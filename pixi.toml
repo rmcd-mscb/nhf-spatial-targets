@@ -65,3 +65,4 @@ test  = { cmd = "pytest tests/ -v", description = "Run test suite" }
 lint  = { cmd = "ruff check src/ tests/", description = "Lint source" }
 fmt   = { cmd = "ruff format src/ tests/", description = "Format source" }
 fmt-check = { cmd = "ruff format --check src/ tests/", description = "Check formatting without modifying" }
+test-unit = { cmd = "pytest tests/ -v -m 'not integration'", description = "Run unit tests only (skip integration)" }
