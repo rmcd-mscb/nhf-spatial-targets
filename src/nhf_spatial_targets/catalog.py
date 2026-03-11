@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-_CATALOG_DIR = Path(__file__).parent.parent.parent.parent / "catalog"
+_CATALOG_DIR = Path(__file__).parent.parent.parent / "catalog"
 
 
 def _load(filename: str) -> dict:
