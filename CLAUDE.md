@@ -25,12 +25,18 @@ pixi run catalog-variables
 pixi run test          # pytest tests/ -v
 pixi run lint          # ruff check src/ tests/
 pixi run fmt           # ruff format src/ tests/
+pixi run fmt-check     # ruff format --check src/ tests/
 ```
 
 **Install environment:**
 ```bash
 pixi install           # default env
 pixi install -e dev    # dev env (adds pytest, ruff, mypy, ipykernel)
+```
+
+```bash
+# Set up pre-commit hooks (once after cloning)
+pixi run -e dev pre-commit install
 ```
 
 **CLI entry point:** `nhf-targets` (defined in pyproject.toml `[project.scripts]`)
@@ -94,6 +100,32 @@ See `catalog/sources.yml` `status:` and `notes:` fields for per-source gaps:
 - `test_catalog.py` covers catalog load/lookup — keep passing at all times
 - New fetch/aggregate/target modules get a corresponding `tests/test_<module>.py`
 - Use `pytest.mark.integration` for tests that require network access or real data files
+
+## Git Workflow
+
+All work follows issue-branch-PR flow:
+
+1. Create a GitHub issue describing the work
+2. Branch from main: `<type>/<issue#>-short-description`
+   - Types: `feature`, `fix`, `refactor`, `docs`, `test`, `chore`
+   - Example: `feature/12-add-mwbm-fetch`, `fix/13-catalog-validation`
+3. Develop on the branch, committing as needed
+4. Open PR referencing the issue (e.g., "Closes #12")
+5. CI must pass; squash merge after review
+
+## Pre-commit Quality Gate
+
+Before suggesting a commit, always run:
+
+```bash
+pixi run fmt && pixi run lint && pixi run test
+```
+
+Pre-commit hooks enforce this automatically, but Claude should run these proactively.
+
+## Test Coverage Rule
+
+Every new module in `fetch/`, `aggregate/`, `normalize/`, or `targets/` must have a corresponding `tests/test_<module>.py`. Every PR should maintain or improve test coverage.
 
 ## Dependencies
 
