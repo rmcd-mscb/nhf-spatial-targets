@@ -1,4 +1,4 @@
-"""Tests for MERRA-2 soil moisture fetch module."""
+"""Tests for MERRA-2 fetch module."""
 
 from __future__ import annotations
 
@@ -29,10 +29,20 @@ def run_dir(tmp_path: Path) -> Path:
 
 
 def _mock_granule(name: str) -> MagicMock:
-    """Create a mock granule object with a data_links method."""
+    """Create a mock granule object."""
     g = MagicMock()
     g.__str__ = lambda self: name
     return g
+
+
+def _fake_download(run_dir: Path, n: int = 1) -> list[str]:
+    """Create fake downloaded files and return their paths."""
+    paths = []
+    for i in range(n):
+        f = run_dir / "data" / "raw" / "merra2" / f"MERRA2_2010{i + 1:02d}.nc4"
+        f.write_bytes(b"fake")
+        paths.append(str(f))
+    return paths
 
 
 # ---- Authentication --------------------------------------------------------
@@ -60,16 +70,27 @@ def test_login_failure_raises(mock_login, run_dir):
         fetch_merra2(run_dir=run_dir, period="2010/2010")
 
 
+@patch("earthaccess.login")
+def test_login_returns_none_raises(mock_login, run_dir):
+    """RuntimeError raised when earthaccess.login() returns None."""
+    mock_login.return_value = None
+    from nhf_spatial_targets.fetch.merra2 import fetch_merra2
+
+    with pytest.raises(RuntimeError, match="Earthdata"):
+        fetch_merra2(run_dir=run_dir, period="2010/2010")
+
+
 # ---- Search parameters -----------------------------------------------------
 
 
-@patch("earthaccess.download", return_value=[])
+@patch("earthaccess.download")
 @patch("earthaccess.search_data")
 @patch("earthaccess.login")
 def test_search_params(mock_login, mock_search, mock_dl, run_dir):
     """search_data called with correct short_name, bbox tuple, and temporal."""
     mock_login.return_value = MagicMock(authenticated=True)
     mock_search.return_value = [_mock_granule("g1")]
+    mock_dl.return_value = _fake_download(run_dir)
 
     from nhf_spatial_targets.fetch.merra2 import fetch_merra2
 
@@ -96,26 +117,17 @@ def test_no_granules_raises(mock_search, mock_login, run_dir):
         fetch_merra2(run_dir=run_dir, period="2010/2010")
 
 
-@patch("earthaccess.login")
-def test_login_returns_none_raises(mock_login, run_dir):
-    """RuntimeError raised when earthaccess.login() returns None."""
-    mock_login.return_value = None
-    from nhf_spatial_targets.fetch.merra2 import fetch_merra2
-
-    with pytest.raises(RuntimeError, match="Earthdata"):
-        fetch_merra2(run_dir=run_dir, period="2010/2010")
-
-
 # ---- Output directory ------------------------------------------------------
 
 
-@patch("earthaccess.download", return_value=[])
+@patch("earthaccess.download")
 @patch("earthaccess.search_data")
 @patch("earthaccess.login")
 def test_output_dir(mock_login, mock_search, mock_dl, run_dir):
     """Download writes to run_dir/data/raw/merra2/."""
     mock_login.return_value = MagicMock(authenticated=True)
     mock_search.return_value = [_mock_granule("g1")]
+    mock_dl.return_value = _fake_download(run_dir)
 
     from nhf_spatial_targets.fetch.merra2 import fetch_merra2
 
@@ -137,11 +149,7 @@ def test_provenance_record(mock_login, mock_search, mock_dl, run_dir):
     """Returned dict has all required provenance keys."""
     mock_login.return_value = MagicMock(authenticated=True)
     mock_search.return_value = [_mock_granule("g1")]
-
-    # Simulate downloaded files
-    f1 = run_dir / "data" / "raw" / "merra2" / "MERRA2_201001.nc4"
-    f1.write_bytes(b"fake")
-    mock_dl.return_value = [str(f1)]
+    mock_dl.return_value = _fake_download(run_dir)
 
     from nhf_spatial_targets.fetch.merra2 import fetch_merra2
 
@@ -164,7 +172,7 @@ def test_provenance_record(mock_login, mock_search, mock_dl, run_dir):
 # ---- Superseded warning ----------------------------------------------------
 
 
-@patch("earthaccess.download", return_value=[])
+@patch("earthaccess.download")
 @patch("earthaccess.search_data")
 @patch("earthaccess.login")
 @patch("nhf_spatial_targets.catalog.source")
@@ -172,11 +180,12 @@ def test_superseded_warning(mock_source, mock_login, mock_search, mock_dl, run_d
     """DeprecationWarning emitted when catalog status is superseded."""
     mock_source.return_value = {
         "status": "superseded",
-        "access": {"url": "https://example.com"},
+        "access": {"url": "https://example.com", "short_name": "M2TMNXLND"},
         "variables": ["SFMC"],
     }
     mock_login.return_value = MagicMock(authenticated=True)
     mock_search.return_value = [_mock_granule("g1")]
+    mock_dl.return_value = _fake_download(run_dir)
 
     from nhf_spatial_targets.fetch.merra2 import fetch_merra2
 
@@ -188,6 +197,81 @@ def test_superseded_warning(mock_source, mock_login, mock_search, mock_dl, run_d
         assert "superseded" in str(dep_warnings[0].message).lower()
 
 
+# ---- Period validation -----------------------------------------------------
+
+
+def test_period_missing_slash(run_dir):
+    """ValueError raised for period without slash separator."""
+    from nhf_spatial_targets.fetch.merra2 import _parse_period
+
+    with pytest.raises(ValueError, match="YYYY/YYYY"):
+        _parse_period("2010")
+
+
+def test_period_non_numeric(run_dir):
+    """ValueError raised for non-integer years."""
+    from nhf_spatial_targets.fetch.merra2 import _parse_period
+
+    with pytest.raises(ValueError, match="integers"):
+        _parse_period("abc/def")
+
+
+def test_period_reversed(run_dir):
+    """ValueError raised when end year is before start year."""
+    from nhf_spatial_targets.fetch.merra2 import _parse_period
+
+    with pytest.raises(ValueError, match="before start year"):
+        _parse_period("2015/2010")
+
+
+# ---- Missing fabric.json --------------------------------------------------
+
+
+@patch("earthaccess.login")
+def test_missing_fabric_raises(mock_login, tmp_path):
+    """FileNotFoundError raised when fabric.json is missing."""
+    mock_login.return_value = MagicMock(authenticated=True)
+    run_dir = tmp_path / "empty_run"
+    run_dir.mkdir()
+
+    from nhf_spatial_targets.fetch.merra2 import fetch_merra2
+
+    with pytest.raises(FileNotFoundError, match="fabric.json"):
+        fetch_merra2(run_dir=run_dir, period="2010/2010")
+
+
+# ---- Download failures -----------------------------------------------------
+
+
+@patch("earthaccess.download", return_value=[])
+@patch("earthaccess.search_data")
+@patch("earthaccess.login")
+def test_empty_download_raises(mock_login, mock_search, mock_dl, run_dir):
+    """RuntimeError raised when download returns no files."""
+    mock_login.return_value = MagicMock(authenticated=True)
+    mock_search.return_value = [_mock_granule("g1")]
+
+    from nhf_spatial_targets.fetch.merra2 import fetch_merra2
+
+    with pytest.raises(RuntimeError, match="returned no files"):
+        fetch_merra2(run_dir=run_dir, period="2010/2010")
+
+
+@patch("earthaccess.download")
+@patch("earthaccess.search_data")
+@patch("earthaccess.login")
+def test_missing_downloaded_file_raises(mock_login, mock_search, mock_dl, run_dir):
+    """RuntimeError raised when downloaded file does not exist on disk."""
+    mock_login.return_value = MagicMock(authenticated=True)
+    mock_search.return_value = [_mock_granule("g1")]
+    mock_dl.return_value = [str(run_dir / "data" / "raw" / "merra2" / "ghost.nc4")]
+
+    from nhf_spatial_targets.fetch.merra2 import fetch_merra2
+
+    with pytest.raises(RuntimeError, match="do not exist on disk"):
+        fetch_merra2(run_dir=run_dir, period="2010/2010")
+
+
 # ---- Integration test (requires NASA Earthdata credentials) ----------------
 
 
@@ -196,7 +280,6 @@ def test_fetch_merra2_real_download(tmp_path):
     """End-to-end download of one year of MERRA-2 data."""
     import xarray as xr
 
-    # Set up minimal run workspace
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     fabric = {
@@ -213,11 +296,9 @@ def test_fetch_merra2_real_download(tmp_path):
 
     result = fetch_merra2(run_dir=run_dir, period="2010/2010")
 
-    # Verify provenance
     assert result["source_key"] == "merra2"
     assert len(result["files"]) > 0
 
-    # Verify at least one file is valid NetCDF with expected variables
     first_file = run_dir / result["files"][0]["path"]
     assert first_file.exists()
     ds = xr.open_dataset(first_file)
