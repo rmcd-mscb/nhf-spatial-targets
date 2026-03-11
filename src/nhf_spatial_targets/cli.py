@@ -205,6 +205,53 @@ def init(
 
 
 @main.group()
+def fetch():
+    """Download source datasets into a run workspace."""
+
+
+@fetch.command("merra2")
+@click.option(
+    "--run-dir",
+    "-r",
+    required=True,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Run workspace created by 'nhf-targets init'.",
+)
+@click.option(
+    "--period",
+    "-p",
+    required=True,
+    help="Temporal range as 'YYYY/YYYY' (start/end years inclusive).",
+)
+def fetch_merra2_cmd(run_dir: Path, period: str):
+    """Download MERRA-2 monthly land surface data (M2TMNXLND).
+
+    Authenticates via earthaccess, downloads granules subsetted to the
+    fabric bounding box, and prints the provenance record.
+
+    Example
+    -------
+      nhf-targets fetch merra2 --run-dir /data/runs/2026-03-11T1500_v0.1.0 --period 2010/2010
+    """
+    import json as json_mod
+
+    from rich.console import Console
+
+    from nhf_spatial_targets.fetch.merra2 import fetch_merra2
+
+    console = Console()
+    console.print(f"[bold]Fetching MERRA-2 for period {period}...[/bold]")
+
+    result = fetch_merra2(run_dir=run_dir, period=period)
+
+    console.print(
+        f"[green]Downloaded {len(result['files'])} files "
+        f"to {run_dir / 'data' / 'raw' / 'merra2'}[/green]"
+    )
+    console.print(json_mod.dumps(result, indent=2))
+
+
+@main.group()
 def catalog():
     """Inspect the data source catalog."""
 
