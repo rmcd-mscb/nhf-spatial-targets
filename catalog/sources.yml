@@ -1,0 +1,292 @@
+# nhf-spatial-targets data source registry
+# Each source entry documents origin, access, currency, and known gaps.
+# "superseded_by" flags sources from the original NHM calibration that have
+# newer versions — resolve before running the pipeline.
+
+sources:
+
+  # ---------------------------------------------------------------------------
+  # RUNOFF
+  # ---------------------------------------------------------------------------
+  nhm_mwbm:
+    name: NHM Monthly Water Balance Model (MWBM)
+    description: >
+      Monthly runoff and uncertainty bounds for CONUS HRUs from the USGS
+      National Hydrologic Model application of the Monthly Water Balance Model.
+      Uncertainty quantified via Bourgin et al. (2015) / Farmer & Vogel (2016)
+      stochastic post-processing framework (Bock et al. 2018).
+    citations:
+      - "Bock, A.R., and others, 2016, OFR 2016-1212"
+      - "Bock, A.R., and others, 2018"
+    access:
+      type: sciencebase
+      url: https://www.sciencebase.gov/catalog/
+      notes: >
+        Exact ScienceBase item ID for pre-computed per-HRU uncertainty bounds
+        not specified in TM 6-B10. Search ScienceBase for Bock 2018 MWBM.
+    variables:
+      - basin_cfs
+    time_step: monthly
+    period: "1982/2010"
+    spatial_extent: CONUS
+    spatial_resolution: HRU (109,951 NHM HRUs)
+    units: cfs
+    status: needs_doi_verification
+
+  # ---------------------------------------------------------------------------
+  # ACTUAL EVAPOTRANSPIRATION
+  # ---------------------------------------------------------------------------
+  mod16a2:
+    name: MODIS MOD16A2 Global Terrestrial Evapotranspiration
+    description: >
+      MODIS/Terra Global Terrestrial ET 8-Day L4 Global 500m.
+      Used at monthly mean for AET calibration target.
+    citations:
+      - "Running, S., Mu, Q., Zhao, M. (2017), MOD16A2 v006, LP DAAC"
+    access:
+      type: lpdaac
+      url: https://lpdaac.usgs.gov/products/mod16a2v006/
+      notes: v006 superseded by v061. Update URL and product ID for new runs.
+    superseded_by: mod16a2_v061
+    variables:
+      - ET_500m       # kg/m2/8day -> convert to inches/day
+      - ET_QC_500m
+    time_step: 8-day (aggregate to monthly)
+    period: "2000/2010"
+    spatial_extent: CONUS
+    spatial_resolution: 500m
+    units: kg/m2/8day
+    status: superseded
+
+  mod16a2_v061:
+    name: MODIS MOD16A2 v061 (current version)
+    description: Updated version of MOD16A2. Use in place of v006.
+    access:
+      type: lpdaac
+      url: https://lpdaac.usgs.gov/products/mod16a2v061/
+    variables:
+      - ET_500m
+      - ET_QC_500m
+    time_step: 8-day (aggregate to monthly)
+    period: "2000/present"
+    spatial_extent: CONUS
+    spatial_resolution: 500m
+    units: kg/m2/8day
+    status: current
+
+  ssebop:
+    name: SSEBop Actual Evapotranspiration
+    description: >
+      Operational Simplified Surface Energy Balance (SSEBop) AET estimates.
+      Used as one of three sources for AET calibration target range.
+    citations:
+      - "Senay, G.B., and others, 2013"
+    access:
+      type: usgs_water
+      url: https://earlywarning.usgs.gov/ssebop/
+      notes: Version used in original calibration unclear. Verify current product.
+    variables:
+      - actual_et
+    time_step: monthly
+    period: "2000/2010"
+    spatial_extent: CONUS
+    spatial_resolution: 1km
+    units: mm/month
+    status: needs_version_verification
+
+  # ---------------------------------------------------------------------------
+  # RECHARGE
+  # ---------------------------------------------------------------------------
+  reitz2017:
+    name: Reitz et al. (2017) Empirical Recharge Estimates
+    description: >
+      Empirical regression-based estimates of groundwater recharge for CONUS.
+      Used as one of two sources for recharge calibration target range.
+      Targets relative year-to-year change (normalized), not magnitude.
+    citations:
+      - "Reitz, M., and others, 2017, doi:10.1111/1752-1688.12546"
+    access:
+      type: sciencebase
+      url: https://www.sciencebase.gov/catalog/
+      notes: >
+        Search ScienceBase for Reitz 2017 recharge. Verify gridded vs tabular
+        format of the data release.
+    variables:
+      - recharge
+    time_step: annual
+    period: "1964/2013"
+    spatial_extent: CONUS
+    spatial_resolution: unknown  # verify from data release
+    units: inches/day (normalized to dimensionless for calibration)
+    status: needs_doi_verification
+
+  watergap22a:
+    name: WaterGAP 2.2a Global Hydrological Model
+    description: >
+      Global hydrological model recharge output. Used as second source for
+      recharge calibration target range (normalized min/max method).
+    citations:
+      - "Döll, P., and others, 2014, doi:10.1002/2014WR015595"
+    access:
+      type: external
+      url: https://www.watermodel.net
+      notes: >
+        Registration-gated access. Superseded by WaterGAP 2.2d and 2.2e.
+        Check if a ScienceBase-hosted version exists. Consider substitution
+        with a more accessible current product.
+    superseded_by: watergap22d  # or 22e
+    variables:
+      - groundwater_recharge
+    time_step: annual
+    period: "1960/2010"
+    spatial_extent: global
+    spatial_resolution: 0.5 degree
+    units: mm/month (normalized to dimensionless for calibration)
+    status: superseded_registration_required
+
+  # ---------------------------------------------------------------------------
+  # SOIL MOISTURE
+  # ---------------------------------------------------------------------------
+  merra_land:
+    name: MERRA-Land Soil Moisture
+    description: >
+      NASA MERRA-Land reanalysis upper-layer soil moisture. Used as one of
+      four sources for soil moisture calibration target range.
+      Targets relative change (normalized), not magnitude.
+    citations:
+      - "Reichle, R.H., and others, 2011"
+    access:
+      type: nasa_gmao
+      url: https://gmao.gsfc.nasa.gov/reanalysis/MERRA-Land/data
+      notes: Superseded by MERRA-2. Use merra2 source for new work.
+    superseded_by: merra2
+    variables:
+      - SFMC   # surface soil moisture — verify correct variable name
+    time_step: monthly
+    period: "1980/2016"
+    spatial_extent: global
+    spatial_resolution: 0.5 x 0.667 degree
+    units: m3/m3 (normalized to dimensionless for calibration)
+    status: superseded
+
+  merra2:
+    name: MERRA-2 Soil Moisture (current replacement for MERRA-Land)
+    description: >
+      NASA Modern-Era Retrospective analysis for Research and Applications,
+      Version 2. Upper soil layer moisture.
+    access:
+      type: nasa_gesdisc
+      url: https://disc.gsfc.nasa.gov/datasets/M2TMNXLND_5.12.4/summary
+      notes: >
+        Use GWETROOT or SFMC variable for upper-layer soil moisture.
+        Verify appropriate layer for comparison with PRMS soil_rechr.
+    variables:
+      - SFMC    # surface soil moisture kg/m2
+      - GWETROOT
+    time_step: monthly
+    period: "1980/present"
+    spatial_extent: global
+    spatial_resolution: 0.5 x 0.625 degree
+    units: kg/m2 or fraction
+    status: current
+
+  ncep_ncar:
+    name: NCEP/NCAR Reanalysis Soil Moisture
+    description: >
+      NOAA/NCEP-NCAR 20th Century Reanalysis soil moisture.
+      Used as one of four sources for soil moisture calibration target range.
+    citations:
+      - "Kalnay, E., and others, 1996"
+    access:
+      type: noaa_psl
+      url: https://psl.noaa.gov/data/gridded/data.ncep.reanalysis.html
+    variables:
+      - soilw.0-10cm   # verify variable name for upper layer
+    time_step: monthly
+    period: "1948/present"
+    spatial_extent: global
+    spatial_resolution: T62 Gaussian grid (~1.9 degree)
+    units: kg/m2 (normalized to dimensionless for calibration)
+    status: current
+
+  nldas_mosaic:
+    name: NLDAS-2 MOSAIC Land Surface Model Soil Moisture
+    description: >
+      North American Land Data Assimilation System phase 2 (NLDAS-2),
+      MOSAIC land surface model output, upper-layer soil moisture.
+    citations:
+      - "Xia, Y., and others, 2012"
+    access:
+      type: nasa_ldas
+      url: https://ldas.gsfc.nasa.gov/nldas/nldas-2-model-data
+    variables:
+      - SOILM0-10cm   # verify upper layer variable name for MOSAIC
+    time_step: monthly
+    period: "1979/present"
+    spatial_extent: CONUS
+    spatial_resolution: 0.125 degree
+    units: kg/m2 (normalized to dimensionless for calibration)
+    status: current
+
+  nldas_noah:
+    name: NLDAS-2 NOAH Land Surface Model Soil Moisture
+    description: >
+      North American Land Data Assimilation System phase 2 (NLDAS-2),
+      NOAH land surface model output, upper-layer soil moisture.
+    citations:
+      - "Xia, Y., and others, 2012"
+    access:
+      type: nasa_ldas
+      url: https://ldas.gsfc.nasa.gov/nldas/nldas-2-model-data
+    variables:
+      - SOILM0-10cm   # verify upper layer variable name for NOAH
+    time_step: monthly
+    period: "1979/present"
+    spatial_extent: CONUS
+    spatial_resolution: 0.125 degree
+    units: kg/m2 (normalized to dimensionless for calibration)
+    status: current
+
+  # ---------------------------------------------------------------------------
+  # SNOW-COVERED AREA
+  # ---------------------------------------------------------------------------
+  mod10c1:
+    name: MODIS MOD10C1 Daily Snow Cover
+    description: >
+      MODIS/Terra Snow Cover Daily L3 Global 0.05Deg CMG.
+      Provides fractional snow cover and confidence interval at 0.05 degree.
+      CI threshold of 70% applied; bounds derived from SCA × CI.
+    citations:
+      - "Hall, D.K., and Riggs, G.A., 2016, doi:10.5067/MODIS/MOD10C1.006"
+    access:
+      type: nsidc
+      url: https://nsidc.org/data/mod10c1
+      notes: v006 superseded by v061. Update for new runs.
+    superseded_by: mod10c1_v061
+    variables:
+      - Day_CMG_Snow_Cover    # fractional snow cover 0-100
+      - Snow_Spatial_QA       # confidence interval 0-100
+    time_step: daily
+    period: "2000/2014"  # files cover 2000-2014 per Appendix 1
+    spatial_extent: CONUS
+    spatial_resolution: 0.05 degree CMG
+    units: percent (convert to fraction 0-1)
+    ci_threshold: 70
+    status: superseded
+
+  mod10c1_v061:
+    name: MODIS MOD10C1 v061 (current version)
+    description: Updated version of MOD10C1. Use in place of v006.
+    access:
+      type: nsidc
+      url: https://nsidc.org/data/mod10c1/versions/61
+    variables:
+      - Day_CMG_Snow_Cover
+      - Snow_Spatial_QA
+    time_step: daily
+    period: "2000/present"
+    spatial_extent: CONUS
+    spatial_resolution: 0.05 degree CMG
+    units: percent (convert to fraction 0-1)
+    ci_threshold: 70
+    status: current

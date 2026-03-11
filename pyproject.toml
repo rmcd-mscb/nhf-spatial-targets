@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nhf-spatial-targets"
+version = "0.1.0"
+description = "Curated calibration target datasets for the National Hydrologic Model"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml>=6.0",
+    "xarray>=2024.1",
+    "numpy>=1.26",
+    "pandas>=2.0",
+    "geopandas>=0.14",
+    "rioxarray>=0.15",
+    "netcdf4>=1.6",
+    "dask>=2024.1",
+    "click>=8.1",
+    "rich>=13.0",
+    "gdptools",
+    "sciencebasepy",
+    "earthaccess",
+]
+
+[project.scripts]
+nhf-targets = "nhf_spatial_targets.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nhf_spatial_targets"]
+
+[tool.ruff]
+line-length = 88
+src = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

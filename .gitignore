@@ -1,0 +1,34 @@
+# pixi
+.pixi/
+*.tar.bz2
+*.conda
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# data (large files not committed)
+data/
+outputs/
+
+# environment
+.env
+.venv/
+
+# editors
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
