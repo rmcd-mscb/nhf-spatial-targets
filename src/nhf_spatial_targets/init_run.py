@@ -22,6 +22,7 @@ def init_run(
     id_col: str,
     config_path: Path,
     workdir: Path,
+    run_label: str | None = None,
     buffer_deg: float = 0.1,
 ) -> Path:
     """
@@ -33,6 +34,8 @@ def init_run(
     id_col      : Name of the HRU ID column.
     config_path : Path to the pipeline.yml to copy as the run config.
     workdir     : Root directory for all runs (e.g. /data/nhf-runs).
+    run_label   : Short label embedded in the run ID (e.g. "gfv11").
+                  Produces: 2026-03-11T1500_gfv11_v0.1.0
     buffer_deg  : Degrees to buffer the fabric bbox for source downloads.
 
     Returns
@@ -43,7 +46,7 @@ def init_run(
     workdir = workdir.resolve()
     workdir.mkdir(parents=True, exist_ok=True)
 
-    run_id = _make_run_id()
+    run_id = _make_run_id(run_label)
     run_dir = workdir / run_id
 
     if run_dir.exists():
@@ -75,8 +78,10 @@ def init_run(
 # Run ID
 # ---------------------------------------------------------------------------
 
-def _make_run_id() -> str:
+def _make_run_id(label: str | None = None) -> str:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M")
+    if label:
+        return f"{ts}_{label}_v{__version__}"
     return f"{ts}_v{__version__}"
 
 

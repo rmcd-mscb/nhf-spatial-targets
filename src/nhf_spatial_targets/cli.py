@@ -116,6 +116,13 @@ def _dispatch(
          "Can be outside the repository for large data volumes.",
 )
 @click.option(
+    "--id",
+    "run_label",
+    default=None,
+    help="Short label embedded in the run ID (e.g. 'gfv11'). "
+         "Produces: 2026-03-11T1500_gfv11_v0.1.0",
+)
+@click.option(
     "--buffer",
     default=0.1,
     show_default=True,
@@ -127,6 +134,7 @@ def init(
     id_col: str,
     config: Path | None,
     workdir: Path | None,
+    run_label: str | None,
     buffer: float,
 ):
     """Initialise a new run workspace tied to a specific fabric.
@@ -138,7 +146,8 @@ def init(
 
     Example
     -------
-      nhf-targets init --fabric /data/gfv1.1_fabric.gpkg --workdir /data/nhf-runs
+      nhf-targets init --fabric /data/gfv1.1_fabric.gpkg --id gfv11 --workdir /data/nhf-runs
+      # creates: /data/nhf-runs/2026-03-11T1500_gfv11_v0.1.0/
     """
     from nhf_spatial_targets.init_run import init_run
     from rich.console import Console
@@ -167,6 +176,7 @@ def init(
             id_col=id_col,
             config_path=config_path,
             workdir=workdir_path,
+            run_label=run_label,
             buffer_deg=buffer,
         )
     except FileExistsError as e:

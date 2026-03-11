@@ -16,7 +16,7 @@ from nhf_spatial_targets.init_run import _make_run_id, init_run
 # _make_run_id
 # ---------------------------------------------------------------------------
 
-def test_run_id_format():
+def test_run_id_format_no_label():
     run_id = _make_run_id()
     # e.g. "2026-03-11T1500_v0.1.0"
     parts = run_id.split("_v")
@@ -27,6 +27,14 @@ def test_run_id_format():
     assert ts[7] == "-"
     assert ts[10] == "T"
     assert version                # version string non-empty
+
+
+def test_run_id_format_with_label():
+    run_id = _make_run_id(label="gfv11")
+    # e.g. "2026-03-11T1500_gfv11_v0.1.0"
+    assert "_gfv11_v" in run_id
+    ts = run_id.split("_gfv11_")[0]
+    assert len(ts) == 15
 
 
 # ---------------------------------------------------------------------------

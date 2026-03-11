@@ -9,7 +9,7 @@ Build curated calibration target datasets for the USGS National Hydrologic Model
 
 ```bash
 # Create a run workspace (required before running the pipeline)
-pixi run init -- --fabric /data/gfv1.1.gpkg --workdir /data/nhf-runs
+pixi run init -- --fabric /data/gfv1.1.gpkg --id gfv11 --workdir /data/nhf-runs
 
 # Run the full pipeline against a workspace
 pixi run run -- --run-dir /data/nhf-runs/2026-03-11T1500_v0.1.0
@@ -71,7 +71,7 @@ tests/
 
 - `nhf-targets init --fabric <gpkg> --workdir <dir>` creates a run workspace
 - Each workspace is tied to a specific fabric (identified by sha256 of the GeoPackage)
-- Run ID format: `YYYY-MM-DDTHHMM_v<version>` (e.g. `2026-03-11T1500_v0.1.0`)
+- Run ID format: `YYYY-MM-DDTHHMM_<id>_v<version>` (e.g. `2026-03-11T1500_gfv11_v0.1.0`); `--id` is optional, omitting it gives `YYYY-MM-DDTHHMM_v<version>`
 - Raw downloads live at `<run_dir>/data/raw/<source_key>/` — subsetted to fabric bbox + buffer
 - If the same fabric is reused, `init` offers to symlink the prior run's raw data
 - `--workdir` can be outside the repo (recommended for large datasets)
