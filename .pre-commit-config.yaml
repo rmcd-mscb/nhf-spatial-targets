@@ -1,0 +1,25 @@
+repos:
+  - repo: local
+    hooks:
+      - id: fmt-check
+        name: ruff format check
+        entry: pixi run -e dev fmt-check
+        language: system
+        pass_filenames: false
+        types: [python]
+
+      - id: lint
+        name: ruff lint
+        entry: pixi run -e dev lint
+        language: system
+        pass_filenames: false
+        types: [python]
+
+      # Integration tests excluded: too slow/network-dependent for local
+      # commits; CI runs the full suite.
+      - id: test
+        name: pytest (unit only)
+        entry: pixi run -e dev test-unit
+        language: system
+        pass_filenames: false
+        always_run: true

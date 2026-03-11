@@ -6,13 +6,21 @@ from pathlib import Path
 
 import yaml
 
-_CATALOG_DIR = Path(__file__).parent.parent.parent.parent / "catalog"
+_CATALOG_DIR = Path(__file__).parent.parent.parent / "catalog"
 
 
 def _load(filename: str) -> dict:
+    """Load a YAML catalog file and return its contents."""
     path = _CATALOG_DIR / filename
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Catalog file not found: {path}  (expected in {_CATALOG_DIR})"
+        )
     with path.open() as f:
-        return yaml.safe_load(f)
+        data = yaml.safe_load(f)
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected YAML mapping in {path}, got {type(data).__name__}")
+    return data
 
 
 def sources() -> dict:

@@ -19,10 +19,11 @@ Uses the pre-commit framework. All hooks use `repo: local` since they invoke pix
 
 **Hook sequence (all hooks use `pixi run -e dev`):**
 
-1. `pixi install -e dev` — ensure environment is current (fast no-op when already up to date)
-2. `pixi run -e dev fmt-check` — verify formatting (fails if unformatted)
-3. `pixi run -e dev lint` — ruff lint check
-4. `pixi run -e dev test -- -m "not integration"` — run unit tests only (skip `pytest.mark.integration` tests which may need network/data)
+1. `pixi run -e dev fmt-check` — verify formatting (fails if unformatted)
+2. `pixi run -e dev lint` — ruff lint check
+3. `pixi run -e dev test-unit` — run unit tests only via dedicated pixi task (excludes `pytest.mark.integration` tests which may need network/data)
+
+Note: `pixi install -e dev` was originally planned as hook step 1 but was dropped — developers are expected to run it manually after cloning (documented in CONTRIBUTING.md).
 
 Developers install once after cloning: `pixi run -e dev pre-commit install`.
 
@@ -109,5 +110,37 @@ Short contributing guide for colleagues without Claude:
 | CI runner | `ubuntu-latest` only | Primary platform; matrix can be added later |
 | Merge strategy | Squash merge | One commit per PR on main, clean audit trail |
 | Branch naming | `<type>/<issue#>-desc` | Descriptive, consistent with hydro-param convention |
-| pixi install in hooks | Yes | Slower first time but ensures env is always current |
+| pixi install in hooks | No (revised) | Developers run `pixi install -e dev` manually; documented in CONTRIBUTING.md |
 | Integration tests in pre-commit | Excluded (`-m "not integration"`) | Too slow/fragile for local commits; CI runs full suite |
+
+## Appendix: Branch Protection Setup
+
+Run these commands after the repository is pushed to GitHub. Replace `OWNER/REPO`
+with the actual GitHub owner and repository name.
+
+```bash
+# Enforce squash merge only
+gh api repos/OWNER/REPO \
+  -X PATCH \
+  -F allow_squash_merge=true \
+  -F allow_merge_commit=false \
+  -F allow_rebase_merge=false
+
+# Enable branch protection on main
+gh api repos/OWNER/REPO/branches/main/protection \
+  -X PUT \
+  -H "Accept: application/vnd.github+json" \
+  --input - <<'EOF'
+{
+  "required_status_checks": {
+    "strict": true,
+    "contexts": ["check"]
+  },
+  "enforce_admins": false,
+  "required_pull_request_reviews": null,
+  "restrictions": null,
+  "allow_force_pushes": false,
+  "allow_deletions": false
+}
+EOF
+```

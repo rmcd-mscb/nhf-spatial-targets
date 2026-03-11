@@ -8,7 +8,7 @@ import click
 import yaml
 
 
-_DEFAULT_CONFIG = Path(__file__).parent.parent.parent.parent / "config" / "pipeline.yml"
+_DEFAULT_CONFIG = Path(__file__).parent.parent.parent / "config" / "pipeline.yml"
 _DEFAULT_WORKDIR = Path("runs")
 
 
@@ -19,20 +19,26 @@ def main():
 
 @main.command()
 @click.option(
-    "--run-dir", "-r",
+    "--run-dir",
+    "-r",
     default=None,
     type=click.Path(exists=True, file_okay=False, path_type=Path),
     help="Run workspace created by 'nhf-targets init'. "
-         "Uses run-dir/config.yml as the pipeline config.",
+    "Uses run-dir/config.yml as the pipeline config.",
 )
 @click.option(
-    "--config", "-c",
+    "--config",
+    "-c",
     default=None,
     type=click.Path(exists=True, path_type=Path),
     help="Explicit pipeline.yml path (alternative to --run-dir).",
 )
-@click.option("--target", "-t", default=None,
-              help="Run a single target (default: all enabled targets).")
+@click.option(
+    "--target",
+    "-t",
+    default=None,
+    help="Run a single target (default: all enabled targets).",
+)
 def run(run_dir: Path | None, config: Path | None, target: str | None):
     """Run the calibration target pipeline.
 
@@ -48,8 +54,11 @@ def run(run_dir: Path | None, config: Path | None, target: str | None):
     cfg = yaml.safe_load(config_path.read_text())
     targets_cfg = cfg.get("targets", {})
 
-    to_run = [target] if target else [k for k, v in targets_cfg.items()
-                                      if v.get("enabled", False)]
+    to_run = (
+        [target]
+        if target
+        else [k for k, v in targets_cfg.items() if v.get("enabled", False)]
+    )
 
     for name in to_run:
         if name not in targets_cfg:
@@ -89,7 +98,8 @@ def _dispatch(
 
 @main.command()
 @click.option(
-    "--fabric", "-f",
+    "--fabric",
+    "-f",
     required=True,
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     help="Path to the HRU fabric GeoPackage.",
@@ -101,26 +111,28 @@ def _dispatch(
     help="HRU ID column name in the fabric.",
 )
 @click.option(
-    "--config", "-c",
+    "--config",
+    "-c",
     default=None,
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     help="Pipeline config to copy into the run workspace. "
-         "Defaults to config/pipeline.yml in the repo root.",
+    "Defaults to config/pipeline.yml in the repo root.",
 )
 @click.option(
-    "--workdir", "-w",
+    "--workdir",
+    "-w",
     default=None,
     type=click.Path(file_okay=False, path_type=Path),
     help="Root directory for run workspaces. "
-         "Defaults to runs/ relative to the current directory. "
-         "Can be outside the repository for large data volumes.",
+    "Defaults to runs/ relative to the current directory. "
+    "Can be outside the repository for large data volumes.",
 )
 @click.option(
     "--id",
     "run_label",
     default=None,
     help="Short label embedded in the run ID (e.g. 'gfv11'). "
-         "Produces: 2026-03-11T1500_gfv11_v0.1.0",
+    "Produces: 2026-03-11T1500_gfv11_v0.1.0",
 )
 @click.option(
     "--buffer",
@@ -202,6 +214,7 @@ def catalog_sources():
     """List all registered data sources."""
     from nhf_spatial_targets.catalog import sources
     from rich import print as rprint
+
     rprint(sources())
 
 
@@ -210,4 +223,5 @@ def catalog_variables():
     """List all calibration variable definitions."""
     from nhf_spatial_targets.catalog import variables
     from rich import print as rprint
+
     rprint(variables())
