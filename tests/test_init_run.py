@@ -16,17 +16,18 @@ from nhf_spatial_targets.init_run import _make_run_id, init_run
 # _make_run_id
 # ---------------------------------------------------------------------------
 
+
 def test_run_id_format_no_label():
     run_id = _make_run_id()
     # e.g. "2026-03-11T1500_v0.1.0"
     parts = run_id.split("_v")
     assert len(parts) == 2
     ts, version = parts
-    assert len(ts) == 15          # "2026-03-11T1500"
+    assert len(ts) == 15  # "2026-03-11T1500"
     assert ts[4] == "-"
     assert ts[7] == "-"
     assert ts[10] == "T"
-    assert version                # version string non-empty
+    assert version  # version string non-empty
 
 
 def test_run_id_format_with_label():
@@ -40,6 +41,7 @@ def test_run_id_format_with_label():
 # ---------------------------------------------------------------------------
 # init_run (mocked fabric read)
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture()
 def fake_fabric(tmp_path: Path) -> Path:
@@ -59,6 +61,7 @@ def fake_config(tmp_path: Path) -> Path:
 def _mock_fabric_read(fabric_path, id_col, buffer_deg):
     """Bypass geopandas in unit tests."""
     import hashlib
+
     h = hashlib.sha256()
     with fabric_path.open("rb") as f:
         h.update(f.read())
@@ -70,7 +73,10 @@ def _mock_fabric_read(fabric_path, id_col, buffer_deg):
         "hru_count": 42,
         "bbox": {"minx": -125.0, "miny": 24.0, "maxx": -66.0, "maxy": 50.0},
         "bbox_buffered": {
-            "minx": -125.1, "miny": 23.9, "maxx": -65.9, "maxy": 50.1,
+            "minx": -125.1,
+            "miny": 23.9,
+            "maxx": -65.9,
+            "maxy": 50.1,
         },
         "buffer_deg": buffer_deg,
     }
@@ -78,7 +84,9 @@ def _mock_fabric_read(fabric_path, id_col, buffer_deg):
 
 @patch("nhf_spatial_targets.init_run._fabric_metadata", side_effect=_mock_fabric_read)
 @patch("nhf_spatial_targets.init_run._find_reusable_raw", return_value=None)
-def test_init_creates_skeleton(mock_reuse, mock_meta, fake_fabric, fake_config, tmp_path):
+def test_init_creates_skeleton(
+    mock_reuse, mock_meta, fake_fabric, fake_config, tmp_path
+):
     workdir = tmp_path / "runs"
     run_dir = init_run(
         fabric_path=fake_fabric,
@@ -100,7 +108,9 @@ def test_init_creates_skeleton(mock_reuse, mock_meta, fake_fabric, fake_config, 
 
 @patch("nhf_spatial_targets.init_run._fabric_metadata", side_effect=_mock_fabric_read)
 @patch("nhf_spatial_targets.init_run._find_reusable_raw", return_value=None)
-def test_fabric_json_contents(mock_reuse, mock_meta, fake_fabric, fake_config, tmp_path):
+def test_fabric_json_contents(
+    mock_reuse, mock_meta, fake_fabric, fake_config, tmp_path
+):
     run_dir = init_run(
         fabric_path=fake_fabric,
         id_col="nhm_id",
@@ -136,6 +146,7 @@ def test_raw_subdirs_created_per_source(
     mock_reuse, mock_meta, fake_fabric, fake_config, tmp_path
 ):
     from nhf_spatial_targets.catalog import sources
+
     run_dir = init_run(
         fabric_path=fake_fabric,
         id_col="nhm_id",

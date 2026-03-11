@@ -34,6 +34,7 @@ pytest-cov = ">=5.0"
 ruff = ">=0.4"
 mypy = ">=1.10"
 ipykernel = ">=6.0"
+pre-commit = ">=4.0"
 
 [environments]
 default = { solve-group = "default" }
@@ -63,3 +64,4 @@ catalog-variables = { cmd = "nhf-targets catalog variables" }
 test  = { cmd = "pytest tests/ -v", description = "Run test suite" }
 lint  = { cmd = "ruff check src/ tests/", description = "Lint source" }
 fmt   = { cmd = "ruff format src/ tests/", description = "Format source" }
+fmt-check = { cmd = "ruff format --check src/ tests/", description = "Check formatting without modifying" }

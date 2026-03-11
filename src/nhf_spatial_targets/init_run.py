@@ -17,6 +17,7 @@ from nhf_spatial_targets import __version__
 # Public entry point
 # ---------------------------------------------------------------------------
 
+
 def init_run(
     fabric_path: Path,
     id_col: str,
@@ -78,6 +79,7 @@ def init_run(
 # Run ID
 # ---------------------------------------------------------------------------
 
+
 def _make_run_id(label: str | None = None) -> str:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M")
     if label:
@@ -88,6 +90,7 @@ def _make_run_id(label: str | None = None) -> str:
 # ---------------------------------------------------------------------------
 # Fabric metadata
 # ---------------------------------------------------------------------------
+
 
 def _fabric_metadata(fabric_path: Path, id_col: str, buffer_deg: float) -> dict:
     """Compute fabric hash and bbox without loading all geometry into memory."""
@@ -138,6 +141,7 @@ def _sha256(path: Path) -> str:
 # Reusable raw data detection
 # ---------------------------------------------------------------------------
 
+
 def _find_reusable_raw(workdir: Path, sha256: str, current_run_id: str) -> Path | None:
     """
     Scan existing runs for one that used the same fabric (by sha256).
@@ -176,6 +180,7 @@ def _find_reusable_raw(workdir: Path, sha256: str, current_run_id: str) -> Path 
 # Directory skeleton
 # ---------------------------------------------------------------------------
 
+
 def _create_skeleton(run_dir: Path, raw_source: Path | None) -> None:
     """Create the run directory tree."""
     from nhf_spatial_targets.catalog import sources as catalog_sources
@@ -200,6 +205,7 @@ def _create_skeleton(run_dir: Path, raw_source: Path | None) -> None:
 # ---------------------------------------------------------------------------
 # Written files
 # ---------------------------------------------------------------------------
+
 
 def _write_fabric_json(run_dir: Path, fabric_meta: dict) -> None:
     path = run_dir / "fabric.json"
@@ -249,8 +255,8 @@ def _write_manifest(run_dir: Path, run_id: str, fabric_meta: dict) -> None:
             "id_col": fabric_meta["id_col"],
             "hru_count": fabric_meta["hru_count"],
         },
-        "sources": {},   # populated by fetch step
-        "steps": [],     # populated as pipeline runs: fetch → aggregate → targets
+        "sources": {},  # populated by fetch step
+        "steps": [],  # populated as pipeline runs: fetch → aggregate → targets
     }
     path = run_dir / "manifest.json"
     path.write_text(json.dumps(manifest, indent=2))

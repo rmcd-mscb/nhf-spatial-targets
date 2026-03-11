@@ -12,11 +12,11 @@
 
 
 def aggregate_to_fabric(
-    source_ds,         # xarray.Dataset: gridded source data
+    source_ds,  # xarray.Dataset: gridded source data
     fabric_path: str,  # path to GeoPackage fabric
-    id_col: str,       # HRU ID column name
-    variable: str,     # variable name in source_ds
+    id_col: str,  # HRU ID column name
+    variable: str,  # variable name in source_ds
     method: str = "area_weighted",
-) -> object:           # xarray.Dataset indexed by id_col
+) -> object:  # xarray.Dataset indexed by id_col
     """Aggregate gridded source data to HRU polygons."""
     raise NotImplementedError
