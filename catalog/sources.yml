@@ -176,6 +176,7 @@ sources:
       Version 2. Upper soil layer moisture.
     access:
       type: nasa_gesdisc
+      short_name: M2TMNXLND
       url: https://disc.gsfc.nasa.gov/datasets/M2TMNXLND_5.12.4/summary
       notes: >
         Use GWETROOT or SFMC variable for upper-layer soil moisture.
