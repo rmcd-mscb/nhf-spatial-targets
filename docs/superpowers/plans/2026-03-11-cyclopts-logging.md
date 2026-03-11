@@ -1,0 +1,525 @@
+# CLI Migration (Click to Cyclopts) and Logging Setup Implementation Plan
+
+> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Replace Click with Cyclopts for the CLI, add stdlib logging with RichHandler, and add logger calls to the fetch module.
+
+**Architecture:** Swap the `click` dependency for `cyclopts` in both `pixi.toml` and `pyproject.toml`, rewrite `cli.py` using cyclopts' type-annotated command pattern with a meta launcher for the global `--verbose` flag, create `_logging.py` with `setup_logging()`, and add `logger` calls to `fetch/merra2.py`.
+
+**Tech Stack:** cyclopts, rich (RichHandler), stdlib logging, importlib.metadata
+
+**Spec:** `docs/superpowers/specs/2026-03-11-cyclopts-logging-design.md`
+
+---
+
+## Chunk 1: Dependencies and logging module
+
+### Task 1: Swap click for cyclopts in dependencies
+
+**Files:**
+- Modify: `pixi.toml`
+- Modify: `pyproject.toml`
+
+- [ ] **Step 1: Update pixi.toml**
+
+In `pixi.toml`, replace the `click` dependency with `cyclopts`:
+
+Change line 19 from:
+```
+click = ">=8.1"
+```
+to:
+```
+cyclopts = ">=3.0"
+```
+
+- [ ] **Step 2: Update pyproject.toml**
+
+In `pyproject.toml`, replace the `click` dependency with `cyclopts`:
+
+Change line 20 from:
+```
+    "click>=8.1",
+```
+to:
+```
+    "cyclopts>=3.0",
+```
+
+- [ ] **Step 3: Install updated environment**
+
+Run: `cd /home/rmcd/projects/usgs/nhf-spatial-targets/.worktrees/feat-merra2-fetch && pixi install -e dev`
+Expected: Environment installs successfully with cyclopts replacing click.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add pixi.toml pyproject.toml pixi.lock
+git commit -m "Swap click for cyclopts dependency"
+```
+
+---
+
+### Task 2: Create logging module
+
+**Files:**
+- Create: `src/nhf_spatial_targets/_logging.py`
+
+- [ ] **Step 1: Write the logging module**
+
+Create `src/nhf_spatial_targets/_logging.py`:
+
+```python
+"""Logging configuration for nhf-spatial-targets CLI."""
+
+from __future__ import annotations
+
+import logging
+
+
+def setup_logging(verbose: bool = False) -> None:
+    """Configure root logger with RichHandler.
+
+    Parameters
+    ----------
+    verbose : bool
+        If True, set level to DEBUG and show source paths.
+        If False, set level to INFO.
+    """
+    from rich.logging import RichHandler
+
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(message)s",
+        datefmt="[%X]",
+        handlers=[RichHandler(rich_tracebacks=True, show_path=verbose)],
+    )
+    # Suppress noisy third-party loggers
+    for name in ("earthaccess", "urllib3"):
+        logging.getLogger(name).setLevel(logging.WARNING)
+```
+
+- [ ] **Step 2: Run format and lint**
+
+Run: `pixi run -e dev fmt && pixi run -e dev lint`
+Expected: Clean.
+
+- [ ] **Step 3: Run tests to confirm nothing breaks**
+
+Run: `pixi run -e dev test`
+Expected: All tests pass.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/nhf_spatial_targets/_logging.py
+git commit -m "Add logging module with RichHandler"
+```
+
+---
+
+## Chunk 2: Rewrite CLI with cyclopts
+
+### Task 3: Rewrite cli.py with cyclopts
+
+**Files:**
+- Modify: `src/nhf_spatial_targets/cli.py` (full rewrite)
+
+- [ ] **Step 1: Write the new cli.py**
+
+Replace the entire contents of `src/nhf_spatial_targets/cli.py` with:
+
+```python
+"""nhf-targets command-line interface."""
+
+from __future__ import annotations
+
+import sys
+from importlib.metadata import version as _pkg_version
+from pathlib import Path
+from typing import Annotated
+
+import yaml
+from cyclopts import App, Parameter
+
+from nhf_spatial_targets._logging import setup_logging
+
+_DEFAULT_CONFIG = Path(__file__).parent.parent.parent / "config" / "pipeline.yml"
+_DEFAULT_WORKDIR = Path("runs")
+
+app = App(
+    name="nhf-targets",
+    help="nhf-spatial-targets: build NHM calibration target datasets.",
+    version=_pkg_version("nhf-spatial-targets"),
+)
+fetch_app = App(name="fetch", help="Download source datasets into a run workspace.")
+catalog_app = App(name="catalog", help="Inspect the data source catalog.")
+app.command(fetch_app)
+app.command(catalog_app)
+
+
+@app.meta.default
+def launcher(
+    *tokens: Annotated[str, Parameter(show=False, allow_leading_hyphen=True)],
+    verbose: Annotated[bool, Parameter(name=["--verbose", "-v"])] = False,
+):
+    """Global options for nhf-targets."""
+    setup_logging(verbose)
+    app(tokens)  # dispatch remaining tokens to the root app
+
+
+@app.command
+def run(
+    run_dir: Annotated[
+        Path | None,
+        Parameter(name=["--run-dir", "-r"], help="Run workspace created by 'nhf-targets init'."),
+    ] = None,
+    config: Annotated[
+        Path | None,
+        Parameter(name=["--config", "-c"], help="Explicit pipeline.yml path."),
+    ] = None,
+    target: Annotated[
+        str | None,
+        Parameter(name=["--target", "-t"], help="Run a single target (default: all enabled)."),
+    ] = None,
+):
+    """Run the calibration target pipeline."""
+    if run_dir is None and config is None:
+        print("Error: Provide either --run-dir or --config.", file=sys.stderr)
+        sys.exit(2)
+    if run_dir is not None and config is not None:
+        print("Error: Provide --run-dir or --config, not both.", file=sys.stderr)
+        sys.exit(2)
+    if run_dir is not None and not run_dir.exists():
+        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+        sys.exit(2)
+
+    config_path = (run_dir / "config.yml") if run_dir else config
+    cfg = yaml.safe_load(config_path.read_text())
+    targets_cfg = cfg.get("targets", {})
+
+    to_run = (
+        [target]
+        if target
+        else [k for k, v in targets_cfg.items() if v.get("enabled", False)]
+    )
+
+    for name in to_run:
+        if name not in targets_cfg:
+            print(f"Error: Unknown target: {name}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Building target: {name}")
+        _dispatch(name, targets_cfg[name], cfg, run_dir=run_dir)
+
+
+def _dispatch(
+    name: str,
+    target_cfg: dict,
+    pipeline_cfg: dict,
+    run_dir: Path | None = None,
+) -> None:
+    """Dispatch to the appropriate target builder module."""
+    from nhf_spatial_targets.targets import aet, rch, run, sca, som
+
+    builders = {
+        "runoff": run.build,
+        "aet": aet.build,
+        "recharge": rch.build,
+        "soil_moisture": som.build,
+        "snow_covered_area": sca.build,
+    }
+    if name not in builders:
+        print(f"Error: No builder registered for target: {name}", file=sys.stderr)
+        sys.exit(1)
+
+    fabric_path = pipeline_cfg["fabric"]["path"]
+    if run_dir is not None:
+        output_path = str(run_dir / "targets")
+    else:
+        output_path = pipeline_cfg["output"]["dir"]
+
+    builders[name](target_cfg, fabric_path, output_path)
+
+
+@app.command
+def init(
+    fabric: Annotated[
+        Path,
+        Parameter(name=["--fabric", "-f"], help="Path to the HRU fabric GeoPackage."),
+    ],
+    id_col: Annotated[
+        str,
+        Parameter(name="--id-col", help="HRU ID column name in the fabric."),
+    ] = "nhm_id",
+    config: Annotated[
+        Path | None,
+        Parameter(name=["--config", "-c"], help="Pipeline config to copy into the run workspace."),
+    ] = None,
+    workdir: Annotated[
+        Path | None,
+        Parameter(name=["--workdir", "-w"], help="Root directory for run workspaces."),
+    ] = None,
+    run_label: Annotated[
+        str | None,
+        Parameter(name="--id", help="Short label embedded in the run ID (e.g. 'gfv11')."),
+    ] = None,
+    buffer: Annotated[
+        float,
+        Parameter(name="--buffer", help="Degrees to buffer the fabric bounding box."),
+    ] = 0.1,
+):
+    """Initialise a new run workspace tied to a specific fabric.
+
+    Creates a dated directory under WORKDIR containing a folder skeleton,
+    a snapshot of the pipeline config, a credentials template, and a
+    fabric metadata file (path, bounding box, sha256).
+    """
+    from nhf_spatial_targets.init_run import init_run
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.text import Text
+
+    console = Console()
+
+    if not fabric.exists():
+        print(f"Error: Fabric file not found: {fabric}", file=sys.stderr)
+        sys.exit(1)
+    if fabric.is_dir():
+        print(f"Error: Fabric path is a directory, not a file: {fabric}", file=sys.stderr)
+        sys.exit(1)
+
+    config_path = config or _DEFAULT_CONFIG
+    if not config_path.exists():
+        print(
+            f"Error: Config file not found: {config_path}\n"
+            "Pass --config to specify a different path.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    workdir_path = workdir or _DEFAULT_WORKDIR
+
+    console.print(f"[bold]Fabric:[/bold]  {fabric}")
+    console.print(f"[bold]Workdir:[/bold] {workdir_path.resolve()}")
+    console.print(f"[bold]Buffer:[/bold]  {buffer}°\n")
+    console.print("[dim]Computing fabric bbox and sha256 (reading full file)...[/dim]")
+
+    try:
+        run_dir = init_run(
+            fabric_path=fabric,
+            id_col=id_col,
+            config_path=config_path,
+            workdir=workdir_path,
+            run_label=run_label,
+            buffer_deg=buffer,
+        )
+    except FileExistsError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    msg = Text()
+    msg.append("Run workspace created:\n", style="bold green")
+    msg.append(f"  {run_dir}\n\n")
+    msg.append("Next steps:\n", style="bold")
+    msg.append(f"  1. Edit   {run_dir / 'config.yml'}\n")
+    msg.append(f"  2. Fill   {run_dir / '.credentials.yml'}\n")
+    msg.append(f"  3. Run    nhf-targets run --run-dir {run_dir}\n")
+    console.print(Panel(msg, title="nhf-targets init", border_style="green"))
+
+
+@fetch_app.command(name="merra2")
+def fetch_merra2_cmd(
+    run_dir: Annotated[
+        Path,
+        Parameter(name=["--run-dir", "-r"], help="Run workspace created by 'nhf-targets init'."),
+    ],
+    period: Annotated[
+        str,
+        Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
+    ],
+):
+    """Download MERRA-2 monthly land surface data (M2TMNXLND).
+
+    Authenticates via earthaccess, downloads granules subsetted to the
+    fabric bounding box, and prints the provenance record.
+    """
+    import json as json_mod
+
+    from rich.console import Console
+
+    from nhf_spatial_targets.fetch.merra2 import fetch_merra2
+
+    console = Console()
+    console.print(f"[bold]Fetching MERRA-2 for period {period}...[/bold]")
+
+    result = fetch_merra2(run_dir=run_dir, period=period)
+
+    console.print(
+        f"[green]Downloaded {len(result['files'])} files "
+        f"to {run_dir / 'data' / 'raw' / 'merra2'}[/green]"
+    )
+    console.print(json_mod.dumps(result, indent=2))
+
+
+@catalog_app.command(name="sources")
+def catalog_sources():
+    """List all registered data sources."""
+    from nhf_spatial_targets.catalog import sources
+    from rich import print as rprint
+
+    rprint(sources())
+
+
+@catalog_app.command(name="variables")
+def catalog_variables():
+    """List all calibration variable definitions."""
+    from nhf_spatial_targets.catalog import variables
+    from rich import print as rprint
+
+    rprint(variables())
+
+
+main = app.meta
+```
+
+- [ ] **Step 2: Run format and lint**
+
+Run: `pixi run -e dev fmt && pixi run -e dev lint`
+Expected: Clean (ruff may reformat some long lines).
+
+- [ ] **Step 3: Run tests**
+
+Run: `pixi run -e dev test`
+Expected: All tests pass. Tests do not import `cli.py`, so changing it does not break them.
+
+- [ ] **Step 4: Verify CLI help works**
+
+Run: `pixi run -e dev nhf-targets --help`
+
+Expected: Help output showing `run`, `init`, `fetch`, `catalog` commands and `--verbose`/`-v` flag.
+
+- [ ] **Step 5: Verify subcommand help**
+
+Run: `nhf-targets fetch --help` and `nhf-targets fetch merra2 --help`
+Expected: Shows options `--run-dir`/`-r` and `--period`/`-p`.
+
+- [ ] **Step 6: Verify catalog command works**
+
+Run: `nhf-targets catalog sources`
+Expected: Prints the sources dict with Rich formatting.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/nhf_spatial_targets/cli.py
+git commit -m "Rewrite CLI with cyclopts replacing click"
+```
+
+---
+
+## Chunk 3: Add logging to fetch module
+
+### Task 4: Add logger calls to fetch/merra2.py
+
+**Files:**
+- Modify: `src/nhf_spatial_targets/fetch/merra2.py`
+
+- [ ] **Step 1: Add logging to merra2.py**
+
+Add `import logging` and `logger = logging.getLogger(__name__)` at the top of the file (after the existing imports, before `_SOURCE_KEY`).
+
+Then add logger calls at these points in `fetch_merra2()`:
+
+After successful auth (after line 71):
+```python
+    logger.info("Authenticated with NASA Earthdata")
+```
+
+After reading bbox (after line 81):
+```python
+    logger.debug("bbox=%s, temporal=%s", bbox_tuple, temporal)
+```
+
+After search_data returns (after line 89, before the `if not granules` check):
+```python
+    logger.info("Found %d granules for %s", len(granules), short_name)
+```
+
+After download completes (after line 110, before building provenance):
+```python
+    logger.info(
+        "Downloaded %d files to %s", len(downloaded), output_dir
+    )
+```
+
+The full import block at the top of the file should become:
+
+```python
+import json
+import logging
+import warnings
+from datetime import datetime, timezone
+from pathlib import Path
+```
+
+And add after `_SOURCE_KEY = "merra2"`:
+
+```python
+logger = logging.getLogger(__name__)
+```
+
+- [ ] **Step 2: Run format and lint**
+
+Run: `pixi run -e dev fmt && pixi run -e dev lint`
+Expected: Clean.
+
+- [ ] **Step 3: Run tests**
+
+Run: `pixi run -e dev test`
+Expected: All tests pass. Logger calls do not affect test behavior (no handler configured during tests, messages go nowhere).
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/nhf_spatial_targets/fetch/merra2.py
+git commit -m "Add structured logging to MERRA-2 fetch module"
+```
+
+---
+
+## Chunk 4: Update CLAUDE.md
+
+### Task 5: Update CLAUDE.md for cyclopts and logging
+
+**Files:**
+- Modify: `CLAUDE.md`
+
+- [ ] **Step 1: Update CLAUDE.md**
+
+In the Dependencies section, replace the `click` line:
+```
+- `click`, `rich` — CLI
+```
+with:
+```
+- `cyclopts`, `rich` — CLI
+```
+
+Also update the Repository Layout comment from "Click CLI" to "Cyclopts CLI":
+```
+  cli.py           # Click CLI: nhf-targets run | catalog | init
+```
+to:
+```
+  cli.py           # Cyclopts CLI: nhf-targets run | catalog | init | fetch
+```
+
+No other CLAUDE.md changes needed — the commands section already uses `pixi run` abstractions.
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add CLAUDE.md
+git commit -m "Update CLAUDE.md: click replaced by cyclopts"
+```
