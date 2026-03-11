@@ -111,3 +111,35 @@ Short contributing guide for colleagues without Claude:
 | Branch naming | `<type>/<issue#>-desc` | Descriptive, consistent with hydro-param convention |
 | pixi install in hooks | Yes | Slower first time but ensures env is always current |
 | Integration tests in pre-commit | Excluded (`-m "not integration"`) | Too slow/fragile for local commits; CI runs full suite |
+
+## Appendix: Branch Protection Setup
+
+Run these commands after the repository is pushed to GitHub. Replace `OWNER/REPO`
+with the actual GitHub owner and repository name.
+
+```bash
+# Enforce squash merge only
+gh api repos/OWNER/REPO \
+  -X PATCH \
+  -f allow_squash_merge=true \
+  -f allow_merge_commit=false \
+  -f allow_rebase_merge=false
+
+# Enable branch protection on main
+gh api repos/OWNER/REPO/branches/main/protection \
+  -X PUT \
+  -H "Accept: application/vnd.github+json" \
+  --input - <<'EOF'
+{
+  "required_status_checks": {
+    "strict": true,
+    "contexts": ["check"]
+  },
+  "enforce_admins": false,
+  "required_pull_request_reviews": null,
+  "restrictions": null,
+  "allow_force_pushes": false,
+  "allow_deletions": false
+}
+EOF
+```
