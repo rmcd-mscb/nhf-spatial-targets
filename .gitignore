@@ -33,6 +33,9 @@ outputs/
 .DS_Store
 Thumbs.db
 
+# worktrees
+.worktrees/
+
 # pytest
 .pytest_cache/
 .coverage
