@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pixi run *)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git status*)"
+    ],
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(pixi run run*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pixi run -e dev lint 2>&1 | head -30"
+          }
+        ]
+      }
+    ]
+  }
+}
