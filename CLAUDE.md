@@ -22,7 +22,8 @@ pixi run catalog-sources
 pixi run catalog-variables
 
 # Development (requires dev environment: pixi install -e dev)
-pixi run -e dev test          # pytest tests/ -v
+pixi run -e dev test          # pytest (excludes integration tests)
+pixi run -e dev test-integration  # integration tests (requires credentials/network)
 pixi run -e dev lint          # ruff check src/ tests/
 pixi run -e dev fmt           # ruff format src/ tests/
 pixi run -e dev fmt-check     # ruff format --check src/ tests/
