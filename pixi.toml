@@ -40,15 +40,20 @@ default = { solve-group = "default" }
 dev = { features = ["dev"], solve-group = "default" }
 
 [tasks]
-# Run the full pipeline
-run = { cmd = "nhf-targets run --config config/pipeline.yml", description = "Run the full target pipeline" }
+# Initialise a run workspace.
+# Usage: pixi run init -- --fabric /data/gfv1.1.gpkg --workdir /data/nhf-runs
+init = { cmd = "nhf-targets init", description = "Create a new run workspace for a fabric" }
 
-# Run individual targets
-run-runoff = { cmd = "nhf-targets run --config config/pipeline.yml --target runoff" }
-run-aet    = { cmd = "nhf-targets run --config config/pipeline.yml --target aet" }
-run-rch    = { cmd = "nhf-targets run --config config/pipeline.yml --target recharge" }
-run-som    = { cmd = "nhf-targets run --config config/pipeline.yml --target soil_moisture" }
-run-sca    = { cmd = "nhf-targets run --config config/pipeline.yml --target snow_covered_area" }
+# Run the full pipeline against a workspace.
+# Usage: pixi run run -- --run-dir /data/nhf-runs/2026-03-11T1500_v0.1.0
+run = { cmd = "nhf-targets run", description = "Run the full target pipeline" }
+
+# Run individual targets — pass --run-dir as extra arg.
+run-runoff = { cmd = "nhf-targets run --target runoff" }
+run-aet    = { cmd = "nhf-targets run --target aet" }
+run-rch    = { cmd = "nhf-targets run --target recharge" }
+run-som    = { cmd = "nhf-targets run --target soil_moisture" }
+run-sca    = { cmd = "nhf-targets run --target snow_covered_area" }
 
 # Catalog inspection
 catalog-sources   = { cmd = "nhf-targets catalog sources" }

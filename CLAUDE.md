@@ -8,13 +8,23 @@ Build curated calibration target datasets for the USGS National Hydrologic Model
 **All commands run via pixi (not pip/conda/python directly):**
 
 ```bash
+# Create a run workspace (required before running the pipeline)
+pixi run init -- --fabric /data/gfv1.1.gpkg --workdir /data/nhf-runs
+
+# Run the full pipeline against a workspace
+pixi run run -- --run-dir /data/nhf-runs/2026-03-11T1500_v0.1.0
+
+# Run a single target
+pixi run run-aet -- --run-dir /data/nhf-runs/2026-03-11T1500_v0.1.0
+
+# Catalog inspection
+pixi run catalog-sources
+pixi run catalog-variables
+
+# Development
 pixi run test          # pytest tests/ -v
 pixi run lint          # ruff check src/ tests/
 pixi run fmt           # ruff format src/ tests/
-pixi run run           # full pipeline (requires fabric + data)
-pixi run run-aet       # single target
-pixi run catalog-sources
-pixi run catalog-variables
 ```
 
 **Install environment:**
@@ -57,11 +67,17 @@ tests/
 - When adding a new source, add it to `catalog/sources.yml` first, then write the fetch module
 - Mark superseded sources with `superseded_by:` key and `status: superseded`
 
-## Data Provenance
+## Data Provenance & Run Workspaces
 
-- All downloaded source data is stored locally under `data/raw/<source_key>/`
-- Each pipeline run is isolated under `runs/<run_id>/` (created by `nhf-targets init`)
-- Never delete raw data; re-download only if explicitly requested
+- `nhf-targets init --fabric <gpkg> --workdir <dir>` creates a run workspace
+- Each workspace is tied to a specific fabric (identified by sha256 of the GeoPackage)
+- Run ID format: `YYYY-MM-DDTHHMM_v<version>` (e.g. `2026-03-11T1500_v0.1.0`)
+- Raw downloads live at `<run_dir>/data/raw/<source_key>/` — subsetted to fabric bbox + buffer
+- If the same fabric is reused, `init` offers to symlink the prior run's raw data
+- `--workdir` can be outside the repo (recommended for large datasets)
+- `.credentials.yml` is always gitignored — never commit it
+- `manifest.json` is the provenance record; populated as the pipeline runs
+- Never delete a run directory — it is the audit trail
 
 ## Known Gaps (do not implement until resolved)
 

@@ -11,9 +11,14 @@ dist/
 build/
 .eggs/
 
-# data (large files not committed)
+# run workspaces and large data (not committed)
+runs/
 data/
 outputs/
+
+# credentials (never commit)
+.credentials.yml
+*/.credentials.yml
 
 # environment
 .env
