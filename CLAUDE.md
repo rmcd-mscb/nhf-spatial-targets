@@ -21,11 +21,11 @@ pixi run run-aet -- --run-dir /data/nhf-runs/2026-03-11T1500_v0.1.0
 pixi run catalog-sources
 pixi run catalog-variables
 
-# Development
-pixi run test          # pytest tests/ -v
-pixi run lint          # ruff check src/ tests/
-pixi run fmt           # ruff format src/ tests/
-pixi run fmt-check     # ruff format --check src/ tests/
+# Development (requires dev environment: pixi install -e dev)
+pixi run -e dev test          # pytest tests/ -v
+pixi run -e dev lint          # ruff check src/ tests/
+pixi run -e dev fmt           # ruff format src/ tests/
+pixi run -e dev fmt-check     # ruff format --check src/ tests/
 ```
 
 **Install environment:**
@@ -118,7 +118,7 @@ All work follows issue-branch-PR flow:
 Before suggesting a commit, always run:
 
 ```bash
-pixi run fmt && pixi run lint && pixi run test
+pixi run -e dev fmt && pixi run -e dev lint && pixi run -e dev test
 ```
 
 Pre-commit hooks enforce this automatically, but Claude should run these proactively.

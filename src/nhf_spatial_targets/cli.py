@@ -8,7 +8,7 @@ import click
 import yaml
 
 
-_DEFAULT_CONFIG = Path(__file__).parent.parent.parent.parent / "config" / "pipeline.yml"
+_DEFAULT_CONFIG = Path(__file__).parent.parent.parent / "config" / "pipeline.yml"
 _DEFAULT_WORKDIR = Path("runs")
 
 

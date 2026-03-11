@@ -28,10 +28,10 @@ pixi run -e dev pre-commit install
 ## Running Checks Manually
 
 ```bash
-pixi run fmt           # auto-format code
-pixi run fmt-check     # check formatting without modifying
-pixi run lint          # lint with ruff
-pixi run test          # run full test suite
+pixi run -e dev fmt           # auto-format code
+pixi run -e dev fmt-check     # check formatting without modifying
+pixi run -e dev lint          # lint with ruff
+pixi run -e dev test          # run full test suite
 ```
 
 ## Code Conventions
