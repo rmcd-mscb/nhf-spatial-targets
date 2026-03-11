@@ -15,11 +15,11 @@ repos:
         pass_filenames: false
         types: [python]
 
-      # Integration tests excluded: too slow/network-dependent for local
-      # commits; CI runs the full suite.
+      # Integration tests excluded by default in `pixi run -e dev test`.
+      # Use `pixi run -e dev test-integration` to run them explicitly.
       - id: test
         name: pytest (unit only)
-        entry: pixi run -e dev test-unit
+        entry: pixi run -e dev test
         language: system
         pass_filenames: false
         always_run: true

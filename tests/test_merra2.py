@@ -186,3 +186,40 @@ def test_superseded_warning(mock_source, mock_login, mock_search, mock_dl, run_d
         dep_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
         assert len(dep_warnings) >= 1
         assert "superseded" in str(dep_warnings[0].message).lower()
+
+
+# ---- Integration test (requires NASA Earthdata credentials) ----------------
+
+
+@pytest.mark.integration
+def test_fetch_merra2_real_download(tmp_path):
+    """End-to-end download of one year of MERRA-2 data."""
+    import xarray as xr
+
+    # Set up minimal run workspace
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    fabric = {
+        "bbox_buffered": {
+            "minx": -105.0,
+            "miny": 39.0,
+            "maxx": -104.0,
+            "maxy": 40.0,
+        }
+    }
+    (run_dir / "fabric.json").write_text(json.dumps(fabric))
+
+    from nhf_spatial_targets.fetch.merra2 import fetch_merra2
+
+    result = fetch_merra2(run_dir=run_dir, period="2010/2010")
+
+    # Verify provenance
+    assert result["source_key"] == "merra2"
+    assert len(result["files"]) > 0
+
+    # Verify at least one file is valid NetCDF with expected variables
+    first_file = run_dir / result["files"][0]["path"]
+    assert first_file.exists()
+    ds = xr.open_dataset(first_file)
+    assert "SFMC" in ds.data_vars or "GWETROOT" in ds.data_vars
+    ds.close()

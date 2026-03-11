@@ -61,8 +61,8 @@ catalog-sources   = { cmd = "nhf-targets catalog sources" }
 catalog-variables = { cmd = "nhf-targets catalog variables" }
 
 # Development
-test  = { cmd = "pytest tests/ -v", description = "Run test suite" }
+test  = { cmd = "pytest tests/ -v -m 'not integration'", description = "Run test suite (excludes integration)" }
+test-integration = { cmd = "pytest tests/ -v -m integration", description = "Run integration tests only (requires credentials/network)" }
 lint  = { cmd = "ruff check src/ tests/", description = "Lint source" }
 fmt   = { cmd = "ruff format src/ tests/", description = "Format source" }
 fmt-check = { cmd = "ruff format --check src/ tests/", description = "Check formatting without modifying" }
-test-unit = { cmd = "pytest tests/ -v -m 'not integration'", description = "Run unit tests only (skip integration)" }
