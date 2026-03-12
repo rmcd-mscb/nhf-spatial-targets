@@ -95,34 +95,42 @@ def _make_run_id(label: str | None = None) -> str:
 def _fabric_metadata(fabric_path: Path, id_col: str, buffer_deg: float) -> dict:
     """Compute fabric hash and bbox without loading all geometry into memory."""
     import geopandas as gpd
+    from shapely.geometry import box
 
     # sha256 of the raw file bytes
     sha256 = _sha256(fabric_path)
 
     # read only enough to get bbox and crs
     gdf = gpd.read_file(fabric_path, rows=None)
-    total_bounds = gdf.total_bounds  # (minx, miny, maxx, maxy)
-    crs = gdf.crs.to_string() if gdf.crs else "unknown"
+    native_crs = gdf.crs.to_string() if gdf.crs else "unknown"
     hru_count = len(gdf)
 
+    # Reproject bounding box to WGS84 for use with remote APIs (CMR, etc.)
+    native_bounds = gdf.total_bounds  # (minx, miny, maxx, maxy)
+    if gdf.crs and not gdf.crs.is_geographic:
+        bbox_geom = gpd.GeoSeries([box(*native_bounds)], crs=gdf.crs)
+        wgs84_bounds = bbox_geom.to_crs("EPSG:4326").total_bounds
+    else:
+        wgs84_bounds = native_bounds
+
     buffered = {
-        "minx": float(total_bounds[0]) - buffer_deg,
-        "miny": float(total_bounds[1]) - buffer_deg,
-        "maxx": float(total_bounds[2]) + buffer_deg,
-        "maxy": float(total_bounds[3]) + buffer_deg,
+        "minx": float(wgs84_bounds[0]) - buffer_deg,
+        "miny": float(wgs84_bounds[1]) - buffer_deg,
+        "maxx": float(wgs84_bounds[2]) + buffer_deg,
+        "maxy": float(wgs84_bounds[3]) + buffer_deg,
     }
 
     return {
         "path": str(fabric_path),
         "sha256": sha256,
-        "crs": crs,
+        "crs": native_crs,
         "id_col": id_col,
         "hru_count": hru_count,
         "bbox": {
-            "minx": float(total_bounds[0]),
-            "miny": float(total_bounds[1]),
-            "maxx": float(total_bounds[2]),
-            "maxy": float(total_bounds[3]),
+            "minx": float(wgs84_bounds[0]),
+            "miny": float(wgs84_bounds[1]),
+            "maxx": float(wgs84_bounds[2]),
+            "maxy": float(wgs84_bounds[3]),
         },
         "bbox_buffered": buffered,
         "buffer_deg": buffer_deg,
@@ -147,8 +155,6 @@ def _find_reusable_raw(workdir: Path, sha256: str, current_run_id: str) -> Path 
     Scan existing runs for one that used the same fabric (by sha256).
     Returns the path to that run's data/raw/ dir, or None.
     """
-    import click
-
     candidates = []
     for fabric_json in sorted(workdir.glob("*/fabric.json"), reverse=True):
         run_dir = fabric_json.parent
@@ -167,12 +173,13 @@ def _find_reusable_raw(workdir: Path, sha256: str, current_run_id: str) -> Path 
         return None
 
     prior_name, prior_raw = candidates[0]
-    click.echo(
+    print(
         f"\nFound existing run with identical fabric:\n"
         f"  {prior_name}\n"
         f"  raw data at: {prior_raw}\n"
     )
-    reuse = click.confirm("Reuse raw downloads from that run?", default=True)
+    answer = input("Reuse raw downloads from that run? [Y/n] ").strip().lower()
+    reuse = answer in ("", "y", "yes")
     return prior_raw if reuse else None
 
 

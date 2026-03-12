@@ -23,7 +23,7 @@ def test_source_lookup():
 
 def test_variable_lookup():
     v = variable("aet")
-    assert "mod16a2" in v["sources"]
+    assert "mod16a2_v061" in v["sources"]
 
 
 def test_source_missing():

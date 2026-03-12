@@ -13,17 +13,21 @@ sources:
     description: >
       Monthly runoff and uncertainty bounds for CONUS HRUs from the USGS
       National Hydrologic Model application of the Monthly Water Balance Model.
-      Uncertainty quantified via Bourgin et al. (2015) / Farmer & Vogel (2016)
-      stochastic post-processing framework (Bock et al. 2018).
+      Uncertainty bounds from Bock et al. (2018) stochastic post-processing
+      framework applied at 1,575 streamgages and 109,951 HRUs.
     citations:
-      - "Bock, A.R., and others, 2016, OFR 2016-1212"
-      - "Bock, A.R., and others, 2018"
+      - "Bock, A.R., Hay, L.E., Markstrom, S.L., and Atkinson, R.D., 2016, doi:10.5066/F7VD6WJQ"
+      - "Bock, A.R., Farmer, W.H., and Hay, L.E., 2018, doi:10.1016/j.advwatres.2018.10.005"
+      - "Bock, A.R., Hay, L.E., Markstrom, S.L., Emmerich, C., and Talbert, M., 2016, doi:10.5194/hess-20-2861-2016"
     access:
       type: sciencebase
-      url: https://www.sciencebase.gov/catalog/
+      item_id: "55fc3f98e4b05d6c4e5029a1"
+      doi: "10.5066/F7VD6WJQ"
+      url: https://www.sciencebase.gov/catalog/item/55fc3f98e4b05d6c4e5029a1
       notes: >
-        Exact ScienceBase item ID for pre-computed per-HRU uncertainty bounds
-        not specified in TM 6-B10. Search ScienceBase for Bock 2018 MWBM.
+        Main MWBM data release (ver. 4.0). Variables include AET, PET, runoff,
+        streamflow, soil moisture, SWE; 109,951 HRUs, 1950-2099. The uncertainty
+        child item (Bock et al. 2018) is nested under this same parent item.
     variables:
       - basin_cfs
     time_step: monthly
@@ -31,7 +35,7 @@ sources:
     spatial_extent: CONUS
     spatial_resolution: HRU (109,951 NHM HRUs)
     units: cfs
-    status: needs_doi_verification
+    status: current
 
   # ---------------------------------------------------------------------------
   # ACTUAL EVAPOTRANSPIRATION
@@ -100,41 +104,43 @@ sources:
   reitz2017:
     name: Reitz et al. (2017) Empirical Recharge Estimates
     description: >
-      Empirical regression-based estimates of groundwater recharge for CONUS.
-      Used as one of two sources for recharge calibration target range.
-      Targets relative year-to-year change (normalized), not magnitude.
+      Annual empirical regression-based estimates of groundwater recharge,
+      quick-flow runoff, and ET for CONUS. Used as one of two sources for
+      the recharge calibration target range (normalized min-max method).
+      Targets relative year-to-year change, not absolute magnitude.
     citations:
-      - "Reitz, M., and others, 2017, doi:10.1111/1752-1688.12546"
+      - "Reitz, M., Sanford, W.E., Senay, G.B., and Cazenas, J., 2017, doi:10.1111/1752-1688.12546"
+      - "Data release: doi:10.5066/F7PN93P0"
     access:
       type: sciencebase
-      url: https://www.sciencebase.gov/catalog/
-      notes: >
-        Search ScienceBase for Reitz 2017 recharge. Verify gridded vs tabular
-        format of the data release.
+      item_id: "56c49126e4b0946c65219231"
+      doi: "10.5066/F7PN93P0"
+      url: https://www.sciencebase.gov/catalog/item/56c49126e4b0946c65219231
     variables:
       - recharge
     time_step: annual
-    period: "1964/2013"
+    period: "2000/2013"
     spatial_extent: CONUS
-    spatial_resolution: unknown  # verify from data release
-    units: inches/day (normalized to dimensionless for calibration)
-    status: needs_doi_verification
+    spatial_resolution: 800m raster
+    units: inches/year (normalized to dimensionless for calibration)
+    status: current
 
   watergap22a:
     name: WaterGAP 2.2a Global Hydrological Model
     description: >
       Global hydrological model recharge output. Used as second source for
-      recharge calibration target range (normalized min/max method).
+      recharge calibration target range (normalized min-max method).
+      Access-gated at time of TM 6-B10; superseded by 2.2d/2.2e.
     citations:
       - "Döll, P., and others, 2014, doi:10.1002/2014WR015595"
     access:
       type: external
       url: https://www.watermodel.net
       notes: >
-        Registration-gated access. Superseded by WaterGAP 2.2d and 2.2e.
-        Check if a ScienceBase-hosted version exists. Consider substitution
-        with a more accessible current product.
-    superseded_by: watergap22d  # or 22e
+        Registration-gated. No ScienceBase-hosted copy found.
+        Substitute candidate: WaterGAP 2.2d on PANGAEA,
+        doi:10.1594/PANGAEA.918447 (open access).
+    superseded_by: watergap22d
     variables:
       - groundwater_recharge
     time_step: annual
@@ -144,6 +150,27 @@ sources:
     units: mm/month (normalized to dimensionless for calibration)
     status: superseded_registration_required
 
+  watergap22d:
+    name: WaterGAP 2.2d Global Hydrological Model (substitute for 2.2a)
+    description: >
+      Open-access successor to WaterGAP 2.2a on PANGAEA. Consider as
+      substitute for watergap22a in the recharge calibration target.
+    citations:
+      - "Müller Schmied, H., and others, 2021, doi:10.5194/essd-13-2791-2021"
+    access:
+      type: pangaea
+      doi: "10.1594/PANGAEA.918447"
+      url: https://doi.pangaea.de/10.1594/PANGAEA.918447
+      notes: Open access. Verify recharge variable name and period of record.
+    variables:
+      - groundwater_recharge  # verify variable name
+    time_step: annual
+    period: "1901/2016"
+    spatial_extent: global
+    spatial_resolution: 0.5 degree
+    units: mm/month (normalized to dimensionless for calibration)
+    status: current
+
   # ---------------------------------------------------------------------------
   # SOIL MOISTURE
   # ---------------------------------------------------------------------------
@@ -151,19 +178,23 @@ sources:
     name: MERRA-Land Soil Moisture
     description: >
       NASA MERRA-Land reanalysis upper-layer soil moisture. Used as one of
-      four sources for soil moisture calibration target range.
-      Targets relative change (normalized), not magnitude.
+      four sources for soil moisture calibration target range in the original
+      TM 6-B10 calibration. Targets relative change (normalized), not magnitude.
+      DISCONTINUED 2016-02-29 — use merra2 for all new runs.
     citations:
       - "Reichle, R.H., and others, 2011"
     access:
       type: nasa_gmao
       url: https://gmao.gsfc.nasa.gov/reanalysis/MERRA-Land/data
-      notes: Superseded by MERRA-2. Use merra2 source for new work.
+      discontinuation_ref: https://gmao.gsfc.nasa.gov/reanalysis/
+      notes: >
+        Discontinued 2016-02-29 per GMAO reanalysis documentation.
+        Superseded by MERRA-2. Use merra2 source for all new work.
     superseded_by: merra2
     variables:
-      - SFMC   # surface soil moisture — verify correct variable name
+      - SFMC   # surface soil moisture — variable name from original calibration
     time_step: monthly
-    period: "1980/2016"
+    period: "1980/2016-02-29"
     spatial_extent: global
     spatial_resolution: 0.5 x 0.667 degree
     units: m3/m3 (normalized to dimensionless for calibration)
@@ -173,9 +204,9 @@ sources:
     name: MERRA-2 Soil Moisture (current replacement for MERRA-Land)
     description: >
       NASA Modern-Era Retrospective analysis for Research and Applications,
-      Version 2. Monthly land surface diagnostics (M2TMNXLND). Soil wetness
-      variables at three depth intervals enable weighted interpolation to
-      arbitrary target depths for calibration.
+      Version 2. Monthly land surface diagnostics (M2TMNXLND). Upper soil
+      layer (0-0.05m) moisture used as one of four sources for the soil
+      moisture calibration target range.
     citations:
       - "Gelaro, R., and others, 2017, doi:10.1175/JCLI-D-16-0758.1"
       - "Reichle, R.H., and others, 2017, doi:10.1175/JCLI-D-16-0720.1"
@@ -221,19 +252,26 @@ sources:
   ncep_ncar:
     name: NCEP/NCAR Reanalysis Soil Moisture
     description: >
-      NOAA/NCEP-NCAR 20th Century Reanalysis soil moisture.
+      NOAA/NCEP-NCAR Reanalysis 1 upper-layer soil moisture.
       Used as one of four sources for soil moisture calibration target range.
     citations:
-      - "Kalnay, E., and others, 1996"
+      - "Kalnay, E., and others, 1996, doi:10.1175/1520-0477(1996)077<0437:TNYRP>2.0.CO;2"
     access:
       type: noaa_psl
       url: https://psl.noaa.gov/data/gridded/data.ncep.reanalysis.html
+      file_pattern: "https://downloads.psl.noaa.gov/Datasets/ncep.reanalysis.dailyavgs/surface_gauss/soilw.0-10cm.gauss.{year}.nc"
+      notes: Monthly means derived from daily Gaussian grid files.
     variables:
-      - soilw.0-10cm   # verify variable name for upper layer
-    time_step: monthly
+      - name: soilw
+        file_variable: soilw.0-10cm
+        long_name: "volumetric soil moisture 0-10 cm"
+        layer_depth_m: "0.00-0.10"
+        units: kg/m2
+        notes: Confirmed variable name from NOAA PSL file naming convention.
+    time_step: monthly (derived from daily)
     period: "1948/present"
     spatial_extent: global
-    spatial_resolution: T62 Gaussian grid (~1.9 degree)
+    spatial_resolution: T62 Gaussian grid (~1.875 degree)
     units: kg/m2 (normalized to dimensionless for calibration)
     status: current
 
@@ -241,39 +279,63 @@ sources:
     name: NLDAS-2 MOSAIC Land Surface Model Soil Moisture
     description: >
       North American Land Data Assimilation System phase 2 (NLDAS-2),
-      MOSAIC land surface model output, upper-layer soil moisture.
+      MOSAIC land surface model output, upper-layer (0-10cm) soil moisture.
+      MOSAIC has 3 soil layers: 0-10cm, 0-40cm, 0-200cm.
     citations:
-      - "Xia, Y., and others, 2012"
+      - "Xia, Y., and others, 2012, doi:10.1029/2011JD016048"
     access:
-      type: nasa_ldas
-      url: https://ldas.gsfc.nasa.gov/nldas/nldas-2-model-data
+      type: nasa_gesdisc
+      short_name: NLDAS_MOS0125_M
+      version: "2.0"
+      url: https://disc.gsfc.nasa.gov/datasets/NLDAS_MOS0125_M_2.0/summary
+      notes: Access via earthaccess (NASA Earthdata login required).
     variables:
-      - SOILM0-10cm   # verify upper layer variable name for MOSAIC
+      - name: SOILM_UNKNOWN
+        long_name: "soil moisture layer 1 (0-10cm)"
+        layer_depth_m: "0.00-0.10"
+        units: kg/m2
+        notes: >
+          NEEDS VERIFICATION: exact NetCDF variable name not confirmed from
+          documentation. Inspect actual file via earthaccess or GES DISC
+          README (NLDAS_MOS0125_M) before implementing fetch module.
+          Possible names: SoilMoist_1, soilmoist1, SOILM_1.
     time_step: monthly
     period: "1979/present"
     spatial_extent: CONUS
     spatial_resolution: 0.125 degree
     units: kg/m2 (normalized to dimensionless for calibration)
-    status: current
+    status: needs_variable_verification
 
   nldas_noah:
     name: NLDAS-2 NOAH Land Surface Model Soil Moisture
     description: >
       North American Land Data Assimilation System phase 2 (NLDAS-2),
-      NOAH land surface model output, upper-layer soil moisture.
+      NOAH land surface model output, upper-layer (0-10cm) soil moisture.
+      NOAH has 4 soil layers: 0-10cm, 10-40cm, 40-100cm, 100-200cm.
     citations:
-      - "Xia, Y., and others, 2012"
+      - "Xia, Y., and others, 2012, doi:10.1029/2011JD016048"
     access:
-      type: nasa_ldas
-      url: https://ldas.gsfc.nasa.gov/nldas/nldas-2-model-data
+      type: nasa_gesdisc
+      short_name: NLDAS_NOAH0125_M
+      version: "2.0"
+      url: https://disc.gsfc.nasa.gov/datasets/NLDAS_NOAH0125_M_2.0/summary
+      notes: Access via earthaccess (NASA Earthdata login required).
     variables:
-      - SOILM0-10cm   # verify upper layer variable name for NOAH
+      - name: SOILM_UNKNOWN
+        long_name: "soil moisture layer 1 (0-10cm)"
+        layer_depth_m: "0.00-0.10"
+        units: kg/m2
+        notes: >
+          NEEDS VERIFICATION: exact NetCDF variable name not confirmed from
+          documentation. Inspect actual file via earthaccess or GES DISC
+          README (NLDAS_NOAH0125_M) before implementing fetch module.
+          Possible names: SoilM0_10cm, SOILM_1, soilmoist1.
     time_step: monthly
     period: "1979/present"
     spatial_extent: CONUS
     spatial_resolution: 0.125 degree
     units: kg/m2 (normalized to dimensionless for calibration)
-    status: current
+    status: needs_variable_verification
 
   # ---------------------------------------------------------------------------
   # SNOW-COVERED AREA

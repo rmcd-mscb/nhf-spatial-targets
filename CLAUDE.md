@@ -88,12 +88,20 @@ tests/
 
 ## Known Gaps (do not implement until resolved)
 
-See `catalog/sources.yml` `status:` and `notes:` fields for per-source gaps:
-- MWBM ScienceBase item ID — needs verification
-- MOD16A2 / MOD10C1 v006 → v061 transition
-- WaterGAP 2.2a access — registration-gated, may need substitute
-- SCA CI-bounds formula — verify against PRMSobjfun.f
-- Recharge normalization window — 2000-2009 vs 1990-1999 discrepancy
+See `catalog/sources.yml` `status:` and `notes:` fields for per-source gaps.
+
+**Resolved:**
+- MWBM ScienceBase item ID — confirmed: `55fc3f98e4b05d6c4e5029a1`, doi:10.5066/F7VD6WJQ
+- Reitz 2017 ScienceBase item ID — confirmed: `56c49126e4b0946c65219231`, doi:10.5066/F7PN93P0
+- Recharge normalization window — confirmed **2000-2009** from TM 6-B10 body text
+- MOD16A2 / MOD10C1 v006 → v061: both decommissioned; use v061 in all new runs
+- MERRA-2 variable — use `GWETTOP` (0-0.05m, dimensionless); product M2TMNXLND
+
+**Still open:**
+- WaterGAP 2.2a — registration-gated; substitute candidate is WaterGAP 2.2d on PANGAEA (doi:10.1594/PANGAEA.918447)
+- SCA CI-bounds formula — PRMSobjfun.f not publicly available; formula unconfirmed
+- NLDAS-2 MOSAIC / NOAH upper-layer variable names — needs file inspection via earthaccess or GES DISC README
+- SSEBop — version and access URL used in original TM 6-B10 unconfirmed
 
 ## Testing
 

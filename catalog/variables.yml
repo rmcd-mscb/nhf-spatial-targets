@@ -1,6 +1,14 @@
 # nhf-spatial-targets calibration variable definitions
 # Maps PRMS output variables to their calibration target configuration,
 # including which sources contribute and the range calculation method.
+#
+# Key references:
+#   TM 6-B10: Hay et al. 2022/2023, doi:10.3133/tm6B10
+#   TM 6-B7:  Markstrom et al. 2015 (PRMS-V; defines soil_rechr)
+#   TM 6-B9:  Regan et al. 2018 (NHM infrastructure description)
+#   iEMSs 2018: Hay et al. (methodological paper for multi-target calibration)
+#   PEST++: automated parameter estimation framework used for byHRU calibration
+#   gdptools: area-weighted aggregation of gridded sources to HRU polygons
 
 variables:
 
@@ -9,6 +17,7 @@ variables:
     description: >
       Monthly basin mean runoff. Uncertainty bounds pre-computed by MWBM
       post-processing — single source with built-in uncertainty envelope.
+    prms_reference: "TM 6-B7 (Markstrom et al. 2015)"
     time_step: monthly
     period: "1982/2010"
     units: cfs
@@ -17,7 +26,8 @@ variables:
     range_method: mwbm_uncertainty
     range_notes: >
       Upper/lower bounds from Bock et al. (2018) stochastic post-processing
-      framework; not a multi-source min/max.
+      framework applied at 1,575 streamgages and 109,951 HRUs. Not a
+      multi-source min/max — bounds come from within-model uncertainty.
     normalize: false
     output_format: netcdf
 
@@ -25,19 +35,22 @@ variables:
     prms_variable: hru_actet
     description: >
       Monthly actual evapotranspiration. Range is min/max across three
-      independent source datasets for each time step.
+      independent source datasets per HRU and time step. Absolute values
+      used (not normalized); range reflects inter-product spread.
+    prms_reference: "TM 6-B7 (Markstrom et al. 2015)"
     time_step: monthly
     period: "2000/2010"
     units: inches/day
     sources:
       - nhm_mwbm
-      - mod16a2       # or mod16a2_v061 for updated runs
+      - mod16a2_v061   # v006 used in original TM 6-B10; v061 for new runs
       - ssebop
     range_method: multi_source_minmax
     range_notes: >
       For each HRU and time step: lower_bound = min(src1, src2, src3),
       upper_bound = max(src1, src2, src3). All sources must be spatially
-      aggregated to HRU polygons before comparison.
+      aggregated to HRU polygons via gdptools before comparison.
+      AET is NOT normalized — absolute values are compared directly.
     normalize: false
     output_format: netcdf
 
@@ -45,75 +58,90 @@ variables:
     prms_variable: recharge
     description: >
       Annual groundwater recharge. Both sources normalized 0-1 over the
-      calibration period; optimization targets relative year-to-year change,
-      not absolute magnitude.
+      calibration period via min-max normalization. Optimization targets
+      relative year-to-year change, not absolute magnitude.
+    prms_reference: "TM 6-B7 (Markstrom et al. 2015)"
     time_step: annual
     period: "2000/2009"
     units: dimensionless (normalized)
-    original_units: inches/day
+    original_units: varies by source (inches/year, mm/month)
     sources:
       - reitz2017
-      - watergap22a
+      - watergap22a   # or watergap22d (open-access substitute on PANGAEA)
     range_method: normalized_minmax
     range_notes: >
-      Each source normalized independently to 0-1 over period of record.
+      Normalization confirmed as 2000-2009 per TM 6-B10 text.
+      Each source normalized independently: norm = (x - min) / (max - min)
+      over the 2000-2009 period after aggregation to HRU polygons.
       lower_bound = min(norm_src1, norm_src2),
       upper_bound = max(norm_src1, norm_src2).
-      NOTE: Appendix 1 of TM 6-B10 implies normalization window may be
-      1990-1999 rather than 2000-2009 — verify against Fortran code
-      PRMSobjfun.f before production run.
+      NOTE: PRMSobjfun.f is not publicly available; normalization period
+      2000-2009 is confirmed from TM 6-B10 body text (not Appendix 1).
     normalize: true
-    normalize_period: "2000/2009"  # verify — may be 1990/1999
+    normalize_period: "2000/2009"
     output_format: netcdf
 
   soil_moisture:
     prms_variable: soil_rechr
     description: >
-      Upper capillary reservoir storage (soil_rechr). Four sources normalized
-      0-1; optimization targets relative change, not magnitude.
-      Monthly normalization applied per calendar month independently.
+      Upper capillary reservoir storage (soil_rechr). Defined in PRMS-V
+      (TM 6-B7) as the storage for the upper part of the capillary reservoir,
+      available for both evaporation and transpiration. Units: inches.
+      Four reanalysis/LSM sources normalized 0-1; optimization targets
+      relative change, not magnitude.
+    prms_reference: >
+      TM 6-B7 (Markstrom et al. 2015) — soil_rechr is the upper-zone
+      capillary storage calibrated via soil_rechr_max_frac parameter.
     time_step:
       - monthly
       - annual
     period: "1982/2010"
     units: dimensionless (normalized)
-    original_units: depth (varies by source)
+    original_units: depth (varies by source; inches for PRMS)
     sources:
-      - merra_land    # or merra2 for updated runs
+      - merra2        # merra_land used in original TM 6-B10; merra2 for new runs
       - ncep_ncar
       - nldas_mosaic
       - nldas_noah
     range_method: normalized_minmax
     range_notes: >
-      Annual: normalize each source 0-1 over full period of record.
+      Upper soil layer from each source (~0-10cm depth; MERRA-2 is 0-5cm).
+      Annual: normalize each source 0-1 over full 1982-2010 period.
       Monthly: normalize each source 0-1 per calendar month independently
-               (i.e., all Januaries normalized together, etc.)
+               (all Januaries normalized together, all Februaries together, etc.)
+               — confirmed in TM 6-B10 Appendix 1.
       lower_bound = min across four sources,
       upper_bound = max across four sources.
-      Key gap: upper soil layer variable names differ across products —
-      verify SFMC (MERRA), soilw.0-10cm (NCEP), SOILM0-10cm (NLDAS)
-      all represent comparable depths relative to PRMS soil_rechr.
+      Layer depths and variable names:
+        MERRA-2:    GWETTOP (0-0.05m, dimensionless) — preferred
+        NCEP/NCAR:  soilw.0-10cm (0-0.10m, kg/m2) — confirmed variable name
+        NLDAS-MOSAIC: layer 1 (0-0.10m, kg/m2) — variable name TBD
+        NLDAS-NOAH:   layer 1 (0-0.10m, kg/m2) — variable name TBD
     normalize: true
-    normalize_by: calendar_month   # for monthly; full period for annual
+    normalize_by: calendar_month   # for monthly; full 1982-2010 period for annual
     output_format: netcdf
 
   snow_covered_area:
     prms_variable: snowcov_area
     description: >
       Daily fractional snow-covered area. CI-based bounds from MOD10C1.
-      Only days with confidence interval > 70% are used.
+      Only days with confidence interval > 70% used. Bounds derived from
+      daily SCA value and associated confidence interval.
+    prms_reference: "TM 6-B7 (Markstrom et al. 2015)"
     time_step: daily
     period: "2000/2010"
     units: fraction (0-1)
     sources:
-      - mod10c1    # or mod10c1_v061 for updated runs
+      - mod10c1_v061  # v006 used in original TM 6-B10; v006 decommissioned 2023-07-31
     range_method: modis_ci
     range_notes: >
-      From MOD10C1: sca = Day_CMG_Snow_Cover / 100,
-                    ci  = Snow_Spatial_QA / 100.
-      Filter: only use grid cells/days where ci > 0.70.
-      Bounds formula: TM 6-B10 implies bounds derived from sca × ci,
-      but exact formula not fully specified — verify against PRMSobjfun.f.
+      From MOD10C1: sca = Day_CMG_Snow_Cover / 100 (fraction 0-1),
+                    ci  = Snow_Spatial_QA / 100 (fraction 0-1).
+      Filter: only use grid cells/days where ci > 0.70 (confirmed TM 6-B10).
+      TM 6-B10: "upper and lower range...calculated and treated as an error
+      bound based on the daily snow-covered area value and the associated
+      confidence interval." Exact formula not specified in report.
+      PRMSobjfun.f not publicly available — formula remains unconfirmed.
     ci_threshold: 0.70
     normalize: false
     output_format: netcdf

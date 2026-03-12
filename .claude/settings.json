@@ -3,16 +3,22 @@
     "allow": [
       "Bash(pixi run *)",
       "Bash(pixi install *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
       "Bash(git diff*)",
       "Bash(git log*)",
       "Bash(git status*)",
       "Bash(git branch*)",
+      "Bash(mkdir *)",
+      "Bash(cp *)",
       "Bash(ls *)",
       "Bash(wc *)"
     ],
     "deny": [
       "Bash(rm -rf *)",
-      "Bash(pixi run run*)"
+      "Bash(git push *)",
+      "Bash(git reset *)",
+      "Bash(pixi run run *)"
     ]
   },
   "hooks": {
