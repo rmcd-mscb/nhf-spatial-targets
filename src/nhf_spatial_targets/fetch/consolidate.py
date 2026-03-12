@@ -135,6 +135,7 @@ def consolidate_merra2(
     for f in tqdm(nc_files, desc="Reading MERRA-2 files"):
         datasets.append(xr.open_dataset(f, chunks={}))
     ds = xr.concat(datasets, dim="time", data_vars="minimal", coords="minimal")
+    ds = ds.sortby("time")
     ds = ds[variables]
     ds = _fix_time_merra2(ds)
 
@@ -210,6 +211,7 @@ def consolidate_nldas(
     for f in tqdm(nc_files, desc=f"Reading {source_key} files"):
         datasets.append(xr.open_dataset(f, chunks={}))
     ds = xr.concat(datasets, dim="time", data_vars="minimal", coords="minimal")
+    ds = ds.sortby("time")
     ds = ds[variables]
 
     out_path = source_dir / f"{source_key}_consolidated.nc"
@@ -258,18 +260,36 @@ def consolidate_ncep_ncar(
 
     logger.info("Merging %d monthly NetCDF files for NCEP/NCAR", len(nc_files))
 
-    datasets = []
-    for f in tqdm(nc_files, desc="Reading NCEP/NCAR files"):
-        datasets.append(xr.open_dataset(f, chunks={}))
-    ds = xr.concat(datasets, dim="time", data_vars="minimal", coords="minimal")
+    # NCEP/NCAR has separate files per variable per year (e.g. soilw.0-10cm.gauss.2010.monthly.nc).
+    # Group by variable, concat each group along time, then merge across variables.
+    from collections import defaultdict
+
+    groups: dict[str, list[Path]] = defaultdict(list)
+    for f in nc_files:
+        ds_peek = xr.open_dataset(f, chunks={})
+        data_vars = [v for v in ds_peek.data_vars if v != "time_bnds"]
+        key = tuple(sorted(data_vars))
+        groups[key].append(f)
+        ds_peek.close()
+
+    merged_parts = []
+    for var_key, file_group in groups.items():
+        datasets = []
+        for f in tqdm(file_group, desc=f"Reading NCEP/NCAR {', '.join(var_key)}"):
+            datasets.append(xr.open_dataset(f, chunks={}))
+        part = xr.concat(datasets, dim="time", data_vars="minimal", coords="minimal")
+        part = part.sortby("time")
+        merged_parts.append(part)
+
+    ds = xr.merge(merged_parts)
     ds = ds[variables]
 
     out_path = ncep_dir / "ncep_ncar_consolidated.nc"
     logger.info("Writing consolidated file: %s", out_path)
     with ProgressBar():
         ds.to_netcdf(out_path)
-    for d in datasets:
-        d.close()
+    for part in merged_parts:
+        part.close()
     ds.close()
     logger.info("Wrote %s", out_path)
 
