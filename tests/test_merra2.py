@@ -35,10 +35,12 @@ def run_dir(tmp_path: Path) -> Path:
     return rd
 
 
-def _mock_granule(name: str) -> MagicMock:
-    """Create a mock granule object."""
+def _mock_granule(name: str, year_month: str = "201001") -> MagicMock:
+    """Create a mock granule object with data_links containing a MERRA-2 URL."""
     g = MagicMock()
     g.__str__ = lambda self: name
+    url = f"https://example.com/MERRA2_300.tavgM_2d_lnd_Nx.{year_month}.nc4"
+    g.data_links.return_value = [url]
     return g
 
 
@@ -356,6 +358,14 @@ def test_year_month_from_filename():
         _year_month_from_path(Path("MERRA2_400.tavgM_2d_lnd_Nx.202312.nc4"))
         == "2023-12"
     )
+
+
+def test_year_month_from_invalid_filename():
+    """ValueError raised for filenames without a date pattern."""
+    from nhf_spatial_targets.fetch.merra2 import _year_month_from_path
+
+    with pytest.raises(ValueError, match="Cannot extract date"):
+        _year_month_from_path(Path("not_a_merra2_file.txt"))
 
 
 # ---- Manifest update tests -------------------------------------------------

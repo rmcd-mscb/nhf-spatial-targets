@@ -186,7 +186,8 @@ sources:
       url: https://disc.gsfc.nasa.gov/datasets/M2TMNXLND_5.12.4/summary
       notes: >
         Access via earthaccess (NASA Earthdata login required).
-        Download monthly files; subset to fabric bbox before storing.
+        Download monthly files (global granules); spatial subsetting
+        occurs during aggregation, not at download time.
     variables:
       - name: GWETTOP
         long_name: surface_soil_wetness

@@ -163,13 +163,13 @@ def _fix_time(combined: dict) -> dict:
 
 def _make_relative(refs: dict, base_dir: Path) -> dict:
     """Convert absolute file paths in kerchunk refs to relative paths."""
-    base_str = str(base_dir)
+    base_prefix = str(base_dir) + "/"
     out = {}
     for key, val in refs.items():
         if isinstance(val, list) and len(val) >= 1 and isinstance(val[0], str):
             path = val[0]
-            if path.startswith(base_str):
-                rel = "./" + str(Path(path).relative_to(base_dir))
+            if path.startswith(base_prefix):
+                rel = "./" + path[len(base_prefix):]
                 val = [rel] + val[1:]
         out[key] = val
     return out
@@ -235,8 +235,6 @@ def consolidate_merra2(
     # Add CF and provenance global attributes
     meta = _catalog.source("merra2")
     root_attrs = ujson.loads(combined["refs"].get(".zattrs", "{}"))
-    if isinstance(root_attrs, str):
-        root_attrs = ujson.loads(root_attrs)
     root_attrs.update(
         {
             "Conventions": "CF-1.8",
@@ -248,7 +246,7 @@ def consolidate_merra2(
                 f" v{meta['access'].get('version', 'unknown')}"
             ),
             "time_modification_note": (
-                "Original timestamps (YYYY-01-01T00:30:00) shifted to mid-month "
+                "Original timestamps (YYYY-MM-01T00:30:00) shifted to mid-month "
                 "(15th) for consistency. See time_bnds for exact averaging periods."
             ),
             "references": meta["access"]["url"],

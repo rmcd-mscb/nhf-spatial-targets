@@ -18,6 +18,16 @@ _SOURCE_KEY = "merra2"
 logger = logging.getLogger(__name__)
 
 _MERRA2_DATE_RE = re.compile(r"\.(\d{4})(\d{2})\.nc4$")
+_MERRA2_DATE_URL_RE = re.compile(r"\.(\d{4})(\d{2})\.nc4")
+
+
+def _granule_year_month(granule: object) -> str | None:
+    """Extract 'YYYY-MM' from an earthaccess granule's data links."""
+    for link in granule.data_links():
+        m = _MERRA2_DATE_URL_RE.search(link)
+        if m:
+            return f"{m.group(1)}-{m.group(2)}"
+    return None
 
 
 def _parse_period(period: str) -> tuple[str, str]:
@@ -40,6 +50,7 @@ def _parse_period(period: str) -> tuple[str, str]:
 
 def _months_in_period(period: str) -> list[str]:
     """Return list of 'YYYY-MM' strings for every month in the period."""
+    _parse_period(period)  # validate format
     parts = period.split("/")
     start_year, end_year = int(parts[0]), int(parts[1])
     months = []
@@ -58,6 +69,7 @@ def _manifest_merra2_files(run_dir: Path) -> list[dict]:
         manifest = json.loads(manifest_path.read_text())
         return manifest.get("sources", {}).get("merra2", {}).get("files", [])
     except (json.JSONDecodeError, KeyError):
+        logger.warning("Malformed manifest.json in %s, ignoring merra2 entries", run_dir)
         return []
 
 
@@ -168,27 +180,47 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
                 f"bbox={bbox_tuple}, temporal={temporal}"
             )
 
-        output_dir = run_dir / "data" / "raw" / _SOURCE_KEY
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        downloaded = earthaccess.download(
-            granules,
-            local_path=str(output_dir),
-        )
-
-        if not downloaded:
-            raise RuntimeError(
-                f"earthaccess.download() returned no files for "
-                f"{len(granules)} granules. Check network connectivity "
-                f"and Earthdata credentials."
+        # Filter granules to only months not already downloaded
+        needed_set = set(needed)
+        granules = [
+            g for g in granules if _granule_year_month(g) in needed_set
+        ]
+        if not granules:
+            logger.info(
+                "All granules matched already-downloaded months, "
+                "skipping to consolidation"
             )
-        if len(downloaded) < len(granules):
-            logger.warning(
-                "Partial download: got %d of %d granules",
-                len(downloaded),
+        else:
+            logger.info(
+                "Downloading %d of %d needed months",
                 len(granules),
+                len(needed),
             )
-        logger.info("Downloaded %d files to %s", len(downloaded), output_dir)
+
+            output_dir = run_dir / "data" / "raw" / _SOURCE_KEY
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            downloaded = earthaccess.download(
+                granules,
+                local_path=str(output_dir),
+            )
+
+            if not downloaded:
+                raise RuntimeError(
+                    f"earthaccess.download() returned no files for "
+                    f"{len(granules)} granules. Check network connectivity "
+                    f"and Earthdata credentials."
+                )
+            if len(downloaded) < len(granules):
+                logger.warning(
+                    "Partial download: got %d of %d granules. "
+                    "Consolidation will proceed with available files only.",
+                    len(downloaded),
+                    len(granules),
+                )
+            logger.info(
+                "Downloaded %d files to %s", len(downloaded), output_dir
+            )
 
     # Build file inventory from all .nc4 files on disk
     output_dir = run_dir / "data" / "raw" / _SOURCE_KEY

@@ -170,6 +170,68 @@ def test_relative_paths(merra2_dir):
             assert path.startswith("./"), f"Non-relative path in ref '{key}': {path}"
 
 
+def test_no_nc4_files_raises(tmp_path):
+    """FileNotFoundError raised when no .nc4 files exist."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_merra2
+
+    run_dir = tmp_path
+    (run_dir / "data" / "raw" / "merra2").mkdir(parents=True)
+
+    with pytest.raises(FileNotFoundError, match="No .nc4 files"):
+        consolidate_merra2(run_dir=run_dir, variables=["GWETTOP"])
+
+
+@pytest.fixture()
+def merra2_dir_year_boundary(tmp_path: Path) -> Path:
+    """Create synthetic MERRA-2 files spanning a year boundary (Nov-Dec-Jan)."""
+    out = tmp_path / "data" / "raw" / "merra2"
+    out.mkdir(parents=True)
+
+    lat = np.arange(-90, 91, 45.0)
+    lon = np.arange(-180, 180, 60.0)
+
+    months = [(2010, 11), (2010, 12), (2011, 1)]
+    for year, month in months:
+        time = np.array(
+            [f"{year}-{month:02d}-01T00:30:00"],
+            dtype="datetime64[ns]",
+        )
+        ds = xr.Dataset(
+            {
+                "GWETTOP": (
+                    ["time", "lat", "lon"],
+                    np.random.rand(1, len(lat), len(lon)).astype(np.float32),
+                ),
+            },
+            coords={"time": time, "lat": lat, "lon": lon},
+        )
+        fname = f"MERRA2_300.tavgM_2d_lnd_Nx.{year}{month:02d}.nc4"
+        ds.to_netcdf(out / fname)
+
+    return out
+
+
+def test_time_bounds_december_year_boundary(merra2_dir_year_boundary):
+    """time_bnds correctly crosses year boundary for December."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_merra2
+
+    run_dir = merra2_dir_year_boundary.parent.parent.parent
+    consolidate_merra2(run_dir=run_dir, variables=["GWETTOP"])
+
+    ref_path = merra2_dir_year_boundary / "merra2_refs.json"
+    import fsspec
+
+    fs = fsspec.filesystem("reference", fo=str(ref_path), target_protocol="file")
+    ds = xr.open_zarr(fs.get_mapper(""), consolidated=False)
+
+    # December 2010: bounds should be [2010-12-01, 2011-01-01]
+    dec_idx = 1  # Nov=0, Dec=1, Jan=2
+    bnds = pd.DatetimeIndex(ds.time_bnds.values[dec_idx])
+    assert bnds[0] == pd.Timestamp("2010-12-01")
+    assert bnds[1] == pd.Timestamp("2011-01-01")
+    ds.close()
+
+
 def test_provenance_return(merra2_dir):
     """consolidate_merra2 returns a dict with provenance keys."""
     from nhf_spatial_targets.fetch.consolidate import consolidate_merra2

@@ -239,7 +239,11 @@ def fetch_merra2_cmd(
     console = Console()
     console.print(f"[bold]Fetching MERRA-2 for period {period}...[/bold]")
 
-    result = fetch_merra2(run_dir=run_dir, period=period)
+    try:
+        result = fetch_merra2(run_dir=run_dir, period=period)
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     console.print(
         f"[green]Downloaded {len(result['files'])} files "
