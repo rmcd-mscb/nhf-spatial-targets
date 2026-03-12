@@ -245,6 +245,10 @@ def fetch_merra2_cmd(
         f"[green]Downloaded {len(result['files'])} files "
         f"to {run_dir / 'data' / 'raw' / 'merra2'}[/green]"
     )
+    if "kerchunk_ref" in result:
+        console.print(
+            f"[green]Kerchunk reference store: {run_dir / result['kerchunk_ref']}[/green]"
+        )
     console.print(json_mod.dumps(result, indent=2))
 
 

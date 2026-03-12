@@ -444,6 +444,7 @@ def test_manifest_preserves_download_timestamp(
 @pytest.mark.integration
 def test_fetch_merra2_real_download(tmp_path):
     """End-to-end download of one year of MERRA-2 data."""
+    import fsspec
     import xarray as xr
 
     run_dir = tmp_path / "run"
@@ -463,10 +464,22 @@ def test_fetch_merra2_real_download(tmp_path):
     result = fetch_merra2(run_dir=run_dir, period="2010/2010")
 
     assert result["source_key"] == "merra2"
-    assert len(result["files"]) > 0
+    assert len(result["files"]) == 12
+    assert "kerchunk_ref" in result
 
-    first_file = run_dir / result["files"][0]["path"]
-    assert first_file.exists()
-    ds = xr.open_dataset(first_file)
-    assert "SFMC" in ds.data_vars or "GWETROOT" in ds.data_vars
+    # Verify Kerchunk reference store works
+    ref_path = run_dir / result["kerchunk_ref"]
+    assert ref_path.exists()
+
+    fs = fsspec.filesystem("reference", fo=str(ref_path), target_protocol="file")
+    ds = xr.open_zarr(fs.get_mapper(""), consolidated=False)
+    assert "GWETTOP" in ds.data_vars
+    assert "GWETROOT" in ds.data_vars
+    assert "GWETPROF" in ds.data_vars
+    assert "SFMC" not in ds.data_vars
+    assert len(ds.time) == 12
     ds.close()
+
+    # Verify manifest was written
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    assert "merra2" in manifest["sources"]
