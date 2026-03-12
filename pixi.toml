@@ -27,6 +27,8 @@ nhf-spatial-targets = { path = ".", editable = true }
 gdptools = "*"
 sciencebasepy = "*"
 earthaccess = "*"
+kerchunk = ">=0.2"
+ujson = "*"
 
 [feature.dev.dependencies]
 pytest = ">=8.0"
