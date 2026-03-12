@@ -127,6 +127,7 @@ def test_time_bounds(merra2_dir):
 
     assert "time_bnds" in ds.data_vars
     assert ds.time.attrs.get("bounds") == "time_bnds"
+    assert ds.time.attrs.get("cell_methods") == "time: mean"
     # First month: Jan 2010
     bnds = pd.DatetimeIndex(ds.time_bnds.values[0])
     assert bnds[0] == pd.Timestamp("2010-01-01")
@@ -149,6 +150,7 @@ def test_global_attributes(merra2_dir):
     assert "nhf-spatial-targets" in root_attrs["history"]
     assert "M2TMNXLND" in root_attrs["source"]
     assert "time_modification_note" in root_attrs
+    assert "references" in root_attrs
 
 
 def test_relative_paths(merra2_dir):
