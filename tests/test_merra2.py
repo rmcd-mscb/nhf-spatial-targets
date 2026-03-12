@@ -157,7 +157,8 @@ def test_provenance_record(mock_login, mock_search, mock_dl, run_dir):
 
     assert result["source_key"] == "merra2"
     assert "access_url" in result
-    assert result["variables"] == ["SFMC", "GWETROOT"]
+    var_names = [v["name"] for v in result["variables"]]
+    assert var_names == ["GWETTOP", "GWETROOT", "GWETPROF"]
     assert result["period"] == "2010/2010"
     assert "bbox" in result
     assert "download_timestamp" in result
