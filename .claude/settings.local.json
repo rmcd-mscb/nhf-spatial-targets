@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "WebFetch(domain:claude.ai)",
-      "Bash(git config --global --add safe.directory '%\\(prefix\\)///wsl.localhost/Ubuntu/home/rmcd/projects/usgs/nhf-spatial-targets')"
+      "Bash(git config --global --add safe.directory '%\\(prefix\\)///wsl.localhost/Ubuntu/home/rmcd/projects/usgs/nhf-spatial-targets')",
+      "Bash(.pixi/envs/dev/bin/pytest tests/test_nldas.py -v -m \"not integration\" 2>&1)",
+      "Bash(git stash:*)",
+      "Bash(gh pr:*)"
     ]
   }
 }
