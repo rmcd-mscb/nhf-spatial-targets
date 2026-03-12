@@ -173,22 +173,49 @@ sources:
     name: MERRA-2 Soil Moisture (current replacement for MERRA-Land)
     description: >
       NASA Modern-Era Retrospective analysis for Research and Applications,
-      Version 2. Upper soil layer moisture.
+      Version 2. Monthly land surface diagnostics (M2TMNXLND). Soil wetness
+      variables at three depth intervals enable weighted interpolation to
+      arbitrary target depths for calibration.
+    citations:
+      - "Gelaro, R., and others, 2017, doi:10.1175/JCLI-D-16-0758.1"
+      - "Reichle, R.H., and others, 2017, doi:10.1175/JCLI-D-16-0720.1"
     access:
       type: nasa_gesdisc
       short_name: M2TMNXLND
+      version: "5.12.4"
       url: https://disc.gsfc.nasa.gov/datasets/M2TMNXLND_5.12.4/summary
       notes: >
-        Use GWETROOT or SFMC variable for upper-layer soil moisture.
-        Verify appropriate layer for comparison with PRMS soil_rechr.
+        Access via earthaccess (NASA Earthdata login required).
+        Download monthly files (global granules); spatial subsetting
+        occurs during aggregation, not at download time.
     variables:
-      - SFMC    # surface soil moisture kg/m2
-      - GWETROOT
+      - name: GWETTOP
+        long_name: surface_soil_wetness
+        layer_depth_m: "0.00-0.05"
+        units: dimensionless (fraction of saturation, 0-1)
+        preferred: true
+        notes: >
+          Best variable for comparison with PRMS soil_rechr. Already
+          dimensionless so no unit conversion before normalization.
+      - name: GWETROOT
+        long_name: root_zone_soil_wetness
+        layer_depth_m: "0.00-1.00"
+        units: dimensionless (fraction of saturation, 0-1)
+        notes: Root zone integrated wetness.
+      - name: GWETPROF
+        long_name: ave_prof_soil_moisture
+        layer_depth_m: "0.00-3.50"
+        units: dimensionless (fraction of saturation, 0-1)
+        notes: Full profile average soil moisture.
+    layer_depth_notes: >
+      Three nested depth intervals (0-5cm, 0-100cm, 0-350cm) allow weighted
+      interpolation to any target depth. TM 6-B10 notes magnitudes are not
+      expected to equate across sources — normalization makes depth difference
+      irrelevant for calibration.
     time_step: monthly
     period: "1980/present"
     spatial_extent: global
     spatial_resolution: 0.5 x 0.625 degree
-    units: kg/m2 or fraction
     status: current
 
   ncep_ncar:
