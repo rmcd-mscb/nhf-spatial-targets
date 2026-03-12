@@ -12,6 +12,7 @@ from pathlib import Path
 import earthaccess
 
 import nhf_spatial_targets.catalog as _catalog
+from nhf_spatial_targets.fetch._auth import earthdata_login
 from nhf_spatial_targets.fetch._period import months_in_period, parse_period
 from nhf_spatial_targets.fetch.consolidate import consolidate_merra2
 
@@ -101,12 +102,7 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
             stacklevel=2,
         )
 
-    auth = earthaccess.login()
-    if auth is None or not auth.authenticated:
-        raise RuntimeError(
-            "NASA Earthdata login failed. Register at "
-            "https://urs.earthdata.nasa.gov/users/new"
-        )
+    earthdata_login(run_dir)
     logger.info("Authenticated with NASA Earthdata")
 
     fabric_path = run_dir / "fabric.json"
