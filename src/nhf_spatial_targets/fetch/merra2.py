@@ -76,7 +76,7 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
 
     Supports incremental download — months already recorded in
     ``manifest.json`` are skipped. After downloading, builds a
-    Kerchunk virtual Zarr reference store and updates the manifest.
+    consolidated NetCDF file and updates the manifest.
 
     Parameters
     ----------
@@ -208,7 +208,7 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
             }
         )
 
-    # Consolidate into Kerchunk reference store
+    # Consolidate into single NetCDF
     var_names = [v["name"] for v in meta["variables"]]
     consolidation = consolidate_merra2(run_dir=run_dir, variables=var_names)
 
@@ -232,7 +232,7 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
         "bbox": bbox,
         "download_timestamp": now_utc,
         "files": files,
-        "kerchunk_ref": consolidation["kerchunk_ref"],
+        "consolidated_nc": consolidation["consolidated_nc"],
     }
 
 
@@ -263,7 +263,7 @@ def _update_manifest(
             "bbox": bbox,
             "variables": [v["name"] for v in meta["variables"]],
             "files": files,
-            "kerchunk_ref": consolidation["kerchunk_ref"],
+            "consolidated_nc": consolidation["consolidated_nc"],
             "last_consolidated_utc": consolidation["last_consolidated_utc"],
         }
     )

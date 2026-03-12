@@ -1,8 +1,7 @@
-"""Tests for MERRA-2 Kerchunk consolidation."""
+"""Tests for NetCDF consolidation."""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import numpy as np
@@ -57,7 +56,7 @@ def merra2_dir(tmp_path: Path) -> Path:
 
 
 def test_filter_variables(merra2_dir):
-    """Reference store contains only requested variables plus coordinates."""
+    """Consolidated file contains only requested variables plus coordinates."""
     from nhf_spatial_targets.fetch.consolidate import consolidate_merra2
 
     run_dir = merra2_dir.parent.parent.parent
@@ -66,18 +65,10 @@ def test_filter_variables(merra2_dir):
         variables=["GWETTOP", "GWETROOT", "GWETPROF"],
     )
 
-    ref_path = merra2_dir / "merra2_refs.json"
-    assert ref_path.exists()
+    nc_path = merra2_dir / "merra2_consolidated.nc"
+    assert nc_path.exists()
 
-    import fsspec
-
-    fs = fsspec.filesystem(
-        "reference",
-        fo=str(ref_path),
-        target_protocol="file",
-    )
-    ds = xr.open_zarr(fs.get_mapper(""), consolidated=False)
-
+    ds = xr.open_dataset(nc_path)
     assert "GWETTOP" in ds.data_vars
     assert "GWETROOT" in ds.data_vars
     assert "GWETPROF" in ds.data_vars
@@ -92,17 +83,9 @@ def test_time_midmonth(merra2_dir):
     from nhf_spatial_targets.fetch.consolidate import consolidate_merra2
 
     run_dir = merra2_dir.parent.parent.parent
-    consolidate_merra2(
-        run_dir=run_dir,
-        variables=["GWETTOP"],
-    )
+    consolidate_merra2(run_dir=run_dir, variables=["GWETTOP"])
 
-    ref_path = merra2_dir / "merra2_refs.json"
-    import fsspec
-
-    fs = fsspec.filesystem("reference", fo=str(ref_path), target_protocol="file")
-    ds = xr.open_zarr(fs.get_mapper(""), consolidated=False)
-
+    ds = xr.open_dataset(merra2_dir / "merra2_consolidated.nc")
     for t in pd.DatetimeIndex(ds.time.values):
         assert t.day == 15
         assert t.hour == 0
@@ -114,17 +97,9 @@ def test_time_bounds(merra2_dir):
     from nhf_spatial_targets.fetch.consolidate import consolidate_merra2
 
     run_dir = merra2_dir.parent.parent.parent
-    consolidate_merra2(
-        run_dir=run_dir,
-        variables=["GWETTOP"],
-    )
+    consolidate_merra2(run_dir=run_dir, variables=["GWETTOP"])
 
-    ref_path = merra2_dir / "merra2_refs.json"
-    import fsspec
-
-    fs = fsspec.filesystem("reference", fo=str(ref_path), target_protocol="file")
-    ds = xr.open_zarr(fs.get_mapper(""), consolidated=False)
-
+    ds = xr.open_dataset(merra2_dir / "merra2_consolidated.nc")
     assert "time_bnds" in ds.data_vars
     assert ds.time.attrs.get("bounds") == "time_bnds"
     assert ds.time.attrs.get("cell_methods") == "time: mean"
@@ -136,38 +111,19 @@ def test_time_bounds(merra2_dir):
 
 
 def test_global_attributes(merra2_dir):
-    """Reference store has CF and provenance global attributes."""
+    """Consolidated file has CF and provenance global attributes."""
     from nhf_spatial_targets.fetch.consolidate import consolidate_merra2
 
     run_dir = merra2_dir.parent.parent.parent
     consolidate_merra2(run_dir=run_dir, variables=["GWETTOP"])
 
-    ref_path = merra2_dir / "merra2_refs.json"
-    refs = json.loads(ref_path.read_text())
-    root_attrs = json.loads(refs["refs"][".zattrs"])
-
-    assert root_attrs["Conventions"] == "CF-1.8"
-    assert "nhf-spatial-targets" in root_attrs["history"]
-    assert "M2TMNXLND" in root_attrs["source"]
-    assert "time_modification_note" in root_attrs
-    assert "references" in root_attrs
-
-
-def test_relative_paths(merra2_dir):
-    """All file references use relative paths starting with './'."""
-    from nhf_spatial_targets.fetch.consolidate import consolidate_merra2
-
-    run_dir = merra2_dir.parent.parent.parent
-    consolidate_merra2(run_dir=run_dir, variables=["GWETTOP"])
-
-    ref_path = merra2_dir / "merra2_refs.json"
-    refs = json.loads(ref_path.read_text())
-
-    for key, val in refs["refs"].items():
-        if isinstance(val, list) and len(val) >= 1 and isinstance(val[0], str):
-            path = val[0]
-            assert not path.startswith("/"), f"Absolute path in ref '{key}': {path}"
-            assert path.startswith("./"), f"Non-relative path in ref '{key}': {path}"
+    ds = xr.open_dataset(merra2_dir / "merra2_consolidated.nc")
+    assert ds.attrs["Conventions"] == "CF-1.8"
+    assert "nhf-spatial-targets" in ds.attrs["history"]
+    assert "M2TMNXLND" in ds.attrs["source"]
+    assert "time_modification_note" in ds.attrs
+    assert "references" in ds.attrs
+    ds.close()
 
 
 def test_no_nc4_files_raises(tmp_path):
@@ -218,12 +174,7 @@ def test_time_bounds_december_year_boundary(merra2_dir_year_boundary):
     run_dir = merra2_dir_year_boundary.parent.parent.parent
     consolidate_merra2(run_dir=run_dir, variables=["GWETTOP"])
 
-    ref_path = merra2_dir_year_boundary / "merra2_refs.json"
-    import fsspec
-
-    fs = fsspec.filesystem("reference", fo=str(ref_path), target_protocol="file")
-    ds = xr.open_zarr(fs.get_mapper(""), consolidated=False)
-
+    ds = xr.open_dataset(merra2_dir_year_boundary / "merra2_consolidated.nc")
     # December 2010: bounds should be [2010-12-01, 2011-01-01]
     dec_idx = 1  # Nov=0, Dec=1, Jan=2
     bnds = pd.DatetimeIndex(ds.time_bnds.values[dec_idx])
@@ -242,7 +193,7 @@ def test_provenance_return(merra2_dir):
         variables=["GWETTOP", "GWETROOT", "GWETPROF"],
     )
 
-    assert result["kerchunk_ref"] == "data/raw/merra2/merra2_refs.json"
+    assert result["consolidated_nc"] == "data/raw/merra2/merra2_consolidated.nc"
     assert "last_consolidated_utc" in result
     assert result["n_files"] == 3
     assert result["variables"] == ["GWETTOP", "GWETROOT", "GWETPROF"]
@@ -288,7 +239,6 @@ def nldas_dir(tmp_path: Path) -> Path:
 
 def test_nldas_filter_variables(nldas_dir):
     from nhf_spatial_targets.fetch.consolidate import consolidate_nldas
-    import fsspec
 
     run_dir = nldas_dir.parent.parent.parent
     consolidate_nldas(
@@ -297,34 +247,16 @@ def test_nldas_filter_variables(nldas_dir):
         variables=["SoilM_0_10cm", "SoilM_10_40cm", "SoilM_40_200cm"],
     )
 
-    ref_path = nldas_dir / "nldas_mosaic_refs.json"
-    assert ref_path.exists()
+    nc_path = nldas_dir / "nldas_mosaic_consolidated.nc"
+    assert nc_path.exists()
 
-    fs = fsspec.filesystem("reference", fo=str(ref_path), target_protocol="file")
-    ds = xr.open_zarr(fs.get_mapper(""), consolidated=False)
+    ds = xr.open_dataset(nc_path)
     assert "SoilM_0_10cm" in ds.data_vars
     assert "SoilM_10_40cm" in ds.data_vars
     assert "SoilM_40_200cm" in ds.data_vars
     assert "EXTRA_VAR" not in ds.data_vars
     assert len(ds.time) == 3
     ds.close()
-
-
-def test_nldas_relative_paths(nldas_dir):
-    from nhf_spatial_targets.fetch.consolidate import consolidate_nldas
-
-    run_dir = nldas_dir.parent.parent.parent
-    consolidate_nldas(
-        run_dir=run_dir,
-        source_key="nldas_mosaic",
-        variables=["SoilM_0_10cm"],
-    )
-
-    ref_path = nldas_dir / "nldas_mosaic_refs.json"
-    refs = json.loads(ref_path.read_text())
-    for key, val in refs["refs"].items():
-        if isinstance(val, list) and len(val) >= 1 and isinstance(val[0], str):
-            assert val[0].startswith("./"), f"Non-relative path: {val[0]}"
 
 
 def test_nldas_provenance_return(nldas_dir):
@@ -336,7 +268,10 @@ def test_nldas_provenance_return(nldas_dir):
         source_key="nldas_mosaic",
         variables=["SoilM_0_10cm", "SoilM_10_40cm", "SoilM_40_200cm"],
     )
-    assert result["kerchunk_ref"] == "data/raw/nldas_mosaic/nldas_mosaic_refs.json"
+    assert (
+        result["consolidated_nc"]
+        == "data/raw/nldas_mosaic/nldas_mosaic_consolidated.nc"
+    )
     assert "last_consolidated_utc" in result
     assert result["n_files"] == 3
 
@@ -386,16 +321,13 @@ def ncep_dir(tmp_path: Path) -> Path:
 def test_ncep_filter_variables(ncep_dir):
     from nhf_spatial_targets.fetch.consolidate import consolidate_ncep_ncar
 
-    import fsspec
-
     run_dir = ncep_dir.parent.parent.parent
     consolidate_ncep_ncar(run_dir=run_dir, variables=["soilw"])
 
-    ref_path = ncep_dir / "ncep_ncar_refs.json"
-    assert ref_path.exists()
+    nc_path = ncep_dir / "ncep_ncar_consolidated.nc"
+    assert nc_path.exists()
 
-    fs = fsspec.filesystem("reference", fo=str(ref_path), target_protocol="file")
-    ds = xr.open_zarr(fs.get_mapper(""), consolidated=False)
+    ds = xr.open_dataset(nc_path)
     assert "soilw" in ds.data_vars
     assert "EXTRA" not in ds.data_vars
     ds.close()
@@ -406,7 +338,7 @@ def test_ncep_provenance_return(ncep_dir):
 
     run_dir = ncep_dir.parent.parent.parent
     result = consolidate_ncep_ncar(run_dir=run_dir, variables=["soilw"])
-    assert result["kerchunk_ref"] == "data/raw/ncep_ncar/ncep_ncar_refs.json"
+    assert result["consolidated_nc"] == "data/raw/ncep_ncar/ncep_ncar_consolidated.nc"
     assert result["n_files"] == 3
 
 
@@ -416,3 +348,20 @@ def test_ncep_no_files_raises(tmp_path):
     (tmp_path / "data" / "raw" / "ncep_ncar").mkdir(parents=True)
     with pytest.raises(FileNotFoundError):
         consolidate_ncep_ncar(run_dir=tmp_path, variables=["soilw"])
+
+
+def test_open_consolidated(merra2_dir):
+    """open_consolidated returns a readable xr.Dataset."""
+    from nhf_spatial_targets.fetch.consolidate import (
+        consolidate_merra2,
+        open_consolidated,
+    )
+
+    run_dir = merra2_dir.parent.parent.parent
+    consolidate_merra2(run_dir=run_dir, variables=["GWETTOP"])
+
+    nc_path = merra2_dir / "merra2_consolidated.nc"
+    ds = open_consolidated(nc_path)
+    assert "GWETTOP" in ds.data_vars
+    assert len(ds.time) == 3
+    ds.close()

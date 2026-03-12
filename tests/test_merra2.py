@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 _MOCK_CONSOLIDATION = {
-    "kerchunk_ref": "data/raw/merra2/merra2_refs.json",
+    "consolidated_nc": "data/raw/merra2/merra2_consolidated.nc",
     "last_consolidated_utc": "2026-01-01T00:00:00+00:00",
     "n_files": 1,
     "variables": ["GWETTOP", "GWETROOT", "GWETPROF"],
@@ -349,7 +349,7 @@ def test_manifest_updated(mock_login, mock_search, mock_dl, mock_consolidate, ru
     assert merra2_entry["period"] == "2010/2010"
     assert len(merra2_entry["files"]) > 0
     assert "year_month" in merra2_entry["files"][0]
-    assert "kerchunk_ref" in merra2_entry
+    assert "consolidated_nc" in merra2_entry
 
 
 @patch(
@@ -409,7 +409,6 @@ def test_manifest_preserves_download_timestamp(
 @pytest.mark.integration
 def test_fetch_merra2_real_download(tmp_path):
     """End-to-end download of one year of MERRA-2 data."""
-    import fsspec
     import xarray as xr
 
     run_dir = tmp_path / "run"
@@ -430,14 +429,13 @@ def test_fetch_merra2_real_download(tmp_path):
 
     assert result["source_key"] == "merra2"
     assert len(result["files"]) == 12
-    assert "kerchunk_ref" in result
+    assert "consolidated_nc" in result
 
-    # Verify Kerchunk reference store works
-    ref_path = run_dir / result["kerchunk_ref"]
-    assert ref_path.exists()
+    # Verify consolidated file works
+    nc_path = run_dir / result["consolidated_nc"]
+    assert nc_path.exists()
 
-    fs = fsspec.filesystem("reference", fo=str(ref_path), target_protocol="file")
-    ds = xr.open_zarr(fs.get_mapper(""), consolidated=False)
+    ds = xr.open_dataset(nc_path)
     assert "GWETTOP" in ds.data_vars
     assert "GWETROOT" in ds.data_vars
     assert "GWETPROF" in ds.data_vars

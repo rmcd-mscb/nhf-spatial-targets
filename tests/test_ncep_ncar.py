@@ -11,7 +11,7 @@ import pytest
 import xarray as xr
 
 _MOCK_CONSOLIDATION = {
-    "kerchunk_ref": "data/raw/ncep_ncar/ncep_ncar_refs.json",
+    "consolidated_nc": "data/raw/ncep_ncar/ncep_ncar_consolidated.nc",
     "last_consolidated_utc": "2026-01-01T00:00:00+00:00",
     "n_files": 1,
     "variables": ["soilw_0_10cm", "soilw_10_200cm"],
@@ -333,4 +333,4 @@ def test_manifest_updated(mock_consolidate, run_dir):
     assert entry["period"] == "2010/2010"
     assert len(entry["files"]) > 0
     assert "year" in entry["files"][0]
-    assert "kerchunk_ref" in entry
+    assert "consolidated_nc" in entry

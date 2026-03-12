@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import xarray as xr
+from tqdm import tqdm
 
 import nhf_spatial_targets.catalog as _catalog
 from nhf_spatial_targets.fetch._period import parse_period, years_in_period
@@ -79,7 +80,7 @@ def fetch_ncep_ncar(run_dir: Path, period: str) -> dict:
 
     Downloads annual NetCDF files containing daily averages from NOAA PSL
     for each year in the period, resamples to monthly means, and
-    consolidates via Kerchunk. Supports incremental download — years
+    consolidates into a single NetCDF. Supports incremental download — years
     already recorded in ``manifest.json`` are skipped.
 
     Parameters
@@ -144,52 +145,50 @@ def fetch_ncep_ncar(run_dir: Path, period: str) -> dict:
             len(all_years),
         )
 
-        for year in needed:
-            for var_entry in meta["variables"]:
-                file_var = var_entry["file_variable"]
-                url = var_entry["file_pattern"].format(year=year)
-                daily_path = output_dir / f"{file_var}.{year}.nc"
+        # Build flat list of (year, var_entry) tasks for progress tracking
+        tasks = [
+            (year, var_entry) for year in needed for var_entry in meta["variables"]
+        ]
+        for year, var_entry in tqdm(tasks, desc="NCEP/NCAR download"):
+            file_var = var_entry["file_variable"]
+            url = var_entry["file_pattern"].format(year=year)
+            daily_path = output_dir / f"{file_var}.{year}.nc"
 
-                logger.info("Downloading %s -> %s", url, daily_path)
-                try:
-                    urllib.request.urlretrieve(url, daily_path)
-                except urllib.error.HTTPError as exc:
-                    raise RuntimeError(
-                        f"Failed to download {url}: HTTP {exc.code} {exc.reason}"
-                    ) from exc
-                except urllib.error.URLError as exc:
-                    raise RuntimeError(
-                        f"Failed to connect to {url}: {exc.reason}. "
-                        "Check network connectivity and DNS resolution."
-                    ) from exc
-                except OSError as exc:
-                    raise RuntimeError(
-                        f"Network error downloading {url}: {exc}"
-                    ) from exc
+            logger.debug("Downloading %s -> %s", url, daily_path)
+            try:
+                urllib.request.urlretrieve(url, daily_path)
+            except urllib.error.HTTPError as exc:
+                raise RuntimeError(
+                    f"Failed to download {url}: HTTP {exc.code} {exc.reason}"
+                ) from exc
+            except urllib.error.URLError as exc:
+                raise RuntimeError(
+                    f"Failed to connect to {url}: {exc.reason}. "
+                    "Check network connectivity and DNS resolution."
+                ) from exc
+            except OSError as exc:
+                raise RuntimeError(f"Network error downloading {url}: {exc}") from exc
 
-                # Aggregate daily to monthly means
-                logger.debug("Resampling %s to monthly means", daily_path)
-                with xr.open_dataset(daily_path) as ds:
-                    monthly = ds.resample(time="1ME").mean()
-                    # Rename internal variable to catalog name for disambiguation
-                    internal_var = file_var.split(".")[0]
-                    catalog_name = var_entry["name"]
-                    if (
-                        internal_var in monthly.data_vars
-                        and internal_var != catalog_name
-                    ):
-                        monthly = monthly.rename({internal_var: catalog_name})
-                    monthly_path = output_dir / f"{file_var}.{year}.monthly.nc"
-                    monthly.to_netcdf(monthly_path)
+            # Aggregate daily to monthly means
+            logger.debug("Resampling %s to monthly means", daily_path)
+            with xr.open_dataset(daily_path) as ds:
+                monthly = ds.resample(time="1ME").mean()
+                # Rename internal variable to catalog name for disambiguation
+                internal_var = file_var.split(".")[0]
+                catalog_name = var_entry["name"]
+                if internal_var in monthly.data_vars and internal_var != catalog_name:
+                    monthly = monthly.rename({internal_var: catalog_name})
+                monthly_path = output_dir / f"{file_var}.{year}.monthly.nc"
+                monthly.to_netcdf(monthly_path, format="NETCDF3_CLASSIC")
 
-                if not monthly_path.exists() or monthly_path.stat().st_size == 0:
-                    raise RuntimeError(
-                        f"Monthly aggregation produced empty or missing file: "
-                        f"{monthly_path}. Daily file preserved at {daily_path}."
-                    )
-                # Delete the raw daily file
-                daily_path.unlink()
-                logger.debug("Deleted daily file %s", daily_path)
+            if not monthly_path.exists() or monthly_path.stat().st_size == 0:
+                raise RuntimeError(
+                    f"Monthly aggregation produced empty or missing file: "
+                    f"{monthly_path}. Daily file preserved at {daily_path}."
+                )
+            # Delete the raw daily file
+            daily_path.unlink()
+            logger.debug("Deleted daily file %s", daily_path)
 
     # Build file inventory from all *.monthly.nc files on disk
     all_monthly_files = sorted(output_dir.glob("*.monthly.nc"))
@@ -210,7 +209,7 @@ def fetch_ncep_ncar(run_dir: Path, period: str) -> dict:
             }
         )
 
-    # Consolidate into Kerchunk reference store
+    # Consolidate into single NetCDF
     var_names = [v["name"] for v in meta["variables"]]
     consolidation = consolidate_ncep_ncar(run_dir=run_dir, variables=var_names)
 
@@ -231,7 +230,7 @@ def fetch_ncep_ncar(run_dir: Path, period: str) -> dict:
         "bbox": bbox,
         "download_timestamp": now_utc,
         "files": files,
-        "kerchunk_ref": consolidation.get("kerchunk_ref"),
+        "consolidated_nc": consolidation.get("consolidated_nc"),
     }
 
 
@@ -262,7 +261,7 @@ def _update_manifest(
             "bbox": bbox,
             "variables": [v["name"] for v in meta["variables"]],
             "files": files,
-            "kerchunk_ref": consolidation.get("kerchunk_ref"),
+            "consolidated_nc": consolidation.get("consolidated_nc"),
             "last_consolidated_utc": consolidation.get("last_consolidated_utc"),
         }
     )
