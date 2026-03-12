@@ -49,7 +49,7 @@ catalog/           # YAML data source registry and variable definitions
 config/            # pipeline.yml run configuration
 src/nhf_spatial_targets/
   catalog.py       # Python API for catalog/ YAML files
-  cli.py           # Click CLI: nhf-targets run | catalog | init
+  cli.py           # Cyclopts CLI: nhf-targets run | catalog | init | fetch
   fetch/           # per-source download modules (one file per source)
   aggregate/       # gdptools area-weighted aggregation
   normalize/       # normalization and range-bound methods
@@ -135,6 +135,6 @@ Managed by **pixi** (`pixi.toml`). Key packages:
 - `earthaccess` — NASA EDL access for MODIS, MERRA-2, NLDAS
 - `sciencebasepy` — USGS ScienceBase access
 - `xarray`, `rioxarray`, `geopandas` — data handling
-- `click`, `rich` — CLI
+- `cyclopts`, `rich` — CLI
 
 Do not add dependencies directly to `pyproject.toml` `[project.dependencies]` — add to `pixi.toml` instead (pyproject.toml is for build metadata only).
