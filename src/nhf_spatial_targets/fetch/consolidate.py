@@ -169,7 +169,7 @@ def _make_relative(refs: dict, base_dir: Path) -> dict:
         if isinstance(val, list) and len(val) >= 1 and isinstance(val[0], str):
             path = val[0]
             if path.startswith(base_prefix):
-                rel = "./" + path[len(base_prefix):]
+                rel = "./" + path[len(base_prefix) :]
                 val = [rel] + val[1:]
         out[key] = val
     return out

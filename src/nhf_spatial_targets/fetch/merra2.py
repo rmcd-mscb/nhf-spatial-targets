@@ -69,7 +69,9 @@ def _manifest_merra2_files(run_dir: Path) -> list[dict]:
         manifest = json.loads(manifest_path.read_text())
         return manifest.get("sources", {}).get("merra2", {}).get("files", [])
     except (json.JSONDecodeError, KeyError):
-        logger.warning("Malformed manifest.json in %s, ignoring merra2 entries", run_dir)
+        logger.warning(
+            "Malformed manifest.json in %s, ignoring merra2 entries", run_dir
+        )
         return []
 
 
@@ -182,9 +184,7 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
 
         # Filter granules to only months not already downloaded
         needed_set = set(needed)
-        granules = [
-            g for g in granules if _granule_year_month(g) in needed_set
-        ]
+        granules = [g for g in granules if _granule_year_month(g) in needed_set]
         if not granules:
             logger.info(
                 "All granules matched already-downloaded months, "
@@ -218,9 +218,7 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
                     len(downloaded),
                     len(granules),
                 )
-            logger.info(
-                "Downloaded %d files to %s", len(downloaded), output_dir
-            )
+            logger.info("Downloaded %d files to %s", len(downloaded), output_dir)
 
     # Build file inventory from all .nc4 files on disk
     output_dir = run_dir / "data" / "raw" / _SOURCE_KEY
