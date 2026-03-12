@@ -60,6 +60,9 @@ run-sca    = { cmd = "nhf-targets run --target snow_covered_area" }
 
 # Fetch source data
 fetch-merra2 = { cmd = "nhf-targets fetch merra2", description = "Download MERRA-2 data into a run workspace" }
+fetch-nldas-mosaic = { cmd = "nhf-targets fetch nldas-mosaic", description = "Download NLDAS-2 MOSAIC data into a run workspace" }
+fetch-nldas-noah = { cmd = "nhf-targets fetch nldas-noah", description = "Download NLDAS-2 NOAH data into a run workspace" }
+fetch-ncep-ncar = { cmd = "nhf-targets fetch ncep-ncar", description = "Download NCEP/NCAR Reanalysis data into a run workspace" }
 
 # Catalog inspection
 catalog-sources   = { cmd = "nhf-targets catalog sources" }
