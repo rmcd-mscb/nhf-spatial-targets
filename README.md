@@ -117,7 +117,7 @@ pixi run -e dev fmt
 | NLDAS-2 MOSAIC fetch + consolidation | Done |
 | NLDAS-2 NOAH fetch + consolidation | Done |
 | NCEP/NCAR Reanalysis fetch + consolidation | Done |
-| Replace kerchunk with xarray merge | Done |
+| xarray-based NetCDF consolidation | Done |
 | Progress bars (tqdm + dask ProgressBar) | Done |
 | Incremental download with manifest tracking | Done |
 | Notebook for inspecting consolidated datasets | Done |

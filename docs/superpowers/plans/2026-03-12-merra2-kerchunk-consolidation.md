@@ -1,3 +1,5 @@
+> **SUPERSEDED:** Kerchunk was replaced with direct xarray merge + NetCDF consolidation in PR #10. This document is retained for historical context only.
+
 # MERRA-2 Kerchunk Consolidation Implementation Plan
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.

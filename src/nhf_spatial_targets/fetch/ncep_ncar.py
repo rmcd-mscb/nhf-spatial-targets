@@ -267,5 +267,16 @@ def _update_manifest(
     )
     manifest["sources"][_SOURCE_KEY] = entry
 
-    manifest_path.write_text(json.dumps(manifest, indent=2))
+    import tempfile
+
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=manifest_path.parent, suffix=".json.tmp")
+    try:
+        import os
+
+        with os.fdopen(tmp_fd, "w") as f:
+            json.dump(manifest, f, indent=2)
+        Path(tmp_path).replace(manifest_path)
+    except BaseException:
+        Path(tmp_path).unlink(missing_ok=True)
+        raise
     logger.info("Updated manifest.json with NCEP/NCAR provenance")

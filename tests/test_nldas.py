@@ -20,7 +20,7 @@ _MOCK_CONSOLIDATION_NOAH = {
     "consolidated_nc": "data/raw/nldas_noah/nldas_noah_consolidated.nc",
     "last_consolidated_utc": "2026-01-01T00:00:00+00:00",
     "n_files": 1,
-    "variables": ["SoilM_0_10cm", "SoilM_10_40cm", "SoilM_40_200cm"],
+    "variables": ["SoilM_0_10cm", "SoilM_10_40cm", "SoilM_40_100cm", "SoilM_100_200cm"],
 }
 
 _CONSOLIDATE_TARGET = "nhf_spatial_targets.fetch.consolidate.consolidate_nldas"

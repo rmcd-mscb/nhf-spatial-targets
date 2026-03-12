@@ -1,3 +1,5 @@
+> **SUPERSEDED:** Kerchunk references in this document are outdated — consolidation now uses direct xarray merge + NetCDF (PR #10). Retained for historical context.
+
 # Soil Moisture Fetch Modules Design
 
 **Date:** 2026-03-12

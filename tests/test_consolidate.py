@@ -350,6 +350,197 @@ def test_ncep_no_files_raises(tmp_path):
         consolidate_ncep_ncar(run_dir=tmp_path, variables=["soilw"])
 
 
+@pytest.fixture()
+def merra2_dir_unsorted(tmp_path: Path) -> Path:
+    """Create MERRA-2 files in reverse chronological order."""
+    out = tmp_path / "data" / "raw" / "merra2"
+    out.mkdir(parents=True)
+
+    lat = np.arange(-90, 91, 45.0)
+    lon = np.arange(-180, 180, 60.0)
+
+    # Write March first, then Jan — reversed order
+    for month in [3, 1, 2]:
+        time = np.array(
+            [f"2010-{month:02d}-01T00:30:00"],
+            dtype="datetime64[ns]",
+        )
+        ds = xr.Dataset(
+            {
+                "GWETTOP": (
+                    ["time", "lat", "lon"],
+                    np.full((1, len(lat), len(lon)), month, dtype=np.float32),
+                ),
+            },
+            coords={"time": time, "lat": lat, "lon": lon},
+        )
+        fname = f"MERRA2_300.tavgM_2d_lnd_Nx.2010{month:02d}.nc4"
+        ds.to_netcdf(out / fname)
+
+    return out
+
+
+def test_time_sorting(merra2_dir_unsorted):
+    """Consolidated output has monotonically increasing time regardless of input order."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_merra2
+
+    run_dir = merra2_dir_unsorted.parent.parent.parent
+    consolidate_merra2(run_dir=run_dir, variables=["GWETTOP"])
+
+    ds = xr.open_dataset(merra2_dir_unsorted / "merra2_consolidated.nc")
+    times = pd.DatetimeIndex(ds.time.values)
+    assert times.is_monotonic_increasing
+    # Verify data follows the time order (month value encoded in data)
+    assert float(ds["GWETTOP"].isel(time=0).mean()) == pytest.approx(1.0)
+    assert float(ds["GWETTOP"].isel(time=1).mean()) == pytest.approx(2.0)
+    assert float(ds["GWETTOP"].isel(time=2).mean()) == pytest.approx(3.0)
+    ds.close()
+
+
+@pytest.fixture()
+def ncep_multi_var_dir(tmp_path: Path) -> Path:
+    """Create NCEP/NCAR files with different variables in separate files."""
+    out = tmp_path / "data" / "raw" / "ncep_ncar"
+    out.mkdir(parents=True)
+
+    lat = np.arange(-90, 91, 45.0)
+    lon = np.arange(-180, 180, 60.0)
+
+    # Variable group 1: soilw_0_10cm (2 years)
+    for year in [2010, 2011]:
+        for month in range(1, 4):
+            time = np.array([f"{year}-{month:02d}-15T00:00:00"], dtype="datetime64[ns]")
+            ds = xr.Dataset(
+                {
+                    "soilw_0_10cm": (
+                        ["time", "lat", "lon"],
+                        np.random.rand(1, len(lat), len(lon)).astype(np.float32),
+                    ),
+                },
+                coords={"time": time, "lat": lat, "lon": lon},
+            )
+            fname = f"soilw.0-10cm.gauss.{year}-{month:02d}.monthly.nc"
+            ds.to_netcdf(out / fname, format="NETCDF3_CLASSIC")
+
+    # Variable group 2: soilw_10_200cm (same 2 years)
+    for year in [2010, 2011]:
+        for month in range(1, 4):
+            time = np.array([f"{year}-{month:02d}-15T00:00:00"], dtype="datetime64[ns]")
+            ds = xr.Dataset(
+                {
+                    "soilw_10_200cm": (
+                        ["time", "lat", "lon"],
+                        np.random.rand(1, len(lat), len(lon)).astype(np.float32),
+                    ),
+                },
+                coords={"time": time, "lat": lat, "lon": lon},
+            )
+            fname = f"soilw.10-200cm.gauss.{year}-{month:02d}.monthly.nc"
+            ds.to_netcdf(out / fname, format="NETCDF3_CLASSIC")
+
+    return out
+
+
+def test_ncep_multi_variable_merge(ncep_multi_var_dir):
+    """Files with different variables are grouped, concatenated, then merged."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_ncep_ncar
+
+    run_dir = ncep_multi_var_dir.parent.parent.parent
+    result = consolidate_ncep_ncar(
+        run_dir=run_dir, variables=["soilw_0_10cm", "soilw_10_200cm"]
+    )
+
+    nc_path = ncep_multi_var_dir / "ncep_ncar_consolidated.nc"
+    assert nc_path.exists()
+
+    ds = xr.open_dataset(nc_path)
+    assert "soilw_0_10cm" in ds.data_vars
+    assert "soilw_10_200cm" in ds.data_vars
+    # 2 years × 3 months = 6 timesteps (no duplicates)
+    assert len(ds.time) == 6
+    assert pd.DatetimeIndex(ds.time.values).is_monotonic_increasing
+    ds.close()
+
+    assert result["n_files"] == 12  # 6 per variable group
+
+
+@pytest.fixture()
+def nldas_noah_dir(tmp_path: Path) -> Path:
+    """Create synthetic NLDAS NOAH NetCDF4 files with 4 soil layers."""
+    out = tmp_path / "data" / "raw" / "nldas_noah"
+    out.mkdir(parents=True)
+
+    lat = np.arange(25.0, 50.0, 5.0)
+    lon = np.arange(-125.0, -65.0, 10.0)
+
+    for month in range(1, 4):
+        time = np.array([f"2010-{month:02d}-15T00:00:00"], dtype="datetime64[ns]")
+        ds = xr.Dataset(
+            {
+                "SoilM_0_10cm": (
+                    ["time", "lat", "lon"],
+                    np.random.rand(1, len(lat), len(lon)).astype(np.float32),
+                ),
+                "SoilM_10_40cm": (
+                    ["time", "lat", "lon"],
+                    np.random.rand(1, len(lat), len(lon)).astype(np.float32),
+                ),
+                "SoilM_40_100cm": (
+                    ["time", "lat", "lon"],
+                    np.random.rand(1, len(lat), len(lon)).astype(np.float32),
+                ),
+                "SoilM_100_200cm": (
+                    ["time", "lat", "lon"],
+                    np.random.rand(1, len(lat), len(lon)).astype(np.float32),
+                ),
+                "EXTRA_VAR": (
+                    ["time", "lat", "lon"],
+                    np.random.rand(1, len(lat), len(lon)).astype(np.float32),
+                ),
+            },
+            coords={"time": time, "lat": lat, "lon": lon},
+        )
+        fname = f"NLDAS_NOAH0125_M.A2010{month:02d}.002.grb.SUB.nc4"
+        ds.to_netcdf(out / fname)
+
+    return out
+
+
+def test_nldas_noah_filter_variables(nldas_noah_dir):
+    """NOAH consolidation with 4 soil layers filters correctly."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_nldas
+
+    run_dir = nldas_noah_dir.parent.parent.parent
+    noah_vars = ["SoilM_0_10cm", "SoilM_10_40cm", "SoilM_40_100cm", "SoilM_100_200cm"]
+    consolidate_nldas(
+        run_dir=run_dir,
+        source_key="nldas_noah",
+        variables=noah_vars,
+    )
+
+    nc_path = nldas_noah_dir / "nldas_noah_consolidated.nc"
+    assert nc_path.exists()
+
+    ds = xr.open_dataset(nc_path)
+    for var in noah_vars:
+        assert var in ds.data_vars
+    assert "EXTRA_VAR" not in ds.data_vars
+    assert len(ds.time) == 3
+    ds.close()
+
+
+def test_missing_variable_raises(merra2_dir):
+    """ValueError raised when a requested variable does not exist in the data."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_merra2
+
+    run_dir = merra2_dir.parent.parent.parent
+    with pytest.raises(ValueError, match="not found"):
+        consolidate_merra2(
+            run_dir=run_dir,
+            variables=["GWETTOP", "NONEXISTENT_VAR"],
+        )
+
+
 def test_open_consolidated(merra2_dir):
     """open_consolidated returns a readable xr.Dataset."""
     from nhf_spatial_targets.fetch.consolidate import (

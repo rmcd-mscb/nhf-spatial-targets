@@ -1,3 +1,5 @@
+> **SUPERSEDED:** Kerchunk was replaced with direct xarray merge + NetCDF consolidation in PR #10. This document is retained for historical context only.
+
 # MERRA-2 Kerchunk Consolidation Design
 
 ## Goal

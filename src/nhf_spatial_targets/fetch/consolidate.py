@@ -29,7 +29,68 @@ def open_consolidated(nc_path: Path) -> xr.Dataset:
     -------
     xr.Dataset
     """
-    return xr.open_dataset(nc_path)
+    if not nc_path.exists():
+        raise FileNotFoundError(
+            f"Consolidated file not found: {nc_path}. "
+            f"Run the appropriate fetch command first."
+        )
+    try:
+        return xr.open_dataset(nc_path)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to open consolidated file {nc_path}. "
+            f"The file may be corrupt — delete it and re-consolidate. "
+            f"Detail: {exc}"
+        ) from exc
+
+
+def _validate_variables(ds: xr.Dataset, variables: list[str]) -> None:
+    """Raise ValueError if any requested variables are missing from *ds*."""
+    missing = set(variables) - set(ds.data_vars)
+    if missing:
+        raise ValueError(
+            f"Requested variables {sorted(missing)} not found in the "
+            f"concatenated dataset. Available variables: {sorted(ds.data_vars)}. "
+            f"Check catalog/sources.yml or re-fetch the source data."
+        )
+
+
+def _open_datasets(nc_files: list[Path], desc: str) -> list[xr.Dataset]:
+    """Open a list of NetCDF files with tqdm progress, cleaning up on failure."""
+    datasets: list[xr.Dataset] = []
+    for f in tqdm(nc_files, desc=desc):
+        try:
+            datasets.append(xr.open_dataset(f, chunks={}))
+        except Exception as exc:
+            for d in datasets:
+                d.close()
+            raise RuntimeError(
+                f"Failed to open {f.name} during consolidation. "
+                f"The file may be corrupt or truncated. "
+                f"Delete it and re-run the fetch. Detail: {exc}"
+            ) from exc
+    return datasets
+
+
+def _write_netcdf(
+    ds: xr.Dataset,
+    out_path: Path,
+    encoding: dict | None = None,
+) -> None:
+    """Write dataset to NetCDF, removing partial file on failure."""
+    try:
+        kwargs: dict = {}
+        if encoding is not None:
+            kwargs["encoding"] = encoding
+        with ProgressBar():
+            ds.to_netcdf(out_path, **kwargs)
+    except Exception as exc:
+        if out_path.exists():
+            out_path.unlink()
+        raise RuntimeError(
+            f"Failed to write consolidated file {out_path}. "
+            f"Check available disk space and permissions. Detail: {exc}"
+        ) from exc
 
 
 def _fix_time_merra2(ds: xr.Dataset) -> xr.Dataset:
@@ -131,41 +192,40 @@ def consolidate_merra2(
 
     logger.info("Merging %d NetCDF files for MERRA-2", len(nc_files))
 
-    datasets = []
-    for f in tqdm(nc_files, desc="Reading MERRA-2 files"):
-        datasets.append(xr.open_dataset(f, chunks={}))
-    ds = xr.concat(datasets, dim="time", data_vars="minimal", coords="minimal")
-    ds = ds.sortby("time")
-    ds = ds[variables]
-    ds = _fix_time_merra2(ds)
+    datasets = _open_datasets(nc_files, "Reading MERRA-2 files")
+    try:
+        ds = xr.concat(datasets, dim="time", data_vars="minimal", coords="minimal")
+        ds = ds.sortby("time")
+        _validate_variables(ds, variables)
+        ds = ds[variables]
+        ds = _fix_time_merra2(ds)
 
-    # Add CF and provenance global attributes
-    meta = _catalog.source("merra2")
-    ds.attrs.update(
-        {
-            "Conventions": "CF-1.8",
-            "history": (f"Consolidated by nhf-spatial-targets v{__version__}"),
-            "source": (
-                f"NASA MERRA-2 {meta['access']['short_name']}"
-                f" v{meta['access'].get('version', 'unknown')}"
-            ),
-            "time_modification_note": (
-                "Original timestamps (YYYY-MM-01T00:30:00) shifted to mid-month "
-                "(15th) for consistency. See time_bnds for exact averaging periods."
-            ),
-            "references": meta["access"]["url"],
-        }
-    )
+        # Add CF and provenance global attributes
+        meta = _catalog.source("merra2")
+        ds.attrs.update(
+            {
+                "Conventions": "CF-1.8",
+                "history": (f"Consolidated by nhf-spatial-targets v{__version__}"),
+                "source": (
+                    f"NASA MERRA-2 {meta['access']['short_name']}"
+                    f" v{meta['access'].get('version', 'unknown')}"
+                ),
+                "time_modification_note": (
+                    "Original timestamps (YYYY-MM-01T00:30:00) shifted to mid-month "
+                    "(15th) for consistency. See time_bnds for exact averaging periods."
+                ),
+                "references": meta["access"]["url"],
+            }
+        )
 
-    out_path = merra2_dir / "merra2_consolidated.nc"
-    logger.info("Writing consolidated file: %s", out_path)
-    encoding = {"time": {"units": "days since 1970-01-01", "calendar": "standard"}}
-    with ProgressBar():
-        ds.to_netcdf(out_path, encoding=encoding)
-    for d in datasets:
-        d.close()
-    ds.close()
-    logger.info("Wrote %s", out_path)
+        out_path = merra2_dir / "merra2_consolidated.nc"
+        logger.info("Writing consolidated file: %s", out_path)
+        encoding = {"time": {"units": "days since 1970-01-01", "calendar": "standard"}}
+        _write_netcdf(ds, out_path, encoding=encoding)
+        logger.info("Wrote %s", out_path)
+    finally:
+        for d in datasets:
+            d.close()
 
     return {
         "consolidated_nc": str(out_path.relative_to(run_dir)),
@@ -207,21 +267,20 @@ def consolidate_nldas(
 
     logger.info("Merging %d NetCDF files for %s", len(nc_files), source_key)
 
-    datasets = []
-    for f in tqdm(nc_files, desc=f"Reading {source_key} files"):
-        datasets.append(xr.open_dataset(f, chunks={}))
-    ds = xr.concat(datasets, dim="time", data_vars="minimal", coords="minimal")
-    ds = ds.sortby("time")
-    ds = ds[variables]
+    datasets = _open_datasets(nc_files, f"Reading {source_key} files")
+    try:
+        ds = xr.concat(datasets, dim="time", data_vars="minimal", coords="minimal")
+        ds = ds.sortby("time")
+        _validate_variables(ds, variables)
+        ds = ds[variables]
 
-    out_path = source_dir / f"{source_key}_consolidated.nc"
-    logger.info("Writing consolidated file: %s", out_path)
-    with ProgressBar():
-        ds.to_netcdf(out_path)
-    for d in datasets:
-        d.close()
-    ds.close()
-    logger.info("Wrote %s", out_path)
+        out_path = source_dir / f"{source_key}_consolidated.nc"
+        logger.info("Writing consolidated file: %s", out_path)
+        _write_netcdf(ds, out_path)
+        logger.info("Wrote %s", out_path)
+    finally:
+        for d in datasets:
+            d.close()
 
     return {
         "consolidated_nc": str(out_path.relative_to(run_dir)),
@@ -264,34 +323,59 @@ def consolidate_ncep_ncar(
     # Group by variable, concat each group along time, then merge across variables.
     from collections import defaultdict
 
-    groups: dict[str, list[Path]] = defaultdict(list)
+    groups: dict[tuple[str, ...], list[Path]] = defaultdict(list)
     for f in nc_files:
-        ds_peek = xr.open_dataset(f, chunks={})
+        try:
+            ds_peek = xr.open_dataset(f, chunks={})
+        except Exception as exc:
+            raise RuntimeError(
+                f"Cannot inspect {f.name} for variable grouping. "
+                f"The file may be corrupt. Detail: {exc}"
+            ) from exc
         data_vars = [v for v in ds_peek.data_vars if v != "time_bnds"]
         key = tuple(sorted(data_vars))
         groups[key].append(f)
         ds_peek.close()
 
-    merged_parts = []
-    for var_key, file_group in groups.items():
-        datasets = []
-        for f in tqdm(file_group, desc=f"Reading NCEP/NCAR {', '.join(var_key)}"):
-            datasets.append(xr.open_dataset(f, chunks={}))
-        part = xr.concat(datasets, dim="time", data_vars="minimal", coords="minimal")
-        part = part.sortby("time")
-        merged_parts.append(part)
+    # Warn about unexpected variable groups
+    expected_vars = set(variables)
+    for key in groups:
+        if not set(key) & expected_vars:
+            logger.warning(
+                "Found files with unexpected variables %s in %s; "
+                "these will be included in merge but filtered out during "
+                "variable selection.",
+                key,
+                ncep_dir,
+            )
 
-    ds = xr.merge(merged_parts)
-    ds = ds[variables]
+    merged_parts: list[xr.Dataset] = []
+    try:
+        for var_key, file_group in groups.items():
+            datasets = _open_datasets(
+                file_group, f"Reading NCEP/NCAR {', '.join(var_key)}"
+            )
+            try:
+                part = xr.concat(
+                    datasets, dim="time", data_vars="minimal", coords="minimal"
+                )
+                part = part.sortby("time")
+                merged_parts.append(part)
+            finally:
+                for d in datasets:
+                    d.close()
 
-    out_path = ncep_dir / "ncep_ncar_consolidated.nc"
-    logger.info("Writing consolidated file: %s", out_path)
-    with ProgressBar():
-        ds.to_netcdf(out_path)
-    for part in merged_parts:
-        part.close()
-    ds.close()
-    logger.info("Wrote %s", out_path)
+        ds = xr.merge(merged_parts)
+        _validate_variables(ds, variables)
+        ds = ds[variables]
+
+        out_path = ncep_dir / "ncep_ncar_consolidated.nc"
+        logger.info("Writing consolidated file: %s", out_path)
+        _write_netcdf(ds, out_path)
+        logger.info("Wrote %s", out_path)
+    finally:
+        for part in merged_parts:
+            part.close()
 
     return {
         "consolidated_nc": str(out_path.relative_to(run_dir)),

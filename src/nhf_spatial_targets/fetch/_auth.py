@@ -44,11 +44,10 @@ def earthdata_login(run_dir: Path) -> earthaccess.Auth:
             username = nasa.get("username", "") or ""
             password = nasa.get("password", "") or ""
         except yaml.YAMLError as exc:
-            logger.warning(
-                "Could not parse %s: %s. Falling back to default login.",
-                creds_path,
-                exc,
-            )
+            raise ValueError(
+                f"Cannot parse {creds_path}: {exc}. "
+                f"Fix the YAML syntax in your credentials file."
+            ) from exc
 
     if username and password:
         os.environ["EARTHDATA_USERNAME"] = username
