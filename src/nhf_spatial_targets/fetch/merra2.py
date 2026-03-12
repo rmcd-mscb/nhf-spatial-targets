@@ -12,6 +12,8 @@ from pathlib import Path
 import earthaccess
 
 import nhf_spatial_targets.catalog as _catalog
+from nhf_spatial_targets.fetch._auth import earthdata_login
+from nhf_spatial_targets.fetch._period import months_in_period, parse_period
 from nhf_spatial_targets.fetch.consolidate import consolidate_merra2
 
 _SOURCE_KEY = "merra2"
@@ -30,36 +32,6 @@ def _granule_year_month(granule: object) -> str | None:
     return None
 
 
-def _parse_period(period: str) -> tuple[str, str]:
-    """Parse ``"YYYY/YYYY"`` into ``("YYYY-01-01", "YYYY-12-31")``."""
-    parts = period.split("/")
-    if len(parts) != 2:
-        raise ValueError(f"period must be 'YYYY/YYYY', got: {period!r}")
-    start_year, end_year = parts
-    try:
-        start_int, end_int = int(start_year), int(end_year)
-    except ValueError:
-        raise ValueError(f"period years must be integers, got: {period!r}") from None
-    if end_int < start_int:
-        raise ValueError(
-            f"period end year ({end_year}) is before start year "
-            f"({start_year}). Use 'YYYY/YYYY' with start <= end."
-        )
-    return (f"{start_year}-01-01", f"{end_year}-12-31")
-
-
-def _months_in_period(period: str) -> list[str]:
-    """Return list of 'YYYY-MM' strings for every month in the period."""
-    _parse_period(period)  # validate format
-    parts = period.split("/")
-    start_year, end_year = int(parts[0]), int(parts[1])
-    months = []
-    for year in range(start_year, end_year + 1):
-        for month in range(1, 13):
-            months.append(f"{year}-{month:02d}")
-    return months
-
-
 def _manifest_merra2_files(run_dir: Path) -> list[dict]:
     """Read manifest.json and return the merra2 file records list."""
     manifest_path = run_dir / "manifest.json"
@@ -67,12 +39,12 @@ def _manifest_merra2_files(run_dir: Path) -> list[dict]:
         return []
     try:
         manifest = json.loads(manifest_path.read_text())
-        return manifest.get("sources", {}).get("merra2", {}).get("files", [])
-    except (json.JSONDecodeError, KeyError):
-        logger.warning(
-            "Malformed manifest.json in %s, ignoring merra2 entries", run_dir
-        )
-        return []
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"manifest.json in {run_dir} is corrupted and cannot be parsed. "
+            f"Inspect the file manually or restore from backup. Detail: {exc}"
+        ) from exc
+    return manifest.get("sources", {}).get("merra2", {}).get("files", [])
 
 
 def _existing_months(run_dir: Path) -> set[str]:
@@ -130,12 +102,7 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
             stacklevel=2,
         )
 
-    auth = earthaccess.login()
-    if auth is None or not auth.authenticated:
-        raise RuntimeError(
-            "NASA Earthdata login failed. Register at "
-            "https://urs.earthdata.nasa.gov/users/new"
-        )
+    earthdata_login(run_dir)
     logger.info("Authenticated with NASA Earthdata")
 
     fabric_path = run_dir / "fabric.json"
@@ -157,7 +124,7 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
 
     # Determine which months need downloading
     already_have = _existing_months(run_dir)
-    all_months = _months_in_period(period)
+    all_months = months_in_period(period)
     needed = [m for m in all_months if m not in already_have]
 
     if not needed:
@@ -166,7 +133,7 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
             len(all_months),
         )
     else:
-        temporal = _parse_period(period)
+        temporal = parse_period(period)
         logger.debug("bbox=%s, temporal=%s", bbox_tuple, temporal)
 
         granules = earthaccess.search_data(

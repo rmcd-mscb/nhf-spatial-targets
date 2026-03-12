@@ -63,36 +63,15 @@ def _fake_download(run_dir: Path, n: int = 1) -> list[str]:
 # ---- Authentication --------------------------------------------------------
 
 
-@patch("earthaccess.login")
+@patch("nhf_spatial_targets.fetch.merra2.earthdata_login")
 def test_login_called(mock_login, run_dir):
-    """earthaccess.login() is called before searching."""
-    mock_login.return_value = MagicMock(authenticated=True)
+    """earthdata_login() is called before searching."""
     with patch("earthaccess.search_data", return_value=[]):
         with pytest.raises(ValueError, match="No granules found"):
             from nhf_spatial_targets.fetch.merra2 import fetch_merra2
 
             fetch_merra2(run_dir=run_dir, period="2010/2010")
-    mock_login.assert_called_once()
-
-
-@patch("earthaccess.login")
-def test_login_failure_raises(mock_login, run_dir):
-    """RuntimeError raised when earthaccess.login() fails."""
-    mock_login.return_value = MagicMock(authenticated=False)
-    from nhf_spatial_targets.fetch.merra2 import fetch_merra2
-
-    with pytest.raises(RuntimeError, match="Earthdata"):
-        fetch_merra2(run_dir=run_dir, period="2010/2010")
-
-
-@patch("earthaccess.login")
-def test_login_returns_none_raises(mock_login, run_dir):
-    """RuntimeError raised when earthaccess.login() returns None."""
-    mock_login.return_value = None
-    from nhf_spatial_targets.fetch.merra2 import fetch_merra2
-
-    with pytest.raises(RuntimeError, match="Earthdata"):
-        fetch_merra2(run_dir=run_dir, period="2010/2010")
+    mock_login.assert_called_once_with(run_dir)
 
 
 # ---- Search parameters -----------------------------------------------------
@@ -104,10 +83,9 @@ def test_login_returns_none_raises(mock_login, run_dir):
 )
 @patch("earthaccess.download")
 @patch("earthaccess.search_data")
-@patch("earthaccess.login")
+@patch("nhf_spatial_targets.fetch.merra2.earthdata_login")
 def test_search_params(mock_login, mock_search, mock_dl, mock_consolidate, run_dir):
     """search_data called with correct short_name, bbox tuple, and temporal."""
-    mock_login.return_value = MagicMock(authenticated=True)
     mock_search.return_value = [_mock_granule("g1")]
     mock_dl.return_value = _fake_download(run_dir)
 
@@ -125,11 +103,10 @@ def test_search_params(mock_login, mock_search, mock_dl, mock_consolidate, run_d
 # ---- No results ------------------------------------------------------------
 
 
-@patch("earthaccess.login")
+@patch("nhf_spatial_targets.fetch.merra2.earthdata_login")
 @patch("earthaccess.search_data", return_value=[])
 def test_no_granules_raises(mock_search, mock_login, run_dir):
     """ValueError raised when search returns zero granules."""
-    mock_login.return_value = MagicMock(authenticated=True)
     from nhf_spatial_targets.fetch.merra2 import fetch_merra2
 
     with pytest.raises(ValueError, match="No granules found"):
@@ -145,10 +122,9 @@ def test_no_granules_raises(mock_search, mock_login, run_dir):
 )
 @patch("earthaccess.download")
 @patch("earthaccess.search_data")
-@patch("earthaccess.login")
+@patch("nhf_spatial_targets.fetch.merra2.earthdata_login")
 def test_output_dir(mock_login, mock_search, mock_dl, mock_consolidate, run_dir):
     """Download writes to run_dir/data/raw/merra2/."""
-    mock_login.return_value = MagicMock(authenticated=True)
     mock_search.return_value = [_mock_granule("g1")]
     mock_dl.return_value = _fake_download(run_dir)
 
@@ -171,10 +147,9 @@ def test_output_dir(mock_login, mock_search, mock_dl, mock_consolidate, run_dir)
 )
 @patch("earthaccess.download")
 @patch("earthaccess.search_data")
-@patch("earthaccess.login")
+@patch("nhf_spatial_targets.fetch.merra2.earthdata_login")
 def test_provenance_record(mock_login, mock_search, mock_dl, mock_consolidate, run_dir):
     """Returned dict has all required provenance keys."""
-    mock_login.return_value = MagicMock(authenticated=True)
     mock_search.return_value = [_mock_granule("g1")]
     mock_dl.return_value = _fake_download(run_dir)
 
@@ -206,7 +181,7 @@ def test_provenance_record(mock_login, mock_search, mock_dl, mock_consolidate, r
 )
 @patch("earthaccess.download")
 @patch("earthaccess.search_data")
-@patch("earthaccess.login")
+@patch("nhf_spatial_targets.fetch.merra2.earthdata_login")
 @patch("nhf_spatial_targets.catalog.source")
 def test_superseded_warning(
     mock_source, mock_login, mock_search, mock_dl, mock_consolidate, run_dir
@@ -217,7 +192,6 @@ def test_superseded_warning(
         "access": {"url": "https://example.com", "short_name": "M2TMNXLND"},
         "variables": [{"name": "SFMC"}],
     }
-    mock_login.return_value = MagicMock(authenticated=True)
     mock_search.return_value = [_mock_granule("g1")]
     mock_dl.return_value = _fake_download(run_dir)
 
@@ -231,40 +205,12 @@ def test_superseded_warning(
         assert "superseded" in str(dep_warnings[0].message).lower()
 
 
-# ---- Period validation -----------------------------------------------------
+# ---- Missing / malformed fabric.json ---------------------------------------
 
 
-def test_period_missing_slash(run_dir):
-    """ValueError raised for period without slash separator."""
-    from nhf_spatial_targets.fetch.merra2 import _parse_period
-
-    with pytest.raises(ValueError, match="YYYY/YYYY"):
-        _parse_period("2010")
-
-
-def test_period_non_numeric(run_dir):
-    """ValueError raised for non-integer years."""
-    from nhf_spatial_targets.fetch.merra2 import _parse_period
-
-    with pytest.raises(ValueError, match="integers"):
-        _parse_period("abc/def")
-
-
-def test_period_reversed(run_dir):
-    """ValueError raised when end year is before start year."""
-    from nhf_spatial_targets.fetch.merra2 import _parse_period
-
-    with pytest.raises(ValueError, match="before start year"):
-        _parse_period("2015/2010")
-
-
-# ---- Missing fabric.json --------------------------------------------------
-
-
-@patch("earthaccess.login")
+@patch("nhf_spatial_targets.fetch.merra2.earthdata_login")
 def test_missing_fabric_raises(mock_login, tmp_path):
     """FileNotFoundError raised when fabric.json is missing."""
-    mock_login.return_value = MagicMock(authenticated=True)
     run_dir = tmp_path / "empty_run"
     run_dir.mkdir()
 
@@ -274,15 +220,27 @@ def test_missing_fabric_raises(mock_login, tmp_path):
         fetch_merra2(run_dir=run_dir, period="2010/2010")
 
 
+@patch("nhf_spatial_targets.fetch.merra2.earthdata_login")
+def test_malformed_fabric_raises(mock_login, tmp_path):
+    """ValueError raised when fabric.json is malformed."""
+    run_dir = tmp_path / "bad_fabric_run"
+    run_dir.mkdir()
+    (run_dir / "fabric.json").write_text("{}")
+
+    from nhf_spatial_targets.fetch.merra2 import fetch_merra2
+
+    with pytest.raises(ValueError, match="malformed"):
+        fetch_merra2(run_dir=run_dir, period="2010/2010")
+
+
 # ---- Download failures -----------------------------------------------------
 
 
 @patch("earthaccess.download", return_value=[])
 @patch("earthaccess.search_data")
-@patch("earthaccess.login")
+@patch("nhf_spatial_targets.fetch.merra2.earthdata_login")
 def test_empty_download_raises(mock_login, mock_search, mock_dl, run_dir):
     """RuntimeError raised when download returns no files."""
-    mock_login.return_value = MagicMock(authenticated=True)
     mock_search.return_value = [_mock_granule("g1")]
 
     from nhf_spatial_targets.fetch.merra2 import fetch_merra2
@@ -296,11 +254,9 @@ def test_empty_download_raises(mock_login, mock_search, mock_dl, run_dir):
 
 @patch("earthaccess.download")
 @patch("earthaccess.search_data")
-@patch("earthaccess.login")
+@patch("nhf_spatial_targets.fetch.merra2.earthdata_login")
 def test_incremental_skips_existing(mock_login, mock_search, mock_dl, run_dir):
     """Months already in manifest are not re-downloaded."""
-    mock_login.return_value = MagicMock(authenticated=True)
-
     # Pre-populate manifest with Jan 2010 already downloaded
     manifest = {
         "sources": {
@@ -325,12 +281,13 @@ def test_incremental_skips_existing(mock_login, mock_search, mock_dl, run_dir):
     )
     existing.write_bytes(b"fake")
 
-    from nhf_spatial_targets.fetch.merra2 import _existing_months, _months_in_period
+    from nhf_spatial_targets.fetch._period import months_in_period
+    from nhf_spatial_targets.fetch.merra2 import _existing_months
 
     existing_months = _existing_months(run_dir)
     assert "2010-01" in existing_months
 
-    requested = _months_in_period("2010/2010")
+    requested = months_in_period("2010/2010")
     assert len(requested) == 12
 
     missing = [m for m in requested if m not in existing_months]
@@ -377,10 +334,9 @@ def test_year_month_from_invalid_filename():
 )
 @patch("earthaccess.download")
 @patch("earthaccess.search_data")
-@patch("earthaccess.login")
+@patch("nhf_spatial_targets.fetch.merra2.earthdata_login")
 def test_manifest_updated(mock_login, mock_search, mock_dl, mock_consolidate, run_dir):
     """fetch_merra2 writes provenance to manifest.json."""
-    mock_login.return_value = MagicMock(authenticated=True)
     mock_search.return_value = [_mock_granule("g1")]
     mock_dl.return_value = _fake_download(run_dir)
 
@@ -402,12 +358,11 @@ def test_manifest_updated(mock_login, mock_search, mock_dl, mock_consolidate, ru
 )
 @patch("earthaccess.download")
 @patch("earthaccess.search_data")
-@patch("earthaccess.login")
+@patch("nhf_spatial_targets.fetch.merra2.earthdata_login")
 def test_manifest_preserves_download_timestamp(
     mock_login, mock_search, mock_dl, mock_consolidate, run_dir
 ):
     """Re-running fetch preserves original downloaded_utc for existing files."""
-    mock_login.return_value = MagicMock(authenticated=True)
     mock_search.return_value = [_mock_granule("g1")]
 
     # Pre-populate manifest with all 12 months already recorded so

@@ -179,6 +179,101 @@ def test_fetch_merra2_calls_fetch(tmp_path):
     mock_fetch.assert_called_once_with(run_dir=run_dir, period="2010/2010")
 
 
+# ---- fetch nldas-mosaic command --------------------------------------------
+
+
+def test_fetch_nldas_mosaic_nonexistent_run_dir(capsys):
+    from nhf_spatial_targets.cli import main
+
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "fetch",
+                "nldas-mosaic",
+                "--run-dir",
+                "/no/such/dir",
+                "--period",
+                "2010/2010",
+            ]
+        )
+
+
+def test_fetch_nldas_noah_nonexistent_run_dir(capsys):
+    from nhf_spatial_targets.cli import main
+
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "fetch",
+                "nldas-noah",
+                "--run-dir",
+                "/no/such/dir",
+                "--period",
+                "2010/2010",
+            ]
+        )
+
+
+def test_fetch_ncep_ncar_nonexistent_run_dir(capsys):
+    from nhf_spatial_targets.cli import main
+
+    with pytest.raises(SystemExit):
+        main(
+            ["fetch", "ncep-ncar", "--run-dir", "/no/such/dir", "--period", "2010/2010"]
+        )
+
+
+@patch("nhf_spatial_targets.fetch.nldas.fetch_nldas_mosaic")
+def test_fetch_nldas_mosaic_calls_fetch(mock_fetch, tmp_path):
+    """CLI wires --run-dir and --period to fetch_nldas_mosaic()."""
+    mock_fetch.return_value = {"files": [], "kerchunk_ref": "ref.json"}
+    run_dir = tmp_path / "workspace"
+    run_dir.mkdir()
+    _run(
+        "fetch",
+        "nldas-mosaic",
+        "--run-dir",
+        str(run_dir),
+        "--period",
+        "2010/2010",
+    )
+    mock_fetch.assert_called_once()
+
+
+@patch("nhf_spatial_targets.fetch.nldas.fetch_nldas_noah")
+def test_fetch_nldas_noah_calls_fetch(mock_fetch, tmp_path):
+    """CLI wires --run-dir and --period to fetch_nldas_noah()."""
+    mock_fetch.return_value = {"files": [], "kerchunk_ref": "ref.json"}
+    run_dir = tmp_path / "workspace"
+    run_dir.mkdir()
+    _run(
+        "fetch",
+        "nldas-noah",
+        "--run-dir",
+        str(run_dir),
+        "--period",
+        "2010/2010",
+    )
+    mock_fetch.assert_called_once()
+
+
+@patch("nhf_spatial_targets.fetch.ncep_ncar.fetch_ncep_ncar")
+def test_fetch_ncep_ncar_calls_fetch(mock_fetch, tmp_path):
+    """CLI wires --run-dir and --period to fetch_ncep_ncar()."""
+    mock_fetch.return_value = {"files": [], "kerchunk_ref": "ref.json"}
+    run_dir = tmp_path / "workspace"
+    run_dir.mkdir()
+    _run(
+        "fetch",
+        "ncep-ncar",
+        "--run-dir",
+        str(run_dir),
+        "--period",
+        "2010/2010",
+    )
+    mock_fetch.assert_called_once()
+
+
 # ---- catalog commands ------------------------------------------------------
 
 

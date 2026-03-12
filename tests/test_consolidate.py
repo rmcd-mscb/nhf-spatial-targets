@@ -246,3 +246,173 @@ def test_provenance_return(merra2_dir):
     assert "last_consolidated_utc" in result
     assert result["n_files"] == 3
     assert result["variables"] == ["GWETTOP", "GWETROOT", "GWETPROF"]
+
+
+@pytest.fixture()
+def nldas_dir(tmp_path: Path) -> Path:
+    """Create synthetic NLDAS NetCDF4 files."""
+    out = tmp_path / "data" / "raw" / "nldas_mosaic"
+    out.mkdir(parents=True)
+
+    lat = np.arange(25.0, 50.0, 5.0)
+    lon = np.arange(-125.0, -65.0, 10.0)
+
+    for month in range(1, 4):
+        time = np.array([f"2010-{month:02d}-15T00:00:00"], dtype="datetime64[ns]")
+        ds = xr.Dataset(
+            {
+                "SoilM_0_10cm": (
+                    ["time", "lat", "lon"],
+                    np.random.rand(1, len(lat), len(lon)).astype(np.float32),
+                ),
+                "SoilM_10_40cm": (
+                    ["time", "lat", "lon"],
+                    np.random.rand(1, len(lat), len(lon)).astype(np.float32),
+                ),
+                "SoilM_40_200cm": (
+                    ["time", "lat", "lon"],
+                    np.random.rand(1, len(lat), len(lon)).astype(np.float32),
+                ),
+                "EXTRA_VAR": (
+                    ["time", "lat", "lon"],
+                    np.random.rand(1, len(lat), len(lon)).astype(np.float32),
+                ),
+            },
+            coords={"time": time, "lat": lat, "lon": lon},
+        )
+        fname = f"NLDAS_MOS0125_M.A2010{month:02d}.002.grb.SUB.nc4"
+        ds.to_netcdf(out / fname)
+
+    return out
+
+
+def test_nldas_filter_variables(nldas_dir):
+    from nhf_spatial_targets.fetch.consolidate import consolidate_nldas
+    import fsspec
+
+    run_dir = nldas_dir.parent.parent.parent
+    consolidate_nldas(
+        run_dir=run_dir,
+        source_key="nldas_mosaic",
+        variables=["SoilM_0_10cm", "SoilM_10_40cm", "SoilM_40_200cm"],
+    )
+
+    ref_path = nldas_dir / "nldas_mosaic_refs.json"
+    assert ref_path.exists()
+
+    fs = fsspec.filesystem("reference", fo=str(ref_path), target_protocol="file")
+    ds = xr.open_zarr(fs.get_mapper(""), consolidated=False)
+    assert "SoilM_0_10cm" in ds.data_vars
+    assert "SoilM_10_40cm" in ds.data_vars
+    assert "SoilM_40_200cm" in ds.data_vars
+    assert "EXTRA_VAR" not in ds.data_vars
+    assert len(ds.time) == 3
+    ds.close()
+
+
+def test_nldas_relative_paths(nldas_dir):
+    from nhf_spatial_targets.fetch.consolidate import consolidate_nldas
+
+    run_dir = nldas_dir.parent.parent.parent
+    consolidate_nldas(
+        run_dir=run_dir,
+        source_key="nldas_mosaic",
+        variables=["SoilM_0_10cm"],
+    )
+
+    ref_path = nldas_dir / "nldas_mosaic_refs.json"
+    refs = json.loads(ref_path.read_text())
+    for key, val in refs["refs"].items():
+        if isinstance(val, list) and len(val) >= 1 and isinstance(val[0], str):
+            assert val[0].startswith("./"), f"Non-relative path: {val[0]}"
+
+
+def test_nldas_provenance_return(nldas_dir):
+    from nhf_spatial_targets.fetch.consolidate import consolidate_nldas
+
+    run_dir = nldas_dir.parent.parent.parent
+    result = consolidate_nldas(
+        run_dir=run_dir,
+        source_key="nldas_mosaic",
+        variables=["SoilM_0_10cm", "SoilM_10_40cm", "SoilM_40_200cm"],
+    )
+    assert result["kerchunk_ref"] == "data/raw/nldas_mosaic/nldas_mosaic_refs.json"
+    assert "last_consolidated_utc" in result
+    assert result["n_files"] == 3
+
+
+def test_nldas_no_files_raises(tmp_path):
+    from nhf_spatial_targets.fetch.consolidate import consolidate_nldas
+
+    (tmp_path / "data" / "raw" / "nldas_mosaic").mkdir(parents=True)
+    with pytest.raises(FileNotFoundError):
+        consolidate_nldas(
+            run_dir=tmp_path,
+            source_key="nldas_mosaic",
+            variables=["SoilM_0_10cm"],
+        )
+
+
+@pytest.fixture()
+def ncep_dir(tmp_path: Path) -> Path:
+    """Create synthetic NCEP/NCAR monthly NetCDF3 files."""
+    out = tmp_path / "data" / "raw" / "ncep_ncar"
+    out.mkdir(parents=True)
+
+    lat = np.arange(-90, 91, 45.0)
+    lon = np.arange(-180, 180, 60.0)
+
+    for month in range(1, 4):
+        time = np.array([f"2010-{month:02d}-15T00:00:00"], dtype="datetime64[ns]")
+        ds = xr.Dataset(
+            {
+                "soilw": (
+                    ["time", "lat", "lon"],
+                    np.random.rand(1, len(lat), len(lon)).astype(np.float32),
+                ),
+                "EXTRA": (
+                    ["time", "lat", "lon"],
+                    np.random.rand(1, len(lat), len(lon)).astype(np.float32),
+                ),
+            },
+            coords={"time": time, "lat": lat, "lon": lon},
+        )
+        fname = f"soilw.0-10cm.gauss.2010-{month:02d}.monthly.nc"
+        ds.to_netcdf(out / fname, format="NETCDF3_CLASSIC")
+
+    return out
+
+
+def test_ncep_filter_variables(ncep_dir):
+    from nhf_spatial_targets.fetch.consolidate import consolidate_ncep_ncar
+
+    import fsspec
+
+    run_dir = ncep_dir.parent.parent.parent
+    consolidate_ncep_ncar(run_dir=run_dir, variables=["soilw"])
+
+    ref_path = ncep_dir / "ncep_ncar_refs.json"
+    assert ref_path.exists()
+
+    fs = fsspec.filesystem("reference", fo=str(ref_path), target_protocol="file")
+    ds = xr.open_zarr(fs.get_mapper(""), consolidated=False)
+    assert "soilw" in ds.data_vars
+    assert "EXTRA" not in ds.data_vars
+    ds.close()
+
+
+def test_ncep_provenance_return(ncep_dir):
+    from nhf_spatial_targets.fetch.consolidate import consolidate_ncep_ncar
+
+    run_dir = ncep_dir.parent.parent.parent
+    result = consolidate_ncep_ncar(run_dir=run_dir, variables=["soilw"])
+    assert result["kerchunk_ref"] == "data/raw/ncep_ncar/ncep_ncar_refs.json"
+    assert result["n_files"] == 3
+
+
+def test_ncep_no_files_raises(tmp_path):
+    from nhf_spatial_targets.fetch.consolidate import consolidate_ncep_ncar
+
+    (tmp_path / "data" / "raw" / "ncep_ncar").mkdir(parents=True)
+    with pytest.raises(FileNotFoundError):
+        consolidate_ncep_ncar(run_dir=tmp_path, variables=["soilw"])

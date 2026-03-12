@@ -1,4 +1,4 @@
-"""Build Kerchunk virtual Zarr reference store from MERRA-2 NetCDF files."""
+"""Build Kerchunk virtual Zarr reference stores for fetch modules."""
 
 from __future__ import annotations
 
@@ -15,7 +15,8 @@ from nhf_spatial_targets import __version__
 
 logger = logging.getLogger(__name__)
 
-# Variables to keep in addition to user-requested ones.
+# Coordinate and bounds variables to always keep in Kerchunk references,
+# regardless of which data variables the user requests.
 _COORD_VARS = {"time", "lat", "lon", "time_bnds", "lat_bnds", "lon_bnds"}
 
 
@@ -43,6 +44,11 @@ def _filter_refs(refs: dict, keep_vars: set[str]) -> dict:
 
 def _fix_time(combined: dict) -> dict:
     """Shift timestamps to mid-month and add time_bnds.
+
+    MERRA-2 monthly files have timestamps at the first of the month plus
+    30 minutes (e.g. 2010-01-01T00:30:00). This normalizes them to the
+    15th of each month to provide a conventional mid-month representative
+    timestamp for monthly data.
 
     Operates directly on the kerchunk reference dict, replacing the time
     coordinate data with mid-month values and adding time_bnds. Uses
@@ -258,6 +264,139 @@ def consolidate_merra2(
     combined["refs"] = _make_relative(combined["refs"], merra2_dir)
 
     ref_path = merra2_dir / "merra2_refs.json"
+    ref_path.write_text(ujson.dumps(combined, indent=2))
+    logger.info("Wrote Kerchunk reference store: %s", ref_path)
+
+    return {
+        "kerchunk_ref": str(ref_path.relative_to(run_dir)),
+        "last_consolidated_utc": datetime.now(timezone.utc).isoformat(),
+        "n_files": len(nc_files),
+        "variables": variables,
+    }
+
+
+def consolidate_nldas(
+    run_dir: Path,
+    source_key: str,
+    variables: list[str],
+) -> dict:
+    """Build a Kerchunk JSON reference store for NLDAS files.
+
+    Parameters
+    ----------
+    run_dir : Path
+        Run workspace directory.
+    source_key : str
+        Source key (e.g. "nldas_mosaic" or "nldas_noah").
+    variables : list[str]
+        Variable names to include.
+
+    Returns
+    -------
+    dict
+        Provenance record.
+    """
+    from datetime import datetime, timezone
+
+    import kerchunk.hdf
+    from kerchunk.combine import MultiZarrToZarr
+
+    source_dir = run_dir / "data" / "raw" / source_key
+    nc_files = sorted(list(source_dir.glob("*.nc4")) + list(source_dir.glob("*.nc")))
+
+    if not nc_files:
+        raise FileNotFoundError(
+            f"No NetCDF files found in {source_dir}. "
+            f"Run 'nhf-targets fetch {source_key.replace('_', '-')}' first."
+        )
+
+    logger.info("Scanning %d NetCDF files for %s", len(nc_files), source_key)
+
+    keep_vars = set(variables)
+    singles = []
+    for nc in nc_files:
+        with open(nc, "rb") as f:
+            h5chunks = kerchunk.hdf.SingleHdf5ToZarr(f, str(nc))
+            refs = h5chunks.translate()
+        refs["refs"] = _filter_refs(refs["refs"], keep_vars)
+        singles.append(refs)
+
+    mzz = MultiZarrToZarr(
+        singles,
+        concat_dims=["time"],
+        identical_dims=["lat", "lon"],
+        coo_map={"time": "cf:time"},
+    )
+    combined = mzz.translate()
+
+    combined["refs"] = _make_relative(combined["refs"], source_dir)
+
+    ref_path = source_dir / f"{source_key}_refs.json"
+    ref_path.write_text(ujson.dumps(combined, indent=2))
+    logger.info("Wrote Kerchunk reference store: %s", ref_path)
+
+    return {
+        "kerchunk_ref": str(ref_path.relative_to(run_dir)),
+        "last_consolidated_utc": datetime.now(timezone.utc).isoformat(),
+        "n_files": len(nc_files),
+        "variables": variables,
+    }
+
+
+def consolidate_ncep_ncar(
+    run_dir: Path,
+    variables: list[str],
+) -> dict:
+    """Build a Kerchunk JSON reference store for NCEP/NCAR monthly files.
+
+    Uses NetCDF3ToZarr since NCEP/NCAR Reanalysis files are NetCDF-3 classic.
+
+    Parameters
+    ----------
+    run_dir : Path
+        Run workspace directory containing ``data/raw/ncep_ncar/*.monthly.nc``.
+    variables : list[str]
+        Variable names to include (file_variable values).
+
+    Returns
+    -------
+    dict
+        Provenance record.
+    """
+    from datetime import datetime, timezone
+
+    from kerchunk.combine import MultiZarrToZarr
+    from kerchunk.netCDF3 import NetCDF3ToZarr
+
+    ncep_dir = run_dir / "data" / "raw" / "ncep_ncar"
+    nc_files = sorted(ncep_dir.glob("*.monthly.nc"))
+
+    if not nc_files:
+        raise FileNotFoundError(
+            f"No .monthly.nc files found in {ncep_dir}. "
+            "Run 'nhf-targets fetch ncep-ncar' first."
+        )
+
+    logger.info("Scanning %d monthly NetCDF files for NCEP/NCAR", len(nc_files))
+
+    keep_vars = set(variables)
+    singles = []
+    for nc in nc_files:
+        refs = NetCDF3ToZarr(str(nc)).translate()
+        refs["refs"] = _filter_refs(refs["refs"], keep_vars)
+        singles.append(refs)
+
+    mzz = MultiZarrToZarr(
+        singles,
+        concat_dims=["time"],
+        identical_dims=["lat", "lon"],
+        coo_map={"time": "cf:time"},
+    )
+    combined = mzz.translate()
+
+    combined["refs"] = _make_relative(combined["refs"], ncep_dir)
+
+    ref_path = ncep_dir / "ncep_ncar_refs.json"
     ref_path.write_text(ujson.dumps(combined, indent=2))
     logger.info("Wrote Kerchunk reference store: %s", ref_path)
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
@@ -14,6 +15,7 @@ from nhf_spatial_targets._logging import setup_logging
 
 _DEFAULT_CONFIG = Path(__file__).parent.parent.parent / "config" / "pipeline.yml"
 _DEFAULT_WORKDIR = Path("runs")
+_logger = logging.getLogger(__name__)
 
 app = App(
     name="nhf-targets",
@@ -244,10 +246,185 @@ def fetch_merra2_cmd(
     except (ValueError, FileNotFoundError, RuntimeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
+    except Exception as exc:
+        _logger.exception("Unexpected error during MERRA-2 fetch")
+        print(
+            f"Unexpected error ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     console.print(
         f"[green]Downloaded {len(result['files'])} files "
         f"to {run_dir / 'data' / 'raw' / 'merra2'}[/green]"
+    )
+    if "kerchunk_ref" in result:
+        console.print(
+            f"[green]Kerchunk reference store: {run_dir / result['kerchunk_ref']}[/green]"
+        )
+    console.print(json_mod.dumps(result, indent=2))
+
+
+@fetch_app.command(name="nldas-mosaic")
+def fetch_nldas_mosaic_cmd(
+    run_dir: Annotated[
+        Path,
+        Parameter(
+            name=["--run-dir", "-r"],
+            help="Run workspace created by 'nhf-targets init'.",
+        ),
+    ],
+    period: Annotated[
+        str,
+        Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
+    ],
+):
+    """Download NLDAS-2 MOSAIC soil moisture data.
+
+    Authenticates via earthaccess, searches for granules matching the
+    fabric bounding box, downloads them, and prints the provenance record.
+    """
+    import json as json_mod
+
+    from rich.console import Console
+
+    from nhf_spatial_targets.fetch.nldas import fetch_nldas_mosaic
+
+    if not run_dir.exists():
+        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+        sys.exit(2)
+
+    console = Console()
+    console.print(f"[bold]Fetching NLDAS-2 MOSAIC for period {period}...[/bold]")
+
+    try:
+        result = fetch_nldas_mosaic(run_dir=run_dir, period=period)
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        _logger.exception("Unexpected error during NLDAS-2 MOSAIC fetch")
+        print(
+            f"Unexpected error ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    console.print(
+        f"[green]Downloaded {len(result['files'])} files "
+        f"to {run_dir / 'data' / 'raw' / 'nldas_mosaic'}[/green]"
+    )
+    if "kerchunk_ref" in result:
+        console.print(
+            f"[green]Kerchunk reference store: {run_dir / result['kerchunk_ref']}[/green]"
+        )
+    console.print(json_mod.dumps(result, indent=2))
+
+
+@fetch_app.command(name="nldas-noah")
+def fetch_nldas_noah_cmd(
+    run_dir: Annotated[
+        Path,
+        Parameter(
+            name=["--run-dir", "-r"],
+            help="Run workspace created by 'nhf-targets init'.",
+        ),
+    ],
+    period: Annotated[
+        str,
+        Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
+    ],
+):
+    """Download NLDAS-2 NOAH soil moisture data.
+
+    Authenticates via earthaccess, searches for granules matching the
+    fabric bounding box, downloads them, and prints the provenance record.
+    """
+    import json as json_mod
+
+    from rich.console import Console
+
+    from nhf_spatial_targets.fetch.nldas import fetch_nldas_noah
+
+    if not run_dir.exists():
+        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+        sys.exit(2)
+
+    console = Console()
+    console.print(f"[bold]Fetching NLDAS-2 NOAH for period {period}...[/bold]")
+
+    try:
+        result = fetch_nldas_noah(run_dir=run_dir, period=period)
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        _logger.exception("Unexpected error during NLDAS-2 NOAH fetch")
+        print(
+            f"Unexpected error ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    console.print(
+        f"[green]Downloaded {len(result['files'])} files "
+        f"to {run_dir / 'data' / 'raw' / 'nldas_noah'}[/green]"
+    )
+    if "kerchunk_ref" in result:
+        console.print(
+            f"[green]Kerchunk reference store: {run_dir / result['kerchunk_ref']}[/green]"
+        )
+    console.print(json_mod.dumps(result, indent=2))
+
+
+@fetch_app.command(name="ncep-ncar")
+def fetch_ncep_ncar_cmd(
+    run_dir: Annotated[
+        Path,
+        Parameter(
+            name=["--run-dir", "-r"],
+            help="Run workspace created by 'nhf-targets init'.",
+        ),
+    ],
+    period: Annotated[
+        str,
+        Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
+    ],
+):
+    """Download NCEP/NCAR Reanalysis soil moisture data.
+
+    Downloads daily files from NOAA PSL, resamples to monthly means,
+    and prints the provenance record.
+    """
+    import json as json_mod
+
+    from rich.console import Console
+
+    from nhf_spatial_targets.fetch.ncep_ncar import fetch_ncep_ncar
+
+    if not run_dir.exists():
+        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+        sys.exit(2)
+
+    console = Console()
+    console.print(f"[bold]Fetching NCEP/NCAR Reanalysis for period {period}...[/bold]")
+
+    try:
+        result = fetch_ncep_ncar(run_dir=run_dir, period=period)
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        _logger.exception("Unexpected error during NCEP/NCAR fetch")
+        print(
+            f"Unexpected error ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    console.print(
+        f"[green]Downloaded {len(result['files'])} files "
+        f"to {run_dir / 'data' / 'raw' / 'ncep_ncar'}[/green]"
     )
     if "kerchunk_ref" in result:
         console.print(

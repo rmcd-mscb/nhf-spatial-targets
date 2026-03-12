@@ -96,11 +96,11 @@ See `catalog/sources.yml` `status:` and `notes:` fields for per-source gaps.
 - Recharge normalization window — confirmed **2000-2009** from TM 6-B10 body text
 - MOD16A2 / MOD10C1 v006 → v061: both decommissioned; use v061 in all new runs
 - MERRA-2 variable — use `GWETTOP` (0-0.05m, dimensionless); product M2TMNXLND
+- NLDAS-2 MOSAIC / NOAH variable names — confirmed: SoilM_0_10cm, SoilM_10_40cm, SoilM_40_200cm
 
 **Still open:**
 - WaterGAP 2.2a — registration-gated; substitute candidate is WaterGAP 2.2d on PANGAEA (doi:10.1594/PANGAEA.918447)
 - SCA CI-bounds formula — PRMSobjfun.f not publicly available; formula unconfirmed
-- NLDAS-2 MOSAIC / NOAH upper-layer variable names — needs file inspection via earthaccess or GES DISC README
 - SSEBop — version and access URL used in original TM 6-B10 unconfirmed
 
 ## Testing
