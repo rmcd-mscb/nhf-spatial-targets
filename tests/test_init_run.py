@@ -18,23 +18,22 @@ from nhf_spatial_targets.init_run import _make_run_id, init_run
 
 def test_run_id_format_no_label():
     run_id = _make_run_id()
-    # e.g. "2026-03-11T1500_v0.1.0"
+    # e.g. "2026-03-11_v0.1.0"
     parts = run_id.split("_v")
     assert len(parts) == 2
     ts, version = parts
-    assert len(ts) == 15  # "2026-03-11T1500"
+    assert len(ts) == 10  # "2026-03-11"
     assert ts[4] == "-"
     assert ts[7] == "-"
-    assert ts[10] == "T"
     assert version  # version string non-empty
 
 
 def test_run_id_format_with_label():
     run_id = _make_run_id(label="gfv11")
-    # e.g. "2026-03-11T1500_gfv11_v0.1.0"
+    # e.g. "2026-03-11_gfv11_v0.1.0"
     assert "_gfv11_v" in run_id
     ts = run_id.split("_gfv11_")[0]
-    assert len(ts) == 15
+    assert len(ts) == 10
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +78,27 @@ def _mock_fabric_read(fabric_path, id_col, buffer_deg):
         },
         "buffer_deg": buffer_deg,
     }
+
+
+@patch("nhf_spatial_targets.init_run._fabric_metadata", side_effect=_mock_fabric_read)
+@patch("nhf_spatial_targets.init_run._find_reusable_raw", return_value=None)
+def test_init_same_day_collision(
+    mock_reuse, mock_meta, fake_fabric, fake_config, tmp_path
+):
+    workdir = tmp_path / "runs"
+    init_run(
+        fabric_path=fake_fabric,
+        id_col="nhm_id",
+        config_path=fake_config,
+        workdir=workdir,
+    )
+    with pytest.raises(FileExistsError, match="already exists"):
+        init_run(
+            fabric_path=fake_fabric,
+            id_col="nhm_id",
+            config_path=fake_config,
+            workdir=workdir,
+        )
 
 
 @patch("nhf_spatial_targets.init_run._fabric_metadata", side_effect=_mock_fabric_read)

@@ -48,7 +48,7 @@ dev = { features = ["dev"], solve-group = "default" }
 init = { cmd = "nhf-targets init", description = "Create a new run workspace for a fabric" }
 
 # Run the full pipeline against a workspace.
-# Usage: pixi run run -- --run-dir /data/nhf-runs/2026-03-11T1500_v0.1.0
+# Usage: pixi run run -- --run-dir /data/nhf-runs/2026-03-11_v0.1.0
 run = { cmd = "nhf-targets run", description = "Run the full target pipeline" }
 
 # Run individual targets — pass --run-dir as extra arg.
