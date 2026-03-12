@@ -115,8 +115,8 @@ variables:
       Layer depths and variable names:
         MERRA-2:    GWETTOP (0-0.05m, dimensionless) — preferred
         NCEP/NCAR:  soilw.0-10cm (0-0.10m, kg/m2) — confirmed variable name
-        NLDAS-MOSAIC: layer 1 (0-0.10m, kg/m2) — variable name TBD
-        NLDAS-NOAH:   layer 1 (0-0.10m, kg/m2) — variable name TBD
+        NLDAS-MOSAIC: SoilM_0_10cm (0-0.10m, kg/m2) — confirmed
+        NLDAS-NOAH:   SoilM_0_10cm (0-0.10m, kg/m2) — confirmed
     normalize: true
     normalize_by: calendar_month   # for monthly; full 1982-2010 period for annual
     output_format: netcdf

@@ -259,15 +259,20 @@ sources:
     access:
       type: noaa_psl
       url: https://psl.noaa.gov/data/gridded/data.ncep.reanalysis.html
-      file_pattern: "https://downloads.psl.noaa.gov/Datasets/ncep.reanalysis.dailyavgs/surface_gauss/soilw.0-10cm.gauss.{year}.nc"
       notes: Monthly means derived from daily Gaussian grid files.
     variables:
       - name: soilw
-        file_variable: soilw.0-10cm
+        file_variable: soilw.0-10cm.gauss
+        file_pattern: "https://downloads.psl.noaa.gov/Datasets/ncep.reanalysis.dailyavgs/surface_gauss/soilw.0-10cm.gauss.{year}.nc"
         long_name: "volumetric soil moisture 0-10 cm"
         layer_depth_m: "0.00-0.10"
         units: kg/m2
-        notes: Confirmed variable name from NOAA PSL file naming convention.
+      - name: soilw
+        file_variable: soilw.10-200cm.gauss
+        file_pattern: "https://downloads.psl.noaa.gov/Datasets/ncep.reanalysis.dailyavgs/surface_gauss/soilw.10-200cm.gauss.{year}.nc"
+        long_name: "volumetric soil moisture 10-200 cm"
+        layer_depth_m: "0.10-2.00"
+        units: kg/m2
     time_step: monthly (derived from daily)
     period: "1948/present"
     spatial_extent: global
@@ -280,7 +285,7 @@ sources:
     description: >
       North American Land Data Assimilation System phase 2 (NLDAS-2),
       MOSAIC land surface model output, upper-layer (0-10cm) soil moisture.
-      MOSAIC has 3 soil layers: 0-10cm, 0-40cm, 0-200cm.
+      Three soil layers shared with fetch: 0-10cm, 10-40cm, 40-200cm.
     citations:
       - "Xia, Y., and others, 2012, doi:10.1029/2011JD016048"
     access:
@@ -290,28 +295,31 @@ sources:
       url: https://disc.gsfc.nasa.gov/datasets/NLDAS_MOS0125_M_2.0/summary
       notes: Access via earthaccess (NASA Earthdata login required).
     variables:
-      - name: SOILM_UNKNOWN
-        long_name: "soil moisture layer 1 (0-10cm)"
+      - name: SoilM_0_10cm
+        long_name: "soil moisture 0-10 cm"
         layer_depth_m: "0.00-0.10"
         units: kg/m2
-        notes: >
-          NEEDS VERIFICATION: exact NetCDF variable name not confirmed from
-          documentation. Inspect actual file via earthaccess or GES DISC
-          README (NLDAS_MOS0125_M) before implementing fetch module.
-          Possible names: SoilMoist_1, soilmoist1, SOILM_1.
+      - name: SoilM_10_40cm
+        long_name: "soil moisture 10-40 cm"
+        layer_depth_m: "0.10-0.40"
+        units: kg/m2
+      - name: SoilM_40_200cm
+        long_name: "soil moisture 40-200 cm"
+        layer_depth_m: "0.40-2.00"
+        units: kg/m2
     time_step: monthly
     period: "1979/present"
     spatial_extent: CONUS
     spatial_resolution: 0.125 degree
     units: kg/m2 (normalized to dimensionless for calibration)
-    status: needs_variable_verification
+    status: current
 
   nldas_noah:
     name: NLDAS-2 NOAH Land Surface Model Soil Moisture
     description: >
       North American Land Data Assimilation System phase 2 (NLDAS-2),
       NOAH land surface model output, upper-layer (0-10cm) soil moisture.
-      NOAH has 4 soil layers: 0-10cm, 10-40cm, 40-100cm, 100-200cm.
+      Three soil layers shared with fetch: 0-10cm, 10-40cm, 40-200cm.
     citations:
       - "Xia, Y., and others, 2012, doi:10.1029/2011JD016048"
     access:
@@ -321,21 +329,24 @@ sources:
       url: https://disc.gsfc.nasa.gov/datasets/NLDAS_NOAH0125_M_2.0/summary
       notes: Access via earthaccess (NASA Earthdata login required).
     variables:
-      - name: SOILM_UNKNOWN
-        long_name: "soil moisture layer 1 (0-10cm)"
+      - name: SoilM_0_10cm
+        long_name: "soil moisture 0-10 cm"
         layer_depth_m: "0.00-0.10"
         units: kg/m2
-        notes: >
-          NEEDS VERIFICATION: exact NetCDF variable name not confirmed from
-          documentation. Inspect actual file via earthaccess or GES DISC
-          README (NLDAS_NOAH0125_M) before implementing fetch module.
-          Possible names: SoilM0_10cm, SOILM_1, soilmoist1.
+      - name: SoilM_10_40cm
+        long_name: "soil moisture 10-40 cm"
+        layer_depth_m: "0.10-0.40"
+        units: kg/m2
+      - name: SoilM_40_200cm
+        long_name: "soil moisture 40-200 cm"
+        layer_depth_m: "0.40-2.00"
+        units: kg/m2
     time_step: monthly
     period: "1979/present"
     spatial_extent: CONUS
     spatial_resolution: 0.125 degree
     units: kg/m2 (normalized to dimensionless for calibration)
-    status: needs_variable_verification
+    status: current
 
   # ---------------------------------------------------------------------------
   # SNOW-COVERED AREA
