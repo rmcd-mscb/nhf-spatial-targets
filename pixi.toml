@@ -16,7 +16,7 @@ rioxarray = ">=0.15"
 netcdf4 = ">=1.6"
 h5netcdf = ">=1.3"
 dask = ">=2024.1"
-click = ">=8.1"
+cyclopts = ">=3.0"
 rich = ">=13.0"
 # gdptools: spatial aggregation (install from PyPI if not on conda-forge)
 # sciencebasepy: ScienceBase access
