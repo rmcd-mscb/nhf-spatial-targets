@@ -93,15 +93,12 @@ def test_credentials_fallback_on_env_failure(mock_login, run_dir):
     assert mock_login.call_count == 2
 
 
-@patch("nhf_spatial_targets.fetch._auth.earthaccess.login")
-def test_malformed_yaml_falls_back(mock_login, run_dir):
-    """Malformed .credentials.yml triggers default login, not a crash."""
+def test_malformed_yaml_raises(run_dir):
+    """Malformed .credentials.yml raises ValueError."""
     (run_dir / ".credentials.yml").write_text(": invalid: yaml: [")
-    mock_login.return_value = MagicMock(authenticated=True)
 
-    earthdata_login(run_dir)
-
-    mock_login.assert_called_once_with()
+    with pytest.raises(ValueError, match="Cannot parse"):
+        earthdata_login(run_dir)
 
 
 @patch("nhf_spatial_targets.fetch._auth.earthaccess.login")

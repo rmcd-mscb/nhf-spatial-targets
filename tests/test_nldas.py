@@ -10,22 +10,19 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 _MOCK_CONSOLIDATION = {
-    "kerchunk_ref": "data/raw/nldas_mosaic/nldas_mosaic_refs.json",
+    "consolidated_nc": "data/raw/nldas_mosaic/nldas_mosaic_consolidated.nc",
     "last_consolidated_utc": "2026-01-01T00:00:00+00:00",
     "n_files": 1,
     "variables": ["SoilM_0_10cm", "SoilM_10_40cm", "SoilM_40_200cm"],
 }
 
 _MOCK_CONSOLIDATION_NOAH = {
-    "kerchunk_ref": "data/raw/nldas_noah/nldas_noah_refs.json",
+    "consolidated_nc": "data/raw/nldas_noah/nldas_noah_consolidated.nc",
     "last_consolidated_utc": "2026-01-01T00:00:00+00:00",
     "n_files": 1,
-    "variables": ["SoilM_0_10cm", "SoilM_10_40cm", "SoilM_40_200cm"],
+    "variables": ["SoilM_0_10cm", "SoilM_10_40cm", "SoilM_40_100cm", "SoilM_100_200cm"],
 }
 
-# consolidate_nldas doesn't exist in consolidate.py yet (Task 5).
-# The lazy import inside _fetch_nldas resolves from nhf_spatial_targets.fetch.consolidate,
-# so we patch there with create=True.
 _CONSOLIDATE_TARGET = "nhf_spatial_targets.fetch.consolidate.consolidate_nldas"
 
 
@@ -133,7 +130,7 @@ def test_malformed_fabric_raises(mock_login, tmp_path):
     run_dir.mkdir()
     (run_dir / "fabric.json").write_text("{}")
 
-    with patch(_CONSOLIDATE_TARGET, return_value=_MOCK_CONSOLIDATION, create=True):
+    with patch(_CONSOLIDATE_TARGET, return_value=_MOCK_CONSOLIDATION):
         from nhf_spatial_targets.fetch.nldas import fetch_nldas_mosaic
 
         with pytest.raises(ValueError, match="malformed"):
@@ -146,7 +143,7 @@ def test_malformed_fabric_raises(mock_login, tmp_path):
 @patch("nhf_spatial_targets.fetch.nldas.earthdata_login")
 def test_login_called(mock_login, run_dir):
     """earthdata_login() is called before searching."""
-    with patch(_CONSOLIDATE_TARGET, return_value=_MOCK_CONSOLIDATION, create=True):
+    with patch(_CONSOLIDATE_TARGET, return_value=_MOCK_CONSOLIDATION):
         with patch("earthaccess.search_data", return_value=[]):
             with pytest.raises(ValueError, match="No granules found"):
                 from nhf_spatial_targets.fetch.nldas import fetch_nldas_mosaic
@@ -158,7 +155,7 @@ def test_login_called(mock_login, run_dir):
 # ---- Search parameters -----------------------------------------------------
 
 
-@patch(_CONSOLIDATE_TARGET, return_value=_MOCK_CONSOLIDATION, create=True)
+@patch(_CONSOLIDATE_TARGET, return_value=_MOCK_CONSOLIDATION)
 @patch("earthaccess.download")
 @patch("earthaccess.search_data")
 @patch("nhf_spatial_targets.fetch.nldas.earthdata_login")
@@ -180,7 +177,7 @@ def test_search_params_mosaic(
     assert call_kwargs["temporal"] == ("2001-01-01", "2002-12-31")
 
 
-@patch(_CONSOLIDATE_TARGET, return_value=_MOCK_CONSOLIDATION_NOAH, create=True)
+@patch(_CONSOLIDATE_TARGET, return_value=_MOCK_CONSOLIDATION_NOAH)
 @patch("earthaccess.download")
 @patch("earthaccess.search_data")
 @patch("nhf_spatial_targets.fetch.nldas.earthdata_login")
@@ -209,7 +206,7 @@ def test_search_params_noah(
 @patch("earthaccess.search_data", return_value=[])
 def test_no_granules_raises(mock_search, mock_login, run_dir):
     """ValueError raised when search returns zero granules."""
-    with patch(_CONSOLIDATE_TARGET, return_value=_MOCK_CONSOLIDATION, create=True):
+    with patch(_CONSOLIDATE_TARGET, return_value=_MOCK_CONSOLIDATION):
         from nhf_spatial_targets.fetch.nldas import fetch_nldas_mosaic
 
         with pytest.raises(ValueError, match="No granules found"):
@@ -219,7 +216,7 @@ def test_no_granules_raises(mock_search, mock_login, run_dir):
 # ---- Output directory ------------------------------------------------------
 
 
-@patch(_CONSOLIDATE_TARGET, return_value=_MOCK_CONSOLIDATION, create=True)
+@patch(_CONSOLIDATE_TARGET, return_value=_MOCK_CONSOLIDATION)
 @patch("earthaccess.download")
 @patch("earthaccess.search_data")
 @patch("nhf_spatial_targets.fetch.nldas.earthdata_login")
@@ -241,7 +238,7 @@ def test_output_dir(mock_login, mock_search, mock_dl, mock_consolidate, run_dir)
 # ---- Provenance record -----------------------------------------------------
 
 
-@patch(_CONSOLIDATE_TARGET, return_value=_MOCK_CONSOLIDATION, create=True)
+@patch(_CONSOLIDATE_TARGET, return_value=_MOCK_CONSOLIDATION)
 @patch("earthaccess.download")
 @patch("earthaccess.search_data")
 @patch("nhf_spatial_targets.fetch.nldas.earthdata_login")
@@ -272,7 +269,7 @@ def test_provenance_record(mock_login, mock_search, mock_dl, mock_consolidate, r
 # ---- Superseded warning ----------------------------------------------------
 
 
-@patch(_CONSOLIDATE_TARGET, return_value=_MOCK_CONSOLIDATION, create=True)
+@patch(_CONSOLIDATE_TARGET, return_value=_MOCK_CONSOLIDATION)
 @patch("earthaccess.download")
 @patch("earthaccess.search_data")
 @patch("nhf_spatial_targets.fetch.nldas.earthdata_login")
@@ -312,7 +309,7 @@ def test_missing_fabric_raises(mock_login, tmp_path):
     run_dir = tmp_path / "empty_run"
     run_dir.mkdir()
 
-    with patch(_CONSOLIDATE_TARGET, return_value=_MOCK_CONSOLIDATION, create=True):
+    with patch(_CONSOLIDATE_TARGET, return_value=_MOCK_CONSOLIDATION):
         from nhf_spatial_targets.fetch.nldas import fetch_nldas_mosaic
 
         with pytest.raises(FileNotFoundError, match="fabric.json"):
@@ -329,7 +326,7 @@ def test_empty_download_raises(mock_login, mock_search, mock_dl, run_dir):
     """RuntimeError raised when download returns no files."""
     mock_search.return_value = [_mock_granule("g1")]
 
-    with patch(_CONSOLIDATE_TARGET, return_value=_MOCK_CONSOLIDATION, create=True):
+    with patch(_CONSOLIDATE_TARGET, return_value=_MOCK_CONSOLIDATION):
         from nhf_spatial_targets.fetch.nldas import fetch_nldas_mosaic
 
         with pytest.raises(RuntimeError, match="returned no files"):
@@ -389,7 +386,7 @@ def test_incremental_skips_existing(mock_login, mock_search, mock_dl, run_dir):
 # ---- Manifest update tests -------------------------------------------------
 
 
-@patch(_CONSOLIDATE_TARGET, return_value=_MOCK_CONSOLIDATION, create=True)
+@patch(_CONSOLIDATE_TARGET, return_value=_MOCK_CONSOLIDATION)
 @patch("earthaccess.download")
 @patch("earthaccess.search_data")
 @patch("nhf_spatial_targets.fetch.nldas.earthdata_login")
@@ -407,10 +404,10 @@ def test_manifest_updated(mock_login, mock_search, mock_dl, mock_consolidate, ru
     assert entry["period"] == "2001/2001"
     assert len(entry["files"]) > 0
     assert "year_month" in entry["files"][0]
-    assert "kerchunk_ref" in entry
+    assert "consolidated_nc" in entry
 
 
-@patch(_CONSOLIDATE_TARGET, return_value=_MOCK_CONSOLIDATION, create=True)
+@patch(_CONSOLIDATE_TARGET, return_value=_MOCK_CONSOLIDATION)
 @patch("earthaccess.download")
 @patch("earthaccess.search_data")
 @patch("nhf_spatial_targets.fetch.nldas.earthdata_login")
@@ -483,7 +480,7 @@ def test_fetch_nldas_mosaic_real_download(tmp_path):
 
     assert result["source_key"] == "nldas_mosaic"
     assert len(result["files"]) == 12
-    assert "kerchunk_ref" in result
+    assert "consolidated_nc" in result
 
     manifest = json.loads((run_dir / "manifest.json").read_text())
     assert "nldas_mosaic" in manifest["sources"]

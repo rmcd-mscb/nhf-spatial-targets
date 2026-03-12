@@ -258,9 +258,9 @@ def fetch_merra2_cmd(
         f"[green]Downloaded {len(result['files'])} files "
         f"to {run_dir / 'data' / 'raw' / 'merra2'}[/green]"
     )
-    if "kerchunk_ref" in result:
+    if "consolidated_nc" in result:
         console.print(
-            f"[green]Kerchunk reference store: {run_dir / result['kerchunk_ref']}[/green]"
+            f"[green]Consolidated file: {run_dir / result['consolidated_nc']}[/green]"
         )
     console.print(json_mod.dumps(result, indent=2))
 
@@ -314,9 +314,9 @@ def fetch_nldas_mosaic_cmd(
         f"[green]Downloaded {len(result['files'])} files "
         f"to {run_dir / 'data' / 'raw' / 'nldas_mosaic'}[/green]"
     )
-    if "kerchunk_ref" in result:
+    if "consolidated_nc" in result:
         console.print(
-            f"[green]Kerchunk reference store: {run_dir / result['kerchunk_ref']}[/green]"
+            f"[green]Consolidated file: {run_dir / result['consolidated_nc']}[/green]"
         )
     console.print(json_mod.dumps(result, indent=2))
 
@@ -370,9 +370,9 @@ def fetch_nldas_noah_cmd(
         f"[green]Downloaded {len(result['files'])} files "
         f"to {run_dir / 'data' / 'raw' / 'nldas_noah'}[/green]"
     )
-    if "kerchunk_ref" in result:
+    if "consolidated_nc" in result:
         console.print(
-            f"[green]Kerchunk reference store: {run_dir / result['kerchunk_ref']}[/green]"
+            f"[green]Consolidated file: {run_dir / result['consolidated_nc']}[/green]"
         )
     console.print(json_mod.dumps(result, indent=2))
 
@@ -426,9 +426,9 @@ def fetch_ncep_ncar_cmd(
         f"[green]Downloaded {len(result['files'])} files "
         f"to {run_dir / 'data' / 'raw' / 'ncep_ncar'}[/green]"
     )
-    if "kerchunk_ref" in result:
+    if "consolidated_nc" in result:
         console.print(
-            f"[green]Kerchunk reference store: {run_dir / result['kerchunk_ref']}[/green]"
+            f"[green]Consolidated file: {run_dir / result['consolidated_nc']}[/green]"
         )
     console.print(json_mod.dumps(result, indent=2))
 

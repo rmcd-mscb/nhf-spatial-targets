@@ -46,7 +46,7 @@ targets:
     enabled: true
     sources:
       - nhm_mwbm
-      - mod16a2        # set to mod16a2_v061 for updated run
+      - mod16a2_v061
       - ssebop
     time_step: monthly
     period: "2000-01-01/2010-12-31"
@@ -58,7 +58,7 @@ targets:
     enabled: true
     sources:
       - reitz2017
-      - watergap22a
+      - watergap22d
     time_step: annual
     period: "2000-01-01/2009-12-31"
     prms_variable: recharge
@@ -70,7 +70,7 @@ targets:
   soil_moisture:
     enabled: true
     sources:
-      - merra_land     # set to merra2 for updated run
+      - merra2
       - ncep_ncar
       - nldas_mosaic
       - nldas_noah
@@ -87,7 +87,7 @@ targets:
   snow_covered_area:
     enabled: true
     sources:
-      - mod10c1        # set to mod10c1_v061 for updated run
+      - mod10c1_v061
     time_step: daily
     period: "2000-01-01/2010-12-31"
     prms_variable: snowcov_area

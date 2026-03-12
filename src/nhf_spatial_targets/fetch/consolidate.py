@@ -1,76 +1,107 @@
-"""Build Kerchunk virtual Zarr reference stores for fetch modules."""
+"""Merge per-granule NetCDF files into single consolidated datasets."""
 
 from __future__ import annotations
 
-import base64
-import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import ujson
+import xarray as xr
+from dask.diagnostics import ProgressBar
+from tqdm import tqdm
 
 from nhf_spatial_targets import __version__
 
 logger = logging.getLogger(__name__)
 
-# Coordinate and bounds variables to always keep in Kerchunk references,
-# regardless of which data variables the user requests.
-_COORD_VARS = {"time", "lat", "lon", "time_bnds", "lat_bnds", "lon_bnds"}
 
+def open_consolidated(nc_path: Path) -> xr.Dataset:
+    """Open a consolidated NetCDF file produced by a ``consolidate_*`` function.
 
-def _filter_refs(refs: dict, keep_vars: set[str]) -> dict:
-    """Remove variable keys from a kerchunk reference dict.
+    Parameters
+    ----------
+    nc_path : Path
+        Path to a ``*_consolidated.nc`` file.
 
-    Keeps:
-    - Top-level metadata keys (no "/" in key): .zattrs, .zgroup
-    - Coordinate variables: time, lat, lon (and any *_bnds)
-    - Only the data variables listed in keep_vars
-
-    Drops all other variable keys (e.g., "SFMC/.zarray", "SFMC/0.0.0").
+    Returns
+    -------
+    xr.Dataset
     """
-    all_keep = keep_vars | _COORD_VARS
-    filtered = {}
-    for key in refs:
-        if "/" not in key:
-            filtered[key] = refs[key]
-            continue
-        var_name = key.split("/")[0]
-        if var_name in all_keep:
-            filtered[key] = refs[key]
-    return filtered
+    if not nc_path.exists():
+        raise FileNotFoundError(
+            f"Consolidated file not found: {nc_path}. "
+            f"Run the appropriate fetch command first."
+        )
+    try:
+        return xr.open_dataset(nc_path)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to open consolidated file {nc_path}. "
+            f"The file may be corrupt — delete it and re-consolidate. "
+            f"Detail: {exc}"
+        ) from exc
 
 
-def _fix_time(combined: dict) -> dict:
-    """Shift timestamps to mid-month and add time_bnds.
+def _validate_variables(ds: xr.Dataset, variables: list[str]) -> None:
+    """Raise ValueError if any requested variables are missing from *ds*."""
+    missing = set(variables) - set(ds.data_vars)
+    if missing:
+        raise ValueError(
+            f"Requested variables {sorted(missing)} not found in the "
+            f"concatenated dataset. Available variables: {sorted(ds.data_vars)}. "
+            f"Check catalog/sources.yml or re-fetch the source data."
+        )
+
+
+def _open_datasets(nc_files: list[Path], desc: str) -> list[xr.Dataset]:
+    """Open a list of NetCDF files with tqdm progress, cleaning up on failure."""
+    datasets: list[xr.Dataset] = []
+    for f in tqdm(nc_files, desc=desc):
+        try:
+            datasets.append(xr.open_dataset(f, chunks={}))
+        except Exception as exc:
+            for d in datasets:
+                d.close()
+            raise RuntimeError(
+                f"Failed to open {f.name} during consolidation. "
+                f"The file may be corrupt or truncated. "
+                f"Delete it and re-run the fetch. Detail: {exc}"
+            ) from exc
+    return datasets
+
+
+def _write_netcdf(
+    ds: xr.Dataset,
+    out_path: Path,
+    encoding: dict | None = None,
+) -> None:
+    """Write dataset to NetCDF, removing partial file on failure."""
+    try:
+        kwargs: dict = {}
+        if encoding is not None:
+            kwargs["encoding"] = encoding
+        with ProgressBar():
+            ds.to_netcdf(out_path, **kwargs)
+    except Exception as exc:
+        if out_path.exists():
+            out_path.unlink()
+        raise RuntimeError(
+            f"Failed to write consolidated file {out_path}. "
+            f"Check available disk space and permissions. Detail: {exc}"
+        ) from exc
+
+
+def _fix_time_merra2(ds: xr.Dataset) -> xr.Dataset:
+    """Shift MERRA-2 timestamps to mid-month and add time_bnds.
 
     MERRA-2 monthly files have timestamps at the first of the month plus
-    30 minutes (e.g. 2010-01-01T00:30:00). This normalizes them to the
+    30 minutes (e.g. 2010-01-01T00:30:00).  This normalizes them to the
     15th of each month to provide a conventional mid-month representative
     timestamp for monthly data.
-
-    Operates directly on the kerchunk reference dict, replacing the time
-    coordinate data with mid-month values and adding time_bnds. Uses
-    zarr v2 inline base64-encoded chunks compatible with kerchunk references.
     """
-    import fsspec
-    import xarray as xr
-
-    refs = combined["refs"]
-
-    # Open the combined refs to get the original time values
-    fs = fsspec.filesystem(
-        "reference",
-        fo=combined,
-        target_protocol="file",
-        remote_protocol="file",
-    )
-    ds = xr.open_zarr(fs.get_mapper(""), consolidated=False)
     original_times = pd.DatetimeIndex(ds.time.values)
-    n_times = len(original_times)
-    ds.close()
-
     epoch = pd.Timestamp("1970-01-01")
 
     # Build mid-month timestamps (day 15, midnight)
@@ -80,26 +111,8 @@ def _fix_time(combined: dict) -> dict:
             for t in original_times
         ]
     )
-    days_mid = np.array([(t - epoch).days for t in mid_month], dtype="<i8")
 
-    # Update time chunk data (inline base64)
-    refs["time/0"] = "base64:" + base64.b64encode(days_mid.tobytes()).decode()
-
-    # Update time .zarray shape to match actual number of time steps
-    time_zarr = json.loads(refs["time/.zarray"])
-    time_zarr["shape"] = [n_times]
-    time_zarr["chunks"] = [n_times]
-    refs["time/.zarray"] = json.dumps(time_zarr)
-
-    # Update time .zattrs: use epoch-based units, add bounds and CF attrs
-    time_attrs = json.loads(refs["time/.zattrs"])
-    time_attrs["units"] = "days since 1970-01-01"
-    time_attrs["calendar"] = "standard"
-    time_attrs["bounds"] = "time_bnds"
-    time_attrs["cell_methods"] = "time: mean"
-    refs["time/.zattrs"] = json.dumps(time_attrs)
-
-    # Build time_bnds: [first-of-month, first-of-next-month]
+    # Build time_bnds: [first-of-month, first-of-next-month)
     bounds_list = []
     for t in original_times:
         m_start = t.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -124,70 +137,35 @@ def _fix_time(combined: dict) -> dict:
             )
         bounds_list.append([(m_start - epoch).days, (m_end - epoch).days])
 
+    ds = ds.assign_coords(time=mid_month)
+    ds.time.attrs.update(
+        {
+            "bounds": "time_bnds",
+            "cell_methods": "time: mean",
+        }
+    )
+
     bnds_arr = np.array(bounds_list, dtype="<i8")
-
-    refs["time_bnds/.zarray"] = json.dumps(
-        {
-            "shape": [n_times, 2],
-            "chunks": [n_times, 2],
-            "dtype": "<i8",
-            "fill_value": 0,
-            "order": "C",
-            "filters": None,
-            "compressor": None,
-            "zarr_format": 2,
-        }
+    nv = np.array([0, 1])
+    ds["time_bnds"] = xr.DataArray(
+        bnds_arr,
+        dims=["time", "nv"],
+        attrs={"units": "days since 1970-01-01", "calendar": "standard"},
     )
-    refs["time_bnds/.zattrs"] = json.dumps(
-        {
-            "_ARRAY_DIMENSIONS": ["time", "nv"],
-            "units": "days since 1970-01-01",
-            "calendar": "standard",
-        }
-    )
-    refs["time_bnds/0.0"] = "base64:" + base64.b64encode(bnds_arr.tobytes()).decode()
+    ds = ds.assign_coords(nv=nv)
 
-    # Add nv dimension
-    nv_arr = np.array([0, 1], dtype="<i8")
-    refs["nv/.zarray"] = json.dumps(
-        {
-            "shape": [2],
-            "chunks": [2],
-            "dtype": "<i8",
-            "fill_value": 0,
-            "order": "C",
-            "filters": None,
-            "compressor": None,
-            "zarr_format": 2,
-        }
-    )
-    refs["nv/.zattrs"] = json.dumps({"_ARRAY_DIMENSIONS": ["nv"]})
-    refs["nv/0"] = "base64:" + base64.b64encode(nv_arr.tobytes()).decode()
-
-    return combined
-
-
-def _make_relative(refs: dict, base_dir: Path) -> dict:
-    """Convert absolute file paths in kerchunk refs to relative paths."""
-    base_prefix = str(base_dir) + "/"
-    out = {}
-    for key, val in refs.items():
-        if isinstance(val, list) and len(val) >= 1 and isinstance(val[0], str):
-            path = val[0]
-            if path.startswith(base_prefix):
-                rel = "./" + path[len(base_prefix) :]
-                val = [rel] + val[1:]
-        out[key] = val
-    return out
+    return ds
 
 
 def consolidate_merra2(
     run_dir: Path,
     variables: list[str],
 ) -> dict:
-    """Build a Kerchunk JSON reference store for MERRA-2 files.
+    """Merge per-granule MERRA-2 files into a single consolidated NetCDF.
 
-    Always performs a full rebuild from all .nc4 files on disk.
+    Opens all ``.nc4`` files in ``data/raw/merra2/``, selects the requested
+    variables, concatenates along time, shifts timestamps to mid-month,
+    and writes a single ``merra2_consolidated.nc``.
 
     Parameters
     ----------
@@ -199,13 +177,8 @@ def consolidate_merra2(
     Returns
     -------
     dict
-        Provenance record with reference file path and timestamp.
+        Provenance record with consolidated file path and timestamp.
     """
-    from datetime import datetime, timezone
-
-    import kerchunk.hdf
-    from kerchunk.combine import MultiZarrToZarr
-
     import nhf_spatial_targets.catalog as _catalog
 
     merra2_dir = run_dir / "data" / "raw" / "merra2"
@@ -217,58 +190,45 @@ def consolidate_merra2(
             f"Run 'nhf-targets fetch merra2' first."
         )
 
-    logger.info("Scanning %d NetCDF files for Kerchunk references", len(nc_files))
+    logger.info("Merging %d NetCDF files for MERRA-2", len(nc_files))
 
-    keep_vars = set(variables)
-    singles = []
-    for nc in nc_files:
-        with open(nc, "rb") as f:
-            h5chunks = kerchunk.hdf.SingleHdf5ToZarr(f, str(nc))
-            refs = h5chunks.translate()
-        refs["refs"] = _filter_refs(refs["refs"], keep_vars)
-        singles.append(refs)
+    datasets = _open_datasets(nc_files, "Reading MERRA-2 files")
+    try:
+        ds = xr.concat(datasets, dim="time", data_vars="minimal", coords="minimal")
+        ds = ds.sortby("time")
+        _validate_variables(ds, variables)
+        ds = ds[variables]
+        ds = _fix_time_merra2(ds)
 
-    mzz = MultiZarrToZarr(
-        singles,
-        concat_dims=["time"],
-        identical_dims=["lat", "lon"],
-        coo_map={"time": "cf:time"},
-    )
-    combined = mzz.translate()
+        # Add CF and provenance global attributes
+        meta = _catalog.source("merra2")
+        ds.attrs.update(
+            {
+                "Conventions": "CF-1.8",
+                "history": (f"Consolidated by nhf-spatial-targets v{__version__}"),
+                "source": (
+                    f"NASA MERRA-2 {meta['access']['short_name']}"
+                    f" v{meta['access'].get('version', 'unknown')}"
+                ),
+                "time_modification_note": (
+                    "Original timestamps (YYYY-MM-01T00:30:00) shifted to mid-month "
+                    "(15th) for consistency. See time_bnds for exact averaging periods."
+                ),
+                "references": meta["access"]["url"],
+            }
+        )
 
-    combined = _fix_time(combined)
-
-    # Add CF and provenance global attributes
-    meta = _catalog.source("merra2")
-    root_attrs = ujson.loads(combined["refs"].get(".zattrs", "{}"))
-    root_attrs.update(
-        {
-            "Conventions": "CF-1.8",
-            "history": (
-                f"Kerchunk virtual Zarr created by nhf-spatial-targets v{__version__}"
-            ),
-            "source": (
-                f"NASA MERRA-2 {meta['access']['short_name']}"
-                f" v{meta['access'].get('version', 'unknown')}"
-            ),
-            "time_modification_note": (
-                "Original timestamps (YYYY-MM-01T00:30:00) shifted to mid-month "
-                "(15th) for consistency. See time_bnds for exact averaging periods."
-            ),
-            "references": meta["access"]["url"],
-        }
-    )
-    combined["refs"][".zattrs"] = ujson.dumps(root_attrs)
-
-    # Make paths relative to merra2_dir
-    combined["refs"] = _make_relative(combined["refs"], merra2_dir)
-
-    ref_path = merra2_dir / "merra2_refs.json"
-    ref_path.write_text(ujson.dumps(combined, indent=2))
-    logger.info("Wrote Kerchunk reference store: %s", ref_path)
+        out_path = merra2_dir / "merra2_consolidated.nc"
+        logger.info("Writing consolidated file: %s", out_path)
+        encoding = {"time": {"units": "days since 1970-01-01", "calendar": "standard"}}
+        _write_netcdf(ds, out_path, encoding=encoding)
+        logger.info("Wrote %s", out_path)
+    finally:
+        for d in datasets:
+            d.close()
 
     return {
-        "kerchunk_ref": str(ref_path.relative_to(run_dir)),
+        "consolidated_nc": str(out_path.relative_to(run_dir)),
         "last_consolidated_utc": datetime.now(timezone.utc).isoformat(),
         "n_files": len(nc_files),
         "variables": variables,
@@ -280,7 +240,7 @@ def consolidate_nldas(
     source_key: str,
     variables: list[str],
 ) -> dict:
-    """Build a Kerchunk JSON reference store for NLDAS files.
+    """Merge per-granule NLDAS files into a single consolidated NetCDF.
 
     Parameters
     ----------
@@ -296,11 +256,6 @@ def consolidate_nldas(
     dict
         Provenance record.
     """
-    from datetime import datetime, timezone
-
-    import kerchunk.hdf
-    from kerchunk.combine import MultiZarrToZarr
-
     source_dir = run_dir / "data" / "raw" / source_key
     nc_files = sorted(list(source_dir.glob("*.nc4")) + list(source_dir.glob("*.nc")))
 
@@ -310,33 +265,25 @@ def consolidate_nldas(
             f"Run 'nhf-targets fetch {source_key.replace('_', '-')}' first."
         )
 
-    logger.info("Scanning %d NetCDF files for %s", len(nc_files), source_key)
+    logger.info("Merging %d NetCDF files for %s", len(nc_files), source_key)
 
-    keep_vars = set(variables)
-    singles = []
-    for nc in nc_files:
-        with open(nc, "rb") as f:
-            h5chunks = kerchunk.hdf.SingleHdf5ToZarr(f, str(nc))
-            refs = h5chunks.translate()
-        refs["refs"] = _filter_refs(refs["refs"], keep_vars)
-        singles.append(refs)
+    datasets = _open_datasets(nc_files, f"Reading {source_key} files")
+    try:
+        ds = xr.concat(datasets, dim="time", data_vars="minimal", coords="minimal")
+        ds = ds.sortby("time")
+        _validate_variables(ds, variables)
+        ds = ds[variables]
 
-    mzz = MultiZarrToZarr(
-        singles,
-        concat_dims=["time"],
-        identical_dims=["lat", "lon"],
-        coo_map={"time": "cf:time"},
-    )
-    combined = mzz.translate()
-
-    combined["refs"] = _make_relative(combined["refs"], source_dir)
-
-    ref_path = source_dir / f"{source_key}_refs.json"
-    ref_path.write_text(ujson.dumps(combined, indent=2))
-    logger.info("Wrote Kerchunk reference store: %s", ref_path)
+        out_path = source_dir / f"{source_key}_consolidated.nc"
+        logger.info("Writing consolidated file: %s", out_path)
+        _write_netcdf(ds, out_path)
+        logger.info("Wrote %s", out_path)
+    finally:
+        for d in datasets:
+            d.close()
 
     return {
-        "kerchunk_ref": str(ref_path.relative_to(run_dir)),
+        "consolidated_nc": str(out_path.relative_to(run_dir)),
         "last_consolidated_utc": datetime.now(timezone.utc).isoformat(),
         "n_files": len(nc_files),
         "variables": variables,
@@ -347,27 +294,20 @@ def consolidate_ncep_ncar(
     run_dir: Path,
     variables: list[str],
 ) -> dict:
-    """Build a Kerchunk JSON reference store for NCEP/NCAR monthly files.
-
-    Uses NetCDF3ToZarr since NCEP/NCAR Reanalysis files are NetCDF-3 classic.
+    """Merge per-year NCEP/NCAR monthly files into a single consolidated NetCDF.
 
     Parameters
     ----------
     run_dir : Path
         Run workspace directory containing ``data/raw/ncep_ncar/*.monthly.nc``.
     variables : list[str]
-        Variable names to include (file_variable values).
+        Variable names to include.
 
     Returns
     -------
     dict
         Provenance record.
     """
-    from datetime import datetime, timezone
-
-    from kerchunk.combine import MultiZarrToZarr
-    from kerchunk.netCDF3 import NetCDF3ToZarr
-
     ncep_dir = run_dir / "data" / "raw" / "ncep_ncar"
     nc_files = sorted(ncep_dir.glob("*.monthly.nc"))
 
@@ -377,31 +317,68 @@ def consolidate_ncep_ncar(
             "Run 'nhf-targets fetch ncep-ncar' first."
         )
 
-    logger.info("Scanning %d monthly NetCDF files for NCEP/NCAR", len(nc_files))
+    logger.info("Merging %d monthly NetCDF files for NCEP/NCAR", len(nc_files))
 
-    keep_vars = set(variables)
-    singles = []
-    for nc in nc_files:
-        refs = NetCDF3ToZarr(str(nc)).translate()
-        refs["refs"] = _filter_refs(refs["refs"], keep_vars)
-        singles.append(refs)
+    # NCEP/NCAR has separate files per variable per year (e.g. soilw.0-10cm.gauss.2010.monthly.nc).
+    # Group by variable, concat each group along time, then merge across variables.
+    from collections import defaultdict
 
-    mzz = MultiZarrToZarr(
-        singles,
-        concat_dims=["time"],
-        identical_dims=["lat", "lon"],
-        coo_map={"time": "cf:time"},
-    )
-    combined = mzz.translate()
+    groups: dict[tuple[str, ...], list[Path]] = defaultdict(list)
+    for f in nc_files:
+        try:
+            ds_peek = xr.open_dataset(f, chunks={})
+        except Exception as exc:
+            raise RuntimeError(
+                f"Cannot inspect {f.name} for variable grouping. "
+                f"The file may be corrupt. Detail: {exc}"
+            ) from exc
+        data_vars = [v for v in ds_peek.data_vars if v != "time_bnds"]
+        key = tuple(sorted(data_vars))
+        groups[key].append(f)
+        ds_peek.close()
 
-    combined["refs"] = _make_relative(combined["refs"], ncep_dir)
+    # Warn about unexpected variable groups
+    expected_vars = set(variables)
+    for key in groups:
+        if not set(key) & expected_vars:
+            logger.warning(
+                "Found files with unexpected variables %s in %s; "
+                "these will be included in merge but filtered out during "
+                "variable selection.",
+                key,
+                ncep_dir,
+            )
 
-    ref_path = ncep_dir / "ncep_ncar_refs.json"
-    ref_path.write_text(ujson.dumps(combined, indent=2))
-    logger.info("Wrote Kerchunk reference store: %s", ref_path)
+    merged_parts: list[xr.Dataset] = []
+    try:
+        for var_key, file_group in groups.items():
+            datasets = _open_datasets(
+                file_group, f"Reading NCEP/NCAR {', '.join(var_key)}"
+            )
+            try:
+                part = xr.concat(
+                    datasets, dim="time", data_vars="minimal", coords="minimal"
+                )
+                part = part.sortby("time")
+                merged_parts.append(part)
+            finally:
+                for d in datasets:
+                    d.close()
+
+        ds = xr.merge(merged_parts)
+        _validate_variables(ds, variables)
+        ds = ds[variables]
+
+        out_path = ncep_dir / "ncep_ncar_consolidated.nc"
+        logger.info("Writing consolidated file: %s", out_path)
+        _write_netcdf(ds, out_path)
+        logger.info("Wrote %s", out_path)
+    finally:
+        for part in merged_parts:
+            part.close()
 
     return {
-        "kerchunk_ref": str(ref_path.relative_to(run_dir)),
+        "consolidated_nc": str(out_path.relative_to(run_dir)),
         "last_consolidated_utc": datetime.now(timezone.utc).isoformat(),
         "n_files": len(nc_files),
         "variables": variables,

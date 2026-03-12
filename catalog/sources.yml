@@ -321,7 +321,8 @@ sources:
     description: >
       North American Land Data Assimilation System phase 2 (NLDAS-2),
       NOAH land surface model output, upper-layer (0-10cm) soil moisture.
-      Three soil layers shared with fetch: 0-10cm, 10-40cm, 40-200cm.
+      Four soil layers: 0-10cm, 10-40cm, 40-100cm, 100-200cm.
+      Note: NOAH uses different layer boundaries than MOSAIC (which has 40-200cm).
     citations:
       - "Xia, Y., and others, 2012, doi:10.1029/2011JD016048"
     access:
@@ -339,9 +340,13 @@ sources:
         long_name: "soil moisture 10-40 cm"
         layer_depth_m: "0.10-0.40"
         units: kg/m2
-      - name: SoilM_40_200cm
-        long_name: "soil moisture 40-200 cm"
-        layer_depth_m: "0.40-2.00"
+      - name: SoilM_40_100cm
+        long_name: "soil moisture 40-100 cm"
+        layer_depth_m: "0.40-1.00"
+        units: kg/m2
+      - name: SoilM_100_200cm
+        long_name: "soil moisture 100-200 cm"
+        layer_depth_m: "1.00-2.00"
         units: kg/m2
     time_step: monthly
     period: "1979/present"
