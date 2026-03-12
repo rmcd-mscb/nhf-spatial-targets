@@ -1,4 +1,4 @@
-"""Build Kerchunk virtual Zarr reference store from MERRA-2 NetCDF files."""
+"""Build Kerchunk virtual Zarr reference stores for fetch modules."""
 
 from __future__ import annotations
 
@@ -258,6 +258,74 @@ def consolidate_merra2(
     combined["refs"] = _make_relative(combined["refs"], merra2_dir)
 
     ref_path = merra2_dir / "merra2_refs.json"
+    ref_path.write_text(ujson.dumps(combined, indent=2))
+    logger.info("Wrote Kerchunk reference store: %s", ref_path)
+
+    return {
+        "kerchunk_ref": str(ref_path.relative_to(run_dir)),
+        "last_consolidated_utc": datetime.now(timezone.utc).isoformat(),
+        "n_files": len(nc_files),
+        "variables": variables,
+    }
+
+
+def consolidate_nldas(
+    run_dir: Path,
+    source_key: str,
+    variables: list[str],
+) -> dict:
+    """Build a Kerchunk JSON reference store for NLDAS files.
+
+    Parameters
+    ----------
+    run_dir : Path
+        Run workspace directory.
+    source_key : str
+        Source key (e.g. "nldas_mosaic" or "nldas_noah").
+    variables : list[str]
+        Variable names to include.
+
+    Returns
+    -------
+    dict
+        Provenance record.
+    """
+    from datetime import datetime, timezone
+
+    import kerchunk.hdf
+    from kerchunk.combine import MultiZarrToZarr
+
+    source_dir = run_dir / "data" / "raw" / source_key
+    nc_files = sorted(list(source_dir.glob("*.nc4")) + list(source_dir.glob("*.nc")))
+
+    if not nc_files:
+        raise FileNotFoundError(
+            f"No NetCDF files found in {source_dir}. "
+            f"Run 'nhf-targets fetch {source_key.replace('_', '-')}' first."
+        )
+
+    logger.info("Scanning %d NetCDF files for %s", len(nc_files), source_key)
+
+    keep_vars = set(variables)
+    singles = []
+    for nc in nc_files:
+        with open(nc, "rb") as f:
+            h5chunks = kerchunk.hdf.SingleHdf5ToZarr(f, str(nc))
+            refs = h5chunks.translate()
+        refs["refs"] = _filter_refs(refs["refs"], keep_vars)
+        singles.append(refs)
+
+    mzz = MultiZarrToZarr(
+        singles,
+        concat_dims=["time"],
+        identical_dims=["lat", "lon"],
+        coo_map={"time": "cf:time"},
+    )
+    combined = mzz.translate()
+
+    combined["refs"] = _make_relative(combined["refs"], source_dir)
+
+    ref_path = source_dir / f"{source_key}_refs.json"
     ref_path.write_text(ujson.dumps(combined, indent=2))
     logger.info("Wrote Kerchunk reference store: %s", ref_path)
 
