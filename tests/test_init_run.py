@@ -82,6 +82,27 @@ def _mock_fabric_read(fabric_path, id_col, buffer_deg):
 
 @patch("nhf_spatial_targets.init_run._fabric_metadata", side_effect=_mock_fabric_read)
 @patch("nhf_spatial_targets.init_run._find_reusable_raw", return_value=None)
+def test_init_same_day_collision(
+    mock_reuse, mock_meta, fake_fabric, fake_config, tmp_path
+):
+    workdir = tmp_path / "runs"
+    init_run(
+        fabric_path=fake_fabric,
+        id_col="nhm_id",
+        config_path=fake_config,
+        workdir=workdir,
+    )
+    with pytest.raises(FileExistsError, match="already exists"):
+        init_run(
+            fabric_path=fake_fabric,
+            id_col="nhm_id",
+            config_path=fake_config,
+            workdir=workdir,
+        )
+
+
+@patch("nhf_spatial_targets.init_run._fabric_metadata", side_effect=_mock_fabric_read)
+@patch("nhf_spatial_targets.init_run._find_reusable_raw", return_value=None)
 def test_init_creates_skeleton(
     mock_reuse, mock_meta, fake_fabric, fake_config, tmp_path
 ):

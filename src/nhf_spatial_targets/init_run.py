@@ -53,8 +53,8 @@ def init_run(
     if run_dir.exists():
         raise FileExistsError(
             f"Run directory already exists: {run_dir}\n"
-            "This should not happen with a timestamp-based run ID. "
-            "Wait a minute and try again."
+            "Use a different --id label to disambiguate same-day runs, "
+            "or remove the existing directory if it is no longer needed."
         )
 
     # --- fabric metadata (no full file read — only bbox + hash) -------------
