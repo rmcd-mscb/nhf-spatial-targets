@@ -96,7 +96,8 @@ See `catalog/sources.yml` `status:` and `notes:` fields for per-source gaps.
 - Recharge normalization window — confirmed **2000-2009** from TM 6-B10 body text
 - MOD16A2 / MOD10C1 v006 → v061: both decommissioned; use v061 in all new runs
 - MERRA-2 variable — use `GWETTOP` (0-0.05m, dimensionless); product M2TMNXLND
-- NLDAS-2 MOSAIC / NOAH variable names — confirmed: SoilM_0_10cm, SoilM_10_40cm, SoilM_40_200cm
+- MERRA-2 layer depths — dzsf=0.05m (constant globally), dzrz=1.00m (per GMAO FAQ), dzpr=spatially varying (surface to bedrock, ~1.3-8.5m). Thicknesses in M2CONXLND collection.
+- NLDAS NOAH variable names — confirmed from file inspection: SoilM_0_10cm, SoilM_10_40cm, SoilM_40_100cm, SoilM_100_200cm
 
 **Still open:**
 - WaterGAP 2.2a — registration-gated; substitute candidate is WaterGAP 2.2d on PANGAEA (doi:10.1594/PANGAEA.918447)
