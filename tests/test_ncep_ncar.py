@@ -14,7 +14,7 @@ _MOCK_CONSOLIDATION = {
     "kerchunk_ref": "data/raw/ncep_ncar/ncep_ncar_refs.json",
     "last_consolidated_utc": "2026-01-01T00:00:00+00:00",
     "n_files": 1,
-    "variables": ["soilw"],
+    "variables": ["soilw_0_10cm", "soilw_10_200cm"],
 }
 
 
@@ -53,6 +53,57 @@ def _make_daily_nc(path: Path, year: int, var_name: str = "soilw"):
     )
     ds.to_netcdf(path, format="NETCDF3_CLASSIC")
     return ds
+
+
+# ---- Filename parsing -------------------------------------------------------
+
+
+def test_year_from_monthly_path():
+    """Extract year from various valid monthly filenames."""
+    from nhf_spatial_targets.fetch.ncep_ncar import _year_from_monthly_path
+
+    assert _year_from_monthly_path(Path("soilw.0-10cm.gauss.2010.monthly.nc")) == "2010"
+    assert (
+        _year_from_monthly_path(Path("soilw.10-200cm.gauss.1995.monthly.nc")) == "1995"
+    )
+
+
+def test_year_from_monthly_path_invalid():
+    """ValueError raised for filenames without 'monthly' marker."""
+    from nhf_spatial_targets.fetch.ncep_ncar import _year_from_monthly_path
+
+    with pytest.raises(ValueError, match="Cannot extract year"):
+        _year_from_monthly_path(Path("not_a_valid_file.nc"))
+
+
+# ---- Malformed fabric.json -------------------------------------------------
+
+
+def test_malformed_fabric_raises(run_dir):
+    """ValueError raised when fabric.json is malformed."""
+    (run_dir / "fabric.json").write_text("{}")
+
+    from nhf_spatial_targets.fetch.ncep_ncar import fetch_ncep_ncar
+
+    with pytest.raises(ValueError, match="malformed"):
+        fetch_ncep_ncar(run_dir=run_dir, period="2010/2010")
+
+
+# ---- Network error handling ------------------------------------------------
+
+
+def test_url_error_raises(run_dir):
+    """RuntimeError raised when urlretrieve raises URLError."""
+    import urllib.error
+
+    with patch(
+        "nhf_spatial_targets.fetch.ncep_ncar.urllib.request.urlretrieve",
+        side_effect=urllib.error.URLError("Name or service not known"),
+    ):
+        from nhf_spatial_targets.fetch.ncep_ncar import fetch_ncep_ncar
+
+        with pytest.raises(RuntimeError, match="Failed to connect"):
+            fetch_ncep_ncar(run_dir=run_dir, period="2010/2010")
 
 
 # ---- URL construction -------------------------------------------------------

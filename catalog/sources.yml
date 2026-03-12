@@ -261,14 +261,16 @@ sources:
       url: https://psl.noaa.gov/data/gridded/data.ncep.reanalysis.html
       notes: Monthly means derived from daily Gaussian grid files.
     variables:
-      - name: soilw
+      - name: soilw_0_10cm
         file_variable: soilw.0-10cm.gauss
+        internal_name: soilw
         file_pattern: "https://downloads.psl.noaa.gov/Datasets/ncep.reanalysis.dailyavgs/surface_gauss/soilw.0-10cm.gauss.{year}.nc"
         long_name: "volumetric soil moisture 0-10 cm"
         layer_depth_m: "0.00-0.10"
         units: kg/m2
-      - name: soilw
+      - name: soilw_10_200cm
         file_variable: soilw.10-200cm.gauss
+        internal_name: soilw
         file_pattern: "https://downloads.psl.noaa.gov/Datasets/ncep.reanalysis.dailyavgs/surface_gauss/soilw.10-200cm.gauss.{year}.nc"
         long_name: "volumetric soil moisture 10-200 cm"
         layer_depth_m: "0.10-2.00"

@@ -22,7 +22,10 @@ def parse_period(period: str) -> tuple[str, str]:
 
 
 def months_in_period(period: str) -> list[str]:
-    """Return list of 'YYYY-MM' strings for every month in the period."""
+    """Return list of 'YYYY-MM' strings for every month in the period.
+
+    All 12 months are included for each year (no sub-annual start/end).
+    """
     parse_period(period)  # validate format
     parts = period.split("/")
     start_year, end_year = int(parts[0]), int(parts[1])

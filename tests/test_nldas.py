@@ -98,6 +98,48 @@ def _fake_noah_download(run_dir: Path, n: int = 1) -> list[str]:
     return paths
 
 
+# ---- Filename parsing -------------------------------------------------------
+
+
+def test_year_month_from_path():
+    """Extract YYYY-MM from various valid NLDAS filenames."""
+    from nhf_spatial_targets.fetch.nldas import _year_month_from_path
+
+    assert (
+        _year_month_from_path(Path("NLDAS_MOS0125_M.A200101.002.grb.SUB.nc4"))
+        == "2001-01"
+    )
+    assert (
+        _year_month_from_path(Path("NLDAS_NOAH0125_M.A201012.002.grb.SUB.nc4"))
+        == "2010-12"
+    )
+
+
+def test_year_month_from_invalid_path():
+    """ValueError raised for filenames without NLDAS date pattern."""
+    from nhf_spatial_targets.fetch.nldas import _year_month_from_path
+
+    with pytest.raises(ValueError, match="Cannot extract date"):
+        _year_month_from_path(Path("not_an_nldas_file.nc"))
+
+
+# ---- Malformed fabric.json -------------------------------------------------
+
+
+@patch("nhf_spatial_targets.fetch.nldas.earthdata_login")
+def test_malformed_fabric_raises(mock_login, tmp_path):
+    """ValueError raised when fabric.json is malformed."""
+    run_dir = tmp_path / "bad_fabric_run"
+    run_dir.mkdir()
+    (run_dir / "fabric.json").write_text("{}")
+
+    with patch(_CONSOLIDATE_TARGET, return_value=_MOCK_CONSOLIDATION, create=True):
+        from nhf_spatial_targets.fetch.nldas import fetch_nldas_mosaic
+
+        with pytest.raises(ValueError, match="malformed"):
+            fetch_nldas_mosaic(run_dir=run_dir, period="2001/2001")
+
+
 # ---- Authentication --------------------------------------------------------
 
 

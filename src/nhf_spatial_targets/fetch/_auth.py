@@ -43,17 +43,25 @@ def earthdata_login(run_dir: Path) -> earthaccess.Auth:
             nasa = data.get("nasa_earthdata", {})
             username = nasa.get("username", "") or ""
             password = nasa.get("password", "") or ""
-        except (yaml.YAMLError, AttributeError):
-            logger.warning("Could not parse %s, using default login", creds_path)
+        except yaml.YAMLError as exc:
+            logger.warning(
+                "Could not parse %s: %s. Falling back to default login.",
+                creds_path,
+                exc,
+            )
 
     if username and password:
         os.environ["EARTHDATA_USERNAME"] = username
         os.environ["EARTHDATA_PASSWORD"] = password
-        logger.info("Using credentials from .credentials.yml")
-        auth = earthaccess.login(strategy="environment")
-        if auth is not None and auth.authenticated:
-            return auth
-        logger.warning("Environment-based login failed, falling back to default")
+        try:
+            logger.info("Using credentials from .credentials.yml")
+            auth = earthaccess.login(strategy="environment")
+            if auth is not None and auth.authenticated:
+                return auth
+            logger.warning("Environment-based login failed, falling back to default")
+        finally:
+            os.environ.pop("EARTHDATA_USERNAME", None)
+            os.environ.pop("EARTHDATA_PASSWORD", None)
 
     auth = earthaccess.login()
     if auth is None or not auth.authenticated:

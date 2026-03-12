@@ -38,12 +38,12 @@ def _manifest_nldas_files(run_dir: Path, source_key: str) -> list[dict]:
         return []
     try:
         manifest = json.loads(manifest_path.read_text())
-        return manifest.get("sources", {}).get(source_key, {}).get("files", [])
-    except (json.JSONDecodeError, KeyError):
-        logger.warning(
-            "Malformed manifest.json in %s, ignoring %s entries", run_dir, source_key
-        )
-        return []
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"manifest.json in {run_dir} is corrupted and cannot be parsed. "
+            f"Inspect the file manually or restore from backup. Detail: {exc}"
+        ) from exc
+    return manifest.get("sources", {}).get(source_key, {}).get("files", [])
 
 
 def _existing_months(run_dir: Path, source_key: str) -> set[str]:
@@ -132,7 +132,6 @@ def _fetch_nldas(source_key: str, run_dir: Path, period: str) -> dict:
     dict
         Provenance record for ``manifest.json``.
     """
-    # Lazy import to allow mocking in tests before consolidate_nldas exists
     from nhf_spatial_targets.fetch.consolidate import consolidate_nldas  # noqa: PLC0415
 
     meta = _catalog.source(source_key)
@@ -171,6 +170,9 @@ def _fetch_nldas(source_key: str, run_dir: Path, period: str) -> dict:
     all_months = months_in_period(period)
     needed = [m for m in all_months if m not in already_have]
 
+    output_dir = run_dir / "data" / "raw" / source_key
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     if not needed:
         logger.info(
             "All %d months already downloaded, skipping to consolidation",
@@ -208,9 +210,6 @@ def _fetch_nldas(source_key: str, run_dir: Path, period: str) -> dict:
                 len(needed),
             )
 
-            output_dir = run_dir / "data" / "raw" / source_key
-            output_dir.mkdir(parents=True, exist_ok=True)
-
             downloaded = earthaccess.download(
                 granules,
                 local_path=str(output_dir),
@@ -232,7 +231,6 @@ def _fetch_nldas(source_key: str, run_dir: Path, period: str) -> dict:
             logger.info("Downloaded %d files to %s", len(downloaded), output_dir)
 
     # Build file inventory from all .nc4 and .nc files on disk
-    output_dir = run_dir / "data" / "raw" / source_key
     all_nc_files = sorted(
         list(output_dir.glob("*.nc4")) + list(output_dir.glob("*.nc"))
     )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
@@ -14,6 +15,7 @@ from nhf_spatial_targets._logging import setup_logging
 
 _DEFAULT_CONFIG = Path(__file__).parent.parent.parent / "config" / "pipeline.yml"
 _DEFAULT_WORKDIR = Path("runs")
+_logger = logging.getLogger(__name__)
 
 app = App(
     name="nhf-targets",
@@ -244,6 +246,13 @@ def fetch_merra2_cmd(
     except (ValueError, FileNotFoundError, RuntimeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
+    except Exception as exc:
+        _logger.exception("Unexpected error during MERRA-2 fetch")
+        print(
+            f"Unexpected error ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     console.print(
         f"[green]Downloaded {len(result['files'])} files "
@@ -292,6 +301,13 @@ def fetch_nldas_mosaic_cmd(
         result = fetch_nldas_mosaic(run_dir=run_dir, period=period)
     except (ValueError, FileNotFoundError, RuntimeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        _logger.exception("Unexpected error during NLDAS-2 MOSAIC fetch")
+        print(
+            f"Unexpected error ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     console.print(
@@ -342,6 +358,13 @@ def fetch_nldas_noah_cmd(
     except (ValueError, FileNotFoundError, RuntimeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
+    except Exception as exc:
+        _logger.exception("Unexpected error during NLDAS-2 NOAH fetch")
+        print(
+            f"Unexpected error ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     console.print(
         f"[green]Downloaded {len(result['files'])} files "
@@ -370,7 +393,7 @@ def fetch_ncep_ncar_cmd(
 ):
     """Download NCEP/NCAR Reanalysis soil moisture data.
 
-    Downloads from NOAA PSL OPeNDAP, subsets to the fabric bounding box,
+    Downloads daily files from NOAA PSL, resamples to monthly means,
     and prints the provenance record.
     """
     import json as json_mod
@@ -390,6 +413,13 @@ def fetch_ncep_ncar_cmd(
         result = fetch_ncep_ncar(run_dir=run_dir, period=period)
     except (ValueError, FileNotFoundError, RuntimeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        _logger.exception("Unexpected error during NCEP/NCAR fetch")
+        print(
+            f"Unexpected error ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     console.print(

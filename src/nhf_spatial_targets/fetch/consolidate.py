@@ -15,7 +15,8 @@ from nhf_spatial_targets import __version__
 
 logger = logging.getLogger(__name__)
 
-# Variables to keep in addition to user-requested ones.
+# Coordinate and bounds variables to always keep in Kerchunk references,
+# regardless of which data variables the user requests.
 _COORD_VARS = {"time", "lat", "lon", "time_bnds", "lat_bnds", "lon_bnds"}
 
 
@@ -43,6 +44,11 @@ def _filter_refs(refs: dict, keep_vars: set[str]) -> dict:
 
 def _fix_time(combined: dict) -> dict:
     """Shift timestamps to mid-month and add time_bnds.
+
+    MERRA-2 monthly files have timestamps at the first of the month plus
+    30 minutes (e.g. 2010-01-01T00:30:00). This normalizes them to the
+    15th of each month to provide a conventional mid-month representative
+    timestamp for monthly data.
 
     Operates directly on the kerchunk reference dict, replacing the time
     coordinate data with mid-month values and adding time_bnds. Uses

@@ -20,7 +20,7 @@ _SOURCE_KEY = "ncep_ncar"
 
 
 def consolidate_ncep_ncar(run_dir: Path, variables: list[str]) -> dict:
-    """Delegate to consolidate module (added in Task 7).
+    """Delegate to the shared consolidate module for testability.
 
     This thin wrapper exists so tests can patch
     ``nhf_spatial_targets.fetch.ncep_ncar.consolidate_ncep_ncar``.
@@ -39,12 +39,12 @@ def _manifest_ncep_ncar_files(run_dir: Path) -> list[dict]:
         return []
     try:
         manifest = json.loads(manifest_path.read_text())
-        return manifest.get("sources", {}).get(_SOURCE_KEY, {}).get("files", [])
-    except (json.JSONDecodeError, KeyError):
-        logger.warning(
-            "Malformed manifest.json in %s, ignoring ncep_ncar entries", run_dir
-        )
-        return []
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"manifest.json in {run_dir} is corrupted and cannot be parsed. "
+            f"Inspect the file manually or restore from backup. Detail: {exc}"
+        ) from exc
+    return manifest.get("sources", {}).get(_SOURCE_KEY, {}).get("files", [])
 
 
 def _existing_years(run_dir: Path) -> set[str]:
@@ -66,10 +66,8 @@ def _year_from_monthly_path(path: Path) -> str:
 
     e.g. ``soilw.0-10cm.gauss.2010.monthly.nc`` -> ``"2010"``
     """
-    # Filename pattern: {file_variable}.{year}.monthly.nc
-    # Split on '.' and find the part before 'monthly'
-    parts = path.stem.split(".")  # stem drops the final .nc extension
-    # stem of soilw.0-10cm.gauss.2010.monthly.nc is soilw.0-10cm.gauss.2010.monthly
+    # stem e.g. "soilw.0-10cm.gauss.2010.monthly" — find part before "monthly"
+    parts = path.stem.split(".")
     for i, part in enumerate(parts):
         if part == "monthly" and i > 0:
             return parts[i - 1]
@@ -77,12 +75,12 @@ def _year_from_monthly_path(path: Path) -> str:
 
 
 def fetch_ncep_ncar(run_dir: Path, period: str) -> dict:
-    """Download NCEP/NCAR Reanalysis daily files, aggregate to monthly means.
+    """Download NCEP/NCAR Reanalysis soil moisture and aggregate to monthly means.
 
-    Downloads daily Gaussian grid NetCDF files from NOAA PSL for each year
-    in the period, resamples them to monthly means, and consolidates via
-    Kerchunk. Supports incremental download — years already recorded in
-    ``manifest.json`` are skipped.
+    Downloads annual NetCDF files containing daily averages from NOAA PSL
+    for each year in the period, resamples to monthly means, and
+    consolidates via Kerchunk. Supports incremental download — years
+    already recorded in ``manifest.json`` are skipped.
 
     Parameters
     ----------
@@ -159,14 +157,36 @@ def fetch_ncep_ncar(run_dir: Path, period: str) -> dict:
                     raise RuntimeError(
                         f"Failed to download {url}: HTTP {exc.code} {exc.reason}"
                     ) from exc
+                except urllib.error.URLError as exc:
+                    raise RuntimeError(
+                        f"Failed to connect to {url}: {exc.reason}. "
+                        "Check network connectivity and DNS resolution."
+                    ) from exc
+                except OSError as exc:
+                    raise RuntimeError(
+                        f"Network error downloading {url}: {exc}"
+                    ) from exc
 
                 # Aggregate daily to monthly means
                 logger.debug("Resampling %s to monthly means", daily_path)
                 with xr.open_dataset(daily_path) as ds:
                     monthly = ds.resample(time="1ME").mean()
+                    # Rename internal variable to catalog name for disambiguation
+                    internal_var = file_var.split(".")[0]
+                    catalog_name = var_entry["name"]
+                    if (
+                        internal_var in monthly.data_vars
+                        and internal_var != catalog_name
+                    ):
+                        monthly = monthly.rename({internal_var: catalog_name})
                     monthly_path = output_dir / f"{file_var}.{year}.monthly.nc"
                     monthly.to_netcdf(monthly_path)
 
+                if not monthly_path.exists() or monthly_path.stat().st_size == 0:
+                    raise RuntimeError(
+                        f"Monthly aggregation produced empty or missing file: "
+                        f"{monthly_path}. Daily file preserved at {daily_path}."
+                    )
                 # Delete the raw daily file
                 daily_path.unlink()
                 logger.debug("Deleted daily file %s", daily_path)
@@ -190,20 +210,9 @@ def fetch_ncep_ncar(run_dir: Path, period: str) -> dict:
             }
         )
 
-    # Consolidate into Kerchunk reference store (Task 7 adds the real implementation)
-    var_names = list({v["name"] for v in meta["variables"]})
-    try:
-        consolidation = consolidate_ncep_ncar(run_dir=run_dir, variables=var_names)
-    except (ImportError, AttributeError, NotImplementedError):
-        logger.warning(
-            "consolidate_ncep_ncar not yet available; skipping Kerchunk consolidation"
-        )
-        consolidation = {
-            "kerchunk_ref": None,
-            "last_consolidated_utc": now_utc,
-            "n_files": len(all_monthly_files),
-            "variables": var_names,
-        }
+    # Consolidate into Kerchunk reference store
+    var_names = [v["name"] for v in meta["variables"]]
+    consolidation = consolidate_ncep_ncar(run_dir=run_dir, variables=var_names)
 
     # Compute effective period from actual files on disk
     if files:
@@ -251,7 +260,7 @@ def _update_manifest(
             "access_url": meta["access"]["url"],
             "period": period,
             "bbox": bbox,
-            "variables": list({v["name"] for v in meta["variables"]}),
+            "variables": [v["name"] for v in meta["variables"]],
             "files": files,
             "kerchunk_ref": consolidation.get("kerchunk_ref"),
             "last_consolidated_utc": consolidation.get("last_consolidated_utc"),

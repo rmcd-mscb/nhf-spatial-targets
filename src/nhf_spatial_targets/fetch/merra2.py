@@ -39,12 +39,12 @@ def _manifest_merra2_files(run_dir: Path) -> list[dict]:
         return []
     try:
         manifest = json.loads(manifest_path.read_text())
-        return manifest.get("sources", {}).get("merra2", {}).get("files", [])
-    except (json.JSONDecodeError, KeyError):
-        logger.warning(
-            "Malformed manifest.json in %s, ignoring merra2 entries", run_dir
-        )
-        return []
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"manifest.json in {run_dir} is corrupted and cannot be parsed. "
+            f"Inspect the file manually or restore from backup. Detail: {exc}"
+        ) from exc
+    return manifest.get("sources", {}).get("merra2", {}).get("files", [])
 
 
 def _existing_months(run_dir: Path) -> set[str]:

@@ -205,34 +205,7 @@ def test_superseded_warning(
         assert "superseded" in str(dep_warnings[0].message).lower()
 
 
-# ---- Period validation -----------------------------------------------------
-
-
-def test_period_missing_slash(run_dir):
-    """ValueError raised for period without slash separator."""
-    from nhf_spatial_targets.fetch._period import parse_period
-
-    with pytest.raises(ValueError, match="YYYY/YYYY"):
-        parse_period("2010")
-
-
-def test_period_non_numeric(run_dir):
-    """ValueError raised for non-integer years."""
-    from nhf_spatial_targets.fetch._period import parse_period
-
-    with pytest.raises(ValueError, match="integers"):
-        parse_period("abc/def")
-
-
-def test_period_reversed(run_dir):
-    """ValueError raised when end year is before start year."""
-    from nhf_spatial_targets.fetch._period import parse_period
-
-    with pytest.raises(ValueError, match="before start year"):
-        parse_period("2015/2010")
-
-
-# ---- Missing fabric.json --------------------------------------------------
+# ---- Missing / malformed fabric.json ---------------------------------------
 
 
 @patch("nhf_spatial_targets.fetch.merra2.earthdata_login")
@@ -244,6 +217,19 @@ def test_missing_fabric_raises(mock_login, tmp_path):
     from nhf_spatial_targets.fetch.merra2 import fetch_merra2
 
     with pytest.raises(FileNotFoundError, match="fabric.json"):
+        fetch_merra2(run_dir=run_dir, period="2010/2010")
+
+
+@patch("nhf_spatial_targets.fetch.merra2.earthdata_login")
+def test_malformed_fabric_raises(mock_login, tmp_path):
+    """ValueError raised when fabric.json is malformed."""
+    run_dir = tmp_path / "bad_fabric_run"
+    run_dir.mkdir()
+    (run_dir / "fabric.json").write_text("{}")
+
+    from nhf_spatial_targets.fetch.merra2 import fetch_merra2
+
+    with pytest.raises(ValueError, match="malformed"):
         fetch_merra2(run_dir=run_dir, period="2010/2010")
 
 
