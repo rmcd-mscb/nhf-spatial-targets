@@ -36,7 +36,7 @@ def init_run(
     config_path : Path to the pipeline.yml to copy as the run config.
     workdir     : Root directory for all runs (e.g. /data/nhf-runs).
     run_label   : Short label embedded in the run ID (e.g. "gfv11").
-                  Produces: 2026-03-11T1500_gfv11_v0.1.0
+                  Produces: 2026-03-11_gfv11_v0.1.0
     buffer_deg  : Degrees to buffer the fabric bbox for source downloads.
 
     Returns
@@ -81,7 +81,7 @@ def init_run(
 
 
 def _make_run_id(label: str | None = None) -> str:
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M")
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if label:
         return f"{ts}_{label}_v{__version__}"
     return f"{ts}_v{__version__}"
