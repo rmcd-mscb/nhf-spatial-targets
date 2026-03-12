@@ -1,8 +1,9 @@
-"""Fetch MERRA-2 land surface data for soil moisture variables via earthaccess."""
+"""Fetch MERRA-2 monthly land surface diagnostics (M2TMNXLND) via earthaccess."""
 
 from __future__ import annotations
 
 import json
+import logging
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +13,7 @@ import earthaccess
 import nhf_spatial_targets.catalog as _catalog
 
 _SOURCE_KEY = "merra2"
+logger = logging.getLogger(__name__)
 
 
 def _parse_period(period: str) -> tuple[str, str]:
@@ -36,8 +38,8 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
     """Download MERRA-2 M2TMNXLND granules for the given period.
 
     Downloads the full monthly land surface diagnostics product;
-    relevant soil moisture variables (SFMC, GWETROOT) are extracted
-    downstream during aggregation.
+    relevant variables (defined in ``catalog/sources.yml``) are
+    extracted downstream during aggregation.
 
     Parameters
     ----------
@@ -69,6 +71,7 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
             "NASA Earthdata login failed. Register at "
             "https://urs.earthdata.nasa.gov/users/new"
         )
+    logger.info("Authenticated with NASA Earthdata")
 
     fabric_path = run_dir / "fabric.json"
     if not fabric_path.exists():
@@ -76,17 +79,26 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
             f"fabric.json not found in {run_dir}. "
             f"Run 'nhf-targets init' to create a run workspace first."
         )
-    fabric = json.loads(fabric_path.read_text())
-    bbox = fabric["bbox_buffered"]
-    bbox_tuple = (bbox["minx"], bbox["miny"], bbox["maxx"], bbox["maxy"])
+    try:
+        fabric = json.loads(fabric_path.read_text())
+        bbox = fabric["bbox_buffered"]
+        bbox_tuple = (bbox["minx"], bbox["miny"], bbox["maxx"], bbox["maxy"])
+    except (json.JSONDecodeError, KeyError) as exc:
+        raise ValueError(
+            f"fabric.json in {run_dir} is malformed or missing required "
+            f"fields (bbox_buffered.{{minx,miny,maxx,maxy}}). "
+            f"Re-run 'nhf-targets init' to regenerate it."
+        ) from exc
 
     temporal = _parse_period(period)
+    logger.debug("bbox=%s, temporal=%s", bbox_tuple, temporal)
 
     granules = earthaccess.search_data(
         short_name=short_name,
         bounding_box=bbox_tuple,
         temporal=temporal,
     )
+    logger.info("Found %d granules for %s", len(granules), short_name)
 
     if not granules:
         raise ValueError(
@@ -108,6 +120,11 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
             f"{len(granules)} granules. Check network connectivity "
             f"and Earthdata credentials."
         )
+    if len(downloaded) < len(granules):
+        logger.warning(
+            "Partial download: got %d of %d granules", len(downloaded), len(granules)
+        )
+    logger.info("Downloaded %d files to %s", len(downloaded), output_dir)
 
     variables = meta["variables"]
     files = []

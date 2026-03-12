@@ -17,7 +17,7 @@ dependencies = [
     "rioxarray>=0.15",
     "netcdf4>=1.6",
     "dask>=2024.1",
-    "click>=8.1",
+    "cyclopts>=3.0",
     "rich>=13.0",
     "gdptools",
     "sciencebasepy",

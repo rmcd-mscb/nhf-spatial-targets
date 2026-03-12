@@ -16,7 +16,7 @@ rioxarray = ">=0.15"
 netcdf4 = ">=1.6"
 h5netcdf = ">=1.3"
 dask = ">=2024.1"
-click = ">=8.1"
+cyclopts = ">=3.0"
 rich = ">=13.0"
 # gdptools: spatial aggregation (install from PyPI if not on conda-forge)
 # sciencebasepy: ScienceBase access
@@ -55,6 +55,9 @@ run-aet    = { cmd = "nhf-targets run --target aet" }
 run-rch    = { cmd = "nhf-targets run --target recharge" }
 run-som    = { cmd = "nhf-targets run --target soil_moisture" }
 run-sca    = { cmd = "nhf-targets run --target snow_covered_area" }
+
+# Fetch source data
+fetch-merra2 = { cmd = "nhf-targets fetch merra2", description = "Download MERRA-2 data into a run workspace" }
 
 # Catalog inspection
 catalog-sources   = { cmd = "nhf-targets catalog sources" }
