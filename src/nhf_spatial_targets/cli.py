@@ -2,53 +2,70 @@
 
 from __future__ import annotations
 
+import sys
+from importlib.metadata import version as _pkg_version
 from pathlib import Path
+from typing import Annotated
 
-import click
 import yaml
+from cyclopts import App, Parameter
 
+from nhf_spatial_targets._logging import setup_logging
 
 _DEFAULT_CONFIG = Path(__file__).parent.parent.parent / "config" / "pipeline.yml"
 _DEFAULT_WORKDIR = Path("runs")
 
-
-@click.group()
-def main():
-    """nhf-spatial-targets: build NHM calibration target datasets."""
-
-
-@main.command()
-@click.option(
-    "--run-dir",
-    "-r",
-    default=None,
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-    help="Run workspace created by 'nhf-targets init'. "
-    "Uses run-dir/config.yml as the pipeline config.",
+app = App(
+    name="nhf-targets",
+    help="nhf-spatial-targets: build NHM calibration target datasets.",
+    version=_pkg_version("nhf-spatial-targets"),
 )
-@click.option(
-    "--config",
-    "-c",
-    default=None,
-    type=click.Path(exists=True, path_type=Path),
-    help="Explicit pipeline.yml path (alternative to --run-dir).",
-)
-@click.option(
-    "--target",
-    "-t",
-    default=None,
-    help="Run a single target (default: all enabled targets).",
-)
-def run(run_dir: Path | None, config: Path | None, target: str | None):
-    """Run the calibration target pipeline.
+fetch_app = App(name="fetch", help="Download source datasets into a run workspace.")
+catalog_app = App(name="catalog", help="Inspect the data source catalog.")
+app.command(fetch_app)
+app.command(catalog_app)
 
-    Provide either --run-dir (preferred, points to an init workspace) or
-    --config (legacy, points directly to a pipeline.yml).
-    """
+
+@app.meta.default
+def launcher(
+    *tokens: Annotated[str, Parameter(show=False, allow_leading_hyphen=True)],
+    verbose: Annotated[bool, Parameter(name=["--verbose", "-v"])] = False,
+):
+    """Global options for nhf-targets."""
+    setup_logging(verbose)
+    app(tokens)  # dispatch remaining tokens to the root app
+
+
+@app.command
+def run(
+    run_dir: Annotated[
+        Path | None,
+        Parameter(
+            name=["--run-dir", "-r"],
+            help="Run workspace created by 'nhf-targets init'.",
+        ),
+    ] = None,
+    config: Annotated[
+        Path | None,
+        Parameter(name=["--config", "-c"], help="Explicit pipeline.yml path."),
+    ] = None,
+    target: Annotated[
+        str | None,
+        Parameter(
+            name=["--target", "-t"], help="Run a single target (default: all enabled)."
+        ),
+    ] = None,
+):
+    """Run the calibration target pipeline."""
     if run_dir is None and config is None:
-        raise click.UsageError("Provide either --run-dir or --config.")
+        print("Error: Provide either --run-dir or --config.", file=sys.stderr)
+        sys.exit(2)
     if run_dir is not None and config is not None:
-        raise click.UsageError("Provide --run-dir or --config, not both.")
+        print("Error: Provide --run-dir or --config, not both.", file=sys.stderr)
+        sys.exit(2)
+    if run_dir is not None and not run_dir.exists():
+        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+        sys.exit(2)
 
     config_path = (run_dir / "config.yml") if run_dir else config
     cfg = yaml.safe_load(config_path.read_text())
@@ -62,8 +79,9 @@ def run(run_dir: Path | None, config: Path | None, target: str | None):
 
     for name in to_run:
         if name not in targets_cfg:
-            raise click.ClickException(f"Unknown target: {name}")
-        click.echo(f"Building target: {name}")
+            print(f"Error: Unknown target: {name}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Building target: {name}")
         _dispatch(name, targets_cfg[name], cfg, run_dir=run_dir)
 
 
@@ -74,7 +92,7 @@ def _dispatch(
     run_dir: Path | None = None,
 ) -> None:
     """Dispatch to the appropriate target builder module."""
-    from nhf_spatial_targets.targets import run, aet, rch, som, sca
+    from nhf_spatial_targets.targets import aet, rch, run, sca, som
 
     builders = {
         "runoff": run.build,
@@ -84,9 +102,9 @@ def _dispatch(
         "snow_covered_area": sca.build,
     }
     if name not in builders:
-        raise click.ClickException(f"No builder registered for target: {name}")
+        print(f"Error: No builder registered for target: {name}", file=sys.stderr)
+        sys.exit(1)
 
-    # When run_dir is supplied, data paths are relative to the workspace.
     fabric_path = pipeline_cfg["fabric"]["path"]
     if run_dir is not None:
         output_path = str(run_dir / "targets")
@@ -96,70 +114,43 @@ def _dispatch(
     builders[name](target_cfg, fabric_path, output_path)
 
 
-@main.command()
-@click.option(
-    "--fabric",
-    "-f",
-    required=True,
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="Path to the HRU fabric GeoPackage.",
-)
-@click.option(
-    "--id-col",
-    default="nhm_id",
-    show_default=True,
-    help="HRU ID column name in the fabric.",
-)
-@click.option(
-    "--config",
-    "-c",
-    default=None,
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="Pipeline config to copy into the run workspace. "
-    "Defaults to config/pipeline.yml in the repo root.",
-)
-@click.option(
-    "--workdir",
-    "-w",
-    default=None,
-    type=click.Path(file_okay=False, path_type=Path),
-    help="Root directory for run workspaces. "
-    "Defaults to runs/ relative to the current directory. "
-    "Can be outside the repository for large data volumes.",
-)
-@click.option(
-    "--id",
-    "run_label",
-    default=None,
-    help="Short label embedded in the run ID (e.g. 'gfv11'). "
-    "Produces: 2026-03-11T1500_gfv11_v0.1.0",
-)
-@click.option(
-    "--buffer",
-    default=0.1,
-    show_default=True,
-    type=float,
-    help="Degrees to buffer the fabric bounding box for source downloads.",
-)
+@app.command
 def init(
-    fabric: Path,
-    id_col: str,
-    config: Path | None,
-    workdir: Path | None,
-    run_label: str | None,
-    buffer: float,
+    fabric: Annotated[
+        Path,
+        Parameter(name=["--fabric", "-f"], help="Path to the HRU fabric GeoPackage."),
+    ],
+    id_col: Annotated[
+        str,
+        Parameter(name="--id-col", help="HRU ID column name in the fabric."),
+    ] = "nhm_id",
+    config: Annotated[
+        Path | None,
+        Parameter(
+            name=["--config", "-c"],
+            help="Pipeline config to copy into the run workspace.",
+        ),
+    ] = None,
+    workdir: Annotated[
+        Path | None,
+        Parameter(name=["--workdir", "-w"], help="Root directory for run workspaces."),
+    ] = None,
+    run_label: Annotated[
+        str | None,
+        Parameter(
+            name="--id", help="Short label embedded in the run ID (e.g. 'gfv11')."
+        ),
+    ] = None,
+    buffer: Annotated[
+        float,
+        Parameter(name="--buffer", help="Degrees to buffer the fabric bounding box."),
+    ] = 0.1,
 ):
     """Initialise a new run workspace tied to a specific fabric.
 
     Creates a dated directory under WORKDIR containing a folder skeleton,
     a snapshot of the pipeline config, a credentials template, and a
-    fabric metadata file (path, bounding box, sha256). No data is
-    downloaded and no validation is performed at this stage.
-
-    Example
-    -------
-      nhf-targets init --fabric /data/gfv1.1_fabric.gpkg --id gfv11 --workdir /data/nhf-runs
-      # creates: /data/nhf-runs/2026-03-11T1500_gfv11_v0.1.0/
+    fabric metadata file (path, bounding box, sha256).
     """
     from nhf_spatial_targets.init_run import init_run
     from rich.console import Console
@@ -168,12 +159,23 @@ def init(
 
     console = Console()
 
+    if not fabric.exists():
+        print(f"Error: Fabric file not found: {fabric}", file=sys.stderr)
+        sys.exit(1)
+    if fabric.is_dir():
+        print(
+            f"Error: Fabric path is a directory, not a file: {fabric}", file=sys.stderr
+        )
+        sys.exit(1)
+
     config_path = config or _DEFAULT_CONFIG
     if not config_path.exists():
-        raise click.ClickException(
-            f"Config file not found: {config_path}\n"
-            "Pass --config to specify a different path."
+        print(
+            f"Error: Config file not found: {config_path}\n"
+            "Pass --config to specify a different path.",
+            file=sys.stderr,
         )
+        sys.exit(1)
 
     workdir_path = workdir or _DEFAULT_WORKDIR
 
@@ -192,7 +194,8 @@ def init(
             buffer_deg=buffer,
         )
     except FileExistsError as e:
-        raise click.ClickException(str(e)) from e
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
     msg = Text()
     msg.append("Run workspace created:\n", style="bold green")
@@ -204,34 +207,24 @@ def init(
     console.print(Panel(msg, title="nhf-targets init", border_style="green"))
 
 
-@main.group()
-def fetch():
-    """Download source datasets into a run workspace."""
-
-
-@fetch.command("merra2")
-@click.option(
-    "--run-dir",
-    "-r",
-    required=True,
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-    help="Run workspace created by 'nhf-targets init'.",
-)
-@click.option(
-    "--period",
-    "-p",
-    required=True,
-    help="Temporal range as 'YYYY/YYYY' (start/end years inclusive).",
-)
-def fetch_merra2_cmd(run_dir: Path, period: str):
+@fetch_app.command(name="merra2")
+def fetch_merra2_cmd(
+    run_dir: Annotated[
+        Path,
+        Parameter(
+            name=["--run-dir", "-r"],
+            help="Run workspace created by 'nhf-targets init'.",
+        ),
+    ],
+    period: Annotated[
+        str,
+        Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
+    ],
+):
     """Download MERRA-2 monthly land surface data (M2TMNXLND).
 
     Authenticates via earthaccess, downloads granules subsetted to the
     fabric bounding box, and prints the provenance record.
-
-    Example
-    -------
-      nhf-targets fetch merra2 --run-dir /data/runs/2026-03-11T1500_v0.1.0 --period 2010/2010
     """
     import json as json_mod
 
@@ -251,12 +244,7 @@ def fetch_merra2_cmd(run_dir: Path, period: str):
     console.print(json_mod.dumps(result, indent=2))
 
 
-@main.group()
-def catalog():
-    """Inspect the data source catalog."""
-
-
-@catalog.command("sources")
+@catalog_app.command(name="sources")
 def catalog_sources():
     """List all registered data sources."""
     from nhf_spatial_targets.catalog import sources
@@ -265,10 +253,13 @@ def catalog_sources():
     rprint(sources())
 
 
-@catalog.command("variables")
+@catalog_app.command(name="variables")
 def catalog_variables():
     """List all calibration variable definitions."""
     from nhf_spatial_targets.catalog import variables
     from rich import print as rprint
 
     rprint(variables())
+
+
+main = app.meta
