@@ -351,3 +351,68 @@ def test_nldas_no_files_raises(tmp_path):
             source_key="nldas_mosaic",
             variables=["SoilM_0_10cm"],
         )
+
+
+@pytest.fixture()
+def ncep_dir(tmp_path: Path) -> Path:
+    """Create synthetic NCEP/NCAR monthly NetCDF3 files."""
+    out = tmp_path / "data" / "raw" / "ncep_ncar"
+    out.mkdir(parents=True)
+
+    lat = np.arange(-90, 91, 45.0)
+    lon = np.arange(-180, 180, 60.0)
+
+    for month in range(1, 4):
+        time = np.array([f"2010-{month:02d}-15T00:00:00"], dtype="datetime64[ns]")
+        ds = xr.Dataset(
+            {
+                "soilw": (
+                    ["time", "lat", "lon"],
+                    np.random.rand(1, len(lat), len(lon)).astype(np.float32),
+                ),
+                "EXTRA": (
+                    ["time", "lat", "lon"],
+                    np.random.rand(1, len(lat), len(lon)).astype(np.float32),
+                ),
+            },
+            coords={"time": time, "lat": lat, "lon": lon},
+        )
+        fname = f"soilw.0-10cm.gauss.2010-{month:02d}.monthly.nc"
+        ds.to_netcdf(out / fname, format="NETCDF3_CLASSIC")
+
+    return out
+
+
+def test_ncep_filter_variables(ncep_dir):
+    from nhf_spatial_targets.fetch.consolidate import consolidate_ncep_ncar
+
+    import fsspec
+
+    run_dir = ncep_dir.parent.parent.parent
+    consolidate_ncep_ncar(run_dir=run_dir, variables=["soilw"])
+
+    ref_path = ncep_dir / "ncep_ncar_refs.json"
+    assert ref_path.exists()
+
+    fs = fsspec.filesystem("reference", fo=str(ref_path), target_protocol="file")
+    ds = xr.open_zarr(fs.get_mapper(""), consolidated=False)
+    assert "soilw" in ds.data_vars
+    assert "EXTRA" not in ds.data_vars
+    ds.close()
+
+
+def test_ncep_provenance_return(ncep_dir):
+    from nhf_spatial_targets.fetch.consolidate import consolidate_ncep_ncar
+
+    run_dir = ncep_dir.parent.parent.parent
+    result = consolidate_ncep_ncar(run_dir=run_dir, variables=["soilw"])
+    assert result["kerchunk_ref"] == "data/raw/ncep_ncar/ncep_ncar_refs.json"
+    assert result["n_files"] == 3
+
+
+def test_ncep_no_files_raises(tmp_path):
+    from nhf_spatial_targets.fetch.consolidate import consolidate_ncep_ncar
+
+    (tmp_path / "data" / "raw" / "ncep_ncar").mkdir(parents=True)
+    with pytest.raises(FileNotFoundError):
+        consolidate_ncep_ncar(run_dir=tmp_path, variables=["soilw"])

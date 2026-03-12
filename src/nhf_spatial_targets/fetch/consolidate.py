@@ -335,3 +335,68 @@ def consolidate_nldas(
         "n_files": len(nc_files),
         "variables": variables,
     }
+
+
+def consolidate_ncep_ncar(
+    run_dir: Path,
+    variables: list[str],
+) -> dict:
+    """Build a Kerchunk JSON reference store for NCEP/NCAR monthly files.
+
+    Uses NetCDF3ToZarr since NCEP/NCAR Reanalysis files are NetCDF-3 classic.
+
+    Parameters
+    ----------
+    run_dir : Path
+        Run workspace directory containing ``data/raw/ncep_ncar/*.monthly.nc``.
+    variables : list[str]
+        Variable names to include (file_variable values).
+
+    Returns
+    -------
+    dict
+        Provenance record.
+    """
+    from datetime import datetime, timezone
+
+    from kerchunk.combine import MultiZarrToZarr
+    from kerchunk.netCDF3 import NetCDF3ToZarr
+
+    ncep_dir = run_dir / "data" / "raw" / "ncep_ncar"
+    nc_files = sorted(ncep_dir.glob("*.monthly.nc"))
+
+    if not nc_files:
+        raise FileNotFoundError(
+            f"No .monthly.nc files found in {ncep_dir}. "
+            "Run 'nhf-targets fetch ncep-ncar' first."
+        )
+
+    logger.info("Scanning %d monthly NetCDF files for NCEP/NCAR", len(nc_files))
+
+    keep_vars = set(variables)
+    singles = []
+    for nc in nc_files:
+        refs = NetCDF3ToZarr(str(nc)).translate()
+        refs["refs"] = _filter_refs(refs["refs"], keep_vars)
+        singles.append(refs)
+
+    mzz = MultiZarrToZarr(
+        singles,
+        concat_dims=["time"],
+        identical_dims=["lat", "lon"],
+        coo_map={"time": "cf:time"},
+    )
+    combined = mzz.translate()
+
+    combined["refs"] = _make_relative(combined["refs"], ncep_dir)
+
+    ref_path = ncep_dir / "ncep_ncar_refs.json"
+    ref_path.write_text(ujson.dumps(combined, indent=2))
+    logger.info("Wrote Kerchunk reference store: %s", ref_path)
+
+    return {
+        "kerchunk_ref": str(ref_path.relative_to(run_dir)),
+        "last_consolidated_utc": datetime.now(timezone.utc).isoformat(),
+        "n_files": len(nc_files),
+        "variables": variables,
+    }
