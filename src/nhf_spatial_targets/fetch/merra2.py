@@ -49,17 +49,23 @@ def _months_in_period(period: str) -> list[str]:
     return months
 
 
-def _existing_months(run_dir: Path) -> set[str]:
-    """Read manifest.json and return set of year_month values already fetched."""
+def _manifest_merra2_files(run_dir: Path) -> list[dict]:
+    """Read manifest.json and return the merra2 file records list."""
     manifest_path = run_dir / "manifest.json"
     if not manifest_path.exists():
-        return set()
+        return []
     try:
         manifest = json.loads(manifest_path.read_text())
-        files = manifest.get("sources", {}).get("merra2", {}).get("files", [])
-        return {f["year_month"] for f in files if "year_month" in f}
+        return manifest.get("sources", {}).get("merra2", {}).get("files", [])
     except (json.JSONDecodeError, KeyError):
-        return set()
+        return []
+
+
+def _existing_months(run_dir: Path) -> set[str]:
+    """Return set of year_month values already fetched from manifest."""
+    return {
+        f["year_month"] for f in _manifest_merra2_files(run_dir) if "year_month" in f
+    }
 
 
 def _year_month_from_path(path: Path) -> str:
@@ -72,19 +78,11 @@ def _year_month_from_path(path: Path) -> str:
 
 def _existing_file_timestamps(run_dir: Path) -> dict[str, str]:
     """Return {year_month: downloaded_utc} from existing manifest."""
-    manifest_path = run_dir / "manifest.json"
-    if not manifest_path.exists():
-        return {}
-    try:
-        manifest = json.loads(manifest_path.read_text())
-        files = manifest.get("sources", {}).get("merra2", {}).get("files", [])
-        return {
-            f["year_month"]: f["downloaded_utc"]
-            for f in files
-            if "year_month" in f and "downloaded_utc" in f
-        }
-    except (json.JSONDecodeError, KeyError):
-        return {}
+    return {
+        f["year_month"]: f["downloaded_utc"]
+        for f in _manifest_merra2_files(run_dir)
+        if "year_month" in f and "downloaded_utc" in f
+    }
 
 
 def fetch_merra2(run_dir: Path, period: str) -> dict:

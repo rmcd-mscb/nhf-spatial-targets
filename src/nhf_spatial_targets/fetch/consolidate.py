@@ -41,25 +41,12 @@ def _filter_refs(refs: dict, keep_vars: set[str]) -> dict:
     return filtered
 
 
-def _fix_time(combined: dict, merra2_dir: Path) -> dict:  # noqa: ARG001
+def _fix_time(combined: dict) -> dict:
     """Shift timestamps to mid-month and add time_bnds.
 
     Operates directly on the kerchunk reference dict, replacing the time
     coordinate data with mid-month values and adding time_bnds. Uses
     zarr v2 inline base64-encoded chunks compatible with kerchunk references.
-
-    Parameters
-    ----------
-    combined : dict
-        Kerchunk combined reference dict from MultiZarrToZarr.translate().
-    merra2_dir : Path
-        Directory containing MERRA-2 files (unused; kept for signature
-        consistency).
-
-    Returns
-    -------
-    dict
-        Modified reference dict with corrected time and time_bnds.
     """
     import fsspec
     import xarray as xr
@@ -243,7 +230,7 @@ def consolidate_merra2(
     )
     combined = mzz.translate()
 
-    combined = _fix_time(combined, merra2_dir)
+    combined = _fix_time(combined)
 
     # Add CF and provenance global attributes
     meta = _catalog.source("merra2")
