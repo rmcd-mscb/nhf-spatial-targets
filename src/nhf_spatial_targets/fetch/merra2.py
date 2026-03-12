@@ -12,6 +12,7 @@ from pathlib import Path
 import earthaccess
 
 import nhf_spatial_targets.catalog as _catalog
+from nhf_spatial_targets.fetch._period import months_in_period, parse_period
 from nhf_spatial_targets.fetch.consolidate import consolidate_merra2
 
 _SOURCE_KEY = "merra2"
@@ -28,36 +29,6 @@ def _granule_year_month(granule: object) -> str | None:
         if m:
             return f"{m.group(1)}-{m.group(2)}"
     return None
-
-
-def _parse_period(period: str) -> tuple[str, str]:
-    """Parse ``"YYYY/YYYY"`` into ``("YYYY-01-01", "YYYY-12-31")``."""
-    parts = period.split("/")
-    if len(parts) != 2:
-        raise ValueError(f"period must be 'YYYY/YYYY', got: {period!r}")
-    start_year, end_year = parts
-    try:
-        start_int, end_int = int(start_year), int(end_year)
-    except ValueError:
-        raise ValueError(f"period years must be integers, got: {period!r}") from None
-    if end_int < start_int:
-        raise ValueError(
-            f"period end year ({end_year}) is before start year "
-            f"({start_year}). Use 'YYYY/YYYY' with start <= end."
-        )
-    return (f"{start_year}-01-01", f"{end_year}-12-31")
-
-
-def _months_in_period(period: str) -> list[str]:
-    """Return list of 'YYYY-MM' strings for every month in the period."""
-    _parse_period(period)  # validate format
-    parts = period.split("/")
-    start_year, end_year = int(parts[0]), int(parts[1])
-    months = []
-    for year in range(start_year, end_year + 1):
-        for month in range(1, 13):
-            months.append(f"{year}-{month:02d}")
-    return months
 
 
 def _manifest_merra2_files(run_dir: Path) -> list[dict]:
@@ -157,7 +128,7 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
 
     # Determine which months need downloading
     already_have = _existing_months(run_dir)
-    all_months = _months_in_period(period)
+    all_months = months_in_period(period)
     needed = [m for m in all_months if m not in already_have]
 
     if not needed:
@@ -166,7 +137,7 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
             len(all_months),
         )
     else:
-        temporal = _parse_period(period)
+        temporal = parse_period(period)
         logger.debug("bbox=%s, temporal=%s", bbox_tuple, temporal)
 
         granules = earthaccess.search_data(

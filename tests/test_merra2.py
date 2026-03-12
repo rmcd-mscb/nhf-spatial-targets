@@ -236,26 +236,26 @@ def test_superseded_warning(
 
 def test_period_missing_slash(run_dir):
     """ValueError raised for period without slash separator."""
-    from nhf_spatial_targets.fetch.merra2 import _parse_period
+    from nhf_spatial_targets.fetch._period import parse_period
 
     with pytest.raises(ValueError, match="YYYY/YYYY"):
-        _parse_period("2010")
+        parse_period("2010")
 
 
 def test_period_non_numeric(run_dir):
     """ValueError raised for non-integer years."""
-    from nhf_spatial_targets.fetch.merra2 import _parse_period
+    from nhf_spatial_targets.fetch._period import parse_period
 
     with pytest.raises(ValueError, match="integers"):
-        _parse_period("abc/def")
+        parse_period("abc/def")
 
 
 def test_period_reversed(run_dir):
     """ValueError raised when end year is before start year."""
-    from nhf_spatial_targets.fetch.merra2 import _parse_period
+    from nhf_spatial_targets.fetch._period import parse_period
 
     with pytest.raises(ValueError, match="before start year"):
-        _parse_period("2015/2010")
+        parse_period("2015/2010")
 
 
 # ---- Missing fabric.json --------------------------------------------------
@@ -325,12 +325,13 @@ def test_incremental_skips_existing(mock_login, mock_search, mock_dl, run_dir):
     )
     existing.write_bytes(b"fake")
 
-    from nhf_spatial_targets.fetch.merra2 import _existing_months, _months_in_period
+    from nhf_spatial_targets.fetch._period import months_in_period
+    from nhf_spatial_targets.fetch.merra2 import _existing_months
 
     existing_months = _existing_months(run_dir)
     assert "2010-01" in existing_months
 
-    requested = _months_in_period("2010/2010")
+    requested = months_in_period("2010/2010")
     assert len(requested) == 12
 
     missing = [m for m in requested if m not in existing_months]
