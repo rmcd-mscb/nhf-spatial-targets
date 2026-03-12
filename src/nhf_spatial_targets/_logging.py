@@ -11,7 +11,7 @@ def setup_logging(verbose: bool = False) -> None:
     Parameters
     ----------
     verbose : bool
-        If True, set level to DEBUG and show source paths.
+        If True, set level to DEBUG and show Python source file/line in log output.
         If False, set level to INFO.
     """
     from rich.logging import RichHandler
@@ -22,6 +22,7 @@ def setup_logging(verbose: bool = False) -> None:
         format="%(message)s",
         datefmt="[%X]",
         handlers=[RichHandler(rich_tracebacks=True, show_path=verbose)],
+        force=True,
     )
     # Suppress noisy third-party loggers
     for name in ("earthaccess", "urllib3"):

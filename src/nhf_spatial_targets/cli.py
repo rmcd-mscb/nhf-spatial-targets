@@ -223,14 +223,18 @@ def fetch_merra2_cmd(
 ):
     """Download MERRA-2 monthly land surface data (M2TMNXLND).
 
-    Authenticates via earthaccess, downloads granules subsetted to the
-    fabric bounding box, and prints the provenance record.
+    Authenticates via earthaccess, searches for granules matching the
+    fabric bounding box, downloads them, and prints the provenance record.
     """
     import json as json_mod
 
     from rich.console import Console
 
     from nhf_spatial_targets.fetch.merra2 import fetch_merra2
+
+    if not run_dir.exists():
+        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+        sys.exit(2)
 
     console = Console()
     console.print(f"[bold]Fetching MERRA-2 for period {period}...[/bold]")

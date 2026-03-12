@@ -1,4 +1,4 @@
-"""Fetch MERRA-2 land surface data for soil moisture variables via earthaccess."""
+"""Fetch MERRA-2 monthly land surface diagnostics (M2TMNXLND) via earthaccess."""
 
 from __future__ import annotations
 
@@ -38,8 +38,8 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
     """Download MERRA-2 M2TMNXLND granules for the given period.
 
     Downloads the full monthly land surface diagnostics product;
-    relevant soil moisture variables (SFMC, GWETROOT) are extracted
-    downstream during aggregation.
+    relevant variables (defined in ``catalog/sources.yml``) are
+    extracted downstream during aggregation.
 
     Parameters
     ----------
@@ -79,9 +79,16 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
             f"fabric.json not found in {run_dir}. "
             f"Run 'nhf-targets init' to create a run workspace first."
         )
-    fabric = json.loads(fabric_path.read_text())
-    bbox = fabric["bbox_buffered"]
-    bbox_tuple = (bbox["minx"], bbox["miny"], bbox["maxx"], bbox["maxy"])
+    try:
+        fabric = json.loads(fabric_path.read_text())
+        bbox = fabric["bbox_buffered"]
+        bbox_tuple = (bbox["minx"], bbox["miny"], bbox["maxx"], bbox["maxy"])
+    except (json.JSONDecodeError, KeyError) as exc:
+        raise ValueError(
+            f"fabric.json in {run_dir} is malformed or missing required "
+            f"fields (bbox_buffered.{{minx,miny,maxx,maxy}}). "
+            f"Re-run 'nhf-targets init' to regenerate it."
+        ) from exc
 
     temporal = _parse_period(period)
     logger.debug("bbox=%s, temporal=%s", bbox_tuple, temporal)
@@ -112,6 +119,10 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
             f"earthaccess.download() returned no files for "
             f"{len(granules)} granules. Check network connectivity "
             f"and Earthdata credentials."
+        )
+    if len(downloaded) < len(granules):
+        logger.warning(
+            "Partial download: got %d of %d granules", len(downloaded), len(granules)
         )
     logger.info("Downloaded %d files to %s", len(downloaded), output_dir)
 
