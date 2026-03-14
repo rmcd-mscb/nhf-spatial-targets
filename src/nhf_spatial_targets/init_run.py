@@ -138,10 +138,18 @@ def _fabric_metadata(fabric_path: Path, id_col: str, buffer_deg: float) -> dict:
 
 
 def _sha256(path: Path) -> str:
+    """Compute SHA-256 of a file, or of all files in a directory (e.g. .gdb)."""
     h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
+    if path.is_dir():
+        for child in sorted(path.rglob("*")):
+            if child.is_file():
+                with child.open("rb") as f:
+                    for chunk in iter(lambda: f.read(1 << 20), b""):
+                        h.update(chunk)
+    else:
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
     return h.hexdigest()
 
 
