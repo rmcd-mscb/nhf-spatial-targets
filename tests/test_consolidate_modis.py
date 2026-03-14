@@ -26,6 +26,14 @@ def test_time_from_modis_filename():
     t = _time_from_modis_filename(Path("MOD10C1.A2010032.061.conus.nc"))
     assert t == pd.Timestamp("2010-02-01")
 
+    # DOY 365 in a non-leap year → Dec 31
+    t = _time_from_modis_filename(Path("MOD10C1.A2010365.061.conus.nc"))
+    assert t == pd.Timestamp("2010-12-31")
+
+    # DOY 366 in leap year 2000 → Dec 31
+    t = _time_from_modis_filename(Path("MOD10C1.A2000366.061.conus.nc"))
+    assert t == pd.Timestamp("2000-12-31")
+
 
 def test_time_from_modis_filename_bad():
     """Raises ValueError for non-MODIS filename."""
@@ -146,6 +154,78 @@ def test_consolidate_mod10c1_overwrites_existing(mod10c1_run_dir: Path) -> None:
     assert result1["consolidated_nc"] == result2["consolidated_nc"]
     out_path = mod10c1_run_dir / result2["consolidated_nc"]
     assert out_path.exists()
+
+
+def test_consolidate_mod10c1_missing_variable_raises(mod10c1_run_dir: Path) -> None:
+    """ValueError raised when requesting a nonexistent variable."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_mod10c1
+
+    with pytest.raises(ValueError, match="NONEXISTENT"):
+        consolidate_mod10c1(
+            run_dir=mod10c1_run_dir,
+            source_key="mod10c1_v061",
+            variables=["NONEXISTENT"],
+            year=2010,
+        )
+
+
+def test_consolidate_mod10c1_filters_variables(tmp_path: Path) -> None:
+    """Only requested variables appear in consolidated output."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_mod10c1
+
+    source_key = "mod10c1_v061"
+    out = tmp_path / "data" / "raw" / source_key
+    out.mkdir(parents=True)
+
+    lat = np.linspace(25.0, 50.0, 4)
+    lon = np.linspace(-125.0, -65.0, 6)
+
+    for doy in range(1, 3):
+        ds = xr.Dataset(
+            {
+                "Day_CMG_Snow_Cover": (
+                    ["lat", "lon"],
+                    np.random.rand(len(lat), len(lon)).astype(np.float32),
+                ),
+                "ExtraVar": (
+                    ["lat", "lon"],
+                    np.random.rand(len(lat), len(lon)).astype(np.float32),
+                ),
+            },
+            coords={"lat": lat, "lon": lon},
+        )
+        fname = f"MOD10C1.A2010{doy:03d}.061.conus.nc"
+        ds.to_netcdf(out / fname)
+
+    result = consolidate_mod10c1(
+        run_dir=tmp_path,
+        source_key=source_key,
+        variables=["Day_CMG_Snow_Cover"],
+        year=2010,
+    )
+
+    out_path = tmp_path / result["consolidated_nc"]
+    ds_out = xr.open_dataset(out_path)
+    assert "Day_CMG_Snow_Cover" in ds_out.data_vars
+    assert "ExtraVar" not in ds_out.data_vars
+    ds_out.close()
+
+
+def test_consolidate_mod10c1_sorts_time(mod10c1_run_dir: Path) -> None:
+    """Consolidated time dimension is monotonically increasing."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_mod10c1
+
+    result = consolidate_mod10c1(
+        run_dir=mod10c1_run_dir,
+        source_key="mod10c1_v061",
+        variables=["Day_CMG_Snow_Cover"],
+        year=2010,
+    )
+
+    out_path = mod10c1_run_dir / result["consolidated_nc"]
+    ds = xr.open_dataset(out_path)
+    assert pd.DatetimeIndex(ds.time.values).is_monotonic_increasing
+    ds.close()
 
 
 def test_consolidate_mod10c1_filters_year(mod10c1_run_dir: Path) -> None:

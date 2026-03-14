@@ -344,9 +344,9 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
     consolidated_ncs: dict[str, str] = {}
     years_on_disk = sorted({f["year"] for f in files})
     for year in years_on_disk:
+        logger.info("Consolidating %s year %d", source_key, year)
         result = consolidate_mod16a2(run_dir, source_key, variables, year)
-        if result and "consolidated_nc" in result:
-            consolidated_ncs[str(year)] = result["consolidated_nc"]
+        consolidated_ncs[str(year)] = result["consolidated_nc"]
 
     # Compute effective period from actual files on disk
     if years_on_disk:
@@ -552,9 +552,9 @@ def fetch_mod10c1(run_dir: Path, period: str) -> dict:
     consolidated_ncs: dict[str, str] = {}
     years_on_disk = sorted({f["year"] for f in files})
     for year in years_on_disk:
+        logger.info("Consolidating %s year %d", source_key, year)
         result = consolidate_mod10c1(run_dir, source_key, variables, year)
-        if result and "consolidated_nc" in result:
-            consolidated_ncs[str(year)] = result["consolidated_nc"]
+        consolidated_ncs[str(year)] = result["consolidated_nc"]
 
     # Compute effective period from actual files on disk
     if years_on_disk:

@@ -340,13 +340,13 @@ def consolidate_mod10c1(
         "Merging %d MOD10C1 files for %s year %d", len(nc_files), source_key, year
     )
 
-    datasets = _open_datasets(nc_files, f"Reading {source_key} {year} files")
-    datasets = [
-        ds.expand_dims(time=[_time_from_modis_filename(f)])
-        for ds, f in zip(datasets, nc_files)
-    ]
-
+    opened = _open_datasets(nc_files, f"Reading {source_key} {year} files")
     try:
+        datasets = [
+            ds.expand_dims(time=[_time_from_modis_filename(f)])
+            for ds, f in zip(opened, nc_files)
+        ]
+
         ds_merged = xr.concat(
             datasets, dim="time", data_vars="minimal", coords="minimal"
         )
@@ -359,7 +359,7 @@ def consolidate_mod10c1(
         _write_netcdf(ds_merged, out_path)
         logger.info("Wrote %s", out_path)
     finally:
-        for d in datasets:
+        for d in opened:
             d.close()
 
     return {
@@ -384,9 +384,10 @@ def _mosaic_and_reproject_timestep(
     for p in tile_paths:
         try:
             da = rioxarray.open_rasterio(p, variable=variable, masked=True)
-        except Exception:
-            logger.debug(
-                "variable= kwarg failed for %s; opening without subdataset selection",
+        except TypeError:
+            logger.warning(
+                "variable= kwarg not supported for %s; "
+                "opening without subdataset selection",
                 p.name,
             )
             da = rioxarray.open_rasterio(p, masked=True)
@@ -394,24 +395,31 @@ def _mosaic_and_reproject_timestep(
             da = da[0]
         arrays.append(da)
 
-    if len(arrays) == 1:
-        mosaic = arrays[0]
-    else:
-        mosaic = merge_arrays(arrays)
-
     if "QC" in variable or "qa" in variable.lower():
         resampling = Resampling.nearest
     else:
         resampling = Resampling.average
 
-    reprojected = mosaic.rio.reproject(
-        "EPSG:4326",
-        resolution=resolution,
-        resampling=resampling,
-    )
+    try:
+        if len(arrays) == 1:
+            mosaic = arrays[0]
+        else:
+            mosaic = merge_arrays(arrays)
 
-    for a in arrays:
-        a.close()
+        reprojected = mosaic.rio.reproject(
+            "EPSG:4326",
+            resolution=resolution,
+            resampling=resampling,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to mosaic/reproject {len(arrays)} tiles for "
+            f"variable '{variable}'. "
+            f"Tiles: {[p.name for p in tile_paths]}. Detail: {exc}"
+        ) from exc
+    finally:
+        for a in arrays:
+            a.close()
 
     return reprojected
 
