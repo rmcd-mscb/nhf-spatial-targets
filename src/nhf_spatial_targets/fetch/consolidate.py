@@ -20,7 +20,11 @@ logger = logging.getLogger(__name__)
 
 
 def log_memory(label: str) -> None:
-    """Log current RSS from /proc/self/status (Linux) or peak RSS as fallback."""
+    """Log current RSS from /proc/self/status (Linux) or peak RSS as fallback.
+
+    On macOS the ``resource`` fallback adjusts for bytes-valued ``ru_maxrss``.
+    This function never raises — all errors are caught and logged.
+    """
     try:
         with open("/proc/self/status") as f:
             for line in f:
@@ -29,13 +33,17 @@ def log_memory(label: str) -> None:
                     rss_gib = rss_kb / (1024**2)
                     logger.info("[memory] RSS=%.2f GiB — %s", rss_gib, label)
                     return
-    except OSError:
-        pass
+    except (OSError, ValueError) as exc:
+        logger.debug("[memory] /proc/self/status unavailable: %s — %s", exc, label)
     try:
         import resource
+        import sys
 
-        peak_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        peak_gib = peak_kb / (1024**2)
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        if sys.platform == "darwin":
+            peak_gib = peak / (1024**3)  # bytes on macOS
+        else:
+            peak_gib = peak / (1024**2)  # KB on Linux
         logger.info("[memory] peak RSS=%.2f GiB — %s", peak_gib, label)
     except (ImportError, OSError):
         logger.debug("[memory] cannot read RSS on this platform — %s", label)
@@ -477,18 +485,23 @@ def consolidate_mod16a2_timestep(
     timestamp = _time_from_modis_filename(tile_paths[0])
 
     var_arrays: dict[str, xr.DataArray] = {}
-    for var in variables:
-        da = _mosaic_and_reproject_timestep(tile_paths, var, resolution)
-        if "band" in da.dims:
-            da = da.squeeze("band", drop=True)
-        rename_map = {}
-        if "y" in da.dims:
-            rename_map["y"] = "lat"
-        if "x" in da.dims:
-            rename_map["x"] = "lon"
-        if rename_map:
-            da = da.rename(rename_map)
-        var_arrays[var] = da
+    try:
+        for var in variables:
+            da = _mosaic_and_reproject_timestep(tile_paths, var, resolution)
+            if "band" in da.dims:
+                da = da.squeeze("band", drop=True)
+            rename_map = {}
+            if "y" in da.dims:
+                rename_map["y"] = "lat"
+            if "x" in da.dims:
+                rename_map["x"] = "lon"
+            if rename_map:
+                da = da.rename(rename_map)
+            var_arrays[var] = da
+    except Exception:
+        for da in var_arrays.values():
+            da.close()
+        raise
 
     ds_step = xr.Dataset(var_arrays)
     ds_step = ds_step.expand_dims(time=[timestamp])
@@ -551,12 +564,16 @@ def consolidate_mod16a2_finalize(
             [str(p) for p in tmp_paths],
             combine="by_coords",
             chunks={},
+            data_vars="all",
+            join="outer",
         )
-        ds = ds.sortby("time")
-        _validate_variables(ds, variables)
-        ds = ds[variables]
-        _write_netcdf(ds, out_path)
-        ds.close()
+        try:
+            ds = ds.sortby("time")
+            _validate_variables(ds, variables)
+            ds = ds[variables]
+            _write_netcdf(ds, out_path)
+        finally:
+            ds.close()
         logger.info("Wrote %s", out_path)
     except Exception as exc:
         _cleanup_temps()
@@ -621,9 +638,8 @@ def consolidate_mod16a2(
             f"Run 'nhf-targets fetch {source_key.replace('_', '-')}' first."
         )
 
-    # Clean up any stale temp files from a prior interrupted run (same PID)
-    pid = os.getpid()
-    for stale in source_dir.glob(f"_tmp_{pid}_*.nc"):
+    # Clean up any stale temp files from prior interrupted runs
+    for stale in source_dir.glob("_tmp_*_*.nc"):
         logger.warning("Removing stale temp file: %s", stale.name)
         stale.unlink()
 

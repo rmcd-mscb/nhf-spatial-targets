@@ -66,6 +66,16 @@ def _group_granules_by_timestep(
             logger.warning("Cannot extract AYYYYDDD from granule URL: %s", links[0])
             continue
         groups[m.group(1)].append(g)
+
+    total_grouped = sum(len(v) for v in groups.values())
+    dropped = len(granules) - total_grouped
+    if dropped > 0:
+        logger.warning(
+            "Dropped %d of %d granules during timestep grouping "
+            "(no data links or unparseable filenames)",
+            dropped,
+            len(granules),
+        )
     return dict(groups)
 
 
@@ -343,58 +353,65 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
 
             tmp_paths: list[Path] = []
 
-            for i, ydoy in enumerate(sorted_ydoys, 1):
-                batch = ts_groups[ydoy]
-                logger.info(
-                    "Downloading timestep %d/%d (A%s): %d granules",
-                    i,
-                    n_steps,
-                    ydoy,
-                    len(batch),
-                )
-
-                downloaded = earthaccess.download(
-                    batch,
-                    local_path=str(output_dir),
-                )
-
-                if not downloaded:
-                    raise RuntimeError(
-                        f"earthaccess.download() returned no files for "
-                        f"timestep A{ydoy} ({len(batch)} granules). "
-                        f"Check network connectivity and Earthdata credentials."
-                    )
-                if len(downloaded) < len(batch):
-                    logger.warning(
-                        "Partial download for timestep A%s: got %d of %d granules.",
+            try:
+                for i, ydoy in enumerate(sorted_ydoys, 1):
+                    batch = ts_groups[ydoy]
+                    logger.info(
+                        "Downloading timestep %d/%d (A%s): %d granules",
+                        i,
+                        n_steps,
                         ydoy,
-                        len(downloaded),
                         len(batch),
                     )
 
-                log_memory(f"after downloading timestep {i}/{n_steps} (A{ydoy})")
+                    downloaded = earthaccess.download(
+                        batch,
+                        local_path=str(output_dir),
+                    )
 
-                # Consolidate this timestep immediately
-                tile_paths = [Path(f) for f in downloaded]
-                tmp_path = consolidate_mod16a2_timestep(
-                    tile_paths=tile_paths,
+                    if not downloaded:
+                        raise RuntimeError(
+                            f"earthaccess.download() returned no files for "
+                            f"timestep A{ydoy} ({len(batch)} granules). "
+                            f"Check network connectivity and Earthdata credentials."
+                        )
+                    if len(downloaded) < len(batch):
+                        logger.warning(
+                            "Partial download for timestep A%s: got %d of %d granules.",
+                            ydoy,
+                            len(downloaded),
+                            len(batch),
+                        )
+
+                    log_memory(f"after downloading timestep {i}/{n_steps} (A{ydoy})")
+
+                    # Consolidate this timestep immediately
+                    tile_paths = [Path(f) for f in downloaded]
+                    tmp_path = consolidate_mod16a2_timestep(
+                        tile_paths=tile_paths,
+                        variables=variables,
+                        source_dir=output_dir,
+                        ydoy=ydoy,
+                    )
+                    tmp_paths.append(tmp_path)
+                    log_memory(f"after consolidating timestep {i}/{n_steps} (A{ydoy})")
+
+                # Finalize: lazy-concat temp files into consolidated NetCDF
+                out_path = output_dir / f"{source_key}_{year}_consolidated.nc"
+                result = consolidate_mod16a2_finalize(
+                    tmp_paths=tmp_paths,
                     variables=variables,
-                    source_dir=output_dir,
-                    ydoy=ydoy,
+                    out_path=out_path,
+                    run_dir=run_dir,
                 )
-                tmp_paths.append(tmp_path)
-                log_memory(f"after consolidating timestep {i}/{n_steps} (A{ydoy})")
-
-            # Finalize: lazy-concat temp files into consolidated NetCDF
-            out_path = output_dir / f"{source_key}_{year}_consolidated.nc"
-            result = consolidate_mod16a2_finalize(
-                tmp_paths=tmp_paths,
-                variables=variables,
-                out_path=out_path,
-                run_dir=run_dir,
-            )
-            consolidated_ncs[str(year)] = result["consolidated_nc"]
-            logger.info("Downloaded and consolidated year %d", year)
+                consolidated_ncs[str(year)] = result["consolidated_nc"]
+                logger.info("Downloaded and consolidated year %d", year)
+            except Exception:
+                for p in tmp_paths:
+                    if p.exists():
+                        p.unlink()
+                        logger.debug("Cleaned up temp file after failure: %s", p.name)
+                raise
 
     # Re-consolidate any years that were already downloaded but not yet
     # consolidated in this run (e.g. prior download, no consolidated file)
