@@ -126,6 +126,20 @@ def test_init_gdb_file_not_directory(tmp_path):
         _run("init", "--fabric", str(fake_gdb))
 
 
+def test_init_missing_parquet_fabric(tmp_path):
+    """Exit code 1 when --fabric .parquet file does not exist."""
+    with pytest.raises(SystemExit, match="1"):
+        _run("init", "--fabric", str(tmp_path / "missing.parquet"))
+
+
+def test_init_parquet_directory_rejected(tmp_path):
+    """Exit code 1 when --fabric .parquet path is a directory."""
+    d = tmp_path / "fabric.parquet"
+    d.mkdir()
+    with pytest.raises(SystemExit, match="1"):
+        _run("init", "--fabric", str(d))
+
+
 def test_init_missing_config(tmp_path):
     """Exit code 1 when resolved config does not exist."""
     fabric = tmp_path / "fabric.gpkg"
@@ -411,3 +425,29 @@ def test_sha256_directory_includes_filenames(tmp_path):
     (dir_b / "file_two.dat").write_bytes(b"same content")
 
     assert _sha256(dir_a) != _sha256(dir_b)
+
+
+# ---- _fabric_metadata parquet support -------------------------------------
+
+
+def test_fabric_metadata_reads_parquet(tmp_path):
+    """_fabric_metadata can read a GeoParquet fabric file."""
+    import geopandas as gpd
+    from shapely.geometry import box
+
+    from nhf_spatial_targets.init_run import _fabric_metadata
+
+    gdf = gpd.GeoDataFrame(
+        {"nhm_id": [1, 2]},
+        geometry=[box(0, 0, 1, 1), box(1, 1, 2, 2)],
+        crs="EPSG:4326",
+    )
+    parquet_path = tmp_path / "fabric.parquet"
+    gdf.to_parquet(parquet_path)
+
+    meta = _fabric_metadata(parquet_path, "nhm_id", buffer_deg=0.1)
+    assert meta["hru_count"] == 2
+    assert meta["id_col"] == "nhm_id"
+    assert len(meta["sha256"]) == 64
+    assert meta["bbox"]["minx"] == 0.0
+    assert meta["bbox"]["maxy"] == 2.0
