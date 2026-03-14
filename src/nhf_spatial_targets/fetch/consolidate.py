@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -290,14 +291,137 @@ def consolidate_nldas(
     }
 
 
+def _time_from_modis_filename(path: Path) -> pd.Timestamp:
+    """Extract a timestamp from a MODIS ``AYYYYDDD`` filename pattern."""
+    m = re.search(r"\.A(\d{4})(\d{3})\.", path.name)
+    if not m:
+        raise ValueError(f"Cannot extract date from MODIS filename: {path.name}")
+    year, doy = int(m.group(1)), int(m.group(2))
+    return pd.Timestamp(year=year, month=1, day=1) + pd.Timedelta(days=doy - 1)
+
+
 def consolidate_mod10c1(
     run_dir: Path,
     source_key: str,
     variables: list[str],
     year: int,
 ) -> dict:
-    """Merge daily MOD10C1 CONUS subsets for a single year into one NetCDF."""
-    raise NotImplementedError("consolidate_mod10c1 not yet implemented")
+    """Merge daily MOD10C1 CONUS subsets for a single year into one NetCDF.
+
+    Parameters
+    ----------
+    run_dir : Path
+        Run workspace directory.
+    source_key : str
+        Source key (e.g. ``"mod10c1_v061"``).
+    variables : list[str]
+        Variable names to include.
+    year : int
+        Year to consolidate.
+
+    Returns
+    -------
+    dict
+        Provenance record.
+    """
+    source_dir = run_dir / "data" / "raw" / source_key
+    year_pattern = re.compile(rf"\.A{year}\d{{3}}\.")
+    nc_files = sorted(
+        f for f in source_dir.glob("*.conus.nc") if year_pattern.search(f.name)
+    )
+
+    if not nc_files:
+        raise FileNotFoundError(
+            f"No .conus.nc files for year {year} found in {source_dir}. "
+            f"Run 'nhf-targets fetch {source_key.replace('_', '-')}' first."
+        )
+
+    logger.info(
+        "Merging %d MOD10C1 files for %s year %d", len(nc_files), source_key, year
+    )
+
+    opened = _open_datasets(nc_files, f"Reading {source_key} {year} files")
+    try:
+        datasets = [
+            ds.expand_dims(time=[_time_from_modis_filename(f)])
+            for ds, f in zip(opened, nc_files)
+        ]
+
+        ds_merged = xr.concat(
+            datasets, dim="time", data_vars="minimal", coords="minimal"
+        )
+        ds_merged = ds_merged.sortby("time")
+        _validate_variables(ds_merged, variables)
+        ds_merged = ds_merged[variables]
+
+        out_path = source_dir / f"{source_key}_{year}_consolidated.nc"
+        logger.info("Writing consolidated file: %s", out_path)
+        _write_netcdf(ds_merged, out_path)
+        logger.info("Wrote %s", out_path)
+    finally:
+        for d in opened:
+            d.close()
+
+    return {
+        "consolidated_nc": str(out_path.relative_to(run_dir)),
+        "last_consolidated_utc": datetime.now(timezone.utc).isoformat(),
+        "n_files": len(nc_files),
+        "variables": variables,
+    }
+
+
+def _mosaic_and_reproject_timestep(
+    tile_paths: list[Path],
+    variable: str,
+    resolution: float = 0.04,
+) -> xr.DataArray:
+    """Mosaic tiles for one variable/timestep, reproject to EPSG:4326."""
+    import rioxarray  # noqa: F401
+    from rasterio.enums import Resampling
+    from rioxarray.merge import merge_arrays
+
+    arrays = []
+    for p in tile_paths:
+        try:
+            da = rioxarray.open_rasterio(p, variable=variable, masked=True)
+        except TypeError:
+            logger.warning(
+                "variable= kwarg not supported for %s; "
+                "opening without subdataset selection",
+                p.name,
+            )
+            da = rioxarray.open_rasterio(p, masked=True)
+        if isinstance(da, list):
+            da = da[0]
+        arrays.append(da)
+
+    if "QC" in variable or "qa" in variable.lower():
+        resampling = Resampling.nearest
+    else:
+        resampling = Resampling.average
+
+    try:
+        if len(arrays) == 1:
+            mosaic = arrays[0]
+        else:
+            mosaic = merge_arrays(arrays)
+
+        reprojected = mosaic.rio.reproject(
+            "EPSG:4326",
+            resolution=resolution,
+            resampling=resampling,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to mosaic/reproject {len(arrays)} tiles for "
+            f"variable '{variable}'. "
+            f"Tiles: {[p.name for p in tile_paths]}. Detail: {exc}"
+        ) from exc
+    finally:
+        for a in arrays:
+            a.close()
+
+    return reprojected
 
 
 def consolidate_mod16a2(
@@ -305,8 +429,13 @@ def consolidate_mod16a2(
     source_key: str,
     variables: list[str],
     year: int,
+    resolution: float = 0.04,
 ) -> dict:
     """Merge per-granule MOD16A2 HDF files into a consolidated NetCDF.
+
+    Globs ``*.hdf`` files, groups tiles by time step (AYYYYDDD token),
+    mosaics and reprojects each time step to EPSG:4326, and writes a
+    single consolidated NetCDF per year.
 
     Parameters
     ----------
@@ -318,13 +447,87 @@ def consolidate_mod16a2(
         Variable names to include.
     year : int
         Year to consolidate.
+    resolution : float
+        Output resolution in degrees (default 0.04 ≈ 4 km).
 
     Returns
     -------
     dict
         Provenance record.
     """
-    raise NotImplementedError("consolidate_mod16a2 not yet implemented")
+    from collections import defaultdict
+
+    source_dir = run_dir / "data" / "raw" / source_key
+    year_pattern = re.compile(rf"\.A({year}\d{{3}})\.")
+    hdf_files = sorted(
+        f for f in source_dir.glob("*.hdf") if year_pattern.search(f.name)
+    )
+
+    if not hdf_files:
+        raise FileNotFoundError(
+            f"No .hdf files for year {year} found in {source_dir}. "
+            f"Run 'nhf-targets fetch {source_key.replace('_', '-')}' first."
+        )
+
+    # Group tiles by time step (AYYYYDDD token)
+    timestep_groups: dict[str, list[Path]] = defaultdict(list)
+    for f in hdf_files:
+        m = year_pattern.search(f.name)
+        if m:
+            timestep_groups[m.group(1)].append(f)
+
+    logger.info(
+        "Processing %d HDF files across %d time steps for %s year %d",
+        len(hdf_files),
+        len(timestep_groups),
+        source_key,
+        year,
+    )
+
+    time_datasets: list[xr.Dataset] = []
+    for ydoy in tqdm(sorted(timestep_groups), desc=f"Mosaicking {source_key} {year}"):
+        tile_paths = timestep_groups[ydoy]
+        timestamp = _time_from_modis_filename(tile_paths[0])
+
+        var_arrays: dict[str, xr.DataArray] = {}
+        for var in variables:
+            da = _mosaic_and_reproject_timestep(tile_paths, var, resolution)
+            # Squeeze band dimension if present
+            if "band" in da.dims:
+                da = da.squeeze("band", drop=True)
+            # Rename spatial dims to lat/lon
+            rename_map = {}
+            if "y" in da.dims:
+                rename_map["y"] = "lat"
+            if "x" in da.dims:
+                rename_map["x"] = "lon"
+            if rename_map:
+                da = da.rename(rename_map)
+            var_arrays[var] = da
+
+        ds_step = xr.Dataset(var_arrays)
+        ds_step = ds_step.expand_dims(time=[timestamp])
+        time_datasets.append(ds_step)
+
+    try:
+        ds = xr.concat(time_datasets, dim="time", join="outer")
+        ds = ds.sortby("time")
+        _validate_variables(ds, variables)
+
+        out_path = source_dir / f"{source_key}_{year}_consolidated.nc"
+        logger.info("Writing consolidated file: %s", out_path)
+        _write_netcdf(ds, out_path)
+        logger.info("Wrote %s", out_path)
+    finally:
+        for ts in time_datasets:
+            ts.close()
+
+    return {
+        "consolidated_nc": str(out_path.relative_to(run_dir)),
+        "last_consolidated_utc": datetime.now(timezone.utc).isoformat(),
+        "n_files": len(hdf_files),
+        "variables": variables,
+    }
 
 
 def consolidate_ncep_ncar(
