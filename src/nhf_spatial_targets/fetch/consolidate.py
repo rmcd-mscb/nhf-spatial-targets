@@ -585,9 +585,9 @@ def consolidate_mod16a2(
 ) -> dict:
     """Merge per-granule MOD16A2 HDF files into a consolidated NetCDF.
 
-    Globs ``*.hdf`` files, groups tiles by time step (AYYYYDDD token),
-    mosaics and reprojects each time step to EPSG:4326, and writes a
-    single consolidated NetCDF per year.
+    Convenience wrapper: groups tiles by timestep, calls
+    ``consolidate_mod16a2_timestep`` for each, then
+    ``consolidate_mod16a2_finalize`` to produce the final file.
 
     Parameters
     ----------
@@ -621,7 +621,13 @@ def consolidate_mod16a2(
             f"Run 'nhf-targets fetch {source_key.replace('_', '-')}' first."
         )
 
-    # Group tiles by time step (AYYYYDDD token)
+    # Clean up any stale temp files from a prior interrupted run (same PID)
+    pid = os.getpid()
+    for stale in source_dir.glob(f"_tmp_{pid}_*.nc"):
+        logger.warning("Removing stale temp file: %s", stale.name)
+        stale.unlink()
+
+    # Group tiles by timestep (AYYYYDDD token)
     timestep_groups: dict[str, list[Path]] = defaultdict(list)
     for f in hdf_files:
         m = year_pattern.search(f.name)
@@ -636,50 +642,41 @@ def consolidate_mod16a2(
         year,
     )
 
-    time_datasets: list[xr.Dataset] = []
-    for ydoy in tqdm(sorted(timestep_groups), desc=f"Mosaicking {source_key} {year}"):
+    sorted_ydoys = sorted(timestep_groups)
+    n_steps = len(sorted_ydoys)
+    tmp_paths: list[Path] = []
+
+    for i, ydoy in enumerate(
+        tqdm(sorted_ydoys, desc=f"Mosaicking {source_key} {year}"), 1
+    ):
         tile_paths = timestep_groups[ydoy]
-        timestamp = _time_from_modis_filename(tile_paths[0])
+        logger.info(
+            "Consolidating timestep %d/%d (A%s): %d tiles",
+            i,
+            n_steps,
+            ydoy,
+            len(tile_paths),
+        )
+        tmp_path = consolidate_mod16a2_timestep(
+            tile_paths=tile_paths,
+            variables=variables,
+            source_dir=source_dir,
+            ydoy=ydoy,
+            resolution=resolution,
+        )
+        tmp_paths.append(tmp_path)
+        log_memory(f"after timestep {i}/{n_steps} (A{ydoy})")
 
-        var_arrays: dict[str, xr.DataArray] = {}
-        for var in variables:
-            da = _mosaic_and_reproject_timestep(tile_paths, var, resolution)
-            # Squeeze band dimension if present
-            if "band" in da.dims:
-                da = da.squeeze("band", drop=True)
-            # Rename spatial dims to lat/lon
-            rename_map = {}
-            if "y" in da.dims:
-                rename_map["y"] = "lat"
-            if "x" in da.dims:
-                rename_map["x"] = "lon"
-            if rename_map:
-                da = da.rename(rename_map)
-            var_arrays[var] = da
-
-        ds_step = xr.Dataset(var_arrays)
-        ds_step = ds_step.expand_dims(time=[timestamp])
-        time_datasets.append(ds_step)
-
-    try:
-        ds = xr.concat(time_datasets, dim="time", join="outer")
-        ds = ds.sortby("time")
-        _validate_variables(ds, variables)
-
-        out_path = source_dir / f"{source_key}_{year}_consolidated.nc"
-        logger.info("Writing consolidated file: %s", out_path)
-        _write_netcdf(ds, out_path)
-        logger.info("Wrote %s", out_path)
-    finally:
-        for ts in time_datasets:
-            ts.close()
-
-    return {
-        "consolidated_nc": str(out_path.relative_to(run_dir)),
-        "last_consolidated_utc": datetime.now(timezone.utc).isoformat(),
-        "n_files": len(hdf_files),
-        "variables": variables,
-    }
+    out_path = source_dir / f"{source_key}_{year}_consolidated.nc"
+    result = consolidate_mod16a2_finalize(
+        tmp_paths=tmp_paths,
+        variables=variables,
+        out_path=out_path,
+        run_dir=run_dir,
+    )
+    # Override n_files with HDF count (finalize reports timestep count)
+    result["n_files"] = len(hdf_files)
+    return result
 
 
 def consolidate_ncep_ncar(
