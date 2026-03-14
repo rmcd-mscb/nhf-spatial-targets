@@ -433,6 +433,116 @@ def fetch_ncep_ncar_cmd(
     console.print(json_mod.dumps(result, indent=2))
 
 
+@fetch_app.command(name="mod16a2")
+def fetch_mod16a2_cmd(
+    run_dir: Annotated[
+        Path,
+        Parameter(
+            name=["--run-dir", "-r"],
+            help="Run workspace created by 'nhf-targets init'.",
+        ),
+    ],
+    period: Annotated[
+        str,
+        Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
+    ],
+):
+    """Download MODIS MOD16A2 v061 AET data (8-day composites, 500m).
+
+    Authenticates via earthaccess, searches for tiles matching the
+    fabric bounding box, downloads them, and prints the provenance record.
+    """
+    import json as json_mod
+
+    from rich.console import Console
+
+    from nhf_spatial_targets.fetch.modis import fetch_mod16a2
+
+    if not run_dir.exists():
+        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+        sys.exit(2)
+
+    console = Console()
+    console.print(f"[bold]Fetching MOD16A2 v061 for period {period}...[/bold]")
+
+    try:
+        result = fetch_mod16a2(run_dir=run_dir, period=period)
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        _logger.exception("Unexpected error during MOD16A2 fetch")
+        print(
+            f"Unexpected error ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    console.print(
+        f"[green]Downloaded {len(result['files'])} files "
+        f"to {run_dir / 'data' / 'raw' / 'mod16a2_v061'}[/green]"
+    )
+    if result.get("consolidated_ncs"):
+        for yr, nc in result["consolidated_ncs"].items():
+            console.print(f"[green]Consolidated {yr}: {run_dir / nc}[/green]")
+    console.print(json_mod.dumps(result, indent=2))
+
+
+@fetch_app.command(name="mod10c1")
+def fetch_mod10c1_cmd(
+    run_dir: Annotated[
+        Path,
+        Parameter(
+            name=["--run-dir", "-r"],
+            help="Run workspace created by 'nhf-targets init'.",
+        ),
+    ],
+    period: Annotated[
+        str,
+        Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
+    ],
+):
+    """Download MODIS MOD10C1 v061 daily snow cover data (0.05deg CMG).
+
+    Authenticates via earthaccess, downloads global CMG files, subsets
+    to CONUS, and prints the provenance record.
+    """
+    import json as json_mod
+
+    from rich.console import Console
+
+    from nhf_spatial_targets.fetch.modis import fetch_mod10c1
+
+    if not run_dir.exists():
+        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+        sys.exit(2)
+
+    console = Console()
+    console.print(f"[bold]Fetching MOD10C1 v061 for period {period}...[/bold]")
+
+    try:
+        result = fetch_mod10c1(run_dir=run_dir, period=period)
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        _logger.exception("Unexpected error during MOD10C1 fetch")
+        print(
+            f"Unexpected error ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    console.print(
+        f"[green]Downloaded {len(result['files'])} files "
+        f"to {run_dir / 'data' / 'raw' / 'mod10c1_v061'}[/green]"
+    )
+    if result.get("consolidated_ncs"):
+        for yr, nc in result["consolidated_ncs"].items():
+            console.print(f"[green]Consolidated {yr}: {run_dir / nc}[/green]")
+    console.print(json_mod.dumps(result, indent=2))
+
+
 @catalog_app.command(name="sources")
 def catalog_sources():
     """List all registered data sources."""
