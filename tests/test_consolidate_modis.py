@@ -5,8 +5,29 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
+
+from nhf_spatial_targets.fetch.consolidate import _time_from_modis_filename
+
+
+def test_time_from_modis_filename():
+    """Extract date from MODIS AYYYYDDD filename."""
+    t = _time_from_modis_filename(Path("MOD16A2GF.A2010001.h08v04.061.hdf"))
+    assert t == pd.Timestamp("2010-01-01")
+
+    t = _time_from_modis_filename(Path("MOD16A2GF.A2010009.h08v04.061.hdf"))
+    assert t == pd.Timestamp("2010-01-09")
+
+    t = _time_from_modis_filename(Path("MOD10C1.A2010032.061.conus.nc"))
+    assert t == pd.Timestamp("2010-02-01")
+
+
+def test_time_from_modis_filename_bad():
+    """Raises ValueError for non-MODIS filename."""
+    with pytest.raises(ValueError, match="Cannot extract date"):
+        _time_from_modis_filename(Path("random_file.nc"))
 
 
 @pytest.fixture()
