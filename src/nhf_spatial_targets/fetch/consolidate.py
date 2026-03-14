@@ -511,6 +511,71 @@ def consolidate_mod16a2_timestep(
     return tmp_path
 
 
+def consolidate_mod16a2_finalize(
+    tmp_paths: list[Path],
+    variables: list[str],
+    out_path: Path,
+    run_dir: Path,
+) -> dict:
+    """Lazy-concat per-timestep temp files into the final consolidated NetCDF.
+
+    Parameters
+    ----------
+    tmp_paths : list[Path]
+        Temp NetCDF files produced by ``consolidate_mod16a2_timestep``.
+    variables : list[str]
+        Variable names to validate.
+    out_path : Path
+        Path for the final consolidated file.
+    run_dir : Path
+        Run workspace root (for computing relative paths in provenance).
+
+    Returns
+    -------
+    dict
+        Provenance record.
+    """
+
+    def _cleanup_temps() -> None:
+        for p in tmp_paths:
+            if p.exists():
+                p.unlink()
+                logger.debug("Removed temp file: %s", p.name)
+
+    logger.info(
+        "Writing final consolidated file from %d timestep files", len(tmp_paths)
+    )
+
+    try:
+        ds = xr.open_mfdataset(
+            [str(p) for p in tmp_paths],
+            combine="by_coords",
+            chunks={},
+        )
+        ds = ds.sortby("time")
+        _validate_variables(ds, variables)
+        ds = ds[variables]
+        _write_netcdf(ds, out_path)
+        ds.close()
+        logger.info("Wrote %s", out_path)
+    except Exception as exc:
+        _cleanup_temps()
+        raise RuntimeError(
+            f"Failed to finalize consolidated file {out_path}. "
+            f"Temp files cleaned up. Detail: {exc}"
+        ) from exc
+
+    _cleanup_temps()
+    log_memory(f"after writing {out_path.name}")
+
+    return {
+        "consolidated_nc": str(out_path.relative_to(run_dir)),
+        "last_consolidated_utc": datetime.now(timezone.utc).isoformat(),
+        "n_files": len(tmp_paths),
+        "variables": variables,
+    }
+
+
 def consolidate_mod16a2(
     run_dir: Path,
     source_key: str,
