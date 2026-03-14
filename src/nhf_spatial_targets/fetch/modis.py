@@ -344,15 +344,7 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
     consolidated_ncs: dict[str, str] = {}
     years_on_disk = sorted({f["year"] for f in files})
     for year in years_on_disk:
-        try:
-            result = consolidate_mod16a2(run_dir, source_key, variables, year)
-        except NotImplementedError:
-            logger.warning(
-                "Consolidation for %s year %d not yet implemented; skipping",
-                source_key,
-                year,
-            )
-            continue
+        result = consolidate_mod16a2(run_dir, source_key, variables, year)
         if result and "consolidated_nc" in result:
             consolidated_ncs[str(year)] = result["consolidated_nc"]
 
@@ -560,15 +552,7 @@ def fetch_mod10c1(run_dir: Path, period: str) -> dict:
     consolidated_ncs: dict[str, str] = {}
     years_on_disk = sorted({f["year"] for f in files})
     for year in years_on_disk:
-        try:
-            result = consolidate_mod10c1(run_dir, source_key, variables, year)
-        except NotImplementedError:
-            logger.warning(
-                "Consolidation for %s year %d not yet implemented; skipping",
-                source_key,
-                year,
-            )
-            continue
+        result = consolidate_mod10c1(run_dir, source_key, variables, year)
         if result and "consolidated_nc" in result:
             consolidated_ncs[str(year)] = result["consolidated_nc"]
 

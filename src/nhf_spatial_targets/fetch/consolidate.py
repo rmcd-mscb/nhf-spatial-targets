@@ -502,7 +502,7 @@ def consolidate_mod16a2(
         time_datasets.append(ds_step)
 
     try:
-        ds = xr.concat(time_datasets, dim="time")
+        ds = xr.concat(time_datasets, dim="time", join="outer")
         ds = ds.sortby("time")
         _validate_variables(ds, variables)
 
