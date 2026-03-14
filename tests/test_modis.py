@@ -1,0 +1,328 @@
+"""Tests for MODIS fetch module."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+_MOCK_CONSOLIDATION = {
+    "consolidated_nc": "data/raw/mod16a2_v061/mod16a2_v061_2010.nc",
+    "last_consolidated_utc": "2026-01-01T00:00:00+00:00",
+    "n_files": 1,
+    "variables": ["ET_500m", "ET_QC_500m"],
+}
+
+
+@pytest.fixture()
+def run_dir(tmp_path: Path) -> Path:
+    """Create a minimal run workspace with fabric.json."""
+    rd = tmp_path / "run"
+    rd.mkdir()
+    (rd / "data" / "raw" / "mod16a2_v061").mkdir(parents=True)
+    (rd / "data" / "raw" / "mod10c1_v061").mkdir(parents=True)
+    fabric = {
+        "bbox_buffered": {
+            "minx": -125.1,
+            "miny": 23.9,
+            "maxx": -65.9,
+            "maxy": 50.1,
+        }
+    }
+    (rd / "fabric.json").write_text(json.dumps(fabric))
+    return rd
+
+
+def _mock_granule(name: str) -> MagicMock:
+    """Create a mock granule object."""
+    g = MagicMock()
+    g.__str__ = lambda self: name
+    return g
+
+
+def _fake_download(run_dir: Path, year: int = 2010, n: int = 1) -> list[str]:
+    """Create fake downloaded HDF files and return their paths."""
+    paths = []
+    for i in range(n):
+        doy = (i + 1) * 8
+        f = (
+            run_dir
+            / "data"
+            / "raw"
+            / "mod16a2_v061"
+            / f"MOD16A2GF.A{year}{doy:03d}.h08v04.061.2020256154955.hdf"
+        )
+        f.write_bytes(b"fake")
+        paths.append(str(f))
+    return paths
+
+
+# ---- Year extraction -------------------------------------------------------
+
+
+def test_year_from_mod16a2_filename():
+    """Extract year from various MOD16A2 filenames."""
+    from nhf_spatial_targets.fetch.modis import _year_from_path
+
+    assert (
+        _year_from_path(Path("MOD16A2GF.A2010001.h08v04.061.2020256154955.hdf")) == 2010
+    )
+    assert (
+        _year_from_path(Path("MOD16A2GF.A2005049.h09v05.061.2020256154955.hdf")) == 2005
+    )
+    assert (
+        _year_from_path(Path("MOD16A2GF.A2000361.h12v04.061.2020256154955.hdf")) == 2000
+    )
+
+
+def test_year_from_mod10c1_filename():
+    """Extract year from various MOD10C1 filenames."""
+    from nhf_spatial_targets.fetch.modis import _year_from_path
+
+    assert _year_from_path(Path("MOD10C1.A2010032.061.2020345123456.hdf")) == 2010
+    assert _year_from_path(Path("MOD10C1.A2014365.061.2020345123456.hdf")) == 2014
+    assert _year_from_path(Path("MOD10C1.A2001001.061.2020345123456.hdf")) == 2001
+
+
+def test_year_from_conus_subset_filename():
+    """Extract year from .conus.nc suffix filenames."""
+    from nhf_spatial_targets.fetch.modis import _year_from_path
+
+    assert _year_from_path(Path("MOD16A2GF.A2010001.h08v04.061.conus.nc")) == 2010
+    assert _year_from_path(Path("MOD10C1.A2005180.061.conus.nc")) == 2005
+
+
+def test_year_from_invalid_filename():
+    """ValueError raised for filenames without AYYYYDDD pattern."""
+    from nhf_spatial_targets.fetch.modis import _year_from_path
+
+    with pytest.raises(ValueError, match="Cannot extract year"):
+        _year_from_path(Path("not_a_modis_file.txt"))
+
+    with pytest.raises(ValueError, match="Cannot extract year"):
+        _year_from_path(Path("MOD16A2GF_no_dot_A2010001.hdf"))
+
+
+# ---- Authentication --------------------------------------------------------
+
+
+@patch("nhf_spatial_targets.fetch.modis.earthdata_login")
+def test_mod16a2_login_called(mock_login, run_dir):
+    """earthdata_login() is called before searching."""
+    with patch("earthaccess.search_data", return_value=[]):
+        with pytest.raises(ValueError, match="No granules found"):
+            from nhf_spatial_targets.fetch.modis import fetch_mod16a2
+
+            fetch_mod16a2(run_dir=run_dir, period="2010/2010")
+    mock_login.assert_called_once_with(run_dir)
+
+
+# ---- Search parameters -----------------------------------------------------
+
+
+@patch(
+    "nhf_spatial_targets.fetch.modis.consolidate_mod16a2",
+    return_value=_MOCK_CONSOLIDATION,
+)
+@patch("earthaccess.download")
+@patch("earthaccess.search_data")
+@patch("nhf_spatial_targets.fetch.modis.earthdata_login")
+def test_mod16a2_search_params(
+    mock_login, mock_search, mock_dl, mock_consolidate, run_dir
+):
+    """search_data called with correct short_name, bbox tuple, and temporal."""
+    mock_search.return_value = [_mock_granule("g1")]
+    mock_dl.return_value = _fake_download(run_dir)
+
+    from nhf_spatial_targets.fetch.modis import fetch_mod16a2
+
+    fetch_mod16a2(run_dir=run_dir, period="2010/2010")
+
+    mock_search.assert_called_once()
+    call_kwargs = mock_search.call_args[1]
+    assert call_kwargs["short_name"] == "MOD16A2GF"
+    assert call_kwargs["bounding_box"] == (-125.1, 23.9, -65.9, 50.1)
+    assert call_kwargs["temporal"] == ("2010-01-01", "2010-12-31")
+
+
+# ---- No results ------------------------------------------------------------
+
+
+@patch("nhf_spatial_targets.fetch.modis.earthdata_login")
+@patch("earthaccess.search_data", return_value=[])
+def test_mod16a2_no_granules_raises(mock_search, mock_login, run_dir):
+    """ValueError raised when search returns zero granules."""
+    from nhf_spatial_targets.fetch.modis import fetch_mod16a2
+
+    with pytest.raises(ValueError, match="No granules found"):
+        fetch_mod16a2(run_dir=run_dir, period="2010/2010")
+
+
+# ---- Download failures -----------------------------------------------------
+
+
+@patch("earthaccess.download", return_value=[])
+@patch("earthaccess.search_data")
+@patch("nhf_spatial_targets.fetch.modis.earthdata_login")
+def test_mod16a2_empty_download_raises(mock_login, mock_search, mock_dl, run_dir):
+    """RuntimeError raised when download returns no files."""
+    mock_search.return_value = [_mock_granule("g1")]
+
+    from nhf_spatial_targets.fetch.modis import fetch_mod16a2
+
+    with pytest.raises(RuntimeError, match="returned no files"):
+        fetch_mod16a2(run_dir=run_dir, period="2010/2010")
+
+
+# ---- Missing / malformed fabric.json ---------------------------------------
+
+
+@patch("nhf_spatial_targets.fetch.modis.earthdata_login")
+def test_mod16a2_missing_fabric_raises(mock_login, tmp_path):
+    """FileNotFoundError raised when fabric.json is missing."""
+    run_dir = tmp_path / "empty_run"
+    run_dir.mkdir()
+
+    from nhf_spatial_targets.fetch.modis import fetch_mod16a2
+
+    with pytest.raises(FileNotFoundError, match="fabric.json"):
+        fetch_mod16a2(run_dir=run_dir, period="2010/2010")
+
+
+@patch("nhf_spatial_targets.fetch.modis.earthdata_login")
+def test_mod16a2_malformed_fabric_raises(mock_login, tmp_path):
+    """ValueError raised when fabric.json is malformed."""
+    run_dir = tmp_path / "bad_fabric_run"
+    run_dir.mkdir()
+    (run_dir / "fabric.json").write_text("{}")
+
+    from nhf_spatial_targets.fetch.modis import fetch_mod16a2
+
+    with pytest.raises(ValueError, match="malformed"):
+        fetch_mod16a2(run_dir=run_dir, period="2010/2010")
+
+
+# ---- Provenance record -----------------------------------------------------
+
+
+@patch(
+    "nhf_spatial_targets.fetch.modis.consolidate_mod16a2",
+    return_value=_MOCK_CONSOLIDATION,
+)
+@patch("earthaccess.download")
+@patch("earthaccess.search_data")
+@patch("nhf_spatial_targets.fetch.modis.earthdata_login")
+def test_mod16a2_provenance_record(
+    mock_login, mock_search, mock_dl, mock_consolidate, run_dir
+):
+    """Returned dict has all required provenance keys."""
+    mock_search.return_value = [_mock_granule("g1")]
+    mock_dl.return_value = _fake_download(run_dir)
+
+    from nhf_spatial_targets.fetch.modis import fetch_mod16a2
+
+    result = fetch_mod16a2(run_dir=run_dir, period="2010/2010")
+
+    assert result["source_key"] == "mod16a2_v061"
+    assert "access_url" in result
+    assert result["variables"] == ["ET_500m", "ET_QC_500m"]
+    assert result["period"] == "2010/2010"
+    assert "bbox" in result
+    assert "download_timestamp" in result
+    assert isinstance(result["files"], list)
+    assert len(result["files"]) == 1
+    assert "path" in result["files"][0]
+    assert "year" in result["files"][0]
+    assert "size_bytes" in result["files"][0]
+    assert "consolidated_ncs" in result
+    # Path should be relative to run_dir
+    assert not Path(result["files"][0]["path"]).is_absolute()
+
+
+# ---- Manifest update -------------------------------------------------------
+
+
+@patch(
+    "nhf_spatial_targets.fetch.modis.consolidate_mod16a2",
+    return_value=_MOCK_CONSOLIDATION,
+)
+@patch("earthaccess.download")
+@patch("earthaccess.search_data")
+@patch("nhf_spatial_targets.fetch.modis.earthdata_login")
+def test_mod16a2_manifest_updated(
+    mock_login, mock_search, mock_dl, mock_consolidate, run_dir
+):
+    """fetch_mod16a2 writes provenance to manifest.json."""
+    mock_search.return_value = [_mock_granule("g1")]
+    mock_dl.return_value = _fake_download(run_dir)
+
+    from nhf_spatial_targets.fetch.modis import fetch_mod16a2
+
+    fetch_mod16a2(run_dir=run_dir, period="2010/2010")
+
+    updated_manifest = json.loads((run_dir / "manifest.json").read_text())
+    entry = updated_manifest["sources"]["mod16a2_v061"]
+    assert entry["period"] == "2010/2010"
+    assert len(entry["files"]) > 0
+    assert "year" in entry["files"][0]
+    assert "consolidated_ncs" in entry
+    assert "variables" in entry
+    assert entry["variables"] == ["ET_500m", "ET_QC_500m"]
+
+
+# ---- Incremental fetch -----------------------------------------------------
+
+
+@patch(
+    "nhf_spatial_targets.fetch.modis.consolidate_mod16a2",
+    return_value=_MOCK_CONSOLIDATION,
+)
+@patch("earthaccess.download")
+@patch("earthaccess.search_data")
+@patch("nhf_spatial_targets.fetch.modis.earthdata_login")
+def test_mod16a2_incremental_skips_year(
+    mock_login, mock_search, mock_dl, mock_consolidate, run_dir
+):
+    """Years already in manifest are not re-downloaded."""
+    # Pre-populate manifest with 2010 already downloaded
+    manifest = {
+        "sources": {
+            "mod16a2_v061": {
+                "period": "2010/2010",
+                "files": [
+                    {
+                        "path": "data/raw/mod16a2_v061/MOD16A2GF.A2010001.h08v04.061.2020256154955.hdf",
+                        "year": 2010,
+                        "size_bytes": 100,
+                        "downloaded_utc": "2026-01-01T00:00:00+00:00",
+                    }
+                ],
+            }
+        }
+    }
+    (run_dir / "manifest.json").write_text(json.dumps(manifest))
+
+    # Create the existing file on disk
+    existing = (
+        run_dir
+        / "data"
+        / "raw"
+        / "mod16a2_v061"
+        / "MOD16A2GF.A2010001.h08v04.061.2020256154955.hdf"
+    )
+    existing.write_bytes(b"fake")
+
+    # Also create a 2011 file that will be "downloaded"
+    mock_search.return_value = [_mock_granule("g1")]
+    mock_dl.return_value = _fake_download(run_dir, year=2011)
+
+    from nhf_spatial_targets.fetch.modis import fetch_mod16a2
+
+    fetch_mod16a2(run_dir=run_dir, period="2010/2011")
+
+    # search_data should only be called for 2011, not 2010
+    assert mock_search.call_count == 1
+    call_kwargs = mock_search.call_args[1]
+    assert call_kwargs["temporal"] == ("2011-01-01", "2011-12-31")
