@@ -281,3 +281,57 @@ def test_consolidate_mod16a2_synthetic(mod16a2_run_dir: Path) -> None:
         result["consolidated_nc"]
         == f"data/raw/{source_key}/{source_key}_2010_consolidated.nc"
     )
+
+
+def test_consolidate_mod16a2_partial_tiles(mod16a2_run_dir: Path) -> None:
+    """Consolidation succeeds when one tile is missing from a timestep."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_mod16a2
+
+    source_key = "mod16a2_v061"
+    source_dir = mod16a2_run_dir / "data" / "raw" / source_key
+
+    # Delete the h09v04 tile from DOY 009
+    doy9_h09 = list(source_dir.glob("MOD16A2GF.A2010009.h09v04.*"))
+    assert len(doy9_h09) == 1, "Expected exactly one h09v04 tile for DOY 009"
+    doy9_h09[0].unlink()
+
+    result = consolidate_mod16a2(
+        run_dir=mod16a2_run_dir,
+        source_key=source_key,
+        variables=["ET_500m"],
+        year=2010,
+    )
+
+    # 3 remaining HDF files (2 for DOY 001, 1 for DOY 009)
+    assert result["n_files"] == 3
+
+    out_path = mod16a2_run_dir / result["consolidated_nc"]
+    ds = xr.open_dataset(out_path)
+    # Both timesteps should still be present
+    assert ds.sizes["time"] == 2
+    ds.close()
+
+
+def test_consolidate_mod16a2_overwrites_existing(mod16a2_run_dir: Path) -> None:
+    """Re-running consolidation is idempotent and produces the same file."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_mod16a2
+
+    source_key = "mod16a2_v061"
+    variables = ["ET_500m"]
+
+    result1 = consolidate_mod16a2(
+        run_dir=mod16a2_run_dir,
+        source_key=source_key,
+        variables=variables,
+        year=2010,
+    )
+    result2 = consolidate_mod16a2(
+        run_dir=mod16a2_run_dir,
+        source_key=source_key,
+        variables=variables,
+        year=2010,
+    )
+
+    assert result1["consolidated_nc"] == result2["consolidated_nc"]
+    out_path = mod16a2_run_dir / result2["consolidated_nc"]
+    assert out_path.exists()
