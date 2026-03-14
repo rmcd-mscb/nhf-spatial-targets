@@ -120,7 +120,9 @@ def _dispatch(
 def init(
     fabric: Annotated[
         Path,
-        Parameter(name=["--fabric", "-f"], help="Path to the HRU fabric GeoPackage."),
+        Parameter(
+            name=["--fabric", "-f"], help="Path to the HRU fabric (.gpkg or .gdb)."
+        ),
     ],
     id_col: Annotated[
         str,
@@ -164,7 +166,15 @@ def init(
     if not fabric.exists():
         print(f"Error: Fabric file not found: {fabric}", file=sys.stderr)
         sys.exit(1)
-    if fabric.is_dir():
+    suffix = fabric.suffix.lower()
+    if suffix == ".gdb":
+        if not fabric.is_dir():
+            print(
+                f"Error: .gdb fabric must be a directory (File Geodatabase): {fabric}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    elif fabric.is_dir():
         print(
             f"Error: Fabric path is a directory, not a file: {fabric}", file=sys.stderr
         )

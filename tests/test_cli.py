@@ -113,9 +113,17 @@ def test_init_missing_fabric(tmp_path):
 
 
 def test_init_fabric_is_directory(tmp_path):
-    """Exit code 1 when --fabric points to a directory."""
+    """Exit code 1 when --fabric points to a non-.gdb directory."""
     with pytest.raises(SystemExit, match="1"):
         _run("init", "--fabric", str(tmp_path))
+
+
+def test_init_gdb_file_not_directory(tmp_path):
+    """Exit code 1 when --fabric is a .gdb file (not a directory)."""
+    fake_gdb = tmp_path / "fabric.gdb"
+    fake_gdb.write_bytes(b"not a real geodatabase")
+    with pytest.raises(SystemExit, match="1"):
+        _run("init", "--fabric", str(fake_gdb))
 
 
 def test_init_missing_config(tmp_path):
@@ -370,3 +378,36 @@ def test_default_no_verbose():
         _run_meta("catalog", "sources")
 
     mock_setup.assert_called_once_with(False)
+
+
+# ---- _sha256 directory hashing --------------------------------------------
+
+
+def test_sha256_directory_consistent(tmp_path):
+    """_sha256 on a directory returns a consistent digest."""
+    from nhf_spatial_targets.init_run import _sha256
+
+    gdb = tmp_path / "test.gdb"
+    gdb.mkdir()
+    (gdb / "a.gdbtable").write_bytes(b"table data")
+    (gdb / "b.gdbtablx").write_bytes(b"index data")
+
+    h1 = _sha256(gdb)
+    h2 = _sha256(gdb)
+    assert h1 == h2
+    assert len(h1) == 64  # sha256 hex digest
+
+
+def test_sha256_directory_includes_filenames(tmp_path):
+    """Two dirs with same bytes but different filenames produce different hashes."""
+    from nhf_spatial_targets.init_run import _sha256
+
+    dir_a = tmp_path / "a.gdb"
+    dir_a.mkdir()
+    (dir_a / "file_one.dat").write_bytes(b"same content")
+
+    dir_b = tmp_path / "b.gdb"
+    dir_b.mkdir()
+    (dir_b / "file_two.dat").write_bytes(b"same content")
+
+    assert _sha256(dir_a) != _sha256(dir_b)
