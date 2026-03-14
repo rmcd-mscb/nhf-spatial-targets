@@ -136,9 +136,15 @@ def _manifest_source_files(run_dir: Path, source_key: str) -> list[dict]:
 
 def _existing_years(run_dir: Path, source_key: str) -> set[int]:
     """Return years already fetched for *source_key* from manifest."""
-    return {
-        f["year"] for f in _manifest_source_files(run_dir, source_key) if "year" in f
-    }
+    records = _manifest_source_files(run_dir, source_key)
+    skipped = sum(1 for f in records if "year" not in f)
+    if skipped:
+        logger.warning(
+            "%d file record(s) in manifest for %s lack 'year' key; skipping them",
+            skipped,
+            source_key,
+        )
+    return {f["year"] for f in records if "year" in f}
 
 
 def _existing_file_timestamps(run_dir: Path, source_key: str) -> dict[int, str]:
@@ -173,13 +179,20 @@ def _update_manifest(
     """Merge MODIS provenance into ``manifest.json`` with atomic write."""
     manifest_path = run_dir / "manifest.json"
     if manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text())
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"manifest.json in {run_dir} is corrupted and cannot be parsed. "
+                f"Inspect the file manually or restore from backup. Detail: {exc}"
+            ) from exc
     else:
         manifest = {"sources": {}, "steps": []}
 
     if "sources" not in manifest:
         manifest["sources"] = {}
 
+    now_utc = datetime.now(timezone.utc).isoformat()
     entry = manifest["sources"].get(source_key, {})
     entry.update(
         {
@@ -190,6 +203,7 @@ def _update_manifest(
             "variables": meta["variables"],
             "files": files,
             "consolidated_ncs": consolidated_ncs,
+            "last_consolidated_utc": now_utc if consolidated_ncs else None,
         }
     )
     manifest["sources"][source_key] = entry
@@ -330,7 +344,15 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
     consolidated_ncs: dict[str, str] = {}
     years_on_disk = sorted({f["year"] for f in files})
     for year in years_on_disk:
-        result = consolidate_mod16a2(run_dir, source_key, variables, year)
+        try:
+            result = consolidate_mod16a2(run_dir, source_key, variables, year)
+        except NotImplementedError:
+            logger.warning(
+                "Consolidation for %s year %d not yet implemented; skipping",
+                source_key,
+                year,
+            )
+            continue
         if result and "consolidated_nc" in result:
             consolidated_ncs[str(year)] = result["consolidated_nc"]
 
@@ -402,6 +424,12 @@ def _subset_to_conus(hdf_path: Path, bbox: dict | None = None) -> Path:
         subset.to_netcdf(out_path)
     finally:
         ds.close()
+
+    if not out_path.exists() or out_path.stat().st_size == 0:
+        raise RuntimeError(
+            f"Subset file {out_path} was not written correctly; "
+            f"keeping original HDF at {hdf_path}"
+        )
 
     hdf_path.unlink()
     logger.info("Subsetted %s → %s", hdf_path.name, out_path.name)
@@ -532,7 +560,15 @@ def fetch_mod10c1(run_dir: Path, period: str) -> dict:
     consolidated_ncs: dict[str, str] = {}
     years_on_disk = sorted({f["year"] for f in files})
     for year in years_on_disk:
-        result = consolidate_mod10c1(run_dir, source_key, variables, year)
+        try:
+            result = consolidate_mod10c1(run_dir, source_key, variables, year)
+        except NotImplementedError:
+            logger.warning(
+                "Consolidation for %s year %d not yet implemented; skipping",
+                source_key,
+                year,
+            )
+            continue
         if result and "consolidated_nc" in result:
             consolidated_ncs[str(year)] = result["consolidated_nc"]
 
