@@ -33,7 +33,7 @@ Shift from **download-all → consolidate-all** to **per-timestep download → c
 
 #### Granule grouping
 
-earthaccess granule objects expose metadata including the granule filename. Extract the AYYYYDDD token from each granule's filename to group them by timestep before downloading. This uses the same `_MODIS_YEAR_RE`-style regex already in the module.
+earthaccess granule objects expose metadata including the granule filename. Extract the full AYYYYDDD token (7 digits: year + day-of-year) from each granule's filename to group them by timestep before downloading. This requires a new regex — the existing `_MODIS_YEAR_RE` only captures the 4-digit year. Add a module-level `_MODIS_DOY_RE = re.compile(r"\.A(\d{7})\.")` or similar.
 
 ### `consolidate.py` changes
 
@@ -126,6 +126,10 @@ Called at these checkpoints:
 ### Disk space
 
 The per-timestep approach writes ~46 temp NetCDF files per year alongside the original HDF files. Each temp file is a single CONUS-extent timestep at 0.04° resolution (~1650x800 pixels, 2 variables, float32) — roughly 4 MB per file, ~200 MB total for a year. This is small relative to the ~5-10 GB of source HDF tiles and is cleaned up after the final write.
+
+### Dependencies
+
+`consolidate_mod16a2_finalize` uses `xr.open_mfdataset(..., chunks={})` which requires `dask`. Dask is already an indirect dependency (pulled in by xarray/rioxarray) but should be verified as present in `pixi.toml`. If not listed explicitly, add it.
 
 ### What does not change
 
