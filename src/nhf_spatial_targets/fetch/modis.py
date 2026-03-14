@@ -12,11 +12,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import earthaccess
+import xarray as xr
 
 import nhf_spatial_targets.catalog as _catalog
 from nhf_spatial_targets.fetch._auth import earthdata_login
 from nhf_spatial_targets.fetch._period import years_in_period
-from nhf_spatial_targets.fetch.consolidate import consolidate_mod16a2
+from nhf_spatial_targets.fetch.consolidate import (
+    consolidate_mod10c1,
+    consolidate_mod16a2,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -359,6 +363,203 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
     }
 
 
-def fetch_mod10c1(run_dir: Path, period: str) -> None:
-    """Download MOD10C1 daily snow cover CMG files for the given period."""
-    raise NotImplementedError("fetch_mod10c1 not yet implemented")
+_CONUS_BBOX = {
+    "minx": -129.4134,
+    "miny": 22.3380,
+    "maxx": -63.2790,
+    "maxy": 54.6729,
+}
+
+_MOD10C1_SOURCE_KEY = "mod10c1_v061"
+
+
+def _subset_to_conus(hdf_path: Path, bbox: dict | None = None) -> Path:
+    """Open a global MOD10C1 HDF file, subset to CONUS, save as NetCDF.
+
+    Parameters
+    ----------
+    hdf_path : Path
+        Path to the global HDF file.
+    bbox : dict | None
+        Bounding box with minx/miny/maxx/maxy keys. Defaults to
+        :data:`_CONUS_BBOX`.
+
+    Returns
+    -------
+    Path
+        Path to the ``.conus.nc`` file that replaced the original HDF.
+    """
+    if bbox is None:
+        bbox = _CONUS_BBOX
+
+    ds = xr.open_dataset(hdf_path)
+    try:
+        subset = ds.sel(
+            lat=slice(bbox["maxy"], bbox["miny"]),
+            lon=slice(bbox["minx"], bbox["maxx"]),
+        )
+        out_path = hdf_path.with_suffix("").with_suffix(".conus.nc")
+        subset.to_netcdf(out_path)
+    finally:
+        ds.close()
+
+    hdf_path.unlink()
+    logger.info("Subsetted %s → %s", hdf_path.name, out_path.name)
+    return out_path
+
+
+def fetch_mod10c1(run_dir: Path, period: str) -> dict:
+    """Download MOD10C1 daily snow cover CMG files for the given period.
+
+    Supports incremental download — years already recorded in
+    ``manifest.json`` are skipped. After downloading, each HDF file is
+    subsetted to CONUS and saved as NetCDF. Runs per-year consolidation
+    and updates the manifest.
+
+    Parameters
+    ----------
+    run_dir : Path
+        Run workspace directory. Reads ``fabric.json`` for bbox,
+        writes files to ``data/raw/mod10c1_v061/``.
+    period : str
+        Temporal range as ``"YYYY/YYYY"`` (start/end years inclusive).
+
+    Returns
+    -------
+    dict
+        Provenance record for ``manifest.json``.
+    """
+    source_key = _MOD10C1_SOURCE_KEY
+    meta = _catalog.source(source_key)
+    short_name = meta["access"]["short_name"]
+
+    _check_superseded(meta, source_key)
+    earthdata_login(run_dir)
+    logger.info("Authenticated with NASA Earthdata")
+
+    bbox = _read_fabric_bbox(run_dir)
+    bbox_t = _bbox_tuple(bbox)
+
+    # Determine which years need downloading
+    all_years = years_in_period(period)
+    already_have = _existing_years(run_dir, source_key)
+    needed = [y for y in all_years if y not in already_have]
+
+    output_dir = run_dir / "data" / "raw" / source_key
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if not needed:
+        logger.info(
+            "All %d years already downloaded, skipping to consolidation",
+            len(all_years),
+        )
+    else:
+        for year in needed:
+            temporal = (f"{year}-01-01", f"{year}-12-31")
+            logger.debug("bbox=%s, temporal=%s, year=%d", bbox_t, temporal, year)
+
+            granules = earthaccess.search_data(
+                short_name=short_name,
+                bounding_box=bbox_t,
+                temporal=temporal,
+            )
+            logger.info(
+                "Found %d granules for %s year %d",
+                len(granules),
+                short_name,
+                year,
+            )
+
+            if not granules:
+                raise ValueError(
+                    f"No granules found for {short_name} with "
+                    f"bbox={bbox_t}, temporal={temporal}"
+                )
+
+            downloaded = earthaccess.download(
+                granules,
+                local_path=str(output_dir),
+            )
+
+            if not downloaded:
+                raise RuntimeError(
+                    f"earthaccess.download() returned no files for "
+                    f"{len(granules)} granules. Check network connectivity "
+                    f"and Earthdata credentials."
+                )
+            if len(downloaded) < len(granules):
+                logger.warning(
+                    "Partial download: got %d of %d granules for year %d. "
+                    "Consolidation will proceed with available files only.",
+                    len(downloaded),
+                    len(granules),
+                    year,
+                )
+            logger.info(
+                "Downloaded %d files for year %d to %s",
+                len(downloaded),
+                year,
+                output_dir,
+            )
+
+            # Subset each HDF to CONUS
+            for p in [Path(f) for f in downloaded]:
+                if p.suffix == ".hdf":
+                    _subset_to_conus(p)
+
+    # Build file inventory from all .conus.nc files on disk
+    all_nc_files = sorted(output_dir.glob("*.conus.nc"))
+
+    # Preserve original downloaded_utc for files already in manifest
+    existing_timestamps = _existing_file_timestamps(run_dir, source_key)
+    now_utc = datetime.now(timezone.utc).isoformat()
+
+    files = []
+    for p in all_nc_files:
+        rel = str(p.relative_to(run_dir))
+        yr = _year_from_path(p)
+        files.append(
+            {
+                "path": rel,
+                "year": yr,
+                "size_bytes": p.stat().st_size,
+                "downloaded_utc": existing_timestamps.get(yr, now_utc),
+            }
+        )
+
+    # Per-year consolidation
+    variables = meta["variables"]
+    consolidated_ncs: list[str] = []
+    years_on_disk = sorted({f["year"] for f in files})
+    for year in years_on_disk:
+        result = consolidate_mod10c1(run_dir, source_key, variables, year)
+        if result and "consolidated_nc" in result:
+            consolidated_ncs.append(result["consolidated_nc"])
+
+    # Compute effective period from actual files on disk
+    if years_on_disk:
+        effective_period = f"{years_on_disk[0]}/{years_on_disk[-1]}"
+    else:
+        effective_period = period
+
+    # Update manifest.json (merge, don't overwrite)
+    _update_manifest(
+        run_dir,
+        source_key,
+        effective_period,
+        bbox,
+        meta,
+        files,
+        consolidated_ncs,
+    )
+
+    return {
+        "source_key": source_key,
+        "access_url": meta["access"]["url"],
+        "variables": variables,
+        "period": effective_period,
+        "bbox": bbox,
+        "download_timestamp": now_utc,
+        "files": files,
+        "consolidated_ncs": consolidated_ncs,
+    }

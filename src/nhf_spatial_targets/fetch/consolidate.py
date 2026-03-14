@@ -290,6 +290,16 @@ def consolidate_nldas(
     }
 
 
+def consolidate_mod10c1(
+    run_dir: Path,
+    source_key: str,
+    variables: list[str],
+    year: int,
+) -> dict:
+    """Merge daily MOD10C1 CONUS subsets for a single year into one NetCDF."""
+    raise NotImplementedError("consolidate_mod10c1 not yet implemented")
+
+
 def consolidate_mod16a2(
     run_dir: Path,
     source_key: str,

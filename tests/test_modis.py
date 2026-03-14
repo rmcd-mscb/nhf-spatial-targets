@@ -8,6 +8,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+_SOURCE_KEY_10 = "mod10c1_v061"
+
+_MOCK_CONSOLIDATION_10 = {
+    "consolidated_nc": "data/raw/mod10c1_v061/mod10c1_v061_2005.nc",
+    "last_consolidated_utc": "2026-01-01T00:00:00+00:00",
+    "n_files": 1,
+    "variables": ["Day_CMG_Snow_Cover", "Snow_Spatial_QA"],
+}
+
 _MOCK_CONSOLIDATION = {
     "consolidated_nc": "data/raw/mod16a2_v061/mod16a2_v061_2010.nc",
     "last_consolidated_utc": "2026-01-01T00:00:00+00:00",
@@ -326,3 +335,164 @@ def test_mod16a2_incremental_skips_year(
     assert mock_search.call_count == 1
     call_kwargs = mock_search.call_args[1]
     assert call_kwargs["temporal"] == ("2011-01-01", "2011-12-31")
+
+
+# ---------------------------------------------------------------------------
+# MOD10C1 helpers
+# ---------------------------------------------------------------------------
+
+
+def _fake_download_10c1(run_dir: Path, year: int = 2005, n: int = 1) -> list[str]:
+    """Create fake downloaded HDF files for MOD10C1 and return their paths."""
+    paths = []
+    for i in range(n):
+        doy = i + 1
+        f = (
+            run_dir
+            / "data"
+            / "raw"
+            / _SOURCE_KEY_10
+            / f"MOD10C1.A{year}{doy:03d}.061.2020345123456.hdf"
+        )
+        f.write_bytes(b"fake")
+        paths.append(str(f))
+    return paths
+
+
+def _mock_subset_side_effect(hdf_path: Path, bbox=None) -> Path:
+    """Side effect for _subset_to_conus: create .conus.nc, remove .hdf."""
+    out_path = hdf_path.with_suffix("").with_suffix(".conus.nc")
+    out_path.write_bytes(b"fake-nc")
+    if hdf_path.exists():
+        hdf_path.unlink()
+    return out_path
+
+
+# ---- MOD10C1 Authentication -----------------------------------------------
+
+
+@patch("nhf_spatial_targets.fetch.modis.earthdata_login")
+def test_mod10c1_login_called(mock_login, run_dir):
+    """earthdata_login() is called before searching."""
+    with patch("earthaccess.search_data", return_value=[]):
+        with pytest.raises(ValueError, match="No granules found"):
+            from nhf_spatial_targets.fetch.modis import fetch_mod10c1
+
+            fetch_mod10c1(run_dir=run_dir, period="2005/2005")
+    mock_login.assert_called_once_with(run_dir)
+
+
+# ---- MOD10C1 Search parameters --------------------------------------------
+
+
+@patch(
+    "nhf_spatial_targets.fetch.modis.consolidate_mod10c1",
+    return_value=_MOCK_CONSOLIDATION_10,
+)
+@patch(
+    "nhf_spatial_targets.fetch.modis._subset_to_conus",
+    side_effect=_mock_subset_side_effect,
+)
+@patch("earthaccess.download")
+@patch("earthaccess.search_data")
+@patch("nhf_spatial_targets.fetch.modis.earthdata_login")
+def test_mod10c1_search_params(
+    mock_login, mock_search, mock_dl, mock_subset, mock_consolidate, run_dir
+):
+    """search_data called with correct short_name and temporal."""
+    mock_search.return_value = [_mock_granule("g1")]
+    mock_dl.return_value = _fake_download_10c1(run_dir)
+
+    from nhf_spatial_targets.fetch.modis import fetch_mod10c1
+
+    fetch_mod10c1(run_dir=run_dir, period="2005/2005")
+
+    mock_search.assert_called_once()
+    call_kwargs = mock_search.call_args[1]
+    assert call_kwargs["short_name"] == "MOD10C1"
+    assert call_kwargs["temporal"] == ("2005-01-01", "2005-12-31")
+
+
+# ---- MOD10C1 No granules --------------------------------------------------
+
+
+@patch(
+    "nhf_spatial_targets.fetch.modis.consolidate_mod10c1",
+    return_value=_MOCK_CONSOLIDATION_10,
+)
+@patch("nhf_spatial_targets.fetch.modis._subset_to_conus")
+@patch("earthaccess.download")
+@patch("earthaccess.search_data", return_value=[])
+@patch("nhf_spatial_targets.fetch.modis.earthdata_login")
+def test_mod10c1_no_granules_raises(
+    mock_login, mock_search, mock_dl, mock_subset, mock_consolidate, run_dir
+):
+    """ValueError raised when search returns zero granules."""
+    from nhf_spatial_targets.fetch.modis import fetch_mod10c1
+
+    with pytest.raises(ValueError, match="No granules found"):
+        fetch_mod10c1(run_dir=run_dir, period="2005/2005")
+
+
+# ---- MOD10C1 Provenance ---------------------------------------------------
+
+
+@patch(
+    "nhf_spatial_targets.fetch.modis.consolidate_mod10c1",
+    return_value=_MOCK_CONSOLIDATION_10,
+)
+@patch(
+    "nhf_spatial_targets.fetch.modis._subset_to_conus",
+    side_effect=_mock_subset_side_effect,
+)
+@patch("earthaccess.download")
+@patch("earthaccess.search_data")
+@patch("nhf_spatial_targets.fetch.modis.earthdata_login")
+def test_mod10c1_provenance_record(
+    mock_login, mock_search, mock_dl, mock_subset, mock_consolidate, run_dir
+):
+    """Returned dict has all required provenance keys."""
+    mock_search.return_value = [_mock_granule("g1")]
+    mock_dl.return_value = _fake_download_10c1(run_dir)
+
+    from nhf_spatial_targets.fetch.modis import fetch_mod10c1
+
+    result = fetch_mod10c1(run_dir=run_dir, period="2005/2005")
+
+    assert result["source_key"] == _SOURCE_KEY_10
+    assert "access_url" in result
+    assert result["variables"] == ["Day_CMG_Snow_Cover", "Snow_Spatial_QA"]
+    assert result["period"] == "2005/2005"
+    assert "bbox" in result
+    assert "download_timestamp" in result
+    assert isinstance(result["files"], list)
+    assert "consolidated_ncs" in result
+
+
+# ---- MOD10C1 Subset called -------------------------------------------------
+
+
+@patch(
+    "nhf_spatial_targets.fetch.modis.consolidate_mod10c1",
+    return_value=_MOCK_CONSOLIDATION_10,
+)
+@patch(
+    "nhf_spatial_targets.fetch.modis._subset_to_conus",
+    side_effect=_mock_subset_side_effect,
+)
+@patch("earthaccess.download")
+@patch("earthaccess.search_data")
+@patch("nhf_spatial_targets.fetch.modis.earthdata_login")
+def test_mod10c1_subset_called(
+    mock_login, mock_search, mock_dl, mock_subset, mock_consolidate, run_dir
+):
+    """_subset_to_conus called for each downloaded HDF."""
+    n_files = 3
+    mock_search.return_value = [_mock_granule(f"g{i}") for i in range(n_files)]
+    mock_dl.return_value = _fake_download_10c1(run_dir, n=n_files)
+
+    from nhf_spatial_targets.fetch.modis import fetch_mod10c1
+
+    fetch_mod10c1(run_dir=run_dir, period="2005/2005")
+
+    assert mock_subset.call_count == n_files
