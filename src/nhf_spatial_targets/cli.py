@@ -122,7 +122,7 @@ def init(
         Path,
         Parameter(
             name=["--fabric", "-f"],
-            help="Path to the HRU fabric (.gpkg, .gdb, or .parquet).",
+            help="Path to the HRU fabric (.gpkg, .gdb, .parquet, or .geoparquet).",
         ),
     ],
     id_col: Annotated[

@@ -451,3 +451,22 @@ def test_fabric_metadata_reads_parquet(tmp_path):
     assert len(meta["sha256"]) == 64
     assert meta["bbox"]["minx"] == 0.0
     assert meta["bbox"]["maxy"] == 2.0
+
+
+def test_fabric_metadata_reads_geoparquet(tmp_path):
+    """_fabric_metadata handles the .geoparquet extension."""
+    import geopandas as gpd
+    from shapely.geometry import box
+
+    from nhf_spatial_targets.init_run import _fabric_metadata
+
+    gdf = gpd.GeoDataFrame(
+        {"nhm_id": [1, 2]},
+        geometry=[box(0, 0, 1, 1), box(1, 1, 2, 2)],
+        crs="EPSG:4326",
+    )
+    geoparquet_path = tmp_path / "fabric.geoparquet"
+    gdf.to_parquet(geoparquet_path)
+
+    meta = _fabric_metadata(geoparquet_path, "nhm_id", buffer_deg=0.1)
+    assert meta["hru_count"] == 2
