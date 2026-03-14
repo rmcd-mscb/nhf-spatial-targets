@@ -101,7 +101,10 @@ def _fabric_metadata(fabric_path: Path, id_col: str, buffer_deg: float) -> dict:
     sha256 = _sha256(fabric_path)
 
     # read only enough to get bbox and crs
-    gdf = gpd.read_file(fabric_path, rows=None)
+    if fabric_path.suffix.lower() == ".parquet":
+        gdf = gpd.read_parquet(fabric_path)
+    else:
+        gdf = gpd.read_file(fabric_path, rows=None)
     native_crs = gdf.crs.to_string() if gdf.crs else "unknown"
     hru_count = len(gdf)
 
