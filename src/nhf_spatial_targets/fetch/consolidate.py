@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -290,14 +291,83 @@ def consolidate_nldas(
     }
 
 
+def _time_from_modis_filename(path: Path) -> pd.Timestamp:
+    """Extract a timestamp from a MODIS ``AYYYYDDD`` filename pattern."""
+    m = re.search(r"\.A(\d{4})(\d{3})\.", path.name)
+    if not m:
+        raise ValueError(f"Cannot extract date from MODIS filename: {path.name}")
+    year, doy = int(m.group(1)), int(m.group(2))
+    return pd.Timestamp(year=year, month=1, day=1) + pd.Timedelta(days=doy - 1)
+
+
 def consolidate_mod10c1(
     run_dir: Path,
     source_key: str,
     variables: list[str],
     year: int,
 ) -> dict:
-    """Merge daily MOD10C1 CONUS subsets for a single year into one NetCDF."""
-    raise NotImplementedError("consolidate_mod10c1 not yet implemented")
+    """Merge daily MOD10C1 CONUS subsets for a single year into one NetCDF.
+
+    Parameters
+    ----------
+    run_dir : Path
+        Run workspace directory.
+    source_key : str
+        Source key (e.g. ``"mod10c1_v061"``).
+    variables : list[str]
+        Variable names to include.
+    year : int
+        Year to consolidate.
+
+    Returns
+    -------
+    dict
+        Provenance record.
+    """
+    source_dir = run_dir / "data" / "raw" / source_key
+    year_pattern = re.compile(rf"\.A{year}\d{{3}}\.")
+    nc_files = sorted(
+        f for f in source_dir.glob("*.conus.nc") if year_pattern.search(f.name)
+    )
+
+    if not nc_files:
+        raise FileNotFoundError(
+            f"No .conus.nc files for year {year} found in {source_dir}. "
+            f"Run 'nhf-targets fetch {source_key.replace('_', '-')}' first."
+        )
+
+    logger.info(
+        "Merging %d MOD10C1 files for %s year %d", len(nc_files), source_key, year
+    )
+
+    datasets = _open_datasets(nc_files, f"Reading {source_key} {year} files")
+    datasets = [
+        ds.expand_dims(time=[_time_from_modis_filename(f)])
+        for ds, f in zip(datasets, nc_files)
+    ]
+
+    try:
+        ds_merged = xr.concat(
+            datasets, dim="time", data_vars="minimal", coords="minimal"
+        )
+        ds_merged = ds_merged.sortby("time")
+        _validate_variables(ds_merged, variables)
+        ds_merged = ds_merged[variables]
+
+        out_path = source_dir / f"{source_key}_{year}_consolidated.nc"
+        logger.info("Writing consolidated file: %s", out_path)
+        _write_netcdf(ds_merged, out_path)
+        logger.info("Wrote %s", out_path)
+    finally:
+        for d in datasets:
+            d.close()
+
+    return {
+        "consolidated_nc": str(out_path.relative_to(run_dir)),
+        "last_consolidated_utc": datetime.now(timezone.utc).isoformat(),
+        "n_files": len(nc_files),
+        "variables": variables,
+    }
 
 
 def consolidate_mod16a2(
