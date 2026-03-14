@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -444,6 +445,70 @@ def _mosaic_and_reproject_timestep(
             a.close()
 
     return reprojected
+
+
+def consolidate_mod16a2_timestep(
+    tile_paths: list[Path],
+    variables: list[str],
+    source_dir: Path,
+    ydoy: str,
+    resolution: float = 0.04,
+) -> Path:
+    """Mosaic and reproject tiles for one timestep, write to a temp NetCDF.
+
+    Parameters
+    ----------
+    tile_paths : list[Path]
+        HDF tile files for a single MODIS timestep.
+    variables : list[str]
+        Variable names to extract.
+    source_dir : Path
+        Directory to write the temp file into.
+    ydoy : str
+        Seven-digit YYYYDDD token (e.g. "2010001").
+    resolution : float
+        Output resolution in degrees (default 0.04).
+
+    Returns
+    -------
+    Path
+        Path to the written temp NetCDF file.
+    """
+    timestamp = _time_from_modis_filename(tile_paths[0])
+
+    var_arrays: dict[str, xr.DataArray] = {}
+    for var in variables:
+        da = _mosaic_and_reproject_timestep(tile_paths, var, resolution)
+        if "band" in da.dims:
+            da = da.squeeze("band", drop=True)
+        rename_map = {}
+        if "y" in da.dims:
+            rename_map["y"] = "lat"
+        if "x" in da.dims:
+            rename_map["x"] = "lon"
+        if rename_map:
+            da = da.rename(rename_map)
+        var_arrays[var] = da
+
+    ds_step = xr.Dataset(var_arrays)
+    ds_step = ds_step.expand_dims(time=[timestamp])
+
+    tmp_path = source_dir / f"_tmp_{os.getpid()}_A{ydoy}.nc"
+    try:
+        ds_step.to_netcdf(tmp_path)
+    except Exception as exc:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise RuntimeError(
+            f"Failed to write temp file for timestep A{ydoy}. Detail: {exc}"
+        ) from exc
+    finally:
+        ds_step.close()
+        for da in var_arrays.values():
+            da.close()
+
+    logger.info("Wrote temp file: %s", tmp_path.name)
+    return tmp_path
 
 
 def consolidate_mod16a2(

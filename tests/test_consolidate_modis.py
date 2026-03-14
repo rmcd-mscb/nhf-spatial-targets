@@ -12,6 +12,8 @@ import xarray as xr
 from rasterio.crs import CRS
 from rasterio.transform import from_bounds
 
+from unittest.mock import patch as _patch
+
 from nhf_spatial_targets.fetch.consolidate import _time_from_modis_filename
 
 
@@ -415,6 +417,54 @@ def test_consolidate_mod16a2_overwrites_existing(mod16a2_run_dir: Path) -> None:
     assert result1["consolidated_nc"] == result2["consolidated_nc"]
     out_path = mod16a2_run_dir / result2["consolidated_nc"]
     assert out_path.exists()
+
+
+def _make_fake_mosaic(tile_paths, variable, resolution=0.04):
+    """Return a synthetic DataArray mimicking _mosaic_and_reproject_timestep."""
+    lat = np.linspace(25.0, 50.0, 4)
+    lon = np.linspace(-125.0, -65.0, 6)
+    data = np.random.rand(1, len(lat), len(lon)).astype(np.float32)
+    da = xr.DataArray(data, dims=["band", "y", "x"])
+    return da
+
+
+def test_consolidate_mod16a2_timestep_writes_temp(mod16a2_run_dir: Path) -> None:
+    """consolidate_mod16a2_timestep writes a temp NetCDF and returns its path."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_mod16a2_timestep
+
+    source_key = "mod16a2_v061"
+    source_dir = mod16a2_run_dir / "data" / "raw" / source_key
+
+    # Collect DOY 001 tiles
+    tile_paths = sorted(source_dir.glob("MOD16A2GF.A2010001.*.hdf"))
+    assert len(tile_paths) == 2  # h08v04 and h09v04
+
+    with _patch(
+        "nhf_spatial_targets.fetch.consolidate._mosaic_and_reproject_timestep",
+        side_effect=_make_fake_mosaic,
+    ):
+        tmp_path = consolidate_mod16a2_timestep(
+            tile_paths=tile_paths,
+            variables=["ET_500m"],
+            source_dir=source_dir,
+            ydoy="2010001",
+        )
+
+    assert tmp_path.exists()
+    assert tmp_path.name.startswith("_tmp_")
+    assert "A2010001" in tmp_path.name
+    assert tmp_path.suffix == ".nc"
+
+    ds = xr.open_dataset(tmp_path)
+    assert "time" in ds.dims
+    assert len(ds.time) == 1
+    assert "ET_500m" in ds.data_vars
+    assert "lat" in ds.dims
+    assert "lon" in ds.dims
+    ds.close()
+
+    # Clean up
+    tmp_path.unlink()
 
 
 def test_log_memory_does_not_raise():
