@@ -20,6 +20,9 @@ from nhf_spatial_targets.fetch._period import years_in_period
 from nhf_spatial_targets.fetch.consolidate import (
     consolidate_mod10c1,
     consolidate_mod16a2,
+    consolidate_mod16a2_finalize,
+    consolidate_mod16a2_timestep,
+    log_memory,
 )
 
 logger = logging.getLogger(__name__)
@@ -263,9 +266,9 @@ _MOD16A2_SOURCE_KEY = "mod16a2_v061"
 def fetch_mod16a2(run_dir: Path, period: str) -> dict:
     """Download MOD16A2 AET granules for the given period.
 
+    Downloads and consolidates per-timestep to limit peak memory.
     Supports incremental download — years already recorded in
-    ``manifest.json`` are skipped. After downloading, runs per-year
-    consolidation and updates the manifest.
+    ``manifest.json`` are skipped.
 
     Parameters
     ----------
@@ -283,10 +286,12 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
     source_key = _MOD16A2_SOURCE_KEY
     meta = _catalog.source(source_key)
     short_name = meta["access"]["short_name"]
+    variables = meta["variables"]
 
     _check_superseded(meta, source_key)
     earthdata_login(run_dir)
     logger.info("Authenticated with NASA Earthdata")
+    log_memory("after authentication")
 
     bbox = _read_fabric_bbox(run_dir)
     bbox_t = _bbox_tuple(bbox)
@@ -298,6 +303,8 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
 
     output_dir = run_dir / "data" / "raw" / source_key
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    consolidated_ncs: dict[str, str] = {}
 
     if not needed:
         logger.info(
@@ -320,6 +327,7 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
                 short_name,
                 year,
             )
+            log_memory(f"after search for year {year} ({len(granules)} granules)")
 
             if not granules:
                 raise ValueError(
@@ -327,36 +335,78 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
                     f"bbox={bbox_t}, temporal={temporal}"
                 )
 
-            downloaded = earthaccess.download(
-                granules,
-                local_path=str(output_dir),
-            )
+            # Group granules by timestep for batched download
+            ts_groups = _group_granules_by_timestep(granules)
+            sorted_ydoys = sorted(ts_groups)
+            n_steps = len(sorted_ydoys)
+            logger.info("Grouped into %d timesteps for year %d", n_steps, year)
 
-            if not downloaded:
-                raise RuntimeError(
-                    f"earthaccess.download() returned no files for "
-                    f"{len(granules)} granules. Check network connectivity "
-                    f"and Earthdata credentials."
+            tmp_paths: list[Path] = []
+
+            for i, ydoy in enumerate(sorted_ydoys, 1):
+                batch = ts_groups[ydoy]
+                logger.info(
+                    "Downloading timestep %d/%d (A%s): %d granules",
+                    i,
+                    n_steps,
+                    ydoy,
+                    len(batch),
                 )
-            if len(downloaded) < len(granules):
-                logger.warning(
-                    "Partial download: got %d of %d granules for year %d. "
-                    "Consolidation will proceed with available files only.",
-                    len(downloaded),
-                    len(granules),
-                    year,
+
+                downloaded = earthaccess.download(
+                    batch,
+                    local_path=str(output_dir),
                 )
-            logger.info(
-                "Downloaded %d files for year %d to %s",
-                len(downloaded),
-                year,
-                output_dir,
+
+                if not downloaded:
+                    raise RuntimeError(
+                        f"earthaccess.download() returned no files for "
+                        f"timestep A{ydoy} ({len(batch)} granules). "
+                        f"Check network connectivity and Earthdata credentials."
+                    )
+                if len(downloaded) < len(batch):
+                    logger.warning(
+                        "Partial download for timestep A%s: got %d of %d granules.",
+                        ydoy,
+                        len(downloaded),
+                        len(batch),
+                    )
+
+                log_memory(f"after downloading timestep {i}/{n_steps} (A{ydoy})")
+
+                # Consolidate this timestep immediately
+                tile_paths = [Path(f) for f in downloaded]
+                tmp_path = consolidate_mod16a2_timestep(
+                    tile_paths=tile_paths,
+                    variables=variables,
+                    source_dir=output_dir,
+                    ydoy=ydoy,
+                )
+                tmp_paths.append(tmp_path)
+                log_memory(f"after consolidating timestep {i}/{n_steps} (A{ydoy})")
+
+            # Finalize: lazy-concat temp files into consolidated NetCDF
+            out_path = output_dir / f"{source_key}_{year}_consolidated.nc"
+            result = consolidate_mod16a2_finalize(
+                tmp_paths=tmp_paths,
+                variables=variables,
+                out_path=out_path,
+                run_dir=run_dir,
             )
+            consolidated_ncs[str(year)] = result["consolidated_nc"]
+            logger.info("Downloaded and consolidated year %d", year)
+
+    # Re-consolidate any years that were already downloaded but not yet
+    # consolidated in this run (e.g. prior download, no consolidated file)
+    all_hdf_files = sorted(output_dir.glob("*.hdf"))
+    years_on_disk = sorted({_year_from_path(p) for p in all_hdf_files})
+    for year in years_on_disk:
+        if str(year) not in consolidated_ncs:
+            logger.info("Re-consolidating %s year %d", source_key, year)
+            result = consolidate_mod16a2(run_dir, source_key, variables, year)
+            consolidated_ncs[str(year)] = result["consolidated_nc"]
 
     # Build file inventory from all .hdf files on disk
-    all_hdf_files = sorted(output_dir.glob("*.hdf"))
-
-    # Preserve original downloaded_utc for files already in manifest
     existing_timestamps = _existing_file_timestamps(run_dir, source_key)
     now_utc = datetime.now(timezone.utc).isoformat()
 
@@ -372,15 +422,6 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
                 "downloaded_utc": existing_timestamps.get(yr, now_utc),
             }
         )
-
-    # Per-year consolidation
-    variables = meta["variables"]
-    consolidated_ncs: dict[str, str] = {}
-    years_on_disk = sorted({f["year"] for f in files})
-    for year in years_on_disk:
-        logger.info("Consolidating %s year %d", source_key, year)
-        result = consolidate_mod16a2(run_dir, source_key, variables, year)
-        consolidated_ncs[str(year)] = result["consolidated_nc"]
 
     # Compute effective period from actual files on disk
     if years_on_disk:
