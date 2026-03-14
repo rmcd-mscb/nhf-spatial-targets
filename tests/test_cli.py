@@ -274,6 +274,72 @@ def test_fetch_ncep_ncar_calls_fetch(mock_fetch, tmp_path):
     mock_fetch.assert_called_once()
 
 
+# ---- fetch mod16a2 command -------------------------------------------------
+
+
+def test_fetch_mod16a2_nonexistent_run_dir(capsys):
+    """mod16a2 fetch fails with nonexistent --run-dir."""
+    with pytest.raises(SystemExit):
+        _run(
+            "fetch",
+            "mod16a2",
+            "--run-dir",
+            "/no/such/dir",
+            "--period",
+            "2005/2005",
+        )
+
+
+@patch("nhf_spatial_targets.fetch.modis.fetch_mod16a2")
+def test_fetch_mod16a2_calls_fetch(mock_fetch, tmp_path):
+    """CLI wires --run-dir and --period to fetch_mod16a2()."""
+    mock_fetch.return_value = {"files": [], "consolidated_ncs": {}}
+    run_dir = tmp_path / "workspace"
+    run_dir.mkdir()
+    _run(
+        "fetch",
+        "mod16a2",
+        "--run-dir",
+        str(run_dir),
+        "--period",
+        "2005/2005",
+    )
+    mock_fetch.assert_called_once_with(run_dir=run_dir, period="2005/2005")
+
+
+# ---- fetch mod10c1 command -------------------------------------------------
+
+
+def test_fetch_mod10c1_nonexistent_run_dir(capsys):
+    """mod10c1 fetch fails with nonexistent --run-dir."""
+    with pytest.raises(SystemExit):
+        _run(
+            "fetch",
+            "mod10c1",
+            "--run-dir",
+            "/no/such/dir",
+            "--period",
+            "2005/2005",
+        )
+
+
+@patch("nhf_spatial_targets.fetch.modis.fetch_mod10c1")
+def test_fetch_mod10c1_calls_fetch(mock_fetch, tmp_path):
+    """CLI wires --run-dir and --period to fetch_mod10c1()."""
+    mock_fetch.return_value = {"files": [], "consolidated_ncs": {}}
+    run_dir = tmp_path / "workspace"
+    run_dir.mkdir()
+    _run(
+        "fetch",
+        "mod10c1",
+        "--run-dir",
+        str(run_dir),
+        "--period",
+        "2005/2005",
+    )
+    mock_fetch.assert_called_once_with(run_dir=run_dir, period="2005/2005")
+
+
 # ---- catalog commands ------------------------------------------------------
 
 
