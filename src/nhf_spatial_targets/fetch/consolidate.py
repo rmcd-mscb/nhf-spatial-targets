@@ -476,24 +476,26 @@ def _mosaic_and_reproject_timestep(
         else:
             mosaic = merge_arrays(arrays)
 
+        # Build a deterministic output grid from bbox + resolution so that
+        # every timestep produces identical lon/lat coordinates regardless
+        # of which tiles are present.
+        minx, miny, maxx, maxy = bbox
+        dst_width = int(np.ceil((maxx - minx) / resolution))
+        dst_height = int(np.ceil((maxy - miny) / resolution))
+        from rasterio.transform import from_bounds as _from_bounds
+
+        dst_transform = _from_bounds(minx, miny, maxx, maxy, dst_width, dst_height)
+
         reprojected = mosaic.rio.reproject(
             "EPSG:4326",
-            resolution=resolution,
+            shape=(dst_height, dst_width),
+            transform=dst_transform,
             resampling=resampling,
         )
 
-        # Clip to bbox in the output CRS (EPSG:4326).
-        minx, miny, maxx, maxy = bbox
-        clipped = reprojected.rio.clip_box(
-            minx=minx,
-            miny=miny,
-            maxx=maxx,
-            maxy=maxy,
-            crs="EPSG:4326",
-        )
-
-        # Load into memory and return — caller owns the result.
-        result_da = clipped.load()
+        # Load into memory as float32 (MODIS source is int16; float64
+        # is unnecessary and doubles file size).
+        result_da = reprojected.load().astype(np.float32)
     except Exception as exc:
         raise RuntimeError(
             f"Failed to mosaic/reproject/clip {len(arrays)} tiles for "
@@ -586,8 +588,9 @@ def consolidate_mod16a2_finalize(
     variables: list[str],
     out_path: Path,
     run_dir: Path,
+    keep_tmp: bool = False,
 ) -> dict:
-    """Lazy-concat per-timestep temp files into the final consolidated NetCDF.
+    """Concat per-timestep temp files into the final consolidated NetCDF.
 
     Parameters
     ----------
@@ -599,6 +602,9 @@ def consolidate_mod16a2_finalize(
         Path for the final consolidated file.
     run_dir : Path
         Run workspace root (for computing relative paths in provenance).
+    keep_tmp : bool
+        If True, do not delete temp files after writing the consolidated
+        file.  Useful for debugging coordinate alignment issues.
 
     Returns
     -------
@@ -629,27 +635,41 @@ def consolidate_mod16a2_finalize(
             concat_dim="time",
             chunks={},
             data_vars="all",
-            join="outer",
+            join="override",
         )
         try:
             ds = ds.sortby("time")
             _validate_variables(ds, variables)
-            ds = ds[variables]
+            # Keep spatial_ref alongside the requested variables
+            keep = list(variables)
+            if "spatial_ref" in ds:
+                keep.append("spatial_ref")
+            ds = ds[keep]
+            # Restore grid_mapping attribute (open_mfdataset can drop it)
+            for var in variables:
+                if var in ds and "grid_mapping" not in ds[var].attrs:
+                    ds[var].attrs["grid_mapping"] = "spatial_ref"
             _write_netcdf(ds, out_path)
         finally:
             ds.close()
         logger.info("Wrote %s", out_path)
     except RuntimeError:
-        _cleanup_temps()
+        if not keep_tmp:
+            _cleanup_temps()
         raise
     except Exception as exc:
-        _cleanup_temps()
+        if not keep_tmp:
+            _cleanup_temps()
         raise RuntimeError(
             f"Failed to finalize consolidated file {out_path}. "
-            f"Temp files cleaned up. Detail: {exc}"
+            f"{'Temp files cleaned up. ' if not keep_tmp else ''}"
+            f"Detail: {exc}"
         ) from exc
 
-    _cleanup_temps()
+    if not keep_tmp:
+        _cleanup_temps()
+    else:
+        logger.info("Keeping %d temp files for inspection", len(tmp_paths))
     log_memory(f"after writing {out_path.name}")
 
     return {

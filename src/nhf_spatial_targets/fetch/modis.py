@@ -499,6 +499,7 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
                     variables=variables,
                     out_path=out_path,
                     run_dir=run_dir,
+                    keep_tmp=False,
                 )
                 consolidated_ncs[str(year)] = result["consolidated_nc"]
                 logger.info("Downloaded and consolidated year %d", year)
