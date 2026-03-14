@@ -1,4 +1,4 @@
-"""Tests for MOD10C1 consolidation."""
+"""Tests for MODIS consolidation (MOD10C1 and MOD16A2)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import rioxarray  # noqa: F401
 import xarray as xr
+from rasterio.crs import CRS
+from rasterio.transform import from_bounds
 
 from nhf_spatial_targets.fetch.consolidate import _time_from_modis_filename
 
@@ -183,3 +186,98 @@ def test_consolidate_mod10c1_filters_year(mod10c1_run_dir: Path) -> None:
     ds_out = xr.open_dataset(out_path)
     assert len(ds_out.time) == 3
     ds_out.close()
+
+
+# ---------------------------------------------------------------------------
+# MOD16A2 consolidation tests
+# ---------------------------------------------------------------------------
+
+
+def _make_sinusoidal_tile(path: Path, h: int, v: int, value: int = 42) -> None:
+    """Write a small sinusoidal-projected GeoTIFF (with .hdf extension)."""
+    srs = CRS.from_proj4(
+        "+proj=sinu +lon_0=0 +x_0=0 +y_0=0 +R=6371007.181 +units=m +no_defs"
+    )
+    nx, ny = 4, 4
+    x0 = -10_000_000 + h * 200_000
+    y0 = 6_000_000 - v * 200_000
+    res = 500.0
+    transform = from_bounds(x0, y0 - ny * res, x0 + nx * res, y0, nx, ny)
+    data = np.full((1, ny, nx), value, dtype=np.int16)
+    da = xr.DataArray(data, dims=["band", "y", "x"], coords={"band": [1]})
+    da.rio.write_crs(srs, inplace=True)
+    da.rio.write_transform(transform, inplace=True)
+    da.rio.write_nodata(-1, inplace=True)
+    da.rio.to_raster(path, driver="GTiff")
+
+
+@pytest.fixture()
+def mod16a2_run_dir(tmp_path):
+    """Create a run workspace with 2 timesteps × 2 tiles of synthetic HDF files."""
+    rd = tmp_path / "run"
+    rd.mkdir()
+    source_dir = rd / "data" / "raw" / "mod16a2_v061"
+    source_dir.mkdir(parents=True)
+    for doy in [1, 9]:
+        for h, v in [(8, 4), (9, 4)]:
+            fname = f"MOD16A2GF.A2010{doy:03d}.h{h:02d}v{v:02d}.061.2020256154955.hdf"
+            _make_sinusoidal_tile(source_dir / fname, h, v, value=doy * 10)
+    return rd
+
+
+def test_consolidate_mod16a2_no_files(tmp_path: Path) -> None:
+    """FileNotFoundError raised for empty directory."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_mod16a2
+
+    source_key = "mod16a2_v061"
+    (tmp_path / "data" / "raw" / source_key).mkdir(parents=True)
+
+    with pytest.raises(FileNotFoundError, match="No .hdf files"):
+        consolidate_mod16a2(
+            run_dir=tmp_path,
+            source_key=source_key,
+            variables=["ET_500m"],
+            year=2010,
+        )
+
+
+def test_consolidate_mod16a2_synthetic(mod16a2_run_dir: Path) -> None:
+    """Full pipeline: mosaic, reproject, stack along time."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_mod16a2
+
+    source_key = "mod16a2_v061"
+    variables = ["ET_500m"]
+
+    result = consolidate_mod16a2(
+        run_dir=mod16a2_run_dir,
+        source_key=source_key,
+        variables=variables,
+        year=2010,
+    )
+
+    out_path = mod16a2_run_dir / result["consolidated_nc"]
+    assert out_path.exists()
+
+    ds = xr.open_dataset(out_path)
+
+    # Should have 2 time steps (DOY 1 and DOY 9)
+    assert "time" in ds.dims
+    assert len(ds.time) == 2
+
+    # Should have lat/lon coordinates in EPSG:4326
+    assert "lat" in ds.dims or "lat" in ds.coords
+    assert "lon" in ds.dims or "lon" in ds.coords
+
+    # Variable is present
+    assert "ET_500m" in ds.data_vars
+
+    ds.close()
+
+    # Provenance checks
+    assert result["n_files"] == 4
+    assert result["variables"] == variables
+    assert "last_consolidated_utc" in result
+    assert (
+        result["consolidated_nc"]
+        == f"data/raw/{source_key}/{source_key}_2010_consolidated.nc"
+    )
