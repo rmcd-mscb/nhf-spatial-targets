@@ -414,16 +414,21 @@ def _mosaic_and_reproject_timestep(
     arrays = []
     for p in tile_paths:
         try:
-            da = rioxarray.open_rasterio(p, variable=variable, masked=True)
+            result = rioxarray.open_rasterio(p, variable=variable, masked=True)
         except TypeError:
             logger.warning(
                 "variable= kwarg not supported for %s; "
                 "opening without subdataset selection",
                 p.name,
             )
-            da = rioxarray.open_rasterio(p, masked=True)
-        if isinstance(da, list):
-            da = da[0]
+            result = rioxarray.open_rasterio(p, masked=True)
+        # open_rasterio may return Dataset (HDF4), list, or DataArray
+        if isinstance(result, xr.Dataset):
+            da = result[variable]
+        elif isinstance(result, list):
+            da = result[0]
+        else:
+            da = result
         arrays.append(da)
 
     if "QC" in variable or "qa" in variable.lower():
@@ -432,12 +437,6 @@ def _mosaic_and_reproject_timestep(
         resampling = Resampling.average
 
     try:
-        # Ensure (band, y, x) dim order required by rioxarray
-        arrays = [
-            a.transpose("band", "y", "x") if set(a.dims) >= {"band", "y", "x"} else a
-            for a in arrays
-        ]
-
         if len(arrays) == 1:
             mosaic = arrays[0]
         else:
