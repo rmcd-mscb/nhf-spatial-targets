@@ -30,6 +30,40 @@ logger = logging.getLogger(__name__)
 #   MOD10C1.A2010032.061.2020345123456.hdf
 #   MOD16A2GF.A2010001.h08v04.061.conus.nc
 _MODIS_YEAR_RE = re.compile(r"\.A(\d{4})\d{3}\.")
+_MODIS_YDOY_RE = re.compile(r"\.A(\d{7})\.")
+
+
+def _group_granules_by_timestep(
+    granules: list,
+) -> dict[str, list]:
+    """Group earthaccess granules by AYYYYDDD token.
+
+    Parameters
+    ----------
+    granules : list
+        earthaccess granule objects. Each must have a ``data_links()``
+        method returning URLs that contain the MODIS filename.
+
+    Returns
+    -------
+    dict[str, list]
+        Mapping from YYYYDDD token to list of granules.
+    """
+    from collections import defaultdict
+
+    groups: dict[str, list] = defaultdict(list)
+    for g in granules:
+        links = g.data_links()
+        if not links:
+            logger.warning("Granule %s has no data links, skipping", g)
+            continue
+        filename = links[0].split("/")[-1]
+        m = _MODIS_YDOY_RE.search(filename)
+        if not m:
+            logger.warning("Cannot extract AYYYYDDD from granule URL: %s", links[0])
+            continue
+        groups[m.group(1)].append(g)
+    return dict(groups)
 
 
 # ---------------------------------------------------------------------------

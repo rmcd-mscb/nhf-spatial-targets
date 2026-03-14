@@ -496,3 +496,25 @@ def test_mod10c1_subset_called(
     fetch_mod10c1(run_dir=run_dir, period="2005/2005")
 
     assert mock_subset.call_count == n_files
+
+
+# ---- Granule grouping by timestep -----------------------------------------
+
+
+def test_group_granules_by_timestep():
+    """Granules are grouped by AYYYYDDD token."""
+    from nhf_spatial_targets.fetch.modis import _group_granules_by_timestep
+
+    granules = []
+    for doy in [1, 1, 9, 9, 9]:
+        g = _mock_granule(f"MOD16A2GF.A2010{doy:03d}.h08v04.061.2020256154955.hdf")
+        g.data_links.return_value = [
+            f"https://example.com/MOD16A2GF.A2010{doy:03d}.h08v04.061.2020256154955.hdf"
+        ]
+        granules.append(g)
+
+    groups = _group_granules_by_timestep(granules)
+
+    assert sorted(groups.keys()) == ["2010001", "2010009"]
+    assert len(groups["2010001"]) == 2
+    assert len(groups["2010009"]) == 3
