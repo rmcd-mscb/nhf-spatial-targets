@@ -18,6 +18,28 @@ from nhf_spatial_targets import __version__
 logger = logging.getLogger(__name__)
 
 
+def log_memory(label: str) -> None:
+    """Log current RSS from /proc/self/status (Linux) or peak RSS as fallback."""
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    rss_kb = int(line.split()[1])
+                    rss_gib = rss_kb / (1024**2)
+                    logger.info("[memory] RSS=%.2f GiB — %s", rss_gib, label)
+                    return
+    except OSError:
+        pass
+    try:
+        import resource
+
+        peak_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        peak_gib = peak_kb / (1024**2)
+        logger.info("[memory] peak RSS=%.2f GiB — %s", peak_gib, label)
+    except (ImportError, OSError):
+        logger.debug("[memory] cannot read RSS on this platform — %s", label)
+
+
 def open_consolidated(nc_path: Path) -> xr.Dataset:
     """Open a consolidated NetCDF file produced by a ``consolidate_*`` function.
 

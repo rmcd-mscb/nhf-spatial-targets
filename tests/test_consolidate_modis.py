@@ -415,3 +415,11 @@ def test_consolidate_mod16a2_overwrites_existing(mod16a2_run_dir: Path) -> None:
     assert result1["consolidated_nc"] == result2["consolidated_nc"]
     out_path = mod16a2_run_dir / result2["consolidated_nc"]
     assert out_path.exists()
+
+
+def test_log_memory_does_not_raise():
+    """log_memory runs without error on any platform."""
+    from nhf_spatial_targets.fetch.consolidate import log_memory
+
+    # Should not raise regardless of platform
+    log_memory("test checkpoint")
