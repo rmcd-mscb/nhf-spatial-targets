@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 def log_memory(label: str) -> None:
-    """Log current RSS from /proc/self/status (Linux) or peak RSS as fallback.
+    """Log current RSS (Linux /proc) or peak RSS (resource module fallback).
 
     On macOS the ``resource`` fallback adjusts for bytes-valued ``ru_maxrss``.
     This function never raises — all errors are caught and logged.
@@ -439,7 +439,15 @@ def _mosaic_and_reproject_timestep(
     for p in tile_paths:
         try:
             result = rioxarray.open_rasterio(p, variable=variable, masked=True)
-        except TypeError:
+        except TypeError as exc:
+            if "variable" not in str(exc) and "unexpected keyword" not in str(exc):
+                raise  # Re-raise TypeErrors unrelated to the variable= kwarg
+            logger.warning(
+                "variable= kwarg not supported for %s; "
+                "opening without subdataset selection: %s",
+                p.name,
+                exc,
+            )
             result = rioxarray.open_rasterio(p, masked=True)
         # open_rasterio may return Dataset (HDF4), list, or DataArray.
         # Load eagerly to detach from rasterio/GDAL file handles.
@@ -447,6 +455,13 @@ def _mosaic_and_reproject_timestep(
             da = result[variable].load()
             result.close()
         elif isinstance(result, list):
+            if len(result) > 1:
+                logger.warning(
+                    "open_rasterio returned %d subdatasets for %s; "
+                    "using first subdataset only",
+                    len(result),
+                    p.name,
+                )
             da = result[0].load()
             for item in result:
                 item.close()
@@ -467,7 +482,7 @@ def _mosaic_and_reproject_timestep(
             resampling=resampling,
         )
 
-        # Clip to fabric bbox in the output CRS (EPSG:4326).
+        # Clip to bbox in the output CRS (EPSG:4326).
         minx, miny, maxx, maxy = bbox
         clipped = reprojected.rio.clip_box(
             minx=minx,
@@ -597,6 +612,12 @@ def consolidate_mod16a2_finalize(
                 p.unlink()
                 logger.debug("Removed temp file: %s", p.name)
 
+    if not tmp_paths:
+        raise ValueError(
+            "No temp files to finalize. This indicates no timesteps were "
+            "successfully processed. Check earlier log messages for errors."
+        )
+
     logger.info(
         "Writing final consolidated file from %d timestep files", len(tmp_paths)
     )
@@ -618,6 +639,9 @@ def consolidate_mod16a2_finalize(
         finally:
             ds.close()
         logger.info("Wrote %s", out_path)
+    except RuntimeError:
+        _cleanup_temps()
+        raise
     except Exception as exc:
         _cleanup_temps()
         raise RuntimeError(
@@ -686,8 +710,11 @@ def consolidate_mod16a2(
 
     # Clean up any stale temp files from prior interrupted runs
     for stale in source_dir.glob("_tmp_*_*.nc"):
-        logger.warning("Removing stale temp file: %s", stale.name)
-        stale.unlink()
+        try:
+            stale.unlink()
+            logger.warning("Removed stale temp file: %s", stale.name)
+        except OSError as exc:
+            logger.warning("Could not remove stale temp file %s: %s", stale.name, exc)
 
     # Group tiles by timestep (AYYYYDDD token)
     timestep_groups: dict[str, list[Path]] = defaultdict(list)

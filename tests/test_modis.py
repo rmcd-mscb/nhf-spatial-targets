@@ -568,3 +568,146 @@ def test_group_granules_by_timestep():
     assert sorted(groups.keys()) == ["2010001", "2010009"]
     assert len(groups["2010001"]) == 2
     assert len(groups["2010009"]) == 3
+
+
+def test_group_granules_by_timestep_empty_data_links():
+    """Granules with empty data_links are dropped."""
+    from nhf_spatial_targets.fetch.modis import _group_granules_by_timestep
+
+    g = _mock_granule("MOD16A2GF.A2010001.h08v04.061.hdf")
+    g.data_links.return_value = []
+
+    groups = _group_granules_by_timestep([g])
+    assert groups == {}
+
+
+def test_group_granules_by_timestep_unparseable_filename():
+    """Granules with unparseable filenames are dropped."""
+    from nhf_spatial_targets.fetch.modis import _group_granules_by_timestep
+
+    g = _mock_granule("not_a_modis_file.hdf")
+    g.data_links.return_value = ["https://example.com/not_a_modis_file.hdf"]
+
+    groups = _group_granules_by_timestep([g])
+    assert groups == {}
+
+
+# ---- Granule bbox filtering -------------------------------------------------
+
+
+def _make_umm_granule(
+    name: str,
+    west: float,
+    south: float,
+    east: float,
+    north: float,
+) -> dict:
+    """Create a dict mimicking an earthaccess granule with UMM spatial metadata."""
+    return {
+        "umm": {
+            "SpatialExtent": {
+                "HorizontalSpatialDomain": {
+                    "Geometry": {
+                        "BoundingRectangles": [
+                            {
+                                "WestBoundingCoordinate": west,
+                                "EastBoundingCoordinate": east,
+                                "SouthBoundingCoordinate": south,
+                                "NorthBoundingCoordinate": north,
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+    }
+
+
+def test_granule_overlaps_bbox_inside():
+    """Granule fully inside bbox returns True."""
+    from nhf_spatial_targets.fetch.modis import _granule_overlaps_bbox
+
+    g = _make_umm_granule("tile", west=-110, south=30, east=-100, north=40)
+    assert _granule_overlaps_bbox(g, (-130, 20, -60, 55)) is True
+
+
+def test_granule_overlaps_bbox_outside():
+    """Granule fully outside bbox returns False."""
+    from nhf_spatial_targets.fetch.modis import _granule_overlaps_bbox
+
+    # Iceland tile — outside CONUS
+    g = _make_umm_granule("tile", west=-25, south=63, east=-13, north=66)
+    assert _granule_overlaps_bbox(g, (-130, 20, -60, 55)) is False
+
+
+def test_granule_overlaps_bbox_partial():
+    """Granule partially overlapping bbox returns True."""
+    from nhf_spatial_targets.fetch.modis import _granule_overlaps_bbox
+
+    # Overlaps western edge
+    g = _make_umm_granule("tile", west=-140, south=30, east=-120, north=40)
+    assert _granule_overlaps_bbox(g, (-130, 20, -60, 55)) is True
+
+
+def test_granule_overlaps_bbox_edge_touching():
+    """Granule touching bbox edge returns True."""
+    from nhf_spatial_targets.fetch.modis import _granule_overlaps_bbox
+
+    # East edge of granule == west edge of bbox
+    g = _make_umm_granule("tile", west=-140, south=30, east=-130, north=40)
+    assert _granule_overlaps_bbox(g, (-130, 20, -60, 55)) is True
+
+
+def test_granule_overlaps_bbox_missing_metadata():
+    """Granule with no UMM metadata returns True (fail-open)."""
+    from nhf_spatial_targets.fetch.modis import _granule_overlaps_bbox
+
+    assert _granule_overlaps_bbox({}, (-130, 20, -60, 55)) is True
+
+
+def test_granule_overlaps_bbox_non_list_rects():
+    """Granule with non-list BoundingRectangles returns True (fail-open)."""
+    from nhf_spatial_targets.fetch.modis import _granule_overlaps_bbox
+
+    # MagicMock-like object — BoundingRectangles is not a list
+    g = {
+        "umm": {
+            "SpatialExtent": {
+                "HorizontalSpatialDomain": {
+                    "Geometry": {"BoundingRectangles": "not-a-list"}
+                }
+            }
+        }
+    }
+    assert _granule_overlaps_bbox(g, (-130, 20, -60, 55)) is True
+
+
+def test_granule_overlaps_bbox_missing_coord_keys():
+    """Granule with incomplete bounding rect returns True (fail-open)."""
+    from nhf_spatial_targets.fetch.modis import _granule_overlaps_bbox
+
+    g = {
+        "umm": {
+            "SpatialExtent": {
+                "HorizontalSpatialDomain": {
+                    "Geometry": {
+                        "BoundingRectangles": [{"WestBoundingCoordinate": -110}]
+                    }
+                }
+            }
+        }
+    }
+    assert _granule_overlaps_bbox(g, (-130, 20, -60, 55)) is True
+
+
+def test_filter_granules_by_bbox():
+    """Filter keeps overlapping granules and drops non-overlapping ones."""
+    from nhf_spatial_targets.fetch.modis import _filter_granules_by_bbox
+
+    conus = _make_umm_granule("conus", west=-110, south=30, east=-100, north=40)
+    iceland = _make_umm_granule("iceland", west=-25, south=63, east=-13, north=66)
+    bbox = (-130, 20, -60, 55)
+
+    result = _filter_granules_by_bbox([conus, iceland], bbox)
+    assert len(result) == 1
+    assert result[0] is conus

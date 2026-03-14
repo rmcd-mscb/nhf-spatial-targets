@@ -556,6 +556,54 @@ def test_consolidate_mod16a2_finalize_cleans_on_failure(tmp_path: Path) -> None:
     assert not bad_tmp.exists()
 
 
+def test_consolidate_mod16a2_finalize_empty_raises(tmp_path: Path) -> None:
+    """ValueError raised when tmp_paths is empty."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_mod16a2_finalize
+
+    out_path = tmp_path / "consolidated.nc"
+    with pytest.raises(ValueError, match="No temp files to finalize"):
+        consolidate_mod16a2_finalize(
+            tmp_paths=[],
+            variables=["ET_500m"],
+            out_path=out_path,
+            run_dir=tmp_path,
+        )
+
+
+def test_consolidate_mod16a2_bbox_clips_output(mod16a2_run_dir: Path) -> None:
+    """Output grid is clipped to the bbox, not the full reprojected extent."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_mod16a2
+
+    source_key = "mod16a2_v061"
+
+    # Use a tight bbox that is smaller than the tiles' reprojected footprint
+    tight_bbox = (-112.0, 46.0, -108.0, 48.0)
+
+    result = consolidate_mod16a2(
+        run_dir=mod16a2_run_dir,
+        source_key=source_key,
+        variables=["ET_500m"],
+        year=2010,
+        bbox=tight_bbox,
+    )
+
+    out_path = mod16a2_run_dir / result["consolidated_nc"]
+    ds = xr.open_dataset(out_path)
+
+    # Verify the spatial extent is bounded by the tight bbox
+    lons = ds.lon.values
+    lats = ds.lat.values
+    assert lons.min() >= tight_bbox[0] - 0.04  # allow one pixel tolerance
+    assert lons.max() <= tight_bbox[2] + 0.04
+    assert lats.min() >= tight_bbox[1] - 0.04
+    assert lats.max() <= tight_bbox[3] + 0.04
+
+    # Grid should be much smaller than a global grid
+    assert ds.sizes["lon"] < 200
+    assert ds.sizes["lat"] < 200
+    ds.close()
+
+
 def test_log_memory_does_not_raise():
     """log_memory runs without error on any platform."""
     from nhf_spatial_targets.fetch.consolidate import log_memory

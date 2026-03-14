@@ -61,9 +61,11 @@ def _granule_overlaps_bbox(
             "BoundingRectangles"
         ]
         if not isinstance(rects, list):
-            return True  # fail-open: unrecognised metadata shape
+            logger.debug("Granule has non-list BoundingRectangles, keeping (fail-open)")
+            return True
     except (KeyError, TypeError):
-        return True  # fail-open: keep granule if metadata is missing
+        logger.debug("Granule missing spatial metadata, keeping (fail-open)")
+        return True
 
     minx, miny, maxx, maxy = bbox
     for r in rects:
@@ -73,8 +75,8 @@ def _granule_overlaps_bbox(
             gs = r["SouthBoundingCoordinate"]
             gn = r["NorthBoundingCoordinate"]
         except (KeyError, TypeError):
-            return True  # fail-open
-        # Standard rectangle overlap test
+            logger.debug("Granule has incomplete bounding rect, keeping (fail-open)")
+            return True
         if gw <= maxx and ge >= minx and gs <= maxy and gn >= miny:
             return True
     return False
@@ -389,14 +391,17 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
 
     # Clean up stale temp files from prior interrupted runs
     for stale in output_dir.glob("_tmp_*_*.nc"):
-        logger.warning("Removing stale temp file: %s", stale.name)
-        stale.unlink()
+        try:
+            stale.unlink()
+            logger.warning("Removed stale temp file: %s", stale.name)
+        except OSError as exc:
+            logger.warning("Could not remove stale temp file %s: %s", stale.name, exc)
 
     consolidated_ncs: dict[str, str] = {}
 
     if not needed:
         logger.info(
-            "All %d years already downloaded, skipping to consolidation",
+            "All %d years already downloaded; will check for missing consolidated files",
             len(all_years),
         )
     else:
@@ -429,6 +434,13 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
 
             # Group granules by timestep for batched download
             ts_groups = _group_granules_by_timestep(granules)
+            if not ts_groups:
+                raise RuntimeError(
+                    f"No granules could be grouped by timestep for "
+                    f"{short_name} year {year}. This usually means granule "
+                    f"URLs have changed format. Check earthaccess granule "
+                    f"metadata for the {len(granules)} granules returned."
+                )
             sorted_ydoys = sorted(ts_groups)
             n_steps = len(sorted_ydoys)
             logger.info("Grouped into %d timesteps for year %d", n_steps, year)
