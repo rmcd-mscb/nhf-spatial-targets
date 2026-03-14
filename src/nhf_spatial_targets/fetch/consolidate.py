@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import logging
 import os
 import re
@@ -404,37 +405,55 @@ def consolidate_mod10c1(
 def _mosaic_and_reproject_timestep(
     tile_paths: list[Path],
     variable: str,
+    bbox: tuple[float, float, float, float],
     resolution: float = 0.04,
 ) -> xr.DataArray:
-    """Mosaic tiles for one variable/timestep, reproject to EPSG:4326."""
+    """Mosaic tiles for one variable/timestep, reproject to EPSG:4326, clip to bbox.
+
+    Parameters
+    ----------
+    tile_paths : list[Path]
+        HDF tile files (sinusoidal CRS) for a single timestep.
+    variable : str
+        Variable name to extract from each tile.
+    bbox : tuple
+        ``(minx, miny, maxx, maxy)`` in EPSG:4326 degrees.
+    resolution : float
+        Output resolution in degrees (default 0.04).
+
+    Returns
+    -------
+    xr.DataArray
+        Loaded, numpy-backed DataArray clipped to *bbox* in EPSG:4326.
+    """
     import rioxarray  # noqa: F401
     from rasterio.enums import Resampling
     from rioxarray.merge import merge_arrays
+
+    if "QC" in variable or "qa" in variable.lower():
+        resampling = Resampling.nearest
+    else:
+        resampling = Resampling.average
 
     arrays = []
     for p in tile_paths:
         try:
             result = rioxarray.open_rasterio(p, variable=variable, masked=True)
         except TypeError:
-            logger.warning(
-                "variable= kwarg not supported for %s; "
-                "opening without subdataset selection",
-                p.name,
-            )
             result = rioxarray.open_rasterio(p, masked=True)
-        # open_rasterio may return Dataset (HDF4), list, or DataArray
+        # open_rasterio may return Dataset (HDF4), list, or DataArray.
+        # Load eagerly to detach from rasterio/GDAL file handles.
         if isinstance(result, xr.Dataset):
-            da = result[variable]
+            da = result[variable].load()
+            result.close()
         elif isinstance(result, list):
-            da = result[0]
+            da = result[0].load()
+            for item in result:
+                item.close()
         else:
-            da = result
+            da = result.load()
+            result.close()
         arrays.append(da)
-
-    if "QC" in variable or "qa" in variable.lower():
-        resampling = Resampling.nearest
-    else:
-        resampling = Resampling.average
 
     try:
         if len(arrays) == 1:
@@ -447,17 +466,31 @@ def _mosaic_and_reproject_timestep(
             resolution=resolution,
             resampling=resampling,
         )
+
+        # Clip to fabric bbox in the output CRS (EPSG:4326).
+        minx, miny, maxx, maxy = bbox
+        clipped = reprojected.rio.clip_box(
+            minx=minx,
+            miny=miny,
+            maxx=maxx,
+            maxy=maxy,
+            crs="EPSG:4326",
+        )
+
+        # Load into memory and return — caller owns the result.
+        result_da = clipped.load()
     except Exception as exc:
         raise RuntimeError(
-            f"Failed to mosaic/reproject {len(arrays)} tiles for "
+            f"Failed to mosaic/reproject/clip {len(arrays)} tiles for "
             f"variable '{variable}'. "
             f"Tiles: {[p.name for p in tile_paths]}. Detail: {exc}"
         ) from exc
     finally:
         for a in arrays:
             a.close()
+        del arrays
 
-    return reprojected
+    return result_da
 
 
 def consolidate_mod16a2_timestep(
@@ -465,9 +498,10 @@ def consolidate_mod16a2_timestep(
     variables: list[str],
     source_dir: Path,
     ydoy: str,
+    bbox: tuple[float, float, float, float],
     resolution: float = 0.04,
 ) -> Path:
-    """Mosaic and reproject tiles for one timestep, write to a temp NetCDF.
+    """Mosaic, reproject, and clip tiles for one timestep to a temp NetCDF.
 
     Parameters
     ----------
@@ -479,6 +513,8 @@ def consolidate_mod16a2_timestep(
         Directory to write the temp file into.
     ydoy : str
         Seven-digit YYYYDDD token (e.g. "2010001").
+    bbox : tuple
+        ``(minx, miny, maxx, maxy)`` in EPSG:4326 degrees for clipping.
     resolution : float
         Output resolution in degrees (default 0.04).
 
@@ -492,7 +528,7 @@ def consolidate_mod16a2_timestep(
     var_arrays: dict[str, xr.DataArray] = {}
     try:
         for var in variables:
-            da = _mosaic_and_reproject_timestep(tile_paths, var, resolution)
+            da = _mosaic_and_reproject_timestep(tile_paths, var, bbox, resolution)
             if "band" in da.dims:
                 da = da.squeeze("band", drop=True)
             rename_map = {}
@@ -524,6 +560,7 @@ def consolidate_mod16a2_timestep(
         ds_step.close()
         for da in var_arrays.values():
             da.close()
+        del ds_step, var_arrays
 
     logger.info("Wrote temp file: %s", tmp_path.name)
     return tmp_path
@@ -567,7 +604,8 @@ def consolidate_mod16a2_finalize(
     try:
         ds = xr.open_mfdataset(
             [str(p) for p in tmp_paths],
-            combine="by_coords",
+            combine="nested",
+            concat_dim="time",
             chunks={},
             data_vars="all",
             join="outer",
@@ -603,6 +641,7 @@ def consolidate_mod16a2(
     source_key: str,
     variables: list[str],
     year: int,
+    bbox: tuple[float, float, float, float],
     resolution: float = 0.04,
 ) -> dict:
     """Merge per-granule MOD16A2 HDF files into a consolidated NetCDF.
@@ -621,6 +660,8 @@ def consolidate_mod16a2(
         Variable names to include.
     year : int
         Year to consolidate.
+    bbox : tuple
+        ``(minx, miny, maxx, maxy)`` in EPSG:4326 degrees for clipping.
     resolution : float
         Output resolution in degrees (default 0.04 ≈ 4 km).
 
@@ -683,9 +724,11 @@ def consolidate_mod16a2(
             variables=variables,
             source_dir=source_dir,
             ydoy=ydoy,
+            bbox=bbox,
             resolution=resolution,
         )
         tmp_paths.append(tmp_path)
+        gc.collect()
         log_memory(f"after timestep {i}/{n_steps} (A{ydoy})")
 
     out_path = source_dir / f"{source_key}_{year}_consolidated.nc"

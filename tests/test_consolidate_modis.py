@@ -16,6 +16,10 @@ from unittest.mock import patch as _patch
 
 from nhf_spatial_targets.fetch.consolidate import _time_from_modis_filename
 
+# Bbox covering CONUS in EPSG:4326 — used for MOD16A2 tests where the
+# synthetic sinusoidal tiles (h08v04, h09v04) reproject to ~47°N, -110°W.
+_TEST_BBOX = (-130.0, 20.0, -60.0, 55.0)
+
 
 def test_time_from_modis_filename():
     """Extract date from MODIS AYYYYDDD filename."""
@@ -276,11 +280,15 @@ def test_consolidate_mod10c1_filters_year(mod10c1_run_dir: Path) -> None:
 
 
 def _make_sinusoidal_tile(path: Path, h: int, v: int, value: int = 42) -> None:
-    """Write a small sinusoidal-projected GeoTIFF (with .hdf extension)."""
+    """Write a sinusoidal-projected GeoTIFF (with .hdf extension).
+
+    Tiles are 48x48 pixels at 500m — large enough to produce a multi-pixel
+    grid after reprojection to 0.04° EPSG:4326.
+    """
     srs = CRS.from_proj4(
         "+proj=sinu +lon_0=0 +x_0=0 +y_0=0 +R=6371007.181 +units=m +no_defs"
     )
-    nx, ny = 4, 4
+    nx, ny = 48, 48
     x0 = -10_000_000 + h * 200_000
     y0 = 6_000_000 - v * 200_000
     res = 500.0
@@ -320,6 +328,7 @@ def test_consolidate_mod16a2_no_files(tmp_path: Path) -> None:
             source_key=source_key,
             variables=["ET_500m"],
             year=2010,
+            bbox=_TEST_BBOX,
         )
 
 
@@ -335,6 +344,7 @@ def test_consolidate_mod16a2_synthetic(mod16a2_run_dir: Path) -> None:
         source_key=source_key,
         variables=variables,
         year=2010,
+        bbox=_TEST_BBOX,
     )
 
     out_path = mod16a2_run_dir / result["consolidated_nc"]
@@ -382,6 +392,7 @@ def test_consolidate_mod16a2_partial_tiles(mod16a2_run_dir: Path) -> None:
         source_key=source_key,
         variables=["ET_500m"],
         year=2010,
+        bbox=_TEST_BBOX,
     )
 
     # 3 remaining HDF files (2 for DOY 001, 1 for DOY 009)
@@ -406,12 +417,14 @@ def test_consolidate_mod16a2_overwrites_existing(mod16a2_run_dir: Path) -> None:
         source_key=source_key,
         variables=variables,
         year=2010,
+        bbox=_TEST_BBOX,
     )
     result2 = consolidate_mod16a2(
         run_dir=mod16a2_run_dir,
         source_key=source_key,
         variables=variables,
         year=2010,
+        bbox=_TEST_BBOX,
     )
 
     assert result1["consolidated_nc"] == result2["consolidated_nc"]
@@ -419,7 +432,7 @@ def test_consolidate_mod16a2_overwrites_existing(mod16a2_run_dir: Path) -> None:
     assert out_path.exists()
 
 
-def _make_fake_mosaic(tile_paths, variable, resolution=0.04):
+def _make_fake_mosaic(tile_paths, variable, bbox, resolution=0.04):
     """Return a synthetic DataArray mimicking _mosaic_and_reproject_timestep."""
     lat = np.linspace(25.0, 50.0, 4)
     lon = np.linspace(-125.0, -65.0, 6)
@@ -448,6 +461,7 @@ def test_consolidate_mod16a2_timestep_writes_temp(mod16a2_run_dir: Path) -> None
             variables=["ET_500m"],
             source_dir=source_dir,
             ydoy="2010001",
+            bbox=_TEST_BBOX,
         )
 
     assert tmp_path.exists()

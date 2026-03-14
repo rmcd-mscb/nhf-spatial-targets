@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import logging
 import os
@@ -34,6 +35,78 @@ logger = logging.getLogger(__name__)
 #   MOD16A2GF.A2010001.h08v04.061.conus.nc
 _MODIS_YEAR_RE = re.compile(r"\.A(\d{4})\d{3}\.")
 _MODIS_YDOY_RE = re.compile(r"\.A(\d{7})\.")
+
+
+def _granule_overlaps_bbox(
+    granule: object,
+    bbox: tuple[float, float, float, float],
+) -> bool:
+    """Check whether a granule's spatial extent overlaps *bbox*.
+
+    Parameters
+    ----------
+    granule : earthaccess granule
+        Must have UMM metadata with SpatialExtent.
+    bbox : tuple
+        ``(minx, miny, maxx, maxy)`` in EPSG:4326 degrees.
+
+    Returns
+    -------
+    bool
+        True if the granule overlaps the bbox or if spatial metadata
+        is missing (fail-open to avoid dropping valid granules).
+    """
+    try:
+        rects = granule["umm"]["SpatialExtent"]["HorizontalSpatialDomain"]["Geometry"][
+            "BoundingRectangles"
+        ]
+        if not isinstance(rects, list):
+            return True  # fail-open: unrecognised metadata shape
+    except (KeyError, TypeError):
+        return True  # fail-open: keep granule if metadata is missing
+
+    minx, miny, maxx, maxy = bbox
+    for r in rects:
+        try:
+            gw = r["WestBoundingCoordinate"]
+            ge = r["EastBoundingCoordinate"]
+            gs = r["SouthBoundingCoordinate"]
+            gn = r["NorthBoundingCoordinate"]
+        except (KeyError, TypeError):
+            return True  # fail-open
+        # Standard rectangle overlap test
+        if gw <= maxx and ge >= minx and gs <= maxy and gn >= miny:
+            return True
+    return False
+
+
+def _filter_granules_by_bbox(
+    granules: list,
+    bbox: tuple[float, float, float, float],
+) -> list:
+    """Filter granules to those overlapping *bbox*.
+
+    Parameters
+    ----------
+    granules : list
+        earthaccess granule objects.
+    bbox : tuple
+        ``(minx, miny, maxx, maxy)`` in EPSG:4326 degrees.
+
+    Returns
+    -------
+    list
+        Granules whose spatial extent overlaps *bbox*.
+    """
+    kept = [g for g in granules if _granule_overlaps_bbox(g, bbox)]
+    dropped = len(granules) - len(kept)
+    if dropped:
+        logger.info(
+            "Filtered %d of %d granules outside fabric bbox",
+            dropped,
+            len(granules),
+        )
+    return kept
 
 
 def _group_granules_by_timestep(
@@ -314,6 +387,11 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
     output_dir = run_dir / "data" / "raw" / source_key
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Clean up stale temp files from prior interrupted runs
+    for stale in output_dir.glob("_tmp_*_*.nc"):
+        logger.warning("Removing stale temp file: %s", stale.name)
+        stale.unlink()
+
     consolidated_ncs: dict[str, str] = {}
 
     if not needed:
@@ -337,6 +415,10 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
                 short_name,
                 year,
             )
+
+            # Filter out granules whose spatial extent doesn't overlap
+            # the fabric bbox (earthaccess search can return extras)
+            granules = _filter_granules_by_bbox(granules, bbox_t)
             log_memory(f"after search for year {year} ({len(granules)} granules)")
 
             if not granules:
@@ -392,8 +474,10 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
                         variables=variables,
                         source_dir=output_dir,
                         ydoy=ydoy,
+                        bbox=bbox_t,
                     )
                     tmp_paths.append(tmp_path)
+                    gc.collect()
                     log_memory(f"after consolidating timestep {i}/{n_steps} (A{ydoy})")
 
                 # Finalize: lazy-concat temp files into consolidated NetCDF
@@ -420,7 +504,7 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
     for year in years_on_disk:
         if str(year) not in consolidated_ncs:
             logger.info("Re-consolidating %s year %d", source_key, year)
-            result = consolidate_mod16a2(run_dir, source_key, variables, year)
+            result = consolidate_mod16a2(run_dir, source_key, variables, year, bbox_t)
             consolidated_ncs[str(year)] = result["consolidated_nc"]
 
     # Build file inventory from all .hdf files on disk
