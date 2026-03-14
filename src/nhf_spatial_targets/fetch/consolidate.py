@@ -290,6 +290,33 @@ def consolidate_nldas(
     }
 
 
+def consolidate_mod16a2(
+    run_dir: Path,
+    source_key: str,
+    variables: list[str],
+    year: int,
+) -> dict:
+    """Merge per-granule MOD16A2 HDF files into a consolidated NetCDF.
+
+    Parameters
+    ----------
+    run_dir : Path
+        Run workspace directory.
+    source_key : str
+        Source key (e.g. ``"mod16a2_v061"``).
+    variables : list[str]
+        Variable names to include.
+    year : int
+        Year to consolidate.
+
+    Returns
+    -------
+    dict
+        Provenance record.
+    """
+    raise NotImplementedError("consolidate_mod16a2 not yet implemented")
+
+
 def consolidate_ncep_ncar(
     run_dir: Path,
     variables: list[str],
