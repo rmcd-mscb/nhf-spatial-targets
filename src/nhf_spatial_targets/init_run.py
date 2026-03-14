@@ -141,8 +141,9 @@ def _sha256(path: Path) -> str:
     """Compute SHA-256 of a file, or of all files in a directory (e.g. .gdb)."""
     h = hashlib.sha256()
     if path.is_dir():
-        for child in sorted(path.rglob("*")):
+        for child in sorted(path.rglob("*"), key=lambda p: str(p)):
             if child.is_file():
+                h.update(str(child.relative_to(path)).encode())
                 with child.open("rb") as f:
                     for chunk in iter(lambda: f.read(1 << 20), b""):
                         h.update(chunk)
