@@ -245,7 +245,7 @@ def test_mod16a2_provenance_record(
     assert "path" in result["files"][0]
     assert "year" in result["files"][0]
     assert "size_bytes" in result["files"][0]
-    assert "consolidated_ncs" in result
+    assert isinstance(result["consolidated_ncs"], dict)
     # Path should be relative to run_dir
     assert not Path(result["files"][0]["path"]).is_absolute()
 
