@@ -432,6 +432,12 @@ def _mosaic_and_reproject_timestep(
         resampling = Resampling.average
 
     try:
+        # Ensure (band, y, x) dim order required by rioxarray
+        arrays = [
+            a.transpose("band", "y", "x") if set(a.dims) >= {"band", "y", "x"} else a
+            for a in arrays
+        ]
+
         if len(arrays) == 1:
             mosaic = arrays[0]
         else:
