@@ -297,6 +297,25 @@ def test_wrong_file_index_raises(run_dir: Path, _mock_pangaeapy):
         fetch_watergap22d(run_dir=run_dir, period="2000/2009")
 
 
+def test_cli_watergap22d_nonexistent_run_dir(tmp_path: Path):
+    """CLI exits with error for nonexistent run directory."""
+    from nhf_spatial_targets.cli import app
+
+    with pytest.raises(SystemExit) as exc_info:
+        app(
+            [
+                "fetch",
+                "watergap22d",
+                "--run-dir",
+                str(tmp_path / "nope"),
+                "--period",
+                "2000/2009",
+            ],
+            exit_on_error=False,
+        )
+    assert exc_info.value.code == 2
+
+
 @pytest.mark.integration
 def test_fetch_watergap22d_real_download(tmp_path: Path):
     """Integration: fetch from real PANGAEA and verify CF-compliant output.
