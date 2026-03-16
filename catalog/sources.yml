@@ -165,6 +165,7 @@ sources:
       doi: "10.1594/PANGAEA.918447"
       url: https://doi.pangaea.de/10.1594/PANGAEA.918447
       file: watergap_22d_WFDEI-GPCC_histsoc_qrdif_monthly_1901_2016.nc4
+      file_index: 30  # row index in PanDataSet.data for the qrdif NC4 file
     variables:
       - name: groundwater_recharge
         file_variable: qrdif

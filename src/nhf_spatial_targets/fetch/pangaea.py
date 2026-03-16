@@ -20,10 +20,6 @@ from nhf_spatial_targets.fetch._period import parse_period
 logger = logging.getLogger(__name__)
 
 _SOURCE_KEY = "watergap22d"
-_PANGAEA_DATASET_ID = 918447
-_PANGAEA_FILE_INDEX = 30  # row index for qrdif file in PanDataSet.data
-_RAW_FILENAME = "watergap_22d_WFDEI-GPCC_histsoc_qrdif_monthly_1901_2016.nc4"
-_CF_FILENAME = "watergap22d_qrdif_cf.nc"
 
 
 def _cf_fixup(raw_path: Path, output_path: Path) -> Path:
@@ -33,6 +29,9 @@ def _cf_fixup(raw_path: Path, output_path: Path) -> Path:
     - Time encoding: reconstructs 'months since 1901-01-01' offsets as datetime64
     - Grid mapping: adds WGS84 crs variable and grid_mapping attr on data vars
     - Conventions: sets to CF-1.6
+
+    Writes to a temporary file and atomically renames to avoid leaving
+    partial/corrupt output on failure.
 
     Parameters
     ----------
@@ -47,53 +46,59 @@ def _cf_fixup(raw_path: Path, output_path: Path) -> Path:
         Path to the written CF-compliant file (same as output_path).
     """
     ds = xr.open_dataset(raw_path, decode_times=False)
+    tmp_path = output_path.with_suffix(".nc.tmp")
+    try:
+        # --- Reconstruct time coordinate ---
+        time_offsets = ds.time.values.astype(int)
+        base_year = 1901
+        base_month = 1
+        dates = []
+        for offset in time_offsets:
+            total_months = base_month - 1 + offset
+            year = base_year + total_months // 12
+            month = 1 + total_months % 12
+            dates.append(pd.Timestamp(year=int(year), month=int(month), day=1))
+        new_time = pd.DatetimeIndex(dates)
+        ds = ds.assign_coords(time=new_time)
+        ds.time.attrs = {"standard_name": "time", "long_name": "time", "axis": "T"}
 
-    # --- Reconstruct time coordinate ---
-    time_offsets = ds.time.values.astype(int)
-    base_year = 1901
-    base_month = 1
-    dates = []
-    for offset in time_offsets:
-        total_months = base_month - 1 + offset
-        year = base_year + total_months // 12
-        month = 1 + total_months % 12
-        dates.append(pd.Timestamp(year=int(year), month=int(month), day=1))
-    new_time = pd.DatetimeIndex(dates)
-    ds = ds.assign_coords(time=new_time)
-    ds.time.attrs = {"standard_name": "time", "long_name": "time", "axis": "T"}
+        # --- Add CRS variable with WGS84 grid mapping ---
+        crs = xr.DataArray(
+            np.int32(0),
+            attrs={
+                "grid_mapping_name": "latitude_longitude",
+                "semi_major_axis": 6378137.0,
+                "inverse_flattening": 298.257223563,
+                "longitude_of_prime_meridian": 0.0,
+                "crs_wkt": (
+                    'GEOGCS["WGS 84",'
+                    'DATUM["WGS_1984",'
+                    'SPHEROID["WGS 84",6378137,298.257223563]],'
+                    'PRIMEM["Greenwich",0],'
+                    'UNIT["degree",0.0174532925199433]]'
+                ),
+            },
+        )
+        ds["crs"] = crs
 
-    # --- Add CRS variable with WGS84 grid mapping ---
-    crs = xr.DataArray(
-        np.int32(0),
-        attrs={
-            "grid_mapping_name": "latitude_longitude",
-            "semi_major_axis": 6378137.0,
-            "inverse_flattening": 298.257223563,
-            "longitude_of_prime_meridian": 0.0,
-            "crs_wkt": (
-                'GEOGCS["WGS 84",'
-                'DATUM["WGS_1984",'
-                'SPHEROID["WGS 84",6378137,298.257223563]],'
-                'PRIMEM["Greenwich",0],'
-                'UNIT["degree",0.0174532925199433]]'
-            ),
-        },
-    )
-    ds["crs"] = crs
+        # --- Set grid_mapping on data variables ---
+        for var in ds.data_vars:
+            if var != "crs":
+                ds[var].attrs["grid_mapping"] = "crs"
 
-    # --- Set grid_mapping on data variables ---
-    for var in ds.data_vars:
-        if var != "crs":
-            ds[var].attrs["grid_mapping"] = "crs"
+        # --- Set Conventions ---
+        ds.attrs["Conventions"] = "CF-1.6"
+        # Remove the old non-standard conventions attr if present
+        ds.attrs.pop("conventions", None)
 
-    # --- Set Conventions ---
-    ds.attrs["Conventions"] = "CF-1.6"
-    # Remove the old non-standard conventions attr if present
-    ds.attrs.pop("conventions", None)
-
-    # --- Write ---
-    ds.to_netcdf(output_path, format="NETCDF4")
-    ds.close()
+        # --- Write atomically ---
+        ds.to_netcdf(tmp_path, format="NETCDF4")
+        tmp_path.rename(output_path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    finally:
+        ds.close()
 
     logger.info("Wrote CF-compliant file: %s", output_path)
     return output_path
@@ -122,6 +127,13 @@ def fetch_watergap22d(run_dir: Path, period: str) -> dict:
     meta = _catalog.source(_SOURCE_KEY)
     parse_period(period)  # validate format
 
+    access = meta["access"]
+    raw_filename = access["file"]
+    dataset_id = int(access["doi"].rsplit(".", 1)[-1])
+    file_index = access["file_index"]
+    license_str = meta.get("license", "unknown")
+    cf_filename = f"{_SOURCE_KEY}_qrdif_cf.nc"
+
     fabric_path = run_dir / "fabric.json"
     if not fabric_path.exists():
         raise FileNotFoundError(
@@ -141,8 +153,8 @@ def fetch_watergap22d(run_dir: Path, period: str) -> dict:
     output_dir = run_dir / "data" / "raw" / _SOURCE_KEY
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    raw_path = output_dir / _RAW_FILENAME
-    cf_path = output_dir / _CF_FILENAME
+    raw_path = output_dir / raw_filename
+    cf_path = output_dir / cf_filename
     now_utc = datetime.now(timezone.utc).isoformat()
 
     if cf_path.exists():
@@ -157,39 +169,39 @@ def fetch_watergap22d(run_dir: Path, period: str) -> dict:
 
             logger.info(
                 "Downloading WaterGAP 2.2d from PANGAEA (dataset %d)...",
-                _PANGAEA_DATASET_ID,
+                dataset_id,
             )
+            cache_dir = output_dir / ".pangaea_cache"
+            cache_dir.mkdir(exist_ok=True)
             try:
-                cache_dir = output_dir / ".pangaea_cache"
-                cache_dir.mkdir(exist_ok=True)
-                pan_ds = PanDataSet(
-                    _PANGAEA_DATASET_ID,
-                    cachedir=str(cache_dir),
-                )
-
-                # Validate file index before downloading
-                actual_name = pan_ds.data.loc[_PANGAEA_FILE_INDEX, "File name"]
-                if actual_name != _RAW_FILENAME:
-                    raise RuntimeError(
-                        f"PANGAEA file index {_PANGAEA_FILE_INDEX} contains "
-                        f"'{actual_name}', expected '{_RAW_FILENAME}'. "
-                        f"The dataset listing may have changed."
-                    )
-
-                downloaded = pan_ds.download(indices=[_PANGAEA_FILE_INDEX])
-            except RuntimeError:
-                raise
+                pan_ds = PanDataSet(dataset_id, cachedir=str(cache_dir))
             except Exception as exc:
                 raise RuntimeError(
-                    f"Failed to download WaterGAP 2.2d from PANGAEA "
-                    f"(dataset {_PANGAEA_DATASET_ID}): {exc}. "
-                    f"Check network connectivity and PANGAEA availability."
+                    f"Failed to connect to PANGAEA dataset {dataset_id}: "
+                    f"{exc}. Check network connectivity and PANGAEA "
+                    f"availability."
+                ) from exc
+
+            # Validate file index before downloading
+            actual_name = pan_ds.data.loc[file_index, "File name"]
+            if actual_name != raw_filename:
+                raise RuntimeError(
+                    f"PANGAEA file index {file_index} contains "
+                    f"'{actual_name}', expected '{raw_filename}'. "
+                    f"The dataset listing may have changed."
+                )
+
+            try:
+                downloaded = pan_ds.download(indices=[file_index])
+            except Exception as exc:
+                raise RuntimeError(
+                    f"PANGAEA download failed for dataset {dataset_id}: {exc}"
                 ) from exc
 
             if not downloaded:
                 raise RuntimeError(
                     f"pangaeapy returned no files for dataset "
-                    f"{_PANGAEA_DATASET_ID}, index {_PANGAEA_FILE_INDEX}."
+                    f"{dataset_id}, index {file_index}."
                 )
 
             cached_path = Path(downloaded[0])
@@ -200,6 +212,12 @@ def fetch_watergap22d(run_dir: Path, period: str) -> dict:
         logger.info("Applying CF compliance fixes...")
         _cf_fixup(raw_path, cf_path)
 
+    if not cf_path.exists():
+        raise RuntimeError(
+            f"CF-corrected file was not created at {cf_path}. "
+            f"The CF fix-up step may have failed."
+        )
+
     # Build provenance
     file_info = {
         "path": str(cf_path.relative_to(run_dir)),
@@ -208,13 +226,13 @@ def fetch_watergap22d(run_dir: Path, period: str) -> dict:
         "downloaded_utc": now_utc,
     }
 
-    _update_manifest(run_dir, period, bbox, meta, file_info)
+    _update_manifest(run_dir, period, bbox, meta, license_str, file_info)
 
     return {
         "source_key": _SOURCE_KEY,
-        "access_url": meta["access"]["url"],
-        "doi": meta["access"]["doi"],
-        "license": "CC BY-NC 4.0",
+        "access_url": access["url"],
+        "doi": access["doi"],
+        "license": license_str,
         "variables": meta["variables"],
         "period": period,
         "bbox": bbox,
@@ -229,25 +247,34 @@ def _update_manifest(
     period: str,
     bbox: dict,
     meta: dict,
+    license_str: str,
     file_info: dict,
 ) -> None:
     """Merge WaterGAP 2.2d provenance into manifest.json."""
     manifest_path = run_dir / "manifest.json"
     if manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text())
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"manifest.json in {run_dir} is corrupt and cannot be "
+                f"parsed. You may need to delete it and re-run the fetch "
+                f"step. Original error: {exc}"
+            ) from exc
     else:
         manifest = {"sources": {}, "steps": []}
 
     if "sources" not in manifest:
         manifest["sources"] = {}
 
+    access = meta["access"]
     entry = manifest["sources"].get(_SOURCE_KEY, {})
     entry.update(
         {
             "source_key": _SOURCE_KEY,
-            "access_url": meta["access"]["url"],
-            "doi": meta["access"]["doi"],
-            "license": "CC BY-NC 4.0",
+            "access_url": access["url"],
+            "doi": access["doi"],
+            "license": license_str,
             "period": period,
             "bbox": bbox,
             "variables": [v["name"] for v in meta["variables"]],
