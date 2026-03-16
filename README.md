@@ -129,7 +129,7 @@ pixi run -e dev fmt
 | MOD10C1 v061 fetch | Not started |
 | SSEBop fetch | Not started |
 | Reitz 2017 recharge fetch (ScienceBase) | Not started |
-| WaterGAP 2.2d fetch (PANGAEA) | Not started |
+| WaterGAP 2.2d fetch (PANGAEA) | Done |
 
 ## Known Gaps
 
@@ -143,9 +143,9 @@ See `catalog/sources.yml` `status:` and `notes:` fields for per-source details.
 - MERRA-2 variable — use `GWETTOP` (0–0.05m, dimensionless); product M2TMNXLND
 - MERRA-2 layer depths — `dzsf`=0.05m (constant), `dzrz`=1.00m, `dzpr`=spatially varying (surface to bedrock). Thicknesses in M2CONXLND.
 - NLDAS NOAH variable names — confirmed from file inspection: `SoilM_0_10cm`, `SoilM_10_40cm`, `SoilM_40_100cm`, `SoilM_100_200cm`
+- WaterGAP 2.2d — confirmed on PANGAEA (doi:10.1594/PANGAEA.918447), CC BY-NC 4.0
 
 **Still open:**
-- WaterGAP 2.2a — registration-gated; substitute candidate is WaterGAP 2.2d on PANGAEA
 - SCA CI-bounds formula — `PRMSobjfun.f` not publicly available; formula unconfirmed
 - SSEBop — version and access URL used in original TM 6-B10 unconfirmed
 

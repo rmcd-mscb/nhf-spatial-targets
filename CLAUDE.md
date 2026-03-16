@@ -98,9 +98,9 @@ See `catalog/sources.yml` `status:` and `notes:` fields for per-source gaps.
 - MERRA-2 variable — use `GWETTOP` (0-0.05m, dimensionless); product M2TMNXLND
 - MERRA-2 layer depths — dzsf=0.05m (constant globally), dzrz=1.00m (per GMAO FAQ), dzpr=spatially varying (surface to bedrock, ~1.3-8.5m). Thicknesses in M2CONXLND collection.
 - NLDAS NOAH variable names — confirmed from file inspection: SoilM_0_10cm, SoilM_10_40cm, SoilM_40_100cm, SoilM_100_200cm
+- WaterGAP 2.2d — confirmed: doi:10.1594/PANGAEA.918447, variable qrdif (diffuse groundwater recharge), 1901-2016 monthly, 0.5° global, CC BY-NC 4.0
 
 **Still open:**
-- WaterGAP 2.2a — registration-gated; substitute candidate is WaterGAP 2.2d on PANGAEA (doi:10.1594/PANGAEA.918447)
 - SCA CI-bounds formula — PRMSobjfun.f not publicly available; formula unconfirmed
 - SSEBop — version and access URL used in original TM 6-B10 unconfirmed
 
