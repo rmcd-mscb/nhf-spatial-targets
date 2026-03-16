@@ -595,12 +595,27 @@ def _subset_to_conus(hdf_path: Path, bbox: dict | None = None) -> Path:
     if bbox is None:
         bbox = _CONUS_BBOX
 
-    ds = xr.open_dataset(hdf_path, engine="rasterio")
+    out_path = hdf_path.with_suffix("").with_suffix(".conus.nc")
+
     try:
-        # rasterio reads HDF4-EOS with x/y coords and a singleton band dim
+        ds = xr.open_dataset(hdf_path, engine="rasterio")
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to open {hdf_path} with rasterio engine: {exc}"
+        ) from exc
+
+    try:
+        # rasterio reads MOD10C1 HDF4-EOS CMG files with x/y coords
+        # and a singleton band dim
         if "band" in ds.dims:
+            if ds.sizes["band"] != 1:
+                raise ValueError(
+                    f"Expected singleton 'band' dim in {hdf_path}, "
+                    f"got size {ds.sizes['band']}"
+                )
             ds = ds.squeeze("band", drop=True)
-        # Rename x/y → lon/lat for consistency with downstream code
+
+        # Rename x/y → lon/lat for the subset below
         rename = {}
         if "x" in ds.dims:
             rename["x"] = "lon"
@@ -609,11 +624,18 @@ def _subset_to_conus(hdf_path: Path, bbox: dict | None = None) -> Path:
         if rename:
             ds = ds.rename(rename)
 
+        missing = {"lat", "lon"} - set(ds.dims)
+        if missing:
+            raise ValueError(
+                f"Expected 'lat' and 'lon' dimensions in {hdf_path} after "
+                f"rasterio open + rename, but found dims={list(ds.dims)}. "
+                f"Missing: {missing}"
+            )
+
         subset = ds.sel(
             lat=slice(bbox["maxy"], bbox["miny"]),
             lon=slice(bbox["minx"], bbox["maxx"]),
         )
-        out_path = hdf_path.with_suffix("").with_suffix(".conus.nc")
         subset.to_netcdf(out_path)
     finally:
         ds.close()
