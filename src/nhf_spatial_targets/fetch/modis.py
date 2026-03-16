@@ -595,8 +595,20 @@ def _subset_to_conus(hdf_path: Path, bbox: dict | None = None) -> Path:
     if bbox is None:
         bbox = _CONUS_BBOX
 
-    ds = xr.open_dataset(hdf_path)
+    ds = xr.open_dataset(hdf_path, engine="rasterio")
     try:
+        # rasterio reads HDF4-EOS with x/y coords and a singleton band dim
+        if "band" in ds.dims:
+            ds = ds.squeeze("band", drop=True)
+        # Rename x/y → lon/lat for consistency with downstream code
+        rename = {}
+        if "x" in ds.dims:
+            rename["x"] = "lon"
+        if "y" in ds.dims:
+            rename["y"] = "lat"
+        if rename:
+            ds = ds.rename(rename)
+
         subset = ds.sel(
             lat=slice(bbox["maxy"], bbox["miny"]),
             lon=slice(bbox["minx"], bbox["maxx"]),
