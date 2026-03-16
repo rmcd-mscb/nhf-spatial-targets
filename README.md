@@ -28,6 +28,7 @@ pixi run fetch-merra2 -- --run-dir /data/nhf-runs/2026-03-12_gfv11_v0.1.0 --peri
 pixi run fetch-nldas-mosaic -- --run-dir /data/nhf-runs/2026-03-12_gfv11_v0.1.0 --period 1980/2025
 pixi run fetch-nldas-noah -- --run-dir /data/nhf-runs/2026-03-12_gfv11_v0.1.0 --period 1980/2025
 pixi run fetch-ncep-ncar -- --run-dir /data/nhf-runs/2026-03-12_gfv11_v0.1.0 --period 1980/2025
+pixi run fetch-watergap22d -- --run-dir /data/nhf-runs/2026-03-12_gfv11_v0.1.0 --period 1901/2016
 
 # Run all targets
 pixi run run -- --run-dir /data/nhf-runs/2026-03-12_gfv11_v0.1.0
@@ -50,6 +51,7 @@ Each `fetch` command downloads source granules and consolidates them into a sing
 | NLDAS-2 MOSAIC | `fetch-nldas-mosaic` | Monthly `.nc4` via earthaccess | `nldas_mosaic_consolidated.nc` |
 | NLDAS-2 NOAH | `fetch-nldas-noah` | Monthly `.nc` via earthaccess | `nldas_noah_consolidated.nc` |
 | NCEP/NCAR | `fetch-ncep-ncar` | Annual daily `.nc` via HTTP | `ncep_ncar_consolidated.nc` |
+| WaterGAP 2.2d | `fetch-watergap22d` | Single NC4 via pangaeapy | `watergap22d_qrdif_cf.nc` (CF-corrected) |
 
 All fetch commands support **incremental download** — months/years already in `manifest.json` are skipped. The manifest tracks provenance (download timestamps, file checksums, periods, bounding boxes).
 
@@ -78,6 +80,7 @@ nhf-spatial-targets/
 │   │   ├── merra2.py        # MERRA-2 via earthaccess
 │   │   ├── nldas.py         # NLDAS-2 MOSAIC & NOAH via earthaccess
 │   │   ├── ncep_ncar.py     # NCEP/NCAR Reanalysis via HTTP
+│   │   ├── pangaea.py       # WaterGAP 2.2d via pangaeapy
 │   │   ├── _auth.py         # Earthdata login helper
 │   │   └── _period.py       # period parsing utilities
 │   ├── aggregate/           # gdptools spatial aggregation

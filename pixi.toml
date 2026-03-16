@@ -20,6 +20,7 @@ cyclopts = ">=3.0"
 rich = ">=13.0"
 tqdm = ">=4.60"
 libgdal-hdf4 = ">=3.12.2,<4"
+pangaeapy = ">=1.1.0,<2"
 # gdptools: spatial aggregation (install from PyPI if not on conda-forge)
 # sciencebasepy: ScienceBase access
 # earthaccess: NASA EDL access for MODIS, MERRA-2, NLDAS
@@ -63,6 +64,7 @@ fetch-merra2 = { cmd = "nhf-targets fetch merra2", description = "Download MERRA
 fetch-nldas-mosaic = { cmd = "nhf-targets fetch nldas-mosaic", description = "Download NLDAS-2 MOSAIC data into a run workspace" }
 fetch-nldas-noah = { cmd = "nhf-targets fetch nldas-noah", description = "Download NLDAS-2 NOAH data into a run workspace" }
 fetch-ncep-ncar = { cmd = "nhf-targets fetch ncep-ncar", description = "Download NCEP/NCAR Reanalysis data into a run workspace" }
+fetch-watergap22d = { cmd = "nhf-targets fetch watergap22d", description = "Download WaterGAP 2.2d groundwater recharge from PANGAEA" }
 
 # Catalog inspection
 catalog-sources   = { cmd = "nhf-targets catalog sources" }
