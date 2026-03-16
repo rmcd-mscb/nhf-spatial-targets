@@ -67,7 +67,7 @@ variables:
     original_units: varies by source (inches/year, mm/month)
     sources:
       - reitz2017
-      - watergap22a   # or watergap22d (open-access substitute on PANGAEA)
+      - watergap22d
     range_method: normalized_minmax
     range_notes: >
       Normalization confirmed as 2000-2009 per TM 6-B10 text.
