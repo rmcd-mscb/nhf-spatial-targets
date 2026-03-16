@@ -2,10 +2,35 @@
 
 from __future__ import annotations
 
+import json
+import sys
+import types
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
 import xarray as xr
+
+
+@pytest.fixture()
+def _mock_pangaeapy():
+    """Ensure ``pangaeapy`` is importable even when not installed.
+
+    Injects a stub module into ``sys.modules`` so that
+    ``from pangaeapy import PanDataSet`` inside *fetch_watergap22d*
+    resolves to a ``MagicMock``.  Tests that need to control
+    ``PanDataSet`` behaviour should layer their own ``patch`` on top.
+    """
+    fake = types.ModuleType("pangaeapy")
+    fake.PanDataSet = MagicMock()  # default; overridden per-test
+    already = "pangaeapy" in sys.modules
+    sys.modules["pangaeapy"] = fake
+    yield fake
+    if not already:
+        sys.modules.pop("pangaeapy", None)
+    else:
+        sys.modules["pangaeapy"] = fake
 
 
 def _make_watergap_nc(path: Path, n_times: int = 24) -> Path:
@@ -119,3 +144,200 @@ def test_cf_fixup_preserves_data(tmp_path: Path):
     fixed_ds = xr.open_dataset(fixed)
     np.testing.assert_array_equal(fixed_ds["qrdif"].values, raw_values)
     fixed_ds.close()
+
+
+# --- fetch_watergap22d tests ---
+
+
+@pytest.fixture()
+def run_dir(tmp_path: Path) -> Path:
+    """Create a minimal run workspace."""
+    rd = tmp_path / "run"
+    rd.mkdir()
+    (rd / "data" / "raw" / "watergap22d").mkdir(parents=True)
+    fabric = {
+        "bbox_buffered": {
+            "minx": -125.1,
+            "miny": 23.9,
+            "maxx": -65.9,
+            "maxy": 50.1,
+        }
+    }
+    (rd / "fabric.json").write_text(json.dumps(fabric))
+    return rd
+
+
+def test_missing_fabric_raises(tmp_path: Path):
+    """FileNotFoundError when fabric.json is absent."""
+    from nhf_spatial_targets.fetch.pangaea import fetch_watergap22d
+
+    rd = tmp_path / "run"
+    rd.mkdir()
+    with pytest.raises(FileNotFoundError, match="fabric.json"):
+        fetch_watergap22d(run_dir=rd, period="2000/2009")
+
+
+def test_skips_existing_file(run_dir: Path, _mock_pangaeapy):
+    """Skip download when CF-corrected file already exists."""
+    from nhf_spatial_targets.fetch.pangaea import fetch_watergap22d
+
+    output_dir = run_dir / "data" / "raw" / "watergap22d"
+    cf_file = output_dir / "watergap22d_qrdif_cf.nc"
+    _make_watergap_nc(
+        output_dir / "watergap_22d_WFDEI-GPCC_histsoc_qrdif_monthly_1901_2016.nc4",
+        n_times=12,
+    )
+
+    # Create a pre-existing CF-corrected file
+    from nhf_spatial_targets.fetch.pangaea import _cf_fixup
+
+    _cf_fixup(
+        output_dir / "watergap_22d_WFDEI-GPCC_histsoc_qrdif_monthly_1901_2016.nc4",
+        cf_file,
+    )
+
+    mock_pan = MagicMock()
+    _mock_pangaeapy.PanDataSet = mock_pan
+    result = fetch_watergap22d(run_dir=run_dir, period="2000/2009")
+    mock_pan.assert_not_called()
+    assert result["source_key"] == "watergap22d"
+
+
+def test_downloads_and_updates_manifest(run_dir: Path, _mock_pangaeapy):
+    """Download via pangaeapy, CF fix-up, and manifest update."""
+    import pandas as pd_mock
+
+    from nhf_spatial_targets.fetch.pangaea import fetch_watergap22d
+
+    output_dir = run_dir / "data" / "raw" / "watergap22d"
+    raw_filename = "watergap_22d_WFDEI-GPCC_histsoc_qrdif_monthly_1901_2016.nc4"
+
+    # Mock PanDataSet to create a fake NC4 in the cache dir
+    cache_dir = run_dir / "pangaea_cache"
+    cache_dir.mkdir()
+    cached_file = cache_dir / raw_filename
+    _make_watergap_nc(cached_file, n_times=12)
+
+    mock_ds = MagicMock()
+    mock_data = pd_mock.DataFrame({"File name": {30: raw_filename}})
+    mock_ds.data = mock_data
+    mock_ds.download.return_value = [cached_file]
+    _mock_pangaeapy.PanDataSet = MagicMock(return_value=mock_ds)
+
+    result = fetch_watergap22d(run_dir=run_dir, period="2000/2009")
+
+    # Verify raw file was moved to output dir
+    assert (output_dir / raw_filename).exists()
+    # Verify CF-corrected file was created
+    assert (output_dir / "watergap22d_qrdif_cf.nc").exists()
+    # Verify manifest updated
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    assert "watergap22d" in manifest["sources"]
+    assert manifest["sources"]["watergap22d"]["license"] == "CC BY-NC 4.0"
+    assert result["source_key"] == "watergap22d"
+
+
+def test_preserves_original_file(run_dir: Path, _mock_pangaeapy):
+    """Both original and CF-corrected files must exist after fetch."""
+    import pandas as pd_mock
+
+    from nhf_spatial_targets.fetch.pangaea import fetch_watergap22d
+
+    output_dir = run_dir / "data" / "raw" / "watergap22d"
+    raw_filename = "watergap_22d_WFDEI-GPCC_histsoc_qrdif_monthly_1901_2016.nc4"
+
+    cache_dir = run_dir / "pangaea_cache"
+    cache_dir.mkdir()
+    cached_file = cache_dir / raw_filename
+    _make_watergap_nc(cached_file, n_times=12)
+
+    mock_ds = MagicMock()
+    mock_data = pd_mock.DataFrame({"File name": {30: raw_filename}})
+    mock_ds.data = mock_data
+    mock_ds.download.return_value = [cached_file]
+    _mock_pangaeapy.PanDataSet = MagicMock(return_value=mock_ds)
+
+    fetch_watergap22d(run_dir=run_dir, period="2000/2009")
+
+    assert (output_dir / raw_filename).exists(), "Original file must be preserved"
+    assert (output_dir / "watergap22d_qrdif_cf.nc").exists(), (
+        "CF-corrected file must exist"
+    )
+
+
+def test_download_failure_raises(run_dir: Path, _mock_pangaeapy):
+    """RuntimeError when pangaeapy download fails."""
+    import pandas as pd_mock
+
+    from nhf_spatial_targets.fetch.pangaea import fetch_watergap22d
+
+    raw_filename = "watergap_22d_WFDEI-GPCC_histsoc_qrdif_monthly_1901_2016.nc4"
+    mock_ds = MagicMock()
+    mock_data = pd_mock.DataFrame({"File name": {30: raw_filename}})
+    mock_ds.data = mock_data
+    mock_ds.download.side_effect = Exception("PANGAEA unavailable")
+    _mock_pangaeapy.PanDataSet = MagicMock(return_value=mock_ds)
+
+    with pytest.raises(RuntimeError, match="PANGAEA"):
+        fetch_watergap22d(run_dir=run_dir, period="2000/2009")
+
+
+def test_wrong_file_index_raises(run_dir: Path, _mock_pangaeapy):
+    """RuntimeError when file at expected index doesn't match expected filename."""
+    import pandas as pd_mock
+
+    from nhf_spatial_targets.fetch.pangaea import fetch_watergap22d
+
+    mock_ds = MagicMock()
+    mock_data = pd_mock.DataFrame({"File name": {30: "wrong_filename.nc4"}})
+    mock_ds.data = mock_data
+    _mock_pangaeapy.PanDataSet = MagicMock(return_value=mock_ds)
+
+    with pytest.raises(RuntimeError, match="file index"):
+        fetch_watergap22d(run_dir=run_dir, period="2000/2009")
+
+
+@pytest.mark.integration
+def test_fetch_watergap22d_real_download(tmp_path: Path):
+    """Integration: fetch from real PANGAEA and verify CF-compliant output.
+
+    Requires network access. Run with: pixi run -e dev test-integration
+    """
+    from nhf_spatial_targets.fetch.pangaea import fetch_watergap22d
+
+    rd = tmp_path / "run"
+    rd.mkdir()
+    (rd / "data" / "raw" / "watergap22d").mkdir(parents=True)
+    fabric = {
+        "bbox_buffered": {
+            "minx": -125.1,
+            "miny": 23.9,
+            "maxx": -65.9,
+            "maxy": 50.1,
+        }
+    }
+    (rd / "fabric.json").write_text(json.dumps(fabric))
+
+    result = fetch_watergap22d(run_dir=rd, period="2000/2009")
+
+    assert result["source_key"] == "watergap22d"
+
+    cf_path = rd / "data" / "raw" / "watergap22d" / "watergap22d_qrdif_cf.nc"
+    assert cf_path.exists()
+
+    ds = xr.open_dataset(cf_path)
+    assert "qrdif" in ds.data_vars
+    assert ds.time.dtype == np.dtype("datetime64[ns]")
+    assert ds.attrs.get("Conventions") == "CF-1.6"
+    assert "crs" in ds.data_vars
+    assert ds["qrdif"].attrs.get("grid_mapping") == "crs"
+    ds.close()
+
+    raw_path = (
+        rd
+        / "data"
+        / "raw"
+        / "watergap22d"
+        / "watergap_22d_WFDEI-GPCC_histsoc_qrdif_monthly_1901_2016.nc4"
+    )
+    assert raw_path.exists()
