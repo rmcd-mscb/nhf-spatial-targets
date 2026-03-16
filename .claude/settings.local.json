@@ -17,7 +17,11 @@
       "WebFetch(domain:doi.org)",
       "WebFetch(domain:waterdata.usgs.gov)",
       "mcp__plugin_context7_context7__resolve-library-id",
-      "mcp__plugin_context7_context7__query-docs"
+      "mcp__plugin_context7_context7__query-docs",
+      "WebFetch(domain:earthaccess.readthedocs.io)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:wiki.earthdata.nasa.gov)",
+      "Bash(rm:*)"
     ]
   }
 }

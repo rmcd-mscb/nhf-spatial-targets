@@ -24,6 +24,13 @@ _MOCK_CONSOLIDATION = {
     "variables": ["ET_500m", "ET_QC_500m"],
 }
 
+_MOCK_CONSOLIDATION_FINALIZE = {
+    "consolidated_nc": "data/raw/mod16a2_v061/mod16a2_v061_2010_consolidated.nc",
+    "last_consolidated_utc": "2026-01-01T00:00:00+00:00",
+    "n_files": 1,
+    "variables": ["ET_500m", "ET_QC_500m"],
+}
+
 
 @pytest.fixture()
 def run_dir(tmp_path: Path) -> Path:
@@ -48,6 +55,7 @@ def _mock_granule(name: str) -> MagicMock:
     """Create a mock granule object."""
     g = MagicMock()
     g.__str__ = lambda self: name
+    g.data_links.return_value = [f"https://example.com/{name}"]
     return g
 
 
@@ -135,14 +143,24 @@ def test_mod16a2_login_called(mock_login, run_dir):
     "nhf_spatial_targets.fetch.modis.consolidate_mod16a2",
     return_value=_MOCK_CONSOLIDATION,
 )
+@patch(
+    "nhf_spatial_targets.fetch.modis.consolidate_mod16a2_finalize",
+    return_value=_MOCK_CONSOLIDATION_FINALIZE,
+)
+@patch(
+    "nhf_spatial_targets.fetch.modis.consolidate_mod16a2_timestep",
+    return_value=Path("/tmp/fake_tmp.nc"),
+)
 @patch("earthaccess.download")
 @patch("earthaccess.search_data")
 @patch("nhf_spatial_targets.fetch.modis.earthdata_login")
 def test_mod16a2_search_params(
-    mock_login, mock_search, mock_dl, mock_consolidate, run_dir
+    mock_login, mock_search, mock_dl, mock_ts, mock_fin, mock_consolidate, run_dir
 ):
     """search_data called with correct short_name, bbox tuple, and temporal."""
-    mock_search.return_value = [_mock_granule("g1")]
+    mock_search.return_value = [
+        _mock_granule("MOD16A2GF.A2010001.h08v04.061.2020256154955.hdf")
+    ]
     mock_dl.return_value = _fake_download(run_dir)
 
     from nhf_spatial_targets.fetch.modis import fetch_mod16a2
@@ -177,7 +195,9 @@ def test_mod16a2_no_granules_raises(mock_search, mock_login, run_dir):
 @patch("nhf_spatial_targets.fetch.modis.earthdata_login")
 def test_mod16a2_empty_download_raises(mock_login, mock_search, mock_dl, run_dir):
     """RuntimeError raised when download returns no files."""
-    mock_search.return_value = [_mock_granule("g1")]
+    mock_search.return_value = [
+        _mock_granule("MOD16A2GF.A2010001.h08v04.061.2020256154955.hdf")
+    ]
 
     from nhf_spatial_targets.fetch.modis import fetch_mod16a2
 
@@ -220,14 +240,24 @@ def test_mod16a2_malformed_fabric_raises(mock_login, tmp_path):
     "nhf_spatial_targets.fetch.modis.consolidate_mod16a2",
     return_value=_MOCK_CONSOLIDATION,
 )
+@patch(
+    "nhf_spatial_targets.fetch.modis.consolidate_mod16a2_finalize",
+    return_value=_MOCK_CONSOLIDATION_FINALIZE,
+)
+@patch(
+    "nhf_spatial_targets.fetch.modis.consolidate_mod16a2_timestep",
+    return_value=Path("/tmp/fake_tmp.nc"),
+)
 @patch("earthaccess.download")
 @patch("earthaccess.search_data")
 @patch("nhf_spatial_targets.fetch.modis.earthdata_login")
 def test_mod16a2_provenance_record(
-    mock_login, mock_search, mock_dl, mock_consolidate, run_dir
+    mock_login, mock_search, mock_dl, mock_ts, mock_fin, mock_consolidate, run_dir
 ):
     """Returned dict has all required provenance keys."""
-    mock_search.return_value = [_mock_granule("g1")]
+    mock_search.return_value = [
+        _mock_granule("MOD16A2GF.A2010001.h08v04.061.2020256154955.hdf")
+    ]
     mock_dl.return_value = _fake_download(run_dir)
 
     from nhf_spatial_targets.fetch.modis import fetch_mod16a2
@@ -246,7 +276,6 @@ def test_mod16a2_provenance_record(
     assert "year" in result["files"][0]
     assert "size_bytes" in result["files"][0]
     assert isinstance(result["consolidated_ncs"], dict)
-    # Path should be relative to run_dir
     assert not Path(result["files"][0]["path"]).is_absolute()
 
 
@@ -257,14 +286,24 @@ def test_mod16a2_provenance_record(
     "nhf_spatial_targets.fetch.modis.consolidate_mod16a2",
     return_value=_MOCK_CONSOLIDATION,
 )
+@patch(
+    "nhf_spatial_targets.fetch.modis.consolidate_mod16a2_finalize",
+    return_value=_MOCK_CONSOLIDATION_FINALIZE,
+)
+@patch(
+    "nhf_spatial_targets.fetch.modis.consolidate_mod16a2_timestep",
+    return_value=Path("/tmp/fake_tmp.nc"),
+)
 @patch("earthaccess.download")
 @patch("earthaccess.search_data")
 @patch("nhf_spatial_targets.fetch.modis.earthdata_login")
 def test_mod16a2_manifest_updated(
-    mock_login, mock_search, mock_dl, mock_consolidate, run_dir
+    mock_login, mock_search, mock_dl, mock_ts, mock_fin, mock_consolidate, run_dir
 ):
     """fetch_mod16a2 writes provenance to manifest.json."""
-    mock_search.return_value = [_mock_granule("g1")]
+    mock_search.return_value = [
+        _mock_granule("MOD16A2GF.A2010001.h08v04.061.2020256154955.hdf")
+    ]
     mock_dl.return_value = _fake_download(run_dir)
 
     from nhf_spatial_targets.fetch.modis import fetch_mod16a2
@@ -288,14 +327,26 @@ def test_mod16a2_manifest_updated(
     "nhf_spatial_targets.fetch.modis.consolidate_mod16a2",
     return_value=_MOCK_CONSOLIDATION,
 )
+@patch(
+    "nhf_spatial_targets.fetch.modis.consolidate_mod16a2_finalize",
+    return_value={
+        "consolidated_nc": "data/raw/mod16a2_v061/mod16a2_v061_2011_consolidated.nc",
+        "last_consolidated_utc": "2026-01-01T00:00:00+00:00",
+        "n_files": 1,
+        "variables": ["ET_500m", "ET_QC_500m"],
+    },
+)
+@patch(
+    "nhf_spatial_targets.fetch.modis.consolidate_mod16a2_timestep",
+    return_value=Path("/tmp/fake_tmp.nc"),
+)
 @patch("earthaccess.download")
 @patch("earthaccess.search_data")
 @patch("nhf_spatial_targets.fetch.modis.earthdata_login")
 def test_mod16a2_incremental_skips_year(
-    mock_login, mock_search, mock_dl, mock_consolidate, run_dir
+    mock_login, mock_search, mock_dl, mock_ts, mock_fin, mock_consolidate, run_dir
 ):
     """Years already in manifest are not re-downloaded."""
-    # Pre-populate manifest with 2010 already downloaded
     manifest = {
         "sources": {
             "mod16a2_v061": {
@@ -313,7 +364,6 @@ def test_mod16a2_incremental_skips_year(
     }
     (run_dir / "manifest.json").write_text(json.dumps(manifest))
 
-    # Create the existing file on disk
     existing = (
         run_dir
         / "data"
@@ -323,15 +373,15 @@ def test_mod16a2_incremental_skips_year(
     )
     existing.write_bytes(b"fake")
 
-    # Also create a 2011 file that will be "downloaded"
-    mock_search.return_value = [_mock_granule("g1")]
+    mock_search.return_value = [
+        _mock_granule("MOD16A2GF.A2011001.h08v04.061.2020256154955.hdf")
+    ]
     mock_dl.return_value = _fake_download(run_dir, year=2011)
 
     from nhf_spatial_targets.fetch.modis import fetch_mod16a2
 
     fetch_mod16a2(run_dir=run_dir, period="2010/2011")
 
-    # search_data should only be called for 2011, not 2010
     assert mock_search.call_count == 1
     call_kwargs = mock_search.call_args[1]
     assert call_kwargs["temporal"] == ("2011-01-01", "2011-12-31")
@@ -496,3 +546,168 @@ def test_mod10c1_subset_called(
     fetch_mod10c1(run_dir=run_dir, period="2005/2005")
 
     assert mock_subset.call_count == n_files
+
+
+# ---- Granule grouping by timestep -----------------------------------------
+
+
+def test_group_granules_by_timestep():
+    """Granules are grouped by AYYYYDDD token."""
+    from nhf_spatial_targets.fetch.modis import _group_granules_by_timestep
+
+    granules = []
+    for doy in [1, 1, 9, 9, 9]:
+        g = _mock_granule(f"MOD16A2GF.A2010{doy:03d}.h08v04.061.2020256154955.hdf")
+        g.data_links.return_value = [
+            f"https://example.com/MOD16A2GF.A2010{doy:03d}.h08v04.061.2020256154955.hdf"
+        ]
+        granules.append(g)
+
+    groups = _group_granules_by_timestep(granules)
+
+    assert sorted(groups.keys()) == ["2010001", "2010009"]
+    assert len(groups["2010001"]) == 2
+    assert len(groups["2010009"]) == 3
+
+
+def test_group_granules_by_timestep_empty_data_links():
+    """Granules with empty data_links are dropped."""
+    from nhf_spatial_targets.fetch.modis import _group_granules_by_timestep
+
+    g = _mock_granule("MOD16A2GF.A2010001.h08v04.061.hdf")
+    g.data_links.return_value = []
+
+    groups = _group_granules_by_timestep([g])
+    assert groups == {}
+
+
+def test_group_granules_by_timestep_unparseable_filename():
+    """Granules with unparseable filenames are dropped."""
+    from nhf_spatial_targets.fetch.modis import _group_granules_by_timestep
+
+    g = _mock_granule("not_a_modis_file.hdf")
+    g.data_links.return_value = ["https://example.com/not_a_modis_file.hdf"]
+
+    groups = _group_granules_by_timestep([g])
+    assert groups == {}
+
+
+# ---- Granule bbox filtering -------------------------------------------------
+
+
+def _make_umm_granule(
+    name: str,
+    west: float,
+    south: float,
+    east: float,
+    north: float,
+) -> dict:
+    """Create a dict mimicking an earthaccess granule with UMM spatial metadata."""
+    return {
+        "umm": {
+            "SpatialExtent": {
+                "HorizontalSpatialDomain": {
+                    "Geometry": {
+                        "BoundingRectangles": [
+                            {
+                                "WestBoundingCoordinate": west,
+                                "EastBoundingCoordinate": east,
+                                "SouthBoundingCoordinate": south,
+                                "NorthBoundingCoordinate": north,
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+    }
+
+
+def test_granule_overlaps_bbox_inside():
+    """Granule fully inside bbox returns True."""
+    from nhf_spatial_targets.fetch.modis import _granule_overlaps_bbox
+
+    g = _make_umm_granule("tile", west=-110, south=30, east=-100, north=40)
+    assert _granule_overlaps_bbox(g, (-130, 20, -60, 55)) is True
+
+
+def test_granule_overlaps_bbox_outside():
+    """Granule fully outside bbox returns False."""
+    from nhf_spatial_targets.fetch.modis import _granule_overlaps_bbox
+
+    # Iceland tile — outside CONUS
+    g = _make_umm_granule("tile", west=-25, south=63, east=-13, north=66)
+    assert _granule_overlaps_bbox(g, (-130, 20, -60, 55)) is False
+
+
+def test_granule_overlaps_bbox_partial():
+    """Granule partially overlapping bbox returns True."""
+    from nhf_spatial_targets.fetch.modis import _granule_overlaps_bbox
+
+    # Overlaps western edge
+    g = _make_umm_granule("tile", west=-140, south=30, east=-120, north=40)
+    assert _granule_overlaps_bbox(g, (-130, 20, -60, 55)) is True
+
+
+def test_granule_overlaps_bbox_edge_touching():
+    """Granule touching bbox edge returns True."""
+    from nhf_spatial_targets.fetch.modis import _granule_overlaps_bbox
+
+    # East edge of granule == west edge of bbox
+    g = _make_umm_granule("tile", west=-140, south=30, east=-130, north=40)
+    assert _granule_overlaps_bbox(g, (-130, 20, -60, 55)) is True
+
+
+def test_granule_overlaps_bbox_missing_metadata():
+    """Granule with no UMM metadata returns True (fail-open)."""
+    from nhf_spatial_targets.fetch.modis import _granule_overlaps_bbox
+
+    assert _granule_overlaps_bbox({}, (-130, 20, -60, 55)) is True
+
+
+def test_granule_overlaps_bbox_non_list_rects():
+    """Granule with non-list BoundingRectangles returns True (fail-open)."""
+    from nhf_spatial_targets.fetch.modis import _granule_overlaps_bbox
+
+    # MagicMock-like object — BoundingRectangles is not a list
+    g = {
+        "umm": {
+            "SpatialExtent": {
+                "HorizontalSpatialDomain": {
+                    "Geometry": {"BoundingRectangles": "not-a-list"}
+                }
+            }
+        }
+    }
+    assert _granule_overlaps_bbox(g, (-130, 20, -60, 55)) is True
+
+
+def test_granule_overlaps_bbox_missing_coord_keys():
+    """Granule with incomplete bounding rect returns True (fail-open)."""
+    from nhf_spatial_targets.fetch.modis import _granule_overlaps_bbox
+
+    g = {
+        "umm": {
+            "SpatialExtent": {
+                "HorizontalSpatialDomain": {
+                    "Geometry": {
+                        "BoundingRectangles": [{"WestBoundingCoordinate": -110}]
+                    }
+                }
+            }
+        }
+    }
+    assert _granule_overlaps_bbox(g, (-130, 20, -60, 55)) is True
+
+
+def test_filter_granules_by_bbox():
+    """Filter keeps overlapping granules and drops non-overlapping ones."""
+    from nhf_spatial_targets.fetch.modis import _filter_granules_by_bbox
+
+    conus = _make_umm_granule("conus", west=-110, south=30, east=-100, north=40)
+    iceland = _make_umm_granule("iceland", west=-25, south=63, east=-13, north=66)
+    bbox = (-130, 20, -60, 55)
+
+    result = _filter_granules_by_bbox([conus, iceland], bbox)
+    assert len(result) == 1
+    assert result[0] is conus

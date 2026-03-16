@@ -19,6 +19,7 @@ dask = ">=2024.1"
 cyclopts = ">=3.0"
 rich = ">=13.0"
 tqdm = ">=4.60"
+libgdal-hdf4 = ">=3.12.2,<4"
 # gdptools: spatial aggregation (install from PyPI if not on conda-forge)
 # sciencebasepy: ScienceBase access
 # earthaccess: NASA EDL access for MODIS, MERRA-2, NLDAS

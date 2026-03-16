@@ -12,7 +12,13 @@ import xarray as xr
 from rasterio.crs import CRS
 from rasterio.transform import from_bounds
 
+from unittest.mock import patch as _patch
+
 from nhf_spatial_targets.fetch.consolidate import _time_from_modis_filename
+
+# Bbox covering CONUS in EPSG:4326 — used for MOD16A2 tests where the
+# synthetic sinusoidal tiles (h08v04, h09v04) reproject to ~47°N, -110°W.
+_TEST_BBOX = (-130.0, 20.0, -60.0, 55.0)
 
 
 def test_time_from_modis_filename():
@@ -274,11 +280,15 @@ def test_consolidate_mod10c1_filters_year(mod10c1_run_dir: Path) -> None:
 
 
 def _make_sinusoidal_tile(path: Path, h: int, v: int, value: int = 42) -> None:
-    """Write a small sinusoidal-projected GeoTIFF (with .hdf extension)."""
+    """Write a sinusoidal-projected GeoTIFF (with .hdf extension).
+
+    Tiles are 48x48 pixels at 500m — large enough to produce a multi-pixel
+    grid after reprojection to 0.04° EPSG:4326.
+    """
     srs = CRS.from_proj4(
         "+proj=sinu +lon_0=0 +x_0=0 +y_0=0 +R=6371007.181 +units=m +no_defs"
     )
-    nx, ny = 4, 4
+    nx, ny = 48, 48
     x0 = -10_000_000 + h * 200_000
     y0 = 6_000_000 - v * 200_000
     res = 500.0
@@ -318,6 +328,7 @@ def test_consolidate_mod16a2_no_files(tmp_path: Path) -> None:
             source_key=source_key,
             variables=["ET_500m"],
             year=2010,
+            bbox=_TEST_BBOX,
         )
 
 
@@ -333,6 +344,7 @@ def test_consolidate_mod16a2_synthetic(mod16a2_run_dir: Path) -> None:
         source_key=source_key,
         variables=variables,
         year=2010,
+        bbox=_TEST_BBOX,
     )
 
     out_path = mod16a2_run_dir / result["consolidated_nc"]
@@ -380,6 +392,7 @@ def test_consolidate_mod16a2_partial_tiles(mod16a2_run_dir: Path) -> None:
         source_key=source_key,
         variables=["ET_500m"],
         year=2010,
+        bbox=_TEST_BBOX,
     )
 
     # 3 remaining HDF files (2 for DOY 001, 1 for DOY 009)
@@ -404,14 +417,196 @@ def test_consolidate_mod16a2_overwrites_existing(mod16a2_run_dir: Path) -> None:
         source_key=source_key,
         variables=variables,
         year=2010,
+        bbox=_TEST_BBOX,
     )
     result2 = consolidate_mod16a2(
         run_dir=mod16a2_run_dir,
         source_key=source_key,
         variables=variables,
         year=2010,
+        bbox=_TEST_BBOX,
     )
 
     assert result1["consolidated_nc"] == result2["consolidated_nc"]
     out_path = mod16a2_run_dir / result2["consolidated_nc"]
     assert out_path.exists()
+
+
+def _make_fake_mosaic(tile_paths, variable, bbox, resolution=0.04):
+    """Return a synthetic DataArray mimicking _mosaic_and_reproject_timestep."""
+    lat = np.linspace(25.0, 50.0, 4)
+    lon = np.linspace(-125.0, -65.0, 6)
+    data = np.random.rand(1, len(lat), len(lon)).astype(np.float32)
+    da = xr.DataArray(data, dims=["band", "y", "x"])
+    return da
+
+
+def test_consolidate_mod16a2_timestep_writes_temp(mod16a2_run_dir: Path) -> None:
+    """consolidate_mod16a2_timestep writes a temp NetCDF and returns its path."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_mod16a2_timestep
+
+    source_key = "mod16a2_v061"
+    source_dir = mod16a2_run_dir / "data" / "raw" / source_key
+
+    # Collect DOY 001 tiles
+    tile_paths = sorted(source_dir.glob("MOD16A2GF.A2010001.*.hdf"))
+    assert len(tile_paths) == 2  # h08v04 and h09v04
+
+    with _patch(
+        "nhf_spatial_targets.fetch.consolidate._mosaic_and_reproject_timestep",
+        side_effect=_make_fake_mosaic,
+    ):
+        tmp_path = consolidate_mod16a2_timestep(
+            tile_paths=tile_paths,
+            variables=["ET_500m"],
+            source_dir=source_dir,
+            ydoy="2010001",
+            bbox=_TEST_BBOX,
+        )
+
+    assert tmp_path.exists()
+    assert tmp_path.name.startswith("_tmp_")
+    assert "A2010001" in tmp_path.name
+    assert tmp_path.suffix == ".nc"
+
+    ds = xr.open_dataset(tmp_path)
+    assert "time" in ds.dims
+    assert len(ds.time) == 1
+    assert "ET_500m" in ds.data_vars
+    assert "lat" in ds.dims
+    assert "lon" in ds.dims
+    ds.close()
+
+    # Clean up
+    tmp_path.unlink()
+
+
+def test_consolidate_mod16a2_finalize_concats_and_cleans(tmp_path: Path) -> None:
+    """finalize lazy-concats temp files, writes consolidated, cleans up temps."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_mod16a2_finalize
+
+    source_dir = tmp_path / "data" / "raw" / "mod16a2_v061"
+    source_dir.mkdir(parents=True)
+
+    lat = np.linspace(25.0, 50.0, 4)
+    lon = np.linspace(-125.0, -65.0, 6)
+
+    tmp_paths = []
+    for doy in [1, 9]:
+        ts = pd.Timestamp(year=2010, month=1, day=1) + pd.Timedelta(days=doy - 1)
+        ds = xr.Dataset(
+            {
+                "ET_500m": (
+                    ["time", "lat", "lon"],
+                    np.random.rand(1, len(lat), len(lon)).astype(np.float32),
+                ),
+            },
+            coords={"time": [ts], "lat": lat, "lon": lon},
+        )
+        p = source_dir / f"_tmp_99999_A2010{doy:03d}.nc"
+        ds.to_netcdf(p)
+        tmp_paths.append(p)
+
+    out_path = source_dir / "mod16a2_v061_2010_consolidated.nc"
+    result = consolidate_mod16a2_finalize(
+        tmp_paths=tmp_paths,
+        variables=["ET_500m"],
+        out_path=out_path,
+        run_dir=tmp_path,
+    )
+
+    # Final file exists
+    assert out_path.exists()
+    ds_out = xr.open_dataset(out_path)
+    assert len(ds_out.time) == 2
+    assert "ET_500m" in ds_out.data_vars
+    assert pd.DatetimeIndex(ds_out.time.values).is_monotonic_increasing
+    ds_out.close()
+
+    # Temp files cleaned up
+    for p in tmp_paths:
+        assert not p.exists()
+
+    # Provenance
+    assert "consolidated_nc" in result
+    assert result["n_files"] == 2
+
+
+def test_consolidate_mod16a2_finalize_cleans_on_failure(tmp_path: Path) -> None:
+    """Temp files are cleaned up even when the final write fails."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_mod16a2_finalize
+
+    source_dir = tmp_path / "data" / "raw" / "mod16a2_v061"
+    source_dir.mkdir(parents=True)
+
+    # Create a temp file that cannot be opened as NetCDF
+    bad_tmp = source_dir / "_tmp_99999_A2010001.nc"
+    bad_tmp.write_bytes(b"not-netcdf")
+
+    out_path = source_dir / "mod16a2_v061_2010_consolidated.nc"
+    with pytest.raises(RuntimeError):
+        consolidate_mod16a2_finalize(
+            tmp_paths=[bad_tmp],
+            variables=["ET_500m"],
+            out_path=out_path,
+            run_dir=tmp_path,
+        )
+
+    # Temp file should be cleaned up
+    assert not bad_tmp.exists()
+
+
+def test_consolidate_mod16a2_finalize_empty_raises(tmp_path: Path) -> None:
+    """ValueError raised when tmp_paths is empty."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_mod16a2_finalize
+
+    out_path = tmp_path / "consolidated.nc"
+    with pytest.raises(ValueError, match="No temp files to finalize"):
+        consolidate_mod16a2_finalize(
+            tmp_paths=[],
+            variables=["ET_500m"],
+            out_path=out_path,
+            run_dir=tmp_path,
+        )
+
+
+def test_consolidate_mod16a2_bbox_clips_output(mod16a2_run_dir: Path) -> None:
+    """Output grid is clipped to the bbox, not the full reprojected extent."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_mod16a2
+
+    source_key = "mod16a2_v061"
+
+    # Use a tight bbox that is smaller than the tiles' reprojected footprint
+    tight_bbox = (-112.0, 46.0, -108.0, 48.0)
+
+    result = consolidate_mod16a2(
+        run_dir=mod16a2_run_dir,
+        source_key=source_key,
+        variables=["ET_500m"],
+        year=2010,
+        bbox=tight_bbox,
+    )
+
+    out_path = mod16a2_run_dir / result["consolidated_nc"]
+    ds = xr.open_dataset(out_path)
+
+    # Verify the spatial extent is bounded by the tight bbox
+    lons = ds.lon.values
+    lats = ds.lat.values
+    assert lons.min() >= tight_bbox[0] - 0.04  # allow one pixel tolerance
+    assert lons.max() <= tight_bbox[2] + 0.04
+    assert lats.min() >= tight_bbox[1] - 0.04
+    assert lats.max() <= tight_bbox[3] + 0.04
+
+    # Grid should be much smaller than a global grid
+    assert ds.sizes["lon"] < 200
+    assert ds.sizes["lat"] < 200
+    ds.close()
+
+
+def test_log_memory_does_not_raise():
+    """log_memory runs without error on any platform."""
+    from nhf_spatial_targets.fetch.consolidate import log_memory
+
+    # Should not raise regardless of platform
+    log_memory("test checkpoint")

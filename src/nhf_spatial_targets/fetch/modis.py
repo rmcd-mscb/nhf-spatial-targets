@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import logging
 import os
@@ -20,6 +21,9 @@ from nhf_spatial_targets.fetch._period import years_in_period
 from nhf_spatial_targets.fetch.consolidate import (
     consolidate_mod10c1,
     consolidate_mod16a2,
+    consolidate_mod16a2_finalize,
+    consolidate_mod16a2_timestep,
+    log_memory,
 )
 
 logger = logging.getLogger(__name__)
@@ -30,6 +34,124 @@ logger = logging.getLogger(__name__)
 #   MOD10C1.A2010032.061.2020345123456.hdf
 #   MOD16A2GF.A2010001.h08v04.061.conus.nc
 _MODIS_YEAR_RE = re.compile(r"\.A(\d{4})\d{3}\.")
+_MODIS_YDOY_RE = re.compile(r"\.A(\d{7})\.")
+
+
+def _granule_overlaps_bbox(
+    granule: object,
+    bbox: tuple[float, float, float, float],
+) -> bool:
+    """Check whether a granule's spatial extent overlaps *bbox*.
+
+    Parameters
+    ----------
+    granule : earthaccess granule
+        Must have UMM metadata with SpatialExtent.
+    bbox : tuple
+        ``(minx, miny, maxx, maxy)`` in EPSG:4326 degrees.
+
+    Returns
+    -------
+    bool
+        True if the granule overlaps the bbox or if spatial metadata
+        is missing (fail-open to avoid dropping valid granules).
+    """
+    try:
+        rects = granule["umm"]["SpatialExtent"]["HorizontalSpatialDomain"]["Geometry"][
+            "BoundingRectangles"
+        ]
+        if not isinstance(rects, list):
+            logger.debug("Granule has non-list BoundingRectangles, keeping (fail-open)")
+            return True
+    except (KeyError, TypeError):
+        logger.debug("Granule missing spatial metadata, keeping (fail-open)")
+        return True
+
+    minx, miny, maxx, maxy = bbox
+    for r in rects:
+        try:
+            gw = r["WestBoundingCoordinate"]
+            ge = r["EastBoundingCoordinate"]
+            gs = r["SouthBoundingCoordinate"]
+            gn = r["NorthBoundingCoordinate"]
+        except (KeyError, TypeError):
+            logger.debug("Granule has incomplete bounding rect, keeping (fail-open)")
+            return True
+        if gw <= maxx and ge >= minx and gs <= maxy and gn >= miny:
+            return True
+    return False
+
+
+def _filter_granules_by_bbox(
+    granules: list,
+    bbox: tuple[float, float, float, float],
+) -> list:
+    """Filter granules to those overlapping *bbox*.
+
+    Parameters
+    ----------
+    granules : list
+        earthaccess granule objects.
+    bbox : tuple
+        ``(minx, miny, maxx, maxy)`` in EPSG:4326 degrees.
+
+    Returns
+    -------
+    list
+        Granules whose spatial extent overlaps *bbox*.
+    """
+    kept = [g for g in granules if _granule_overlaps_bbox(g, bbox)]
+    dropped = len(granules) - len(kept)
+    if dropped:
+        logger.info(
+            "Filtered %d of %d granules outside fabric bbox",
+            dropped,
+            len(granules),
+        )
+    return kept
+
+
+def _group_granules_by_timestep(
+    granules: list,
+) -> dict[str, list]:
+    """Group earthaccess granules by AYYYYDDD token.
+
+    Parameters
+    ----------
+    granules : list
+        earthaccess granule objects. Each must have a ``data_links()``
+        method returning URLs that contain the MODIS filename.
+
+    Returns
+    -------
+    dict[str, list]
+        Mapping from YYYYDDD token to list of granules.
+    """
+    from collections import defaultdict
+
+    groups: dict[str, list] = defaultdict(list)
+    for g in granules:
+        links = g.data_links()
+        if not links:
+            logger.warning("Granule %s has no data links, skipping", g)
+            continue
+        filename = links[0].split("/")[-1]
+        m = _MODIS_YDOY_RE.search(filename)
+        if not m:
+            logger.warning("Cannot extract AYYYYDDD from granule URL: %s", links[0])
+            continue
+        groups[m.group(1)].append(g)
+
+    total_grouped = sum(len(v) for v in groups.values())
+    dropped = len(granules) - total_grouped
+    if dropped > 0:
+        logger.warning(
+            "Dropped %d of %d granules during timestep grouping "
+            "(no data links or unparseable filenames)",
+            dropped,
+            len(granules),
+        )
+    return dict(groups)
 
 
 # ---------------------------------------------------------------------------
@@ -229,9 +351,9 @@ _MOD16A2_SOURCE_KEY = "mod16a2_v061"
 def fetch_mod16a2(run_dir: Path, period: str) -> dict:
     """Download MOD16A2 AET granules for the given period.
 
+    Downloads and consolidates per-timestep to limit peak memory.
     Supports incremental download — years already recorded in
-    ``manifest.json`` are skipped. After downloading, runs per-year
-    consolidation and updates the manifest.
+    ``manifest.json`` are skipped.
 
     Parameters
     ----------
@@ -249,10 +371,12 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
     source_key = _MOD16A2_SOURCE_KEY
     meta = _catalog.source(source_key)
     short_name = meta["access"]["short_name"]
+    variables = meta["variables"]
 
     _check_superseded(meta, source_key)
     earthdata_login(run_dir)
     logger.info("Authenticated with NASA Earthdata")
+    log_memory("after authentication")
 
     bbox = _read_fabric_bbox(run_dir)
     bbox_t = _bbox_tuple(bbox)
@@ -265,9 +389,19 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
     output_dir = run_dir / "data" / "raw" / source_key
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Clean up stale temp files from prior interrupted runs
+    for stale in output_dir.glob("_tmp_*_*.nc"):
+        try:
+            stale.unlink()
+            logger.warning("Removed stale temp file: %s", stale.name)
+        except OSError as exc:
+            logger.warning("Could not remove stale temp file %s: %s", stale.name, exc)
+
+    consolidated_ncs: dict[str, str] = {}
+
     if not needed:
         logger.info(
-            "All %d years already downloaded, skipping to consolidation",
+            "All %d years already downloaded; will check for missing consolidated files",
             len(all_years),
         )
     else:
@@ -287,42 +421,106 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
                 year,
             )
 
+            # Filter out granules whose spatial extent doesn't overlap
+            # the fabric bbox (earthaccess search can return extras)
+            granules = _filter_granules_by_bbox(granules, bbox_t)
+            log_memory(f"after search for year {year} ({len(granules)} granules)")
+
             if not granules:
                 raise ValueError(
                     f"No granules found for {short_name} with "
                     f"bbox={bbox_t}, temporal={temporal}"
                 )
 
-            downloaded = earthaccess.download(
-                granules,
-                local_path=str(output_dir),
-            )
-
-            if not downloaded:
+            # Group granules by timestep for batched download
+            ts_groups = _group_granules_by_timestep(granules)
+            if not ts_groups:
                 raise RuntimeError(
-                    f"earthaccess.download() returned no files for "
-                    f"{len(granules)} granules. Check network connectivity "
-                    f"and Earthdata credentials."
+                    f"No granules could be grouped by timestep for "
+                    f"{short_name} year {year}. This usually means granule "
+                    f"URLs have changed format. Check earthaccess granule "
+                    f"metadata for the {len(granules)} granules returned."
                 )
-            if len(downloaded) < len(granules):
-                logger.warning(
-                    "Partial download: got %d of %d granules for year %d. "
-                    "Consolidation will proceed with available files only.",
-                    len(downloaded),
-                    len(granules),
-                    year,
+            sorted_ydoys = sorted(ts_groups)
+            n_steps = len(sorted_ydoys)
+            logger.info("Grouped into %d timesteps for year %d", n_steps, year)
+
+            tmp_paths: list[Path] = []
+
+            try:
+                for i, ydoy in enumerate(sorted_ydoys, 1):
+                    batch = ts_groups[ydoy]
+                    logger.info(
+                        "Downloading timestep %d/%d (A%s): %d granules",
+                        i,
+                        n_steps,
+                        ydoy,
+                        len(batch),
+                    )
+
+                    downloaded = earthaccess.download(
+                        batch,
+                        local_path=str(output_dir),
+                    )
+
+                    if not downloaded:
+                        raise RuntimeError(
+                            f"earthaccess.download() returned no files for "
+                            f"timestep A{ydoy} ({len(batch)} granules). "
+                            f"Check network connectivity and Earthdata credentials."
+                        )
+                    if len(downloaded) < len(batch):
+                        logger.warning(
+                            "Partial download for timestep A%s: got %d of %d granules.",
+                            ydoy,
+                            len(downloaded),
+                            len(batch),
+                        )
+
+                    log_memory(f"after downloading timestep {i}/{n_steps} (A{ydoy})")
+
+                    # Consolidate this timestep immediately
+                    tile_paths = [Path(f) for f in downloaded]
+                    tmp_path = consolidate_mod16a2_timestep(
+                        tile_paths=tile_paths,
+                        variables=variables,
+                        source_dir=output_dir,
+                        ydoy=ydoy,
+                        bbox=bbox_t,
+                    )
+                    tmp_paths.append(tmp_path)
+                    gc.collect()
+                    log_memory(f"after consolidating timestep {i}/{n_steps} (A{ydoy})")
+
+                # Finalize: lazy-concat temp files into consolidated NetCDF
+                out_path = output_dir / f"{source_key}_{year}_consolidated.nc"
+                result = consolidate_mod16a2_finalize(
+                    tmp_paths=tmp_paths,
+                    variables=variables,
+                    out_path=out_path,
+                    run_dir=run_dir,
+                    keep_tmp=False,
                 )
-            logger.info(
-                "Downloaded %d files for year %d to %s",
-                len(downloaded),
-                year,
-                output_dir,
-            )
+                consolidated_ncs[str(year)] = result["consolidated_nc"]
+                logger.info("Downloaded and consolidated year %d", year)
+            except Exception:
+                for p in tmp_paths:
+                    if p.exists():
+                        p.unlink()
+                        logger.debug("Cleaned up temp file after failure: %s", p.name)
+                raise
+
+    # Re-consolidate any years that were already downloaded but not yet
+    # consolidated in this run (e.g. prior download, no consolidated file)
+    all_hdf_files = sorted(output_dir.glob("*.hdf"))
+    years_on_disk = sorted({_year_from_path(p) for p in all_hdf_files})
+    for year in years_on_disk:
+        if str(year) not in consolidated_ncs:
+            logger.info("Re-consolidating %s year %d", source_key, year)
+            result = consolidate_mod16a2(run_dir, source_key, variables, year, bbox_t)
+            consolidated_ncs[str(year)] = result["consolidated_nc"]
 
     # Build file inventory from all .hdf files on disk
-    all_hdf_files = sorted(output_dir.glob("*.hdf"))
-
-    # Preserve original downloaded_utc for files already in manifest
     existing_timestamps = _existing_file_timestamps(run_dir, source_key)
     now_utc = datetime.now(timezone.utc).isoformat()
 
@@ -338,15 +536,6 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
                 "downloaded_utc": existing_timestamps.get(yr, now_utc),
             }
         )
-
-    # Per-year consolidation
-    variables = meta["variables"]
-    consolidated_ncs: dict[str, str] = {}
-    years_on_disk = sorted({f["year"] for f in files})
-    for year in years_on_disk:
-        logger.info("Consolidating %s year %d", source_key, year)
-        result = consolidate_mod16a2(run_dir, source_key, variables, year)
-        consolidated_ncs[str(year)] = result["consolidated_nc"]
 
     # Compute effective period from actual files on disk
     if years_on_disk:

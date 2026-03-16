@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import gc
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +18,36 @@ from tqdm import tqdm
 from nhf_spatial_targets import __version__
 
 logger = logging.getLogger(__name__)
+
+
+def log_memory(label: str) -> None:
+    """Log current RSS (Linux /proc) or peak RSS (resource module fallback).
+
+    On macOS the ``resource`` fallback adjusts for bytes-valued ``ru_maxrss``.
+    This function never raises — all errors are caught and logged.
+    """
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    rss_kb = int(line.split()[1])
+                    rss_gib = rss_kb / (1024**2)
+                    logger.info("[memory] RSS=%.2f GiB — %s", rss_gib, label)
+                    return
+    except (OSError, ValueError) as exc:
+        logger.debug("[memory] /proc/self/status unavailable: %s — %s", exc, label)
+    try:
+        import resource
+        import sys
+
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        if sys.platform == "darwin":
+            peak_gib = peak / (1024**3)  # bytes on macOS
+        else:
+            peak_gib = peak / (1024**2)  # KB on Linux
+        logger.info("[memory] peak RSS=%.2f GiB — %s", peak_gib, label)
+    except (ImportError, OSError):
+        logger.debug("[memory] cannot read RSS on this platform — %s", label)
 
 
 def open_consolidated(nc_path: Path) -> xr.Dataset:
@@ -373,32 +405,70 @@ def consolidate_mod10c1(
 def _mosaic_and_reproject_timestep(
     tile_paths: list[Path],
     variable: str,
+    bbox: tuple[float, float, float, float],
     resolution: float = 0.04,
 ) -> xr.DataArray:
-    """Mosaic tiles for one variable/timestep, reproject to EPSG:4326."""
+    """Mosaic tiles for one variable/timestep, reproject to EPSG:4326, clip to bbox.
+
+    Parameters
+    ----------
+    tile_paths : list[Path]
+        HDF tile files (sinusoidal CRS) for a single timestep.
+    variable : str
+        Variable name to extract from each tile.
+    bbox : tuple
+        ``(minx, miny, maxx, maxy)`` in EPSG:4326 degrees.
+    resolution : float
+        Output resolution in degrees (default 0.04).
+
+    Returns
+    -------
+    xr.DataArray
+        Loaded, numpy-backed DataArray clipped to *bbox* in EPSG:4326.
+    """
     import rioxarray  # noqa: F401
     from rasterio.enums import Resampling
     from rioxarray.merge import merge_arrays
-
-    arrays = []
-    for p in tile_paths:
-        try:
-            da = rioxarray.open_rasterio(p, variable=variable, masked=True)
-        except TypeError:
-            logger.warning(
-                "variable= kwarg not supported for %s; "
-                "opening without subdataset selection",
-                p.name,
-            )
-            da = rioxarray.open_rasterio(p, masked=True)
-        if isinstance(da, list):
-            da = da[0]
-        arrays.append(da)
 
     if "QC" in variable or "qa" in variable.lower():
         resampling = Resampling.nearest
     else:
         resampling = Resampling.average
+
+    arrays = []
+    for p in tile_paths:
+        try:
+            result = rioxarray.open_rasterio(p, variable=variable, masked=True)
+        except TypeError as exc:
+            if "variable" not in str(exc) and "unexpected keyword" not in str(exc):
+                raise  # Re-raise TypeErrors unrelated to the variable= kwarg
+            logger.warning(
+                "variable= kwarg not supported for %s; "
+                "opening without subdataset selection: %s",
+                p.name,
+                exc,
+            )
+            result = rioxarray.open_rasterio(p, masked=True)
+        # open_rasterio may return Dataset (HDF4), list, or DataArray.
+        # Load eagerly to detach from rasterio/GDAL file handles.
+        if isinstance(result, xr.Dataset):
+            da = result[variable].load()
+            result.close()
+        elif isinstance(result, list):
+            if len(result) > 1:
+                logger.warning(
+                    "open_rasterio returned %d subdatasets for %s; "
+                    "using first subdataset only",
+                    len(result),
+                    p.name,
+                )
+            da = result[0].load()
+            for item in result:
+                item.close()
+        else:
+            da = result.load()
+            result.close()
+        arrays.append(da)
 
     try:
         if len(arrays) == 1:
@@ -406,22 +476,208 @@ def _mosaic_and_reproject_timestep(
         else:
             mosaic = merge_arrays(arrays)
 
+        # Build a deterministic output grid from bbox + resolution so that
+        # every timestep produces identical lon/lat coordinates regardless
+        # of which tiles are present.
+        minx, miny, maxx, maxy = bbox
+        dst_width = int(np.ceil((maxx - minx) / resolution))
+        dst_height = int(np.ceil((maxy - miny) / resolution))
+        from rasterio.transform import from_bounds as _from_bounds
+
+        dst_transform = _from_bounds(minx, miny, maxx, maxy, dst_width, dst_height)
+
         reprojected = mosaic.rio.reproject(
             "EPSG:4326",
-            resolution=resolution,
+            shape=(dst_height, dst_width),
+            transform=dst_transform,
             resampling=resampling,
         )
+
+        # Load into memory as float32 (MODIS source is int16; float64
+        # is unnecessary and doubles file size).
+        result_da = reprojected.load().astype(np.float32)
     except Exception as exc:
         raise RuntimeError(
-            f"Failed to mosaic/reproject {len(arrays)} tiles for "
+            f"Failed to mosaic/reproject/clip {len(arrays)} tiles for "
             f"variable '{variable}'. "
             f"Tiles: {[p.name for p in tile_paths]}. Detail: {exc}"
         ) from exc
     finally:
         for a in arrays:
             a.close()
+        del arrays
 
-    return reprojected
+    return result_da
+
+
+def consolidate_mod16a2_timestep(
+    tile_paths: list[Path],
+    variables: list[str],
+    source_dir: Path,
+    ydoy: str,
+    bbox: tuple[float, float, float, float],
+    resolution: float = 0.04,
+) -> Path:
+    """Mosaic, reproject, and clip tiles for one timestep to a temp NetCDF.
+
+    Parameters
+    ----------
+    tile_paths : list[Path]
+        HDF tile files for a single MODIS timestep.
+    variables : list[str]
+        Variable names to extract.
+    source_dir : Path
+        Directory to write the temp file into.
+    ydoy : str
+        Seven-digit YYYYDDD token (e.g. "2010001").
+    bbox : tuple
+        ``(minx, miny, maxx, maxy)`` in EPSG:4326 degrees for clipping.
+    resolution : float
+        Output resolution in degrees (default 0.04).
+
+    Returns
+    -------
+    Path
+        Path to the written temp NetCDF file.
+    """
+    timestamp = _time_from_modis_filename(tile_paths[0])
+
+    var_arrays: dict[str, xr.DataArray] = {}
+    try:
+        for var in variables:
+            da = _mosaic_and_reproject_timestep(tile_paths, var, bbox, resolution)
+            if "band" in da.dims:
+                da = da.squeeze("band", drop=True)
+            rename_map = {}
+            if "y" in da.dims:
+                rename_map["y"] = "lat"
+            if "x" in da.dims:
+                rename_map["x"] = "lon"
+            if rename_map:
+                da = da.rename(rename_map)
+            var_arrays[var] = da
+    except Exception:
+        for da in var_arrays.values():
+            da.close()
+        raise
+
+    ds_step = xr.Dataset(var_arrays)
+    ds_step = ds_step.expand_dims(time=[timestamp])
+
+    tmp_path = source_dir / f"_tmp_{os.getpid()}_A{ydoy}.nc"
+    try:
+        ds_step.to_netcdf(tmp_path)
+    except Exception as exc:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise RuntimeError(
+            f"Failed to write temp file for timestep A{ydoy}. Detail: {exc}"
+        ) from exc
+    finally:
+        ds_step.close()
+        for da in var_arrays.values():
+            da.close()
+        del ds_step, var_arrays
+
+    logger.info("Wrote temp file: %s", tmp_path.name)
+    return tmp_path
+
+
+def consolidate_mod16a2_finalize(
+    tmp_paths: list[Path],
+    variables: list[str],
+    out_path: Path,
+    run_dir: Path,
+    keep_tmp: bool = False,
+) -> dict:
+    """Concat per-timestep temp files into the final consolidated NetCDF.
+
+    Parameters
+    ----------
+    tmp_paths : list[Path]
+        Temp NetCDF files produced by ``consolidate_mod16a2_timestep``.
+    variables : list[str]
+        Variable names to validate.
+    out_path : Path
+        Path for the final consolidated file.
+    run_dir : Path
+        Run workspace root (for computing relative paths in provenance).
+    keep_tmp : bool
+        If True, do not delete temp files after writing the consolidated
+        file.  Useful for debugging coordinate alignment issues.
+
+    Returns
+    -------
+    dict
+        Provenance record.
+    """
+
+    def _cleanup_temps() -> None:
+        for p in tmp_paths:
+            if p.exists():
+                p.unlink()
+                logger.debug("Removed temp file: %s", p.name)
+
+    if not tmp_paths:
+        raise ValueError(
+            "No temp files to finalize. This indicates no timesteps were "
+            "successfully processed. Check earlier log messages for errors."
+        )
+
+    logger.info(
+        "Writing final consolidated file from %d timestep files", len(tmp_paths)
+    )
+
+    try:
+        ds = xr.open_mfdataset(
+            [str(p) for p in tmp_paths],
+            combine="nested",
+            concat_dim="time",
+            chunks={},
+            data_vars="all",
+            join="override",
+        )
+        try:
+            ds = ds.sortby("time")
+            _validate_variables(ds, variables)
+            # Keep spatial_ref alongside the requested variables
+            keep = list(variables)
+            if "spatial_ref" in ds:
+                keep.append("spatial_ref")
+            ds = ds[keep]
+            # Restore grid_mapping attribute (open_mfdataset can drop it)
+            for var in variables:
+                if var in ds and "grid_mapping" not in ds[var].attrs:
+                    ds[var].attrs["grid_mapping"] = "spatial_ref"
+            _write_netcdf(ds, out_path)
+        finally:
+            ds.close()
+        logger.info("Wrote %s", out_path)
+    except RuntimeError:
+        if not keep_tmp:
+            _cleanup_temps()
+        raise
+    except Exception as exc:
+        if not keep_tmp:
+            _cleanup_temps()
+        raise RuntimeError(
+            f"Failed to finalize consolidated file {out_path}. "
+            f"{'Temp files cleaned up. ' if not keep_tmp else ''}"
+            f"Detail: {exc}"
+        ) from exc
+
+    if not keep_tmp:
+        _cleanup_temps()
+    else:
+        logger.info("Keeping %d temp files for inspection", len(tmp_paths))
+    log_memory(f"after writing {out_path.name}")
+
+    return {
+        "consolidated_nc": str(out_path.relative_to(run_dir)),
+        "last_consolidated_utc": datetime.now(timezone.utc).isoformat(),
+        "n_files": len(tmp_paths),
+        "variables": variables,
+    }
 
 
 def consolidate_mod16a2(
@@ -429,13 +685,14 @@ def consolidate_mod16a2(
     source_key: str,
     variables: list[str],
     year: int,
+    bbox: tuple[float, float, float, float],
     resolution: float = 0.04,
 ) -> dict:
     """Merge per-granule MOD16A2 HDF files into a consolidated NetCDF.
 
-    Globs ``*.hdf`` files, groups tiles by time step (AYYYYDDD token),
-    mosaics and reprojects each time step to EPSG:4326, and writes a
-    single consolidated NetCDF per year.
+    Convenience wrapper: groups tiles by timestep, calls
+    ``consolidate_mod16a2_timestep`` for each, then
+    ``consolidate_mod16a2_finalize`` to produce the final file.
 
     Parameters
     ----------
@@ -447,6 +704,8 @@ def consolidate_mod16a2(
         Variable names to include.
     year : int
         Year to consolidate.
+    bbox : tuple
+        ``(minx, miny, maxx, maxy)`` in EPSG:4326 degrees for clipping.
     resolution : float
         Output resolution in degrees (default 0.04 ≈ 4 km).
 
@@ -469,7 +728,15 @@ def consolidate_mod16a2(
             f"Run 'nhf-targets fetch {source_key.replace('_', '-')}' first."
         )
 
-    # Group tiles by time step (AYYYYDDD token)
+    # Clean up any stale temp files from prior interrupted runs
+    for stale in source_dir.glob("_tmp_*_*.nc"):
+        try:
+            stale.unlink()
+            logger.warning("Removed stale temp file: %s", stale.name)
+        except OSError as exc:
+            logger.warning("Could not remove stale temp file %s: %s", stale.name, exc)
+
+    # Group tiles by timestep (AYYYYDDD token)
     timestep_groups: dict[str, list[Path]] = defaultdict(list)
     for f in hdf_files:
         m = year_pattern.search(f.name)
@@ -484,50 +751,43 @@ def consolidate_mod16a2(
         year,
     )
 
-    time_datasets: list[xr.Dataset] = []
-    for ydoy in tqdm(sorted(timestep_groups), desc=f"Mosaicking {source_key} {year}"):
+    sorted_ydoys = sorted(timestep_groups)
+    n_steps = len(sorted_ydoys)
+    tmp_paths: list[Path] = []
+
+    for i, ydoy in enumerate(
+        tqdm(sorted_ydoys, desc=f"Mosaicking {source_key} {year}"), 1
+    ):
         tile_paths = timestep_groups[ydoy]
-        timestamp = _time_from_modis_filename(tile_paths[0])
+        logger.info(
+            "Consolidating timestep %d/%d (A%s): %d tiles",
+            i,
+            n_steps,
+            ydoy,
+            len(tile_paths),
+        )
+        tmp_path = consolidate_mod16a2_timestep(
+            tile_paths=tile_paths,
+            variables=variables,
+            source_dir=source_dir,
+            ydoy=ydoy,
+            bbox=bbox,
+            resolution=resolution,
+        )
+        tmp_paths.append(tmp_path)
+        gc.collect()
+        log_memory(f"after timestep {i}/{n_steps} (A{ydoy})")
 
-        var_arrays: dict[str, xr.DataArray] = {}
-        for var in variables:
-            da = _mosaic_and_reproject_timestep(tile_paths, var, resolution)
-            # Squeeze band dimension if present
-            if "band" in da.dims:
-                da = da.squeeze("band", drop=True)
-            # Rename spatial dims to lat/lon
-            rename_map = {}
-            if "y" in da.dims:
-                rename_map["y"] = "lat"
-            if "x" in da.dims:
-                rename_map["x"] = "lon"
-            if rename_map:
-                da = da.rename(rename_map)
-            var_arrays[var] = da
-
-        ds_step = xr.Dataset(var_arrays)
-        ds_step = ds_step.expand_dims(time=[timestamp])
-        time_datasets.append(ds_step)
-
-    try:
-        ds = xr.concat(time_datasets, dim="time", join="outer")
-        ds = ds.sortby("time")
-        _validate_variables(ds, variables)
-
-        out_path = source_dir / f"{source_key}_{year}_consolidated.nc"
-        logger.info("Writing consolidated file: %s", out_path)
-        _write_netcdf(ds, out_path)
-        logger.info("Wrote %s", out_path)
-    finally:
-        for ts in time_datasets:
-            ts.close()
-
-    return {
-        "consolidated_nc": str(out_path.relative_to(run_dir)),
-        "last_consolidated_utc": datetime.now(timezone.utc).isoformat(),
-        "n_files": len(hdf_files),
-        "variables": variables,
-    }
+    out_path = source_dir / f"{source_key}_{year}_consolidated.nc"
+    result = consolidate_mod16a2_finalize(
+        tmp_paths=tmp_paths,
+        variables=variables,
+        out_path=out_path,
+        run_dir=run_dir,
+    )
+    # Override n_files with HDF count (finalize reports timestep count)
+    result["n_files"] = len(hdf_files)
+    return result
 
 
 def consolidate_ncep_ncar(
