@@ -155,22 +155,27 @@ sources:
   watergap22d:
     name: WaterGAP 2.2d Global Hydrological Model (substitute for 2.2a)
     description: >
-      Open-access successor to WaterGAP 2.2a on PANGAEA. Consider as
-      substitute for watergap22a in the recharge calibration target.
+      Open-access successor to WaterGAP 2.2a on PANGAEA. Diffuse groundwater
+      recharge (Rg) used as one of two sources for the recharge calibration
+      target range (normalized min-max method).
     citations:
-      - "Müller Schmied, H., and others, 2021, doi:10.5194/essd-13-2791-2021"
+      - "Müller Schmied, H., and others, 2021, doi:10.5194/gmd-14-1037-2021"
     access:
       type: pangaea
       doi: "10.1594/PANGAEA.918447"
       url: https://doi.pangaea.de/10.1594/PANGAEA.918447
-      notes: Open access. Verify recharge variable name and period of record.
+      file: watergap_22d_WFDEI-GPCC_histsoc_qrdif_monthly_1901_2016.nc4
     variables:
-      - groundwater_recharge  # verify variable name
-    time_step: annual
+      - name: groundwater_recharge
+        file_variable: qrdif
+        long_name: diffuse groundwater recharge
+        units: kg m-2 s-1
+    time_step: monthly
     period: "1901/2016"
     spatial_extent: global
     spatial_resolution: 0.5 degree
-    units: mm/month (normalized to dimensionless for calibration)
+    units: kg m-2 s-1
+    license: CC BY-NC 4.0
     status: current
 
   # ---------------------------------------------------------------------------
