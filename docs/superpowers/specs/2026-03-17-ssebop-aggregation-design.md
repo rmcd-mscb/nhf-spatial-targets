@@ -65,6 +65,27 @@ SSEBop is a remote dataset accessed via gdptools STAC interface — no local
 download step. This is an intentional pattern variation for `usgs_gdp_stac`
 sources compared to the fetch-then-aggregate pattern used for other sources.
 
+## Spatial Batching
+
+**File:** `src/nhf_spatial_targets/aggregate/batching.py`
+
+Adapted from `hydro-param` (github.com/rmcd-mscb/hydro-param). Uses KD-tree
+recursive bisection to partition fabric HRUs into spatially contiguous batches.
+
+**Function:** `spatial_batch(gdf, batch_size=500) -> gpd.GeoDataFrame`
+
+- Computes polygon centroids, then recursively bisects along alternating x/y
+  axes at the median (KD-tree style).
+- Returns a copy of the GeoDataFrame with a `batch_id` column (int, 0-indexed).
+- Recursion depth: `ceil(log2(n_features / batch_size))`.
+- `min_batch_size = batch_size // 2` prevents excessive fragmentation.
+- Suppresses geographic CRS centroid warnings (approximate centroids are
+  sufficient for spatial grouping).
+
+Spatial contiguity is critical: naive batching (e.g., by row order) would
+produce batches with large bounding boxes, causing gdptools to fetch far more
+source data than needed and risking OOM on high-resolution grids.
+
 ## Aggregate Module
 
 **File:** `src/nhf_spatial_targets/aggregate/ssebop.py`
@@ -79,18 +100,19 @@ All new modules use `from __future__ import annotations`.
 2. Obtain the STAC collection object via
    `gdptools.helpers.get_stac_collection(collection_id)`.
 3. Load fabric GeoDataFrame from the GeoPackage.
-4. Chunk the fabric into batches of HRUs (configurable chunk size).
-5. For each chunk:
-   a. Check for cached weights at `<run_dir>/weights/ssebop_chunk<N>.csv`.
+4. Spatially batch the fabric via `spatial_batch(gdf, batch_size)` — produces
+   a `batch_id` column with spatially contiguous groups.
+5. For each batch (grouped by `batch_id`):
+   a. Check for cached weights at `<run_dir>/weights/ssebop_batch<N>.csv`.
    b. If no cache: create `NHGFStacZarrData` with `source_collection`,
-      chunk GeoDataFrame, `source_var="et"`, and time period. Run
+      batch GeoDataFrame, `source_var="et"`, and time period. Run
       `WeightGen.calculate_weights(method="serial")`, save CSV.
    c. If cached: load weights DataFrame from CSV.
    d. Create `AggGen` with `stat_method="masked_mean"`, `agg_engine="serial"`,
       `agg_writer="none"`, pass weights DataFrame.
    e. Call `calculate_agg()` → `(gdf, xr.Dataset)`.
    f. Collect the Dataset.
-6. Concatenate chunk Datasets along the HRU dimension.
+6. Concatenate batch Datasets along the HRU dimension.
 7. Write consolidated NetCDF to `<run_dir>/output/ssebop_aet.nc`.
 8. Return the Dataset.
 
@@ -101,13 +123,14 @@ All new modules use `from __future__ import annotations`.
 - `weight_gen_crs=5070` (NAD83 / CONUS Albers, EPSG:5070, equal-area for
   accurate intersection areas)
 - `weight_gen_method="serial"` (matches `agg_engine`)
-- Weight CSVs named by source key + chunk index for identification and reuse
+- `batch_size=500` (configurable, target HRUs per batch)
+- Weight CSVs named by source key + batch index for identification and reuse
 
 ### Weight Caching
 
 Weights are keyed by (source grid, fabric). As long as the source and target
 are the same, weights can be reused across runs. Weight CSVs are stored at
-`<run_dir>/weights/ssebop_chunk<N>.csv`.
+`<run_dir>/weights/ssebop_batch<N>.csv`.
 
 ### Output
 
@@ -148,7 +171,7 @@ After aggregation completes, write a provenance entry to
     "period": "2000-01-01/2010-12-31",
     "fabric_sha256": "<from fabric.json>",
     "output_file": "output/ssebop_aet.nc",
-    "weight_files": ["weights/ssebop_chunk0.csv", "..."],
+    "weight_files": ["weights/ssebop_batch0.csv", "..."],
     "timestamp": "<ISO 8601>"
   }
 }
@@ -160,11 +183,17 @@ After aggregation completes, write a provenance entry to
 
 ### Unit Tests
 
+**`tests/test_batching.py`** — spatial batching module:
+- Verify spatially contiguous batch assignment on a synthetic GeoDataFrame.
+- Edge cases: empty GeoDataFrame, fewer features than batch_size (single batch),
+  features aligned along one axis (degenerate median split).
+
+**`tests/test_aggregate_ssebop.py`** — aggregation orchestration:
 - Mock `NHGFStacZarrData`, `WeightGen`, and `AggGen` to verify orchestration:
-  chunking logic, weight cache check/save/reload, dataset concatenation,
+  batching logic, weight cache check/save/reload, dataset concatenation,
   manifest writing.
 - Test that cached weights CSV is loaded instead of recomputed.
-- Test that chunk results are concatenated correctly along HRU dimension.
+- Test that batch results are concatenated correctly along HRU dimension.
 
 ### Integration Tests (`pytest.mark.integration`)
 
