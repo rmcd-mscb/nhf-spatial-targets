@@ -772,6 +772,7 @@ def consolidate_mod16a2_finalize(
     variables: list[str],
     out_path: Path,
     run_dir: Path,
+    source_key: str = "mod16a2_v061",
     keep_tmp: bool = False,
 ) -> dict:
     """Concat per-timestep temp files into the final consolidated NetCDF.
@@ -824,15 +825,8 @@ def consolidate_mod16a2_finalize(
         try:
             ds = ds.sortby("time")
             _validate_variables(ds, variables)
-            # Keep spatial_ref alongside the requested variables
-            keep = list(variables)
-            if "spatial_ref" in ds:
-                keep.append("spatial_ref")
-            ds = ds[keep]
-            # Restore grid_mapping attribute (open_mfdataset can drop it)
-            for var in variables:
-                if var in ds and "grid_mapping" not in ds[var].attrs:
-                    ds[var].attrs["grid_mapping"] = "spatial_ref"
+            ds = ds[variables]
+            ds = apply_cf_metadata(ds, source_key, "8-day")
             _write_netcdf(ds, out_path)
         finally:
             ds.close()
@@ -968,6 +962,7 @@ def consolidate_mod16a2(
         variables=variables,
         out_path=out_path,
         run_dir=run_dir,
+        source_key=source_key,
     )
     # Override n_files with HDF count (finalize reports timestep count)
     result["n_files"] = len(hdf_files)

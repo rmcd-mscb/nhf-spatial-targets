@@ -604,6 +604,33 @@ def test_consolidate_mod16a2_bbox_clips_output(mod16a2_run_dir: Path) -> None:
     ds.close()
 
 
+def test_consolidate_mod16a2_cf_metadata(mod16a2_run_dir: Path) -> None:
+    """MOD16A2 consolidated file has CF-1.6 metadata with crs (not spatial_ref)."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_mod16a2
+
+    source_key = "mod16a2_v061"
+    result = consolidate_mod16a2(
+        run_dir=mod16a2_run_dir,
+        source_key=source_key,
+        variables=["ET_500m"],
+        year=2010,
+        bbox=_TEST_BBOX,
+    )
+
+    out_path = mod16a2_run_dir / result["consolidated_nc"]
+    ds = xr.open_dataset(out_path)
+    assert ds.attrs["Conventions"] == "CF-1.6"
+    assert "crs" in ds.data_vars
+    assert "spatial_ref" not in ds.data_vars
+    assert "spatial_ref" not in ds.coords
+    assert ds["ET_500m"].attrs["grid_mapping"] == "crs"
+    assert ds["ET_500m"].attrs["units"] == "kg m-2"
+    assert ds["ET_500m"].attrs["long_name"] == "actual evapotranspiration"
+    assert ds.lat.attrs["standard_name"] == "latitude"
+    assert ds.lon.attrs["standard_name"] == "longitude"
+    ds.close()
+
+
 def test_consolidate_mod10c1_cf_metadata(mod10c1_run_dir: Path) -> None:
     """MOD10C1 consolidated file has CF-1.6 metadata."""
     from nhf_spatial_targets.fetch.consolidate import consolidate_mod10c1

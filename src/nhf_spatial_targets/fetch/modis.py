@@ -499,6 +499,7 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
                     variables=variables,
                     out_path=out_path,
                     run_dir=run_dir,
+                    source_key=source_key,
                     keep_tmp=False,
                 )
                 consolidated_ncs[str(year)] = result["consolidated_nc"]
