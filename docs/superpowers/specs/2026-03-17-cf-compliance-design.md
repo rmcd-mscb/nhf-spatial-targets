@@ -58,7 +58,7 @@ def apply_cf_metadata(
    - If the source has no `variables` key, logs a warning and skips this step.
    - For dict entries: matches on `name` field against dataset data var names.
    - For plain string entries: matches on the string value.
-   - Applies `long_name` and `cf_units` (falling back to `units`) to matching data vars.
+   - Applies `long_name`, `cf_units` (falling back to `units`), and `cell_methods` (when present) to matching data vars.
    - The `units` field in the catalog is human-readable documentation (may include parenthetical annotations). The `cf_units` field is the machine-readable UDUNITS-2 compatible string used for CF metadata. When both exist, `cf_units` takes precedence.
    - Silently skips data vars not found in catalog (e.g., `crs`, `time_bnds`).
 
