@@ -150,10 +150,10 @@ Note: MOD16A2 ET is accumulated over the 8-day compositing period. The CF-valid 
 variables:
   - name: total_recharge
     long_name: "Total recharge"
-    cf_units: "inches/year"
+    cf_units: "inches yr-1"
   - name: eff_recharge
     long_name: "Effective recharge (base flow component)"
-    cf_units: "inches/year"
+    cf_units: "inches yr-1"
 ```
 
 **MERRA-2** — add `cf_units` to existing variable dicts:

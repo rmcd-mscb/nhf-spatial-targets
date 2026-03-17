@@ -110,10 +110,10 @@ With:
     variables:
       - name: total_recharge
         long_name: "Total recharge"
-        cf_units: "inches/year"
+        cf_units: "inches yr-1"
       - name: eff_recharge
         long_name: "Effective recharge (base flow component)"
-        cf_units: "inches/year"
+        cf_units: "inches yr-1"
 ```
 
 - [ ] **Step 5: Run catalog tests**
