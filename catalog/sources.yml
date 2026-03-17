@@ -116,15 +116,27 @@ sources:
     access:
       type: sciencebase
       item_id: "56c49126e4b0946c65219231"
+      child_item_id: "55d383a9e4b0518e35468e58"
       doi: "10.5066/F7PN93P0"
       url: https://www.sciencebase.gov/catalog/item/56c49126e4b0946c65219231
+      file_patterns:
+        total_recharge: "TotalRecharge_{year}.zip"
+        eff_recharge: "EffRecharge_{year}.zip"
     variables:
-      - recharge
+      - name: total_recharge
+        file_variable: TotalRecharge
+        long_name: total groundwater recharge
+        units: inches/year
+      - name: eff_recharge
+        file_variable: EffRecharge
+        long_name: effective groundwater recharge (base flow component)
+        units: inches/year
     time_step: annual
     period: "2000/2013"
     spatial_extent: CONUS
     spatial_resolution: 800m raster
-    units: inches/year (normalized to dimensionless for calibration)
+    units: inches/year
+    license: public domain (USGS)
     status: current
 
   watergap22a:
