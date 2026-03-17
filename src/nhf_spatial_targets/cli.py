@@ -554,6 +554,58 @@ def fetch_mod10c1_cmd(
     console.print(json_mod.dumps(result, indent=2))
 
 
+@fetch_app.command(name="watergap22d")
+def fetch_watergap22d_cmd(
+    run_dir: Annotated[
+        Path,
+        Parameter(
+            name=["--run-dir", "-r"],
+            help="Run workspace created by 'nhf-targets init'.",
+        ),
+    ],
+    period: Annotated[
+        str,
+        Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
+    ],
+):
+    """Download WaterGAP 2.2d groundwater recharge from PANGAEA.
+
+    Downloads the diffuse groundwater recharge (qrdif) NC4 file,
+    applies CF compliance fixes, and prints the provenance record.
+    """
+    import json as json_mod
+
+    from rich.console import Console
+
+    from nhf_spatial_targets.fetch.pangaea import fetch_watergap22d
+
+    if not run_dir.exists():
+        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+        sys.exit(2)
+
+    console = Console()
+    console.print(f"[bold]Fetching WaterGAP 2.2d for period {period}...[/bold]")
+
+    try:
+        result = fetch_watergap22d(run_dir=run_dir, period=period)
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        _logger.exception("Unexpected error during WaterGAP 2.2d fetch")
+        print(
+            f"Unexpected error ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    console.print(
+        f"[green]Downloaded WaterGAP 2.2d to "
+        f"{run_dir / 'data' / 'raw' / 'watergap22d'}[/green]"
+    )
+    console.print(json_mod.dumps(result, indent=2))
+
+
 @catalog_app.command(name="sources")
 def catalog_sources():
     """List all registered data sources."""
