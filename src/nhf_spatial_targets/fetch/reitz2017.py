@@ -9,6 +9,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import rioxarray  # noqa: F401 — registers .rio accessor
 import xarray as xr
@@ -63,6 +64,7 @@ def _consolidate(output_dir: Path, period: str) -> Path:
     var_arrays: dict[str, dict[int, xr.DataArray]] = {
         ds_name: {} for _, ds_name in var_configs
     }
+    src_crs_wkt: str | None = None
 
     for file_prefix, ds_name in var_configs:
         for tif_path in sorted(output_dir.glob(f"{file_prefix}_*.tif")):
@@ -71,7 +73,10 @@ def _consolidate(output_dir: Path, period: str) -> Path:
                 continue
             try:
                 da = rioxarray.open_rasterio(tif_path, masked=True)
-                da = da.squeeze("band", drop=True)
+                da = da.squeeze("band", drop=True).load()
+                if src_crs_wkt is None and da.rio.crs is not None:
+                    src_crs_wkt = da.rio.crs.to_wkt()
+                da.close()
             except Exception as exc:
                 raise RuntimeError(
                     f"Failed to read GeoTIFF '{tif_path.name}' for variable "
@@ -110,6 +115,42 @@ def _consolidate(output_dir: Path, period: str) -> Path:
         )
         stacked = stacked.assign_coords(time=time_coords)
         ds[ds_name] = stacked
+
+    # Drop rioxarray's spatial_ref (replaced by CF-compliant crs variable)
+    if "spatial_ref" in ds:
+        ds = ds.drop_vars("spatial_ref")
+
+    # Add CF-compliant CRS variable (NAD83 / EPSG:4269)
+    if src_crs_wkt is not None:
+        crs_var = xr.DataArray(
+            np.int32(0),
+            attrs={
+                "grid_mapping_name": "latitude_longitude",
+                "semi_major_axis": 6378137.0,
+                "inverse_flattening": 298.257222101,
+                "longitude_of_prime_meridian": 0.0,
+                "crs_wkt": src_crs_wkt,
+            },
+        )
+        ds["crs"] = crs_var
+        for _, ds_name in var_configs:
+            ds[ds_name].attrs["grid_mapping"] = "crs"
+
+    # Add CF variable metadata
+    ds["total_recharge"].attrs.update(
+        long_name="Total recharge",
+        units="inches/year",
+    )
+    ds["eff_recharge"].attrs.update(
+        long_name="Effective recharge (base flow component)",
+        units="inches/year",
+    )
+
+    # Add CF coordinate metadata
+    ds.y.attrs = {"standard_name": "latitude", "units": "degrees_north", "axis": "Y"}
+    ds.x.attrs = {"standard_name": "longitude", "units": "degrees_east", "axis": "X"}
+    ds.time.attrs = {"standard_name": "time", "long_name": "time", "axis": "T"}
+    ds.attrs["Conventions"] = "CF-1.6"
 
     # Write atomically with compression
     encoding = {ds_name: {"zlib": True, "complevel": 4} for _, ds_name in var_configs}
