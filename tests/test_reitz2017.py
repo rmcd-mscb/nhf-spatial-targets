@@ -173,7 +173,7 @@ def test_missing_fabric_raises(tmp_path: Path):
 
 
 def test_skips_existing(run_dir: Path, _mock_sciencebasepy):
-    """Skip everything when consolidated NC exists."""
+    """Skip everything when consolidated NC exists and covers period."""
     from nhf_spatial_targets.fetch.reitz2017 import fetch_reitz2017
 
     output_dir = run_dir / "data" / "raw" / "reitz2017"
@@ -192,6 +192,21 @@ def test_skips_existing(run_dir: Path, _mock_sciencebasepy):
 
     mock_sb.assert_not_called()
     assert result["source_key"] == "reitz2017"
+
+
+def test_existing_nc_period_mismatch_raises(run_dir: Path, _mock_sciencebasepy):
+    """RuntimeError when consolidated NC exists but doesn't cover requested period."""
+    from nhf_spatial_targets.fetch.reitz2017 import _consolidate, fetch_reitz2017
+
+    output_dir = run_dir / "data" / "raw" / "reitz2017"
+    # Create NC covering only 2005
+    _make_reitz_tif(output_dir / "TotalRecharge_2005.tif", value=2005.0)
+    _make_reitz_tif(output_dir / "EffRecharge_2005.tif", value=2005.5)
+    _consolidate(output_dir, "2005/2005")
+
+    # Request broader period
+    with pytest.raises(RuntimeError, match="missing years"):
+        fetch_reitz2017(run_dir=run_dir, period="2005/2006")
 
 
 def test_incremental_skips_downloaded_years(run_dir: Path, _mock_sciencebasepy):

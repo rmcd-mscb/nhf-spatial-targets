@@ -91,6 +91,7 @@ def _consolidate(output_dir: Path, period: str) -> Path:
         )
 
     sorted_years = sorted(total_years)
+    # Annual data: use mid-year (July 1) as representative timestamp
     time_coords = pd.to_datetime([f"{y}-07-01" for y in sorted_years])
 
     # Stack into Dataset
@@ -170,6 +171,16 @@ def fetch_reitz2017(run_dir: Path, period: str) -> dict:
     now_utc = datetime.now(timezone.utc).isoformat()
 
     if nc_path.exists():
+        # Verify existing file covers the requested period
+        with xr.open_dataset(nc_path) as ds_check:
+            existing_years = set(int(y) for y in ds_check.time.dt.year.values)
+        missing = set(requested_years) - existing_years
+        if missing:
+            raise RuntimeError(
+                f"Consolidated file {nc_path} exists but is missing years "
+                f"{sorted(missing)}. Delete it and re-run to rebuild with "
+                f"the requested period {period}."
+            )
         logger.info("Consolidated file already exists, skipping: %s", nc_path)
     else:
         # Determine which years need downloading
@@ -177,7 +188,12 @@ def fetch_reitz2017(run_dir: Path, period: str) -> dict:
         for year in requested_years:
             total_tif = output_dir / f"TotalRecharge_{year}.tif"
             eff_tif = output_dir / f"EffRecharge_{year}.tif"
-            if total_tif.exists() and eff_tif.exists():
+            both_exist = total_tif.exists() and eff_tif.exists()
+            if (
+                both_exist
+                and total_tif.stat().st_size > 0
+                and eff_tif.stat().st_size > 0
+            ):
                 logger.info("Year %d already downloaded, skipping", year)
             else:
                 years_to_download.append(year)
@@ -226,6 +242,14 @@ def fetch_reitz2017(run_dir: Path, period: str) -> dict:
                         ) from exc
 
                     zip_path = output_dir / zip_name
+                    if not zip_path.exists() or zip_path.stat().st_size == 0:
+                        zip_path.unlink(missing_ok=True)
+                        raise RuntimeError(
+                            f"Download of '{zip_name}' produced no file or a "
+                            f"zero-byte file. ScienceBase may be experiencing "
+                            f"issues. Try again later."
+                        )
+
                     # Extract .tif from zip
                     try:
                         with zipfile.ZipFile(zip_path) as zf:
@@ -234,7 +258,17 @@ def fetch_reitz2017(run_dir: Path, period: str) -> dict:
                             ]
                             if not tif_names:
                                 raise RuntimeError(f"No .tif file found in {zip_name}")
-                            zf.extract(tif_names[0], output_dir)
+                            # Sanitize: strip directory components to prevent
+                            # path traversal from malicious zip entries
+                            tif_member = tif_names[0]
+                            safe_name = Path(tif_member).name
+                            (output_dir / safe_name).write_bytes(zf.read(tif_member))
+                    except zipfile.BadZipFile as exc:
+                        raise RuntimeError(
+                            f"Corrupt zip file '{zip_name}' for year {year}. "
+                            f"The download may have been truncated. "
+                            f"Delete it and retry. Original error: {exc}"
+                        ) from exc
                     finally:
                         zip_path.unlink(missing_ok=True)
 

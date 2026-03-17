@@ -106,8 +106,9 @@ sources:
   reitz2017:
     name: Reitz et al. (2017) Empirical Recharge Estimates
     description: >
-      Annual empirical regression-based estimates of groundwater recharge,
-      quick-flow runoff, and ET for CONUS. Used as one of two sources for
+      Annual empirical regression-based estimates of groundwater recharge
+      for CONUS (the publication also covers runoff and ET, but only total
+      and effective recharge are used here). Used as one of two sources for
       the recharge calibration target range (normalized min-max method).
       Targets relative year-to-year change, not absolute magnitude.
     citations:
