@@ -160,3 +160,149 @@ def test_downloads_and_updates_manifest(run_dir: Path, _mock_sciencebasepy):
     assert "reitz2017" in manifest["sources"]
     assert manifest["sources"]["reitz2017"]["license"] == "public domain (USGS)"
     assert result["source_key"] == "reitz2017"
+
+
+def test_missing_fabric_raises(tmp_path: Path):
+    """FileNotFoundError when fabric.json is absent."""
+    from nhf_spatial_targets.fetch.reitz2017 import fetch_reitz2017
+
+    rd = tmp_path / "run"
+    rd.mkdir()
+    with pytest.raises(FileNotFoundError, match="fabric.json"):
+        fetch_reitz2017(run_dir=rd, period="2005/2006")
+
+
+def test_skips_existing(run_dir: Path, _mock_sciencebasepy):
+    """Skip everything when consolidated NC exists."""
+    from nhf_spatial_targets.fetch.reitz2017 import fetch_reitz2017
+
+    output_dir = run_dir / "data" / "raw" / "reitz2017"
+    # Create synthetic GeoTIFFs and consolidate them
+    for year in [2005, 2006]:
+        _make_reitz_tif(output_dir / f"TotalRecharge_{year}.tif", value=float(year))
+        _make_reitz_tif(output_dir / f"EffRecharge_{year}.tif", value=float(year) + 0.5)
+
+    from nhf_spatial_targets.fetch.reitz2017 import _consolidate
+
+    _consolidate(output_dir, "2005/2006")
+
+    mock_sb = MagicMock()
+    _mock_sciencebasepy.SbSession = mock_sb
+    result = fetch_reitz2017(run_dir=run_dir, period="2005/2006")
+
+    mock_sb.assert_not_called()
+    assert result["source_key"] == "reitz2017"
+
+
+def test_incremental_skips_downloaded_years(run_dir: Path, _mock_sciencebasepy):
+    """Only download years whose GeoTIFFs are missing."""
+    from nhf_spatial_targets.fetch.reitz2017 import fetch_reitz2017
+
+    output_dir = run_dir / "data" / "raw" / "reitz2017"
+    # Pre-create 2005 GeoTIFFs
+    _make_reitz_tif(output_dir / "TotalRecharge_2005.tif", value=2005.0)
+    _make_reitz_tif(output_dir / "EffRecharge_2005.tif", value=2005.5)
+
+    mock_sb = _setup_sb_mock(_mock_sciencebasepy, run_dir, [2006])
+
+    result = fetch_reitz2017(run_dir=run_dir, period="2005/2006")
+
+    # ScienceBase should only be called for 2006 files
+    calls = mock_sb.download_file.call_args_list
+    downloaded_names = [c[0][1] for c in calls]
+    assert "TotalRecharge_2005.zip" not in downloaded_names
+    assert "TotalRecharge_2006.zip" in downloaded_names
+    assert result["source_key"] == "reitz2017"
+
+
+def test_manifest_preserves_existing_sources(run_dir: Path, _mock_sciencebasepy):
+    """Manifest merge must not overwrite entries from other sources."""
+    from nhf_spatial_targets.fetch.reitz2017 import fetch_reitz2017
+
+    existing_manifest = {
+        "sources": {
+            "merra2": {"source_key": "merra2", "period": "1980/2020"},
+        },
+        "steps": [],
+    }
+    (run_dir / "manifest.json").write_text(json.dumps(existing_manifest))
+
+    _setup_sb_mock(_mock_sciencebasepy, run_dir, [2005])
+    fetch_reitz2017(run_dir=run_dir, period="2005/2005")
+
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    assert "merra2" in manifest["sources"]
+    assert "reitz2017" in manifest["sources"]
+
+
+def test_corrupt_manifest_raises(run_dir: Path, _mock_sciencebasepy):
+    """ValueError when manifest.json is corrupt."""
+    from nhf_spatial_targets.fetch.reitz2017 import fetch_reitz2017
+
+    (run_dir / "manifest.json").write_text("not valid json{{{")
+    _setup_sb_mock(_mock_sciencebasepy, run_dir, [2005])
+
+    with pytest.raises(ValueError, match="corrupt"):
+        fetch_reitz2017(run_dir=run_dir, period="2005/2005")
+
+
+def test_download_failure_raises(run_dir: Path, _mock_sciencebasepy):
+    """RuntimeError when ScienceBase download fails."""
+    from nhf_spatial_targets.fetch.reitz2017 import fetch_reitz2017
+
+    mock_sb = MagicMock()
+    mock_sb.get_item.return_value = {"id": "55d383a9e4b0518e35468e58"}
+    mock_sb.get_item_file_info.return_value = [
+        {"name": "TotalRecharge_2005.zip", "url": "https://fake/tr.zip"},
+        {"name": "EffRecharge_2005.zip", "url": "https://fake/er.zip"},
+    ]
+    mock_sb.download_file.side_effect = Exception("ScienceBase unavailable")
+    _mock_sciencebasepy.SbSession = MagicMock(return_value=mock_sb)
+
+    with pytest.raises(RuntimeError, match="ScienceBase download failed"):
+        fetch_reitz2017(run_dir=run_dir, period="2005/2005")
+
+
+def test_period_out_of_range_raises(run_dir: Path):
+    """ValueError for period outside 2000-2013."""
+    from nhf_spatial_targets.fetch.reitz2017 import fetch_reitz2017
+
+    with pytest.raises(ValueError, match="outside"):
+        fetch_reitz2017(run_dir=run_dir, period="1990/1995")
+
+
+def test_zip_no_tif_raises(run_dir: Path, _mock_sciencebasepy):
+    """RuntimeError when zip contains no .tif file."""
+    from nhf_spatial_targets.fetch.reitz2017 import fetch_reitz2017
+
+    staging = run_dir / ".sb_staging"
+    staging.mkdir()
+    # Create a zip with a non-tif file
+    zip_path = staging / "TotalRecharge_2005.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("readme.txt", "not a tif")
+
+    mock_sb = MagicMock()
+    mock_sb.get_item.return_value = {"id": "55d383a9e4b0518e35468e58"}
+    mock_sb.get_item_file_info.return_value = [
+        {"name": "TotalRecharge_2005.zip", "url": "https://fake/tr.zip"},
+        {"name": "EffRecharge_2005.zip", "url": "https://fake/er.zip"},
+    ]
+
+    import shutil
+
+    def fake_download_file(url, name, dest):
+        shutil.copy2(str(staging / name), str(Path(dest) / name))
+
+    # Create EffRecharge zip with a real tif so the error happens on TotalRecharge
+    eff_zip = staging / "EffRecharge_2005.zip"
+    eff_tif = staging / "EffRecharge_2005.tif"
+    _make_reitz_tif(eff_tif, value=1.0)
+    with zipfile.ZipFile(eff_zip, "w") as zf:
+        zf.write(eff_tif, "EffRecharge_2005.tif")
+
+    mock_sb.download_file = MagicMock(side_effect=fake_download_file)
+    _mock_sciencebasepy.SbSession = MagicMock(return_value=mock_sb)
+
+    with pytest.raises(RuntimeError, match="No .tif file"):
+        fetch_reitz2017(run_dir=run_dir, period="2005/2005")
