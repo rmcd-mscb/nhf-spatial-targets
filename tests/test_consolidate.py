@@ -118,7 +118,18 @@ def test_global_attributes(merra2_dir):
     consolidate_merra2(run_dir=run_dir, variables=["GWETTOP"])
 
     ds = xr.open_dataset(merra2_dir / "merra2_consolidated.nc")
-    assert ds.attrs["Conventions"] == "CF-1.8"
+    # CF-1.6 compliance
+    assert ds.attrs["Conventions"] == "CF-1.6"
+    assert "crs" in ds.data_vars
+    assert "spatial_ref" not in ds.data_vars
+    assert ds["crs"].attrs["grid_mapping_name"] == "latitude_longitude"
+    assert ds["GWETTOP"].attrs["grid_mapping"] == "crs"
+    assert ds["GWETTOP"].attrs["units"] == "1"
+    assert ds["GWETTOP"].attrs["long_name"] == "surface_soil_wetness"
+    assert ds.lat.attrs["standard_name"] == "latitude"
+    assert ds.lon.attrs["standard_name"] == "longitude"
+    assert ds.time.attrs["standard_name"] == "time"
+    # Provenance attrs preserved
     assert "nhf-spatial-targets" in ds.attrs["history"]
     assert "M2TMNXLND" in ds.attrs["source"]
     assert "time_modification_note" in ds.attrs

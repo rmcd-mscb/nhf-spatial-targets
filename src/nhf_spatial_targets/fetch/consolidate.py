@@ -414,12 +414,12 @@ def consolidate_merra2(
         _validate_variables(ds, variables)
         ds = ds[variables]
         ds = _fix_time_merra2(ds)
+        ds = apply_cf_metadata(ds, "merra2", "monthly")
 
         # Add CF and provenance global attributes
         meta = _catalog.source("merra2")
         ds.attrs.update(
             {
-                "Conventions": "CF-1.8",
                 "history": (f"Consolidated by nhf-spatial-targets v{__version__}"),
                 "source": (
                     f"NASA MERRA-2 {meta['access']['short_name']}"
