@@ -604,6 +604,38 @@ def test_consolidate_mod16a2_bbox_clips_output(mod16a2_run_dir: Path) -> None:
     ds.close()
 
 
+def test_consolidate_mod10c1_cf_metadata(mod10c1_run_dir: Path) -> None:
+    """MOD10C1 consolidated file has CF-1.6 metadata."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_mod10c1
+
+    source_key = "mod10c1_v061"
+    consolidate_mod10c1(
+        run_dir=mod10c1_run_dir,
+        source_key=source_key,
+        variables=["Day_CMG_Snow_Cover", "Snow_Spatial_QA"],
+        year=2010,
+    )
+
+    out_path = (
+        mod10c1_run_dir
+        / "data"
+        / "raw"
+        / source_key
+        / f"{source_key}_2010_consolidated.nc"
+    )
+    ds = xr.open_dataset(out_path)
+    assert ds.attrs["Conventions"] == "CF-1.6"
+    assert "crs" in ds.data_vars
+    assert "spatial_ref" not in ds.data_vars
+    assert ds["Day_CMG_Snow_Cover"].attrs["grid_mapping"] == "crs"
+    assert ds["Day_CMG_Snow_Cover"].attrs["units"] == "percent"
+    assert ds["Day_CMG_Snow_Cover"].attrs["long_name"] == "daily snow-covered area"
+    assert ds.lat.attrs["standard_name"] == "latitude"
+    assert ds.lon.attrs["standard_name"] == "longitude"
+    assert "time_bnds" not in ds.data_vars  # daily data, no time_bnds
+    ds.close()
+
+
 def test_log_memory_does_not_raise():
     """log_memory runs without error on any platform."""
     from nhf_spatial_targets.fetch.consolidate import log_memory

@@ -568,6 +568,7 @@ def consolidate_mod10c1(
         ds_merged = ds_merged.sortby("time")
         _validate_variables(ds_merged, variables)
         ds_merged = ds_merged[variables]
+        ds_merged = apply_cf_metadata(ds_merged, source_key, "daily")
 
         out_path = source_dir / f"{source_key}_{year}_consolidated.nc"
         logger.info("Writing consolidated file: %s", out_path)
