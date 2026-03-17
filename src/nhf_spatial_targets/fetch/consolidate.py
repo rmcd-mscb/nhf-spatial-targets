@@ -1051,6 +1051,7 @@ def consolidate_ncep_ncar(
         ds = xr.merge(merged_parts)
         _validate_variables(ds, variables)
         ds = ds[variables]
+        ds = apply_cf_metadata(ds, "ncep_ncar", "monthly")
 
         out_path = ncep_dir / "ncep_ncar_consolidated.nc"
         logger.info("Writing consolidated file: %s", out_path)

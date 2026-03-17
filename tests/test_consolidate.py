@@ -388,6 +388,24 @@ def test_ncep_no_files_raises(tmp_path):
         consolidate_ncep_ncar(run_dir=tmp_path, variables=["soilw"])
 
 
+def test_ncep_cf_metadata(ncep_dir):
+    """NCEP/NCAR consolidated file has CF-1.6 metadata."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_ncep_ncar
+
+    run_dir = ncep_dir.parent.parent.parent
+    consolidate_ncep_ncar(run_dir=run_dir, variables=["soilw"])
+
+    ds = xr.open_dataset(ncep_dir / "ncep_ncar_consolidated.nc")
+    assert ds.attrs["Conventions"] == "CF-1.6"
+    assert "crs" in ds.data_vars
+    assert "spatial_ref" not in ds.data_vars
+    assert ds["soilw"].attrs["grid_mapping"] == "crs"
+    assert ds.lat.attrs["standard_name"] == "latitude"
+    assert ds.lon.attrs["standard_name"] == "longitude"
+    assert "time_bnds" in ds.data_vars
+    ds.close()
+
+
 @pytest.fixture()
 def merra2_dir_unsorted(tmp_path: Path) -> Path:
     """Create MERRA-2 files in reverse chronological order."""
