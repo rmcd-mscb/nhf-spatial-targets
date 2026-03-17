@@ -325,3 +325,49 @@ def test_cli_nonexistent_run_dir(tmp_path: Path):
             exit_on_error=False,
         )
     assert exc_info.value.code == 2
+
+
+@pytest.mark.integration
+def test_fetch_reitz2017_real_download(tmp_path: Path):
+    """Integration: fetch a single year from real ScienceBase.
+
+    Requires network access. Run with: pixi run -e dev test-integration
+    """
+    from nhf_spatial_targets.fetch.reitz2017 import fetch_reitz2017
+
+    rd = tmp_path / "run"
+    rd.mkdir()
+    (rd / "data" / "raw" / "reitz2017").mkdir(parents=True)
+    fabric = {
+        "bbox_buffered": {
+            "minx": -125.1,
+            "miny": 23.9,
+            "maxx": -65.9,
+            "maxy": 50.1,
+        }
+    }
+    (rd / "fabric.json").write_text(json.dumps(fabric))
+
+    result = fetch_reitz2017(run_dir=rd, period="2005/2005")
+
+    assert result["source_key"] == "reitz2017"
+
+    output_dir = rd / "data" / "raw" / "reitz2017"
+    # Raw GeoTIFFs exist
+    assert (output_dir / "TotalRecharge_2005.tif").exists()
+    assert (output_dir / "EffRecharge_2005.tif").exists()
+
+    # Consolidated NC exists with both variables
+    nc_path = output_dir / "reitz2017_consolidated.nc"
+    assert nc_path.exists()
+
+    ds = xr.open_dataset(nc_path)
+    assert "total_recharge" in ds.data_vars
+    assert "eff_recharge" in ds.data_vars
+    assert ds.sizes["time"] == 1
+    assert str(ds.time.values[0])[:10] == "2005-07-01"
+    ds.close()
+
+    # Manifest updated
+    manifest = json.loads((rd / "manifest.json").read_text())
+    assert "reitz2017" in manifest["sources"]
