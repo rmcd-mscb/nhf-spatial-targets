@@ -137,7 +137,6 @@ def fetch_reitz2017(run_dir: Path, period: str) -> dict:
     dict
         Provenance record for manifest.json.
     """
-    import shutil  # noqa: F401
     import zipfile
 
     meta = _catalog.source(_SOURCE_KEY)
