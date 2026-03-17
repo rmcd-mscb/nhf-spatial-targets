@@ -131,7 +131,7 @@ pixi run -e dev fmt
 | MOD16A2 v061 fetch | Not started |
 | MOD10C1 v061 fetch | Not started |
 | SSEBop fetch | Not started |
-| Reitz 2017 recharge fetch (ScienceBase) | Not started |
+| Reitz 2017 recharge fetch (ScienceBase) | Done |
 | WaterGAP 2.2d fetch (PANGAEA) | Done |
 
 ## Known Gaps
