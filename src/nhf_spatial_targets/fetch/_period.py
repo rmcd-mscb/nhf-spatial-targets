@@ -42,3 +42,41 @@ def years_in_period(period: str) -> list[int]:
     parts = period.split("/")
     start_year, end_year = int(parts[0]), int(parts[1])
     return list(range(start_year, end_year + 1))
+
+
+def clamp_period(requested: str, available: str) -> str | None:
+    """Clamp *requested* period to the *available* range from the catalog.
+
+    Parameters
+    ----------
+    requested : str
+        User-requested period as ``"YYYY/YYYY"``.
+    available : str
+        Catalog period, e.g. ``"2000/2013"`` or ``"1980/present"``.
+        ``"present"`` is treated as year 9999 (no upper bound).
+
+    Returns
+    -------
+    str or None
+        Clamped period as ``"YYYY/YYYY"``, or ``None`` if there is no
+        overlap between the requested and available ranges.
+    """
+    parse_period(requested)
+    req_parts = requested.split("/")
+    req_start, req_end = int(req_parts[0]), int(req_parts[1])
+
+    avail_parts = available.split("/")
+    if len(avail_parts) != 2:
+        raise ValueError(f"available period must be 'YYYY/YYYY', got: {available!r}")
+    avail_start = int(avail_parts[0])
+    avail_end = (
+        9999 if avail_parts[1] == "present" else int(avail_parts[1].split("-")[0])
+    )
+
+    clamped_start = max(req_start, avail_start)
+    clamped_end = min(req_end, avail_end)
+
+    if clamped_start > clamped_end:
+        return None
+
+    return f"{clamped_start}/{clamped_end}"

@@ -220,6 +220,99 @@ def init(
     console.print(Panel(msg, title="nhf-targets init", border_style="green"))
 
 
+@fetch_app.command(name="all")
+def fetch_all_cmd(
+    run_dir: Annotated[
+        Path,
+        Parameter(
+            name=["--run-dir", "-r"],
+            help="Run workspace created by 'nhf-targets init'.",
+        ),
+    ],
+    period: Annotated[
+        str,
+        Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
+    ],
+):
+    """Download all source datasets into the run workspace.
+
+    Iterates through every registered fetch module in sequence.
+    Stops on the first failure.
+    """
+    from rich.console import Console
+
+    if not run_dir.exists():
+        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+        sys.exit(2)
+
+    console = Console()
+
+    # Import all fetch functions
+    import nhf_spatial_targets.catalog as _catalog
+    from nhf_spatial_targets.fetch._period import clamp_period
+    from nhf_spatial_targets.fetch.merra2 import fetch_merra2
+    from nhf_spatial_targets.fetch.modis import fetch_mod10c1, fetch_mod16a2
+    from nhf_spatial_targets.fetch.ncep_ncar import fetch_ncep_ncar
+    from nhf_spatial_targets.fetch.nldas import fetch_nldas_mosaic, fetch_nldas_noah
+    from nhf_spatial_targets.fetch.pangaea import fetch_watergap22d
+    from nhf_spatial_targets.fetch.reitz2017 import fetch_reitz2017
+
+    # (display name, catalog source key, fetch function)
+    sources = [
+        ("merra2", "merra2", fetch_merra2),
+        ("nldas-mosaic", "nldas_mosaic", fetch_nldas_mosaic),
+        ("nldas-noah", "nldas_noah", fetch_nldas_noah),
+        ("ncep-ncar", "ncep_ncar", fetch_ncep_ncar),
+        ("mod16a2", "mod16a2_v061", fetch_mod16a2),
+        ("mod10c1", "mod10c1_v061", fetch_mod10c1),
+        ("watergap22d", "watergap22d", fetch_watergap22d),
+        ("reitz2017", "reitz2017", fetch_reitz2017),
+    ]
+
+    results = {}
+    for name, source_key, fetch_fn in sources:
+        console.print(f"\n[bold]{'─' * 60}[/bold]")
+
+        # Clamp requested period to the source's available range
+        meta = _catalog.source(source_key)
+        available = meta.get("period", "")
+        clamped = clamp_period(period, available) if available else period
+
+        if clamped is None:
+            console.print(
+                f"[yellow]{name}: skipped (no overlap between "
+                f"requested {period} and available {available})[/yellow]"
+            )
+            continue
+
+        if clamped != period:
+            console.print(
+                f"[bold]Fetching {name} for period {clamped} "
+                f"(clamped from {period} to available {available})...[/bold]"
+            )
+        else:
+            console.print(f"[bold]Fetching {name} for period {period}...[/bold]")
+
+        try:
+            result = fetch_fn(run_dir=run_dir, period=clamped)
+            results[name] = result
+            console.print(f"[green]{name}: done[/green]")
+        except (ValueError, FileNotFoundError, RuntimeError) as exc:
+            print(f"Error fetching {name}: {exc}", file=sys.stderr)
+            sys.exit(1)
+        except Exception as exc:
+            _logger.exception("Unexpected error during %s fetch", name)
+            print(
+                f"Unexpected error fetching {name} ({type(exc).__name__}): {exc}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    console.print(
+        f"\n[bold green]All {len(results)} sources fetched successfully.[/bold green]"
+    )
+
+
 @fetch_app.command(name="merra2")
 def fetch_merra2_cmd(
     run_dir: Annotated[

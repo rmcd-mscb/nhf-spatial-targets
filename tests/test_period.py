@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from nhf_spatial_targets.fetch._period import (
+    clamp_period,
     months_in_period,
     parse_period,
     years_in_period,
@@ -56,3 +57,36 @@ def test_years_in_period():
 def test_years_in_period_single():
     years = years_in_period("2010/2010")
     assert years == [2010]
+
+
+def test_clamp_period_within_range():
+    assert clamp_period("2000/2010", "1980/2020") == "2000/2010"
+
+
+def test_clamp_period_clamps_end():
+    assert clamp_period("2000/2020", "2000/2013") == "2000/2013"
+
+
+def test_clamp_period_clamps_start():
+    assert clamp_period("1990/2010", "2000/2013") == "2000/2010"
+
+
+def test_clamp_period_clamps_both():
+    assert clamp_period("1990/2020", "2000/2013") == "2000/2013"
+
+
+def test_clamp_period_no_overlap():
+    assert clamp_period("1990/1995", "2000/2013") is None
+
+
+def test_clamp_period_present():
+    assert clamp_period("2000/2025", "1980/present") == "2000/2025"
+
+
+def test_clamp_period_present_clamps_start():
+    assert clamp_period("1970/2010", "1980/present") == "1980/2010"
+
+
+def test_clamp_period_handles_date_suffix():
+    """Available period like '1980/2016-02-29' uses the year portion."""
+    assert clamp_period("2000/2020", "1980/2016-02-29") == "2000/2016"
