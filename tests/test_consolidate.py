@@ -556,3 +556,159 @@ def test_open_consolidated(merra2_dir):
     assert "GWETTOP" in ds.data_vars
     assert len(ds.time) == 3
     ds.close()
+
+
+def test_apply_cf_metadata_monthly():
+    """apply_cf_metadata adds all CF-1.6 metadata for monthly data."""
+    from nhf_spatial_targets.fetch.consolidate import apply_cf_metadata
+
+    # Build a minimal dataset with y/x coords, spatial_ref, no CF metadata
+    lat = np.arange(25.0, 50.0, 5.0)
+    lon = np.arange(-125.0, -65.0, 10.0)
+    time = pd.date_range("2010-01-15", periods=3, freq="MS")
+    ds = xr.Dataset(
+        {
+            "SoilM_0_10cm": (
+                ["time", "y", "x"],
+                np.random.rand(3, len(lat), len(lon)).astype(np.float32),
+            ),
+            "spatial_ref": xr.DataArray(np.int32(0)),
+        },
+        coords={"time": time, "y": lat, "x": lon},
+    )
+
+    result = apply_cf_metadata(ds, "nldas_mosaic", "monthly")
+
+    # Coordinates renamed to lat/lon
+    assert "lat" in result.dims
+    assert "lon" in result.dims
+    assert "y" not in result.dims
+    assert "x" not in result.dims
+
+    # Dimension order
+    assert result["SoilM_0_10cm"].dims == ("time", "lat", "lon")
+
+    # CRS variable
+    assert "crs" in result.data_vars
+    assert result["crs"].attrs["grid_mapping_name"] == "latitude_longitude"
+    assert result["crs"].attrs["semi_major_axis"] == pytest.approx(6378137.0)
+    assert result["crs"].attrs["inverse_flattening"] == pytest.approx(298.257223563)
+    assert "crs_wkt" in result["crs"].attrs
+
+    # No spatial_ref
+    assert "spatial_ref" not in result.data_vars
+    assert "spatial_ref" not in result.coords
+
+    # grid_mapping on data vars
+    assert result["SoilM_0_10cm"].attrs["grid_mapping"] == "crs"
+
+    # Variable metadata from catalog
+    assert result["SoilM_0_10cm"].attrs["units"] == "kg/m2"
+    assert result["SoilM_0_10cm"].attrs["long_name"] == "soil moisture 0-10 cm"
+
+    # Coordinate attrs
+    assert result.lat.attrs["standard_name"] == "latitude"
+    assert result.lat.attrs["units"] == "degrees_north"
+    assert result.lat.attrs["axis"] == "Y"
+    assert result.lon.attrs["standard_name"] == "longitude"
+    assert result.lon.attrs["units"] == "degrees_east"
+    assert result.lon.attrs["axis"] == "X"
+    assert result.time.attrs["standard_name"] == "time"
+    assert result.time.attrs["axis"] == "T"
+
+    # time_bnds for monthly
+    assert "time_bnds" in result.data_vars
+    assert result.time.attrs.get("bounds") == "time_bnds"
+
+    # Conventions
+    assert result.attrs["Conventions"] == "CF-1.6"
+
+
+def test_apply_cf_metadata_daily_no_time_bnds():
+    """apply_cf_metadata does not add time_bnds for daily data."""
+    from nhf_spatial_targets.fetch.consolidate import apply_cf_metadata
+
+    lat = np.linspace(25.0, 50.0, 4)
+    lon = np.linspace(-125.0, -65.0, 6)
+    time = pd.date_range("2010-01-01", periods=3, freq="D")
+    ds = xr.Dataset(
+        {
+            "Day_CMG_Snow_Cover": (
+                ["time", "lat", "lon"],
+                np.random.rand(3, len(lat), len(lon)).astype(np.float32),
+            ),
+        },
+        coords={"time": time, "lat": lat, "lon": lon},
+    )
+
+    result = apply_cf_metadata(ds, "mod10c1_v061", "daily")
+
+    assert "time_bnds" not in result.data_vars
+    assert "crs" in result.data_vars
+    assert result.attrs["Conventions"] == "CF-1.6"
+
+
+def test_apply_cf_metadata_skips_existing_time_bnds():
+    """apply_cf_metadata skips time_bnds if already present (MERRA-2 case)."""
+    from nhf_spatial_targets.fetch.consolidate import apply_cf_metadata
+
+    lat = np.arange(-90, 91, 45.0)
+    lon = np.arange(-180, 180, 60.0)
+    time = pd.date_range("2010-01-15", periods=2, freq="MS")
+    ds = xr.Dataset(
+        {
+            "GWETTOP": (
+                ["time", "lat", "lon"],
+                np.random.rand(2, len(lat), len(lon)).astype(np.float32),
+            ),
+            "time_bnds": (
+                ["time", "nv"],
+                np.array([[0, 31], [31, 59]], dtype="<i8"),
+                {"units": "days since 1970-01-01", "calendar": "standard"},
+            ),
+        },
+        coords={"time": time, "lat": lat, "lon": lon, "nv": [0, 1]},
+    )
+
+    result = apply_cf_metadata(ds, "merra2", "monthly")
+
+    # Should keep existing time_bnds, not add a second one
+    assert "time_bnds" in result.data_vars
+    # Original values preserved
+    np.testing.assert_array_equal(
+        result["time_bnds"].values, np.array([[0, 31], [31, 59]])
+    )
+
+
+def test_apply_cf_metadata_custom_crs_wkt():
+    """apply_cf_metadata uses pyproj to extract ellipsoid from custom CRS WKT."""
+    from nhf_spatial_targets.fetch.consolidate import apply_cf_metadata
+
+    lat = np.linspace(25.0, 50.0, 4)
+    lon = np.linspace(-125.0, -65.0, 6)
+    time = pd.date_range("2005-07-01", periods=2, freq="YS")
+    ds = xr.Dataset(
+        {
+            "total_recharge": (
+                ["time", "y", "x"],
+                np.random.rand(2, len(lat), len(lon)).astype(np.float32),
+            ),
+        },
+        coords={"time": time, "y": lat, "x": lon},
+    )
+
+    # NAD83 WKT
+    from pyproj import CRS as _CRS
+
+    nad83_wkt = _CRS.from_epsg(4269).to_wkt()
+
+    result = apply_cf_metadata(ds, "reitz2017", "annual", crs_wkt=nad83_wkt)
+
+    assert result["crs"].attrs["grid_mapping_name"] == "latitude_longitude"
+    # NAD83 uses GRS 1980 ellipsoid
+    assert result["crs"].attrs["inverse_flattening"] == pytest.approx(298.257222101)
+    assert "NAD" in result["crs"].attrs["crs_wkt"]
+    assert "time_bnds" not in result.data_vars
+    # y/x renamed to lat/lon
+    assert "lat" in result.dims
+    assert "lon" in result.dims

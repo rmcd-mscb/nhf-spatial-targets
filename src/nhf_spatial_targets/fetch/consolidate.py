@@ -126,6 +126,188 @@ def _write_netcdf(
         ) from exc
 
 
+def apply_cf_metadata(
+    ds: xr.Dataset,
+    source_key: str,
+    time_step: str = "monthly",
+    crs_wkt: str | None = None,
+) -> xr.Dataset:
+    """Apply CF-1.6 compliant metadata to a consolidated dataset.
+
+    Parameters
+    ----------
+    ds : xr.Dataset
+        Dataset to annotate. Callers must use the return value.
+    source_key : str
+        Catalog key for looking up variable metadata.
+    time_step : str
+        One of ``"monthly"``, ``"daily"``, ``"8-day"``, ``"annual"``.
+        Controls whether ``time_bnds`` is added (monthly only).
+    crs_wkt : str | None
+        WKT string for the source CRS. Defaults to WGS84 when ``None``.
+
+    Returns
+    -------
+    xr.Dataset
+    """
+    import nhf_spatial_targets.catalog as _catalog
+
+    # 1. Normalize coordinates to lat/lon
+    rename_map: dict[str, str] = {}
+    for old, new in [
+        ("y", "lat"),
+        ("x", "lon"),
+        ("latitude", "lat"),
+        ("longitude", "lon"),
+    ]:
+        if old in ds.dims and old != new:
+            rename_map[old] = new
+    if rename_map:
+        ds = ds.rename(rename_map)
+
+    # Ensure (time, lat, lon) dimension order; use ellipsis to pass through any
+    # extra dims (e.g. "nv" from time_bnds).
+    dim_order = [d for d in ("time", "lat", "lon") if d in ds.dims]
+    ds = ds.transpose(*dim_order, ...)
+
+    # 2. Drop spatial_ref if present (check both data_vars and coords)
+    if "spatial_ref" in ds.data_vars:
+        ds = ds.drop_vars("spatial_ref")
+    if "spatial_ref" in ds.coords:
+        ds = ds.drop_vars("spatial_ref")
+
+    # 3. Add CRS variable
+    if crs_wkt is not None:
+        from pyproj import CRS as _CRS
+
+        src_crs = _CRS.from_wkt(crs_wkt)
+        crs_attrs: dict = {"crs_wkt": crs_wkt}
+        if src_crs.is_geographic:
+            crs_attrs["grid_mapping_name"] = "latitude_longitude"
+            ellipsoid = src_crs.ellipsoid
+            crs_attrs["semi_major_axis"] = ellipsoid.semi_major_metre
+            crs_attrs["inverse_flattening"] = ellipsoid.inverse_flattening
+            crs_attrs["longitude_of_prime_meridian"] = 0.0
+    else:
+        # Default WGS84
+        crs_attrs = {
+            "grid_mapping_name": "latitude_longitude",
+            "semi_major_axis": 6378137.0,
+            "inverse_flattening": 298.257223563,
+            "longitude_of_prime_meridian": 0.0,
+            "crs_wkt": (
+                'GEOGCS["WGS 84",'
+                'DATUM["WGS_1984",'
+                'SPHEROID["WGS 84",6378137,298.257223563]],'
+                'PRIMEM["Greenwich",0],'
+                'UNIT["degree",0.0174532925199433]]'
+            ),
+        }
+    ds["crs"] = xr.DataArray(np.int32(0), attrs=crs_attrs)
+
+    # 4. Set grid_mapping on data variables
+    skip_vars = {"crs", "time_bnds"}
+    for var in ds.data_vars:
+        if var not in skip_vars:
+            ds[var].attrs["grid_mapping"] = "crs"
+
+    # 5. Set variable metadata from catalog
+    try:
+        meta = _catalog.source(source_key)
+    except KeyError:
+        logger.warning(
+            "Source '%s' not found in catalog; skipping variable metadata", source_key
+        )
+        meta = {}
+
+    cat_vars = meta.get("variables", [])
+    if cat_vars:
+        # Build lookup: variable_name -> dict of attrs
+        var_lookup: dict[str, dict] = {}
+        for entry in cat_vars:
+            if isinstance(entry, dict):
+                name = entry.get("name", "")
+                var_lookup[name] = entry
+            else:
+                var_lookup[str(entry)] = {}
+
+        for var in ds.data_vars:
+            if var in skip_vars:
+                continue
+            if var in var_lookup:
+                entry = var_lookup[var]
+                if "long_name" in entry:
+                    ds[var].attrs["long_name"] = entry["long_name"]
+                # cf_units takes precedence over units
+                units = entry.get("cf_units") or entry.get("units")
+                if units:
+                    ds[var].attrs["units"] = units
+                if "cell_methods" in entry:
+                    ds[var].attrs["cell_methods"] = entry["cell_methods"]
+
+    # 6. Set coordinate attributes
+    if "lat" in ds.coords:
+        ds.lat.attrs = {
+            "standard_name": "latitude",
+            "units": "degrees_north",
+            "axis": "Y",
+        }
+    if "lon" in ds.coords:
+        ds.lon.attrs = {
+            "standard_name": "longitude",
+            "units": "degrees_east",
+            "axis": "X",
+        }
+    if "time" in ds.coords:
+        ds.time.attrs.update(
+            {"standard_name": "time", "long_name": "time", "axis": "T"}
+        )
+
+    # 7. Add time_bnds for monthly data
+    if time_step == "monthly" and "time_bnds" not in ds:
+        times = pd.DatetimeIndex(ds.time.values)
+        epoch = pd.Timestamp("1970-01-01")
+        bounds_list = []
+        for t in times:
+            m_start = t.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            if t.month == 12:
+                m_end = t.replace(
+                    year=t.year + 1,
+                    month=1,
+                    day=1,
+                    hour=0,
+                    minute=0,
+                    second=0,
+                    microsecond=0,
+                )
+            else:
+                m_end = t.replace(
+                    month=t.month + 1,
+                    day=1,
+                    hour=0,
+                    minute=0,
+                    second=0,
+                    microsecond=0,
+                )
+            bounds_list.append([(m_start - epoch).days, (m_end - epoch).days])
+
+        nv = np.array([0, 1])
+        ds["time_bnds"] = xr.DataArray(
+            np.array(bounds_list, dtype="<i8"),
+            dims=["time", "nv"],
+            attrs={"units": "days since 1970-01-01", "calendar": "standard"},
+        )
+        if "nv" not in ds.coords:
+            ds = ds.assign_coords(nv=nv)
+        ds.time.attrs["bounds"] = "time_bnds"
+
+    # 8. Set Conventions
+    ds.attrs["Conventions"] = "CF-1.6"
+    ds.attrs.pop("conventions", None)  # remove stale lowercase variant
+
+    return ds
+
+
 def _fix_time_merra2(ds: xr.Dataset) -> xr.Dataset:
     """Shift MERRA-2 timestamps to mid-month and add time_bnds.
 
