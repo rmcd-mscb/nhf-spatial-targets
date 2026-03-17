@@ -162,6 +162,46 @@ def test_downloads_and_updates_manifest(run_dir: Path, _mock_sciencebasepy):
     assert result["source_key"] == "reitz2017"
 
 
+def test_year_from_filename_valid():
+    """Extract year from a standard Reitz filename."""
+    from nhf_spatial_targets.fetch.reitz2017 import _year_from_filename
+
+    assert _year_from_filename(Path("TotalRecharge_2005.tif")) == 2005
+    assert _year_from_filename(Path("EffRecharge_2013.tif")) == 2013
+
+
+def test_year_from_filename_no_underscore():
+    """ValueError when filename has no underscore."""
+    from nhf_spatial_targets.fetch.reitz2017 import _year_from_filename
+
+    with pytest.raises(ValueError, match="Cannot extract year"):
+        _year_from_filename(Path("badname.tif"))
+
+
+def test_year_from_filename_non_integer():
+    """ValueError when suffix after underscore is not an integer."""
+    from nhf_spatial_targets.fetch.reitz2017 import _year_from_filename
+
+    with pytest.raises(ValueError, match="Cannot extract year"):
+        _year_from_filename(Path("TotalRecharge_abc.tif"))
+
+
+def test_consolidate_mismatched_years_raises(tmp_path: Path):
+    """RuntimeError when TotalRecharge and EffRecharge have different years."""
+    from nhf_spatial_targets.fetch.reitz2017 import _consolidate
+
+    output_dir = tmp_path / "reitz"
+    output_dir.mkdir()
+
+    # Create TotalRecharge for 2005+2006 but EffRecharge only for 2005
+    _make_reitz_tif(output_dir / "TotalRecharge_2005.tif", value=2005.0)
+    _make_reitz_tif(output_dir / "TotalRecharge_2006.tif", value=2006.0)
+    _make_reitz_tif(output_dir / "EffRecharge_2005.tif", value=2005.5)
+
+    with pytest.raises(RuntimeError, match="Mismatched years"):
+        _consolidate(output_dir, "2005/2006")
+
+
 def test_missing_fabric_raises(tmp_path: Path):
     """FileNotFoundError when fabric.json is absent."""
     from nhf_spatial_targets.fetch.reitz2017 import fetch_reitz2017

@@ -69,8 +69,15 @@ def _consolidate(output_dir: Path, period: str) -> Path:
             year = _year_from_filename(tif_path)
             if year not in years:
                 continue
-            da = rioxarray.open_rasterio(tif_path, masked=True)
-            da = da.squeeze("band", drop=True)
+            try:
+                da = rioxarray.open_rasterio(tif_path, masked=True)
+                da = da.squeeze("band", drop=True)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to read GeoTIFF '{tif_path.name}' for variable "
+                    f"'{ds_name}', year {year}. The file may be corrupt — "
+                    f"delete it and re-run the fetch. Original error: {exc}"
+                ) from exc
             var_arrays[ds_name][year] = da
 
     # Validate pairing: every year must have both variables
@@ -164,6 +171,13 @@ def fetch_reitz2017(run_dir: Path, period: str) -> dict:
             f"fabric.json not found in {run_dir}. "
             f"Run 'nhf-targets init' to create a run workspace first."
         )
+    try:
+        json.loads(fabric_path.read_text())
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"fabric.json in {run_dir} is malformed. "
+            f"Re-run 'nhf-targets init' to regenerate it."
+        ) from exc
 
     output_dir = run_dir / "data" / "raw" / _SOURCE_KEY
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -208,11 +222,23 @@ def fetch_reitz2017(run_dir: Path, period: str) -> dict:
             try:
                 sb = SbSession()
                 item = sb.get_item(child_item_id)
-                file_infos = sb.get_item_file_info(item)
             except Exception as exc:
                 raise RuntimeError(
                     f"Failed to connect to ScienceBase item {child_item_id}: {exc}"
                 ) from exc
+
+            if not item or "id" not in item:
+                raise RuntimeError(
+                    f"ScienceBase item {child_item_id} returned an invalid "
+                    f"response. The item may have been deleted or moved."
+                )
+
+            file_infos = sb.get_item_file_info(item)
+            if not file_infos:
+                raise RuntimeError(
+                    f"ScienceBase item {child_item_id} has no downloadable "
+                    f"files. Check the item at {access['url']}."
+                )
 
             # Build lookup: filename -> file_info dict
             file_lookup = {fi["name"]: fi for fi in file_infos}
@@ -258,6 +284,14 @@ def fetch_reitz2017(run_dir: Path, period: str) -> dict:
                             ]
                             if not tif_names:
                                 raise RuntimeError(f"No .tif file found in {zip_name}")
+                            if len(tif_names) > 1:
+                                logger.warning(
+                                    "Zip %s contains %d .tif files: %s. "
+                                    "Using first match.",
+                                    zip_name,
+                                    len(tif_names),
+                                    tif_names,
+                                )
                             # Sanitize: strip directory components to prevent
                             # path traversal from malicious zip entries
                             tif_member = tif_names[0]
