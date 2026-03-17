@@ -306,3 +306,22 @@ def test_zip_no_tif_raises(run_dir: Path, _mock_sciencebasepy):
 
     with pytest.raises(RuntimeError, match="No .tif file"):
         fetch_reitz2017(run_dir=run_dir, period="2005/2005")
+
+
+def test_cli_nonexistent_run_dir(tmp_path: Path):
+    """CLI exits with error for nonexistent run directory."""
+    from nhf_spatial_targets.cli import app
+
+    with pytest.raises(SystemExit) as exc_info:
+        app(
+            [
+                "fetch",
+                "reitz2017",
+                "--run-dir",
+                str(tmp_path / "nope"),
+                "--period",
+                "2005/2006",
+            ],
+            exit_on_error=False,
+        )
+    assert exc_info.value.code == 2

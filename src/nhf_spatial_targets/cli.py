@@ -606,6 +606,58 @@ def fetch_watergap22d_cmd(
     console.print(json_mod.dumps(result, indent=2))
 
 
+@fetch_app.command(name="reitz2017")
+def fetch_reitz2017_cmd(
+    run_dir: Annotated[
+        Path,
+        Parameter(
+            name=["--run-dir", "-r"],
+            help="Run workspace created by 'nhf-targets init'.",
+        ),
+    ],
+    period: Annotated[
+        str,
+        Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
+    ],
+):
+    """Download Reitz 2017 annual recharge estimates from USGS ScienceBase.
+
+    Downloads total and effective recharge GeoTIFFs, consolidates into
+    a single NetCDF, and prints the provenance record.
+    """
+    import json as json_mod
+
+    from rich.console import Console
+
+    from nhf_spatial_targets.fetch.reitz2017 import fetch_reitz2017
+
+    if not run_dir.exists():
+        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+        sys.exit(2)
+
+    console = Console()
+    console.print(f"[bold]Fetching Reitz 2017 recharge for period {period}...[/bold]")
+
+    try:
+        result = fetch_reitz2017(run_dir=run_dir, period=period)
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        _logger.exception("Unexpected error during Reitz 2017 fetch")
+        print(
+            f"Unexpected error ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    console.print(
+        f"[green]Downloaded Reitz 2017 recharge to "
+        f"{run_dir / 'data' / 'raw' / 'reitz2017'}[/green]"
+    )
+    console.print(json_mod.dumps(result, indent=2))
+
+
 @catalog_app.command(name="sources")
 def catalog_sources():
     """List all registered data sources."""
