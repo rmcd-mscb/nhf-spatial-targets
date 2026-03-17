@@ -46,6 +46,11 @@ ssebop:
   status: current
 ```
 
+Note: `access.endpoint` and `access.zarr_store` are informational metadata for
+human reference. The code uses `access.collection_id` with
+`gdptools.helpers.get_stac_collection()`, which resolves the Zarr asset
+location from the STAC catalog automatically.
+
 Key changes from existing entry:
 - `access.type`: `usgs_water` → `usgs_gdp_stac`
 - Added `access.collection_id`, `access.endpoint`, `access.zarr_store`
@@ -53,37 +58,49 @@ Key changes from existing entry:
 - `status`: `needs_version_verification` → `current`
 - `period`: `2000/2010` → `2000/2023` (full available range)
 
+## Existing Fetch Stub
+
+The existing `src/nhf_spatial_targets/fetch/ssebop.py` stub will be deleted.
+SSEBop is a remote dataset accessed via gdptools STAC interface — no local
+download step. This is an intentional pattern variation for `usgs_gdp_stac`
+sources compared to the fetch-then-aggregate pattern used for other sources.
+
 ## Aggregate Module
 
 **File:** `src/nhf_spatial_targets/aggregate/ssebop.py`
+
+All new modules use `from __future__ import annotations`.
 
 **Function:** `aggregate_ssebop(fabric_path, id_col, period, run_dir) -> xr.Dataset`
 
 ### Flow
 
-1. Load source metadata via `catalog.source("ssebop")` — get collection ID and
-   endpoint.
-2. Load fabric GeoDataFrame from the GeoPackage.
-3. Chunk the fabric into batches of HRUs (configurable chunk size).
-4. For each chunk:
+1. Load source metadata via `catalog.source("ssebop")` — get collection ID.
+2. Obtain the STAC collection object via
+   `gdptools.helpers.get_stac_collection(collection_id)`.
+3. Load fabric GeoDataFrame from the GeoPackage.
+4. Chunk the fabric into batches of HRUs (configurable chunk size).
+5. For each chunk:
    a. Check for cached weights at `<run_dir>/weights/ssebop_chunk<N>.csv`.
-   b. If no cache: create `NHGFStacZarrData` with the chunk GeoDataFrame,
-      run `WeightGen.calculate_weights()`, save CSV.
+   b. If no cache: create `NHGFStacZarrData` with `source_collection`,
+      chunk GeoDataFrame, `source_var="et"`, and time period. Run
+      `WeightGen.calculate_weights(method="serial")`, save CSV.
    c. If cached: load weights DataFrame from CSV.
    d. Create `AggGen` with `stat_method="masked_mean"`, `agg_engine="serial"`,
       `agg_writer="none"`, pass weights DataFrame.
    e. Call `calculate_agg()` → `(gdf, xr.Dataset)`.
    f. Collect the Dataset.
-5. Concatenate chunk Datasets along the HRU dimension.
-6. Write consolidated NetCDF to `<run_dir>/output/ssebop_aet.nc`.
-7. Return the Dataset.
+6. Concatenate chunk Datasets along the HRU dimension.
+7. Write consolidated NetCDF to `<run_dir>/output/ssebop_aet.nc`.
+8. Return the Dataset.
 
 ### Key Parameters
 
-- `source_var=["et"]`
+- `source_var="et"` (string, single variable)
 - `source_time_period` derived from `period` config (e.g., `["2000-01-01", "2010-12-31"]`)
-- `weight_gen_crs=6931` (NAD83 / CONUS Albers, equal-area for accurate
-  intersection areas)
+- `weight_gen_crs=5070` (NAD83 / CONUS Albers, EPSG:5070, equal-area for
+  accurate intersection areas)
+- `weight_gen_method="serial"` (matches `agg_engine`)
 - Weight CSVs named by source key + chunk index for identification and reuse
 
 ### Weight Caching
@@ -95,7 +112,7 @@ are the same, weights can be reused across runs. Weight CSVs are stored at
 ### Output
 
 - **File:** `<run_dir>/output/ssebop_aet.nc`
-- **Dimensions:** `(time, hru_id)`
+- **Dimensions:** `(time, <id_col>)` where `id_col` is the fabric's ID column
 - **Variable:** `et` in native units (mm/month) — no unit conversion at this
   stage. All unit conversions deferred to calibration file writer.
 - **Attributes:** CF-1.6 compliant, includes DOI, collection ID, aggregation
@@ -111,9 +128,10 @@ layer.
 
 ## CLI Integration
 
-Add `nhf-targets run-ssebop-agg` command for standalone aggregation. This
-allows running SSEBop aggregation independently for testing and incremental
-work, without requiring the full AET target builder.
+Add `nhf-targets agg ssebop` command for standalone aggregation, following the
+existing CLI pattern (`nhf-targets fetch <source>`). This allows running SSEBop
+aggregation independently for testing and incremental work, without requiring
+the full AET target builder.
 
 ## Manifest / Provenance
 
