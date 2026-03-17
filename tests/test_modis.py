@@ -317,7 +317,8 @@ def test_mod16a2_manifest_updated(
     assert "year" in entry["files"][0]
     assert "consolidated_ncs" in entry
     assert "variables" in entry
-    assert entry["variables"] == ["ET_500m", "ET_QC_500m"]
+    var_names = [v["name"] if isinstance(v, dict) else v for v in entry["variables"]]
+    assert var_names == ["ET_500m", "ET_QC_500m"]
 
 
 # ---- Incremental fetch -----------------------------------------------------
