@@ -182,12 +182,16 @@ def fetch_watergap22d(run_dir: Path, period: str) -> dict:
                     f"availability."
                 ) from exc
 
-            # Validate file index before downloading
+            # Validate file index before downloading.
+            # PANGAEA's "File name" column omits the extension (format is
+            # in a separate "File format" column), so compare against the
+            # filename stem.
             actual_name = pan_ds.data.loc[file_index, "File name"]
-            if actual_name != raw_filename:
+            expected_stem = Path(raw_filename).stem
+            if actual_name != expected_stem:
                 raise RuntimeError(
                     f"PANGAEA file index {file_index} contains "
-                    f"'{actual_name}', expected '{raw_filename}'. "
+                    f"'{actual_name}', expected '{expected_stem}'. "
                     f"The dataset listing may have changed."
                 )
 

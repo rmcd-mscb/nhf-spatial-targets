@@ -35,6 +35,7 @@ def _mock_pangaeapy():
 
 
 _RAW_FILENAME = "watergap_22d_WFDEI-GPCC_histsoc_qrdif_monthly_1901_2016.nc4"
+_RAW_STEM = Path(_RAW_FILENAME).stem
 
 
 def _make_watergap_nc(path: Path, n_times: int = 24) -> Path:
@@ -187,7 +188,7 @@ def _mock_pangaea_download(
     _make_watergap_nc(cached_file, n_times=n_times)
 
     mock_ds = MagicMock()
-    mock_data = pd.DataFrame({"File name": {30: _RAW_FILENAME}})
+    mock_data = pd.DataFrame({"File name": {30: _RAW_STEM}})
     mock_ds.data = mock_data
     mock_ds.download.return_value = [cached_file]
     mock_pangaeapy.PanDataSet = MagicMock(return_value=mock_ds)
@@ -325,7 +326,7 @@ def test_download_failure_raises(run_dir: Path, _mock_pangaeapy):
     from nhf_spatial_targets.fetch.pangaea import fetch_watergap22d
 
     mock_ds = MagicMock()
-    mock_data = pd.DataFrame({"File name": {30: _RAW_FILENAME}})
+    mock_data = pd.DataFrame({"File name": {30: _RAW_STEM}})
     mock_ds.data = mock_data
     mock_ds.download.side_effect = Exception("PANGAEA unavailable")
     _mock_pangaeapy.PanDataSet = MagicMock(return_value=mock_ds)
@@ -339,7 +340,7 @@ def test_empty_download_raises(run_dir: Path, _mock_pangaeapy):
     from nhf_spatial_targets.fetch.pangaea import fetch_watergap22d
 
     mock_ds = MagicMock()
-    mock_data = pd.DataFrame({"File name": {30: _RAW_FILENAME}})
+    mock_data = pd.DataFrame({"File name": {30: _RAW_STEM}})
     mock_ds.data = mock_data
     mock_ds.download.return_value = []
     _mock_pangaeapy.PanDataSet = MagicMock(return_value=mock_ds)
