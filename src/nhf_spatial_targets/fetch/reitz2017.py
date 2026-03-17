@@ -292,11 +292,15 @@ def fetch_reitz2017(run_dir: Path, period: str) -> dict:
                                     len(tif_names),
                                     tif_names,
                                 )
-                            # Sanitize: strip directory components to prevent
-                            # path traversal from malicious zip entries
+                            # Extract and rename to match the expected
+                            # convention (e.g. TotalRecharge_2005.tif).
+                            # The actual names inside the zips differ
+                            # (e.g. RC_2005.tif, RC_eff_2005.tif).
                             tif_member = tif_names[0]
-                            safe_name = Path(tif_member).name
-                            (output_dir / safe_name).write_bytes(zf.read(tif_member))
+                            expected_name = Path(zip_name).with_suffix(".tif").name
+                            (output_dir / expected_name).write_bytes(
+                                zf.read(tif_member)
+                            )
                     except zipfile.BadZipFile as exc:
                         raise RuntimeError(
                             f"Corrupt zip file '{zip_name}' for year {year}. "
