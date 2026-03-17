@@ -10,7 +10,6 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import xarray as xr
 
@@ -62,34 +61,10 @@ def _cf_fixup(raw_path: Path, output_path: Path) -> Path:
         ds = ds.assign_coords(time=new_time)
         ds.time.attrs = {"standard_name": "time", "long_name": "time", "axis": "T"}
 
-        # --- Add CRS variable with WGS84 grid mapping ---
-        crs = xr.DataArray(
-            np.int32(0),
-            attrs={
-                "grid_mapping_name": "latitude_longitude",
-                "semi_major_axis": 6378137.0,
-                "inverse_flattening": 298.257223563,
-                "longitude_of_prime_meridian": 0.0,
-                "crs_wkt": (
-                    'GEOGCS["WGS 84",'
-                    'DATUM["WGS_1984",'
-                    'SPHEROID["WGS 84",6378137,298.257223563]],'
-                    'PRIMEM["Greenwich",0],'
-                    'UNIT["degree",0.0174532925199433]]'
-                ),
-            },
-        )
-        ds["crs"] = crs
+        # --- Apply CF-1.6 metadata via shared helper ---
+        from nhf_spatial_targets.fetch.consolidate import apply_cf_metadata
 
-        # --- Set grid_mapping on data variables ---
-        for var in ds.data_vars:
-            if var != "crs":
-                ds[var].attrs["grid_mapping"] = "crs"
-
-        # --- Set Conventions ---
-        ds.attrs["Conventions"] = "CF-1.6"
-        # Remove the old non-standard conventions attr if present
-        ds.attrs.pop("conventions", None)
+        ds = apply_cf_metadata(ds, "watergap22d", "monthly")
 
         # --- Write atomically ---
         ds.to_netcdf(tmp_path, format="NETCDF4")
