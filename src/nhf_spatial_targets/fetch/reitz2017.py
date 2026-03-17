@@ -9,7 +9,6 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import rioxarray  # noqa: F401 — registers .rio accessor
 import xarray as xr
@@ -118,68 +117,11 @@ def _consolidate(output_dir: Path, period: str) -> Path:
         stacked = stacked.assign_coords(time=time_coords)
         ds[ds_name] = stacked
 
-    # Drop rioxarray's spatial_ref (a CF crs variable is added below)
-    if "spatial_ref" in ds:
-        ds = ds.drop_vars("spatial_ref")
+    # Apply CF-1.6 metadata via shared helper (handles spatial_ref removal,
+    # CRS variable, grid_mapping, coordinate renaming, variable attrs, etc.)
+    from nhf_spatial_targets.fetch.consolidate import apply_cf_metadata
 
-    # Parse source CRS for CF metadata (used in both CRS variable and
-    # coordinate attrs below)
-    src_crs = None
-    if src_crs_wkt is not None:
-        from pyproj import CRS as _CRS
-
-        src_crs = _CRS.from_wkt(src_crs_wkt)
-
-    # Add CF-compliant CRS variable derived from source GeoTIFFs
-    if src_crs is not None:
-        crs_attrs: dict = {"crs_wkt": src_crs_wkt}
-        if src_crs.is_geographic:
-            crs_attrs["grid_mapping_name"] = "latitude_longitude"
-            ellipsoid = src_crs.ellipsoid
-            crs_attrs["semi_major_axis"] = ellipsoid.semi_major_metre
-            crs_attrs["inverse_flattening"] = ellipsoid.inverse_flattening
-            crs_attrs["longitude_of_prime_meridian"] = 0.0
-
-        crs_var = xr.DataArray(np.int32(0), attrs=crs_attrs)
-        ds["crs"] = crs_var
-        for _, ds_name in var_configs:
-            ds[ds_name].attrs["grid_mapping"] = "crs"
-
-    # Add CF variable metadata
-    ds["total_recharge"].attrs.update(
-        long_name="Total recharge",
-        units="inches/year",
-    )
-    ds["eff_recharge"].attrs.update(
-        long_name="Effective recharge (base flow component)",
-        units="inches/year",
-    )
-
-    # Add CF coordinate metadata
-    if src_crs is not None and src_crs.is_geographic:
-        ds.y.attrs = {
-            "standard_name": "latitude",
-            "units": "degrees_north",
-            "axis": "Y",
-        }
-        ds.x.attrs = {
-            "standard_name": "longitude",
-            "units": "degrees_east",
-            "axis": "X",
-        }
-    else:
-        ds.y.attrs = {
-            "standard_name": "projection_y_coordinate",
-            "units": "m",
-            "axis": "Y",
-        }
-        ds.x.attrs = {
-            "standard_name": "projection_x_coordinate",
-            "units": "m",
-            "axis": "X",
-        }
-    ds.time.attrs = {"standard_name": "time", "long_name": "time", "axis": "T"}
-    ds.attrs["Conventions"] = "CF-1.6"
+    ds = apply_cf_metadata(ds, _SOURCE_KEY, "annual", crs_wkt=src_crs_wkt)
 
     # Write atomically with compression
     encoding = {ds_name: {"zlib": True, "complevel": 4} for _, ds_name in var_configs}

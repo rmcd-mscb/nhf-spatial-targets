@@ -371,7 +371,7 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
     source_key = _MOD16A2_SOURCE_KEY
     meta = _catalog.source(source_key)
     short_name = meta["access"]["short_name"]
-    variables = meta["variables"]
+    variables = [v["name"] if isinstance(v, dict) else v for v in meta["variables"]]
 
     _check_superseded(meta, source_key)
     earthdata_login(run_dir)
@@ -499,6 +499,7 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
                     variables=variables,
                     out_path=out_path,
                     run_dir=run_dir,
+                    source_key=source_key,
                     keep_tmp=False,
                 )
                 consolidated_ncs[str(year)] = result["consolidated_nc"]
@@ -771,7 +772,7 @@ def fetch_mod10c1(run_dir: Path, period: str) -> dict:
         )
 
     # Per-year consolidation
-    variables = meta["variables"]
+    variables = [v["name"] if isinstance(v, dict) else v for v in meta["variables"]]
     consolidated_ncs: dict[str, str] = {}
     years_on_disk = sorted({f["year"] for f in files})
     for year in years_on_disk:

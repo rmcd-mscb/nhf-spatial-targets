@@ -136,6 +136,32 @@ def test_cf_fixup_sets_conventions(tmp_path: Path):
     ds.close()
 
 
+def test_cf_fixup_coordinate_metadata(tmp_path: Path):
+    """CF fix-up sets coordinate attrs and time_bnds for monthly data."""
+    from nhf_spatial_targets.fetch.pangaea import _cf_fixup
+
+    raw = _make_watergap_nc(tmp_path / "raw.nc4", n_times=3)
+    fixed = _cf_fixup(raw, tmp_path / "fixed.nc")
+
+    ds = xr.open_dataset(fixed)
+    # Coordinate names
+    assert "lat" in ds.dims
+    assert "lon" in ds.dims
+    # Coordinate attrs
+    assert ds.lat.attrs["standard_name"] == "latitude"
+    assert ds.lat.attrs["units"] == "degrees_north"
+    assert ds.lon.attrs["standard_name"] == "longitude"
+    assert ds.lon.attrs["units"] == "degrees_east"
+    assert ds.time.attrs["standard_name"] == "time"
+    # time_bnds for monthly data
+    assert "time_bnds" in ds.data_vars
+    assert ds.time.attrs.get("bounds") == "time_bnds"
+    # No spatial_ref
+    assert "spatial_ref" not in ds.data_vars
+    assert "spatial_ref" not in ds.coords
+    ds.close()
+
+
 def test_cf_fixup_preserves_data(tmp_path: Path):
     """CF fix-up must not alter the qrdif data values."""
     from nhf_spatial_targets.fetch.pangaea import _cf_fixup

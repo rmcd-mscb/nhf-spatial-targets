@@ -126,6 +126,196 @@ def _write_netcdf(
         ) from exc
 
 
+def apply_cf_metadata(
+    ds: xr.Dataset,
+    source_key: str,
+    time_step: str = "monthly",
+    crs_wkt: str | None = None,
+) -> xr.Dataset:
+    """Apply CF-1.6 compliant metadata to a consolidated dataset.
+
+    Parameters
+    ----------
+    ds : xr.Dataset
+        Dataset to annotate. The function returns a modified copy;
+        callers must use the return value.
+    source_key : str
+        Catalog key for looking up variable metadata.
+    time_step : str
+        Temporal resolution. Only ``"monthly"`` triggers automatic
+        ``time_bnds`` generation; all other values (``"daily"``,
+        ``"8-day"``, ``"annual"``) leave time bounds unchanged.
+    crs_wkt : str | None
+        WKT string for the source CRS. Defaults to WGS84 when ``None``.
+        Only geographic CRS is supported; projected CRS will raise
+        ``NotImplementedError``.
+
+    Returns
+    -------
+    xr.Dataset
+    """
+    import nhf_spatial_targets.catalog as _catalog
+
+    _VALID_TIME_STEPS = {"monthly", "daily", "8-day", "annual"}
+    if time_step not in _VALID_TIME_STEPS:
+        raise ValueError(
+            f"Invalid time_step {time_step!r}; expected one of {sorted(_VALID_TIME_STEPS)}"
+        )
+
+    # 1. Normalize coordinates to lat/lon
+    rename_map: dict[str, str] = {}
+    for old, new in [
+        ("y", "lat"),
+        ("x", "lon"),
+        ("latitude", "lat"),
+        ("longitude", "lon"),
+    ]:
+        if old in ds.dims and old != new:
+            rename_map[old] = new
+    if rename_map:
+        ds = ds.rename(rename_map)
+
+    # Ensure (time, lat, lon) dimension order; use ellipsis to pass through any
+    # extra dims (e.g. "nv" from time_bnds).
+    dim_order = [d for d in ("time", "lat", "lon") if d in ds.dims]
+    ds = ds.transpose(*dim_order, ...)
+
+    # 2. Drop spatial_ref if present (check both data_vars and coords)
+    if "spatial_ref" in ds.data_vars:
+        ds = ds.drop_vars("spatial_ref")
+    if "spatial_ref" in ds.coords:
+        ds = ds.drop_vars("spatial_ref")
+
+    # 3. Add CRS variable
+    if crs_wkt is not None:
+        from pyproj import CRS as _CRS
+
+        src_crs = _CRS.from_wkt(crs_wkt)
+        crs_attrs: dict = {"crs_wkt": crs_wkt}
+        if src_crs.is_geographic:
+            crs_attrs["grid_mapping_name"] = "latitude_longitude"
+            ellipsoid = src_crs.ellipsoid
+            crs_attrs["semi_major_axis"] = ellipsoid.semi_major_metre
+            crs_attrs["inverse_flattening"] = ellipsoid.inverse_flattening
+            crs_attrs["longitude_of_prime_meridian"] = 0.0
+        else:
+            raise NotImplementedError(
+                f"Only geographic CRS is supported, got projected CRS: {src_crs.name}"
+            )
+    else:
+        # Default WGS84
+        crs_attrs = {
+            "grid_mapping_name": "latitude_longitude",
+            "semi_major_axis": 6378137.0,
+            "inverse_flattening": 298.257223563,
+            "longitude_of_prime_meridian": 0.0,
+            "crs_wkt": (
+                'GEOGCS["WGS 84",'
+                'DATUM["WGS_1984",'
+                'SPHEROID["WGS 84",6378137,298.257223563]],'
+                'PRIMEM["Greenwich",0],'
+                'UNIT["degree",0.0174532925199433]]'
+            ),
+        }
+    ds["crs"] = xr.DataArray(np.int32(0), attrs=crs_attrs)
+
+    # 4. Set grid_mapping on data variables
+    skip_vars = {"crs", "time_bnds"}
+    for var in ds.data_vars:
+        if var not in skip_vars:
+            ds[var].attrs["grid_mapping"] = "crs"
+
+    # 5. Set variable metadata from catalog
+    meta = _catalog.source(source_key)
+
+    cat_vars = meta.get("variables", [])
+    if cat_vars:
+        # Build lookup: variable_name -> dict of attrs
+        var_lookup: dict[str, dict] = {}
+        for entry in cat_vars:
+            if isinstance(entry, dict):
+                name = entry.get("name", "")
+                var_lookup[name] = entry
+            else:
+                var_lookup[str(entry)] = {}
+
+        for var in ds.data_vars:
+            if var in skip_vars:
+                continue
+            if var in var_lookup:
+                entry = var_lookup[var]
+                if "long_name" in entry:
+                    ds[var].attrs["long_name"] = entry["long_name"]
+                # cf_units takes precedence over units
+                units = entry.get("cf_units") or entry.get("units")
+                if units:
+                    ds[var].attrs["units"] = units
+                if "cell_methods" in entry:
+                    ds[var].attrs["cell_methods"] = entry["cell_methods"]
+
+    # 6. Set coordinate attributes
+    if "lat" in ds.coords:
+        ds.lat.attrs = {
+            "standard_name": "latitude",
+            "units": "degrees_north",
+            "axis": "Y",
+        }
+    if "lon" in ds.coords:
+        ds.lon.attrs = {
+            "standard_name": "longitude",
+            "units": "degrees_east",
+            "axis": "X",
+        }
+    if "time" in ds.coords:
+        ds.time.attrs.update(
+            {"standard_name": "time", "long_name": "time", "axis": "T"}
+        )
+
+    # 7. Add time_bnds for monthly data
+    if time_step == "monthly" and "time_bnds" not in ds:
+        times = pd.DatetimeIndex(ds.time.values)
+        epoch = pd.Timestamp("1970-01-01")
+        bounds_list = []
+        for t in times:
+            m_start = t.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            if t.month == 12:
+                m_end = t.replace(
+                    year=t.year + 1,
+                    month=1,
+                    day=1,
+                    hour=0,
+                    minute=0,
+                    second=0,
+                    microsecond=0,
+                )
+            else:
+                m_end = t.replace(
+                    month=t.month + 1,
+                    day=1,
+                    hour=0,
+                    minute=0,
+                    second=0,
+                    microsecond=0,
+                )
+            bounds_list.append([(m_start - epoch).days, (m_end - epoch).days])
+
+        nv = np.array([0, 1])
+        ds["time_bnds"] = xr.DataArray(
+            np.array(bounds_list, dtype="<i8"),
+            dims=["time", "nv"],
+            attrs={"units": "days since 1970-01-01", "calendar": "standard"},
+        )
+        if "nv" not in ds.coords:
+            ds = ds.assign_coords(nv=nv)
+        ds.time.attrs["bounds"] = "time_bnds"
+
+    # 8. Set Conventions
+    ds.attrs["Conventions"] = "CF-1.6"
+    ds.attrs.pop("conventions", None)  # remove stale lowercase variant
+
+    return ds
+
+
 def _fix_time_merra2(ds: xr.Dataset) -> xr.Dataset:
     """Shift MERRA-2 timestamps to mid-month and add time_bnds.
 
@@ -232,12 +422,12 @@ def consolidate_merra2(
         _validate_variables(ds, variables)
         ds = ds[variables]
         ds = _fix_time_merra2(ds)
+        ds = apply_cf_metadata(ds, "merra2", "monthly")
 
-        # Add CF and provenance global attributes
+        # Add provenance global attributes
         meta = _catalog.source("merra2")
         ds.attrs.update(
             {
-                "Conventions": "CF-1.8",
                 "history": (f"Consolidated by nhf-spatial-targets v{__version__}"),
                 "source": (
                     f"NASA MERRA-2 {meta['access']['short_name']}"
@@ -306,6 +496,7 @@ def consolidate_nldas(
         ds = ds.sortby("time")
         _validate_variables(ds, variables)
         ds = ds[variables]
+        ds = apply_cf_metadata(ds, source_key, "monthly")
 
         out_path = source_dir / f"{source_key}_consolidated.nc"
         logger.info("Writing consolidated file: %s", out_path)
@@ -385,6 +576,7 @@ def consolidate_mod10c1(
         ds_merged = ds_merged.sortby("time")
         _validate_variables(ds_merged, variables)
         ds_merged = ds_merged[variables]
+        ds_merged = apply_cf_metadata(ds_merged, source_key, "daily")
 
         out_path = source_dir / f"{source_key}_{year}_consolidated.nc"
         logger.info("Writing consolidated file: %s", out_path)
@@ -588,6 +780,7 @@ def consolidate_mod16a2_finalize(
     variables: list[str],
     out_path: Path,
     run_dir: Path,
+    source_key: str = "mod16a2_v061",
     keep_tmp: bool = False,
 ) -> dict:
     """Concat per-timestep temp files into the final consolidated NetCDF.
@@ -640,15 +833,8 @@ def consolidate_mod16a2_finalize(
         try:
             ds = ds.sortby("time")
             _validate_variables(ds, variables)
-            # Keep spatial_ref alongside the requested variables
-            keep = list(variables)
-            if "spatial_ref" in ds:
-                keep.append("spatial_ref")
-            ds = ds[keep]
-            # Restore grid_mapping attribute (open_mfdataset can drop it)
-            for var in variables:
-                if var in ds and "grid_mapping" not in ds[var].attrs:
-                    ds[var].attrs["grid_mapping"] = "spatial_ref"
+            ds = ds[variables]
+            ds = apply_cf_metadata(ds, source_key, "8-day")
             _write_netcdf(ds, out_path)
         finally:
             ds.close()
@@ -784,6 +970,7 @@ def consolidate_mod16a2(
         variables=variables,
         out_path=out_path,
         run_dir=run_dir,
+        source_key=source_key,
     )
     # Override n_files with HDF count (finalize reports timestep count)
     result["n_files"] = len(hdf_files)
@@ -868,6 +1055,7 @@ def consolidate_ncep_ncar(
         ds = xr.merge(merged_parts)
         _validate_variables(ds, variables)
         ds = ds[variables]
+        ds = apply_cf_metadata(ds, "ncep_ncar", "monthly")
 
         out_path = ncep_dir / "ncep_ncar_consolidated.nc"
         logger.info("Writing consolidated file: %s", out_path)

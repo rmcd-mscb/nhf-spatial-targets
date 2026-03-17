@@ -76,16 +76,18 @@ def test_consolidate_builds_nc(tmp_path: Path):
     assert ds["total_recharge"].attrs["grid_mapping"] == "crs"
     assert ds["eff_recharge"].attrs["grid_mapping"] == "crs"
 
-    # CF-compliance: variable metadata
-    assert ds["total_recharge"].attrs["units"] == "inches/year"
-    assert ds["total_recharge"].attrs["long_name"] == "Total recharge"
-    assert ds["eff_recharge"].attrs["units"] == "inches/year"
+    # CF-compliance: variable metadata (cf_units from catalog)
+    assert ds["total_recharge"].attrs["units"] == "inches yr-1"
+    assert "long_name" in ds["total_recharge"].attrs
+    assert ds["eff_recharge"].attrs["units"] == "inches yr-1"
 
-    # CF-compliance: coordinate metadata
-    assert ds.y.attrs["standard_name"] == "latitude"
-    assert ds.y.attrs["units"] == "degrees_north"
-    assert ds.x.attrs["standard_name"] == "longitude"
-    assert ds.x.attrs["units"] == "degrees_east"
+    # CF-compliance: coordinates renamed to lat/lon by apply_cf_metadata
+    assert "lat" in ds.dims
+    assert "lon" in ds.dims
+    assert ds.lat.attrs["standard_name"] == "latitude"
+    assert ds.lat.attrs["units"] == "degrees_north"
+    assert ds.lon.attrs["standard_name"] == "longitude"
+    assert ds.lon.attrs["units"] == "degrees_east"
     assert ds.time.attrs["standard_name"] == "time"
 
     # CF-compliance: global attribute
