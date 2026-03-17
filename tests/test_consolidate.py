@@ -299,6 +299,33 @@ def test_nldas_no_files_raises(tmp_path):
         )
 
 
+def test_nldas_cf_metadata(nldas_dir):
+    """NLDAS consolidated file has CF-1.6 metadata."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_nldas
+
+    run_dir = nldas_dir.parent.parent.parent
+    consolidate_nldas(
+        run_dir=run_dir,
+        source_key="nldas_mosaic",
+        variables=["SoilM_0_10cm", "SoilM_10_40cm", "SoilM_40_200cm"],
+    )
+
+    ds = xr.open_dataset(nldas_dir / "nldas_mosaic_consolidated.nc")
+    assert ds.attrs["Conventions"] == "CF-1.6"
+    assert "crs" in ds.data_vars
+    assert "spatial_ref" not in ds.data_vars
+    assert ds["crs"].attrs["grid_mapping_name"] == "latitude_longitude"
+    assert ds["SoilM_0_10cm"].attrs["grid_mapping"] == "crs"
+    assert ds["SoilM_0_10cm"].attrs["units"] == "kg/m2"
+    assert ds["SoilM_0_10cm"].attrs["long_name"] == "soil moisture 0-10 cm"
+    assert ds.lat.attrs["standard_name"] == "latitude"
+    assert ds.lon.attrs["standard_name"] == "longitude"
+    assert ds.time.attrs["standard_name"] == "time"
+    assert "time_bnds" in ds.data_vars
+    assert ds.time.attrs.get("bounds") == "time_bnds"
+    ds.close()
+
+
 @pytest.fixture()
 def ncep_dir(tmp_path: Path) -> Path:
     """Create synthetic NCEP/NCAR monthly NetCDF3 files."""

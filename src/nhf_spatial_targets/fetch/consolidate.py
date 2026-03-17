@@ -488,6 +488,7 @@ def consolidate_nldas(
         ds = ds.sortby("time")
         _validate_variables(ds, variables)
         ds = ds[variables]
+        ds = apply_cf_metadata(ds, source_key, "monthly")
 
         out_path = source_dir / f"{source_key}_consolidated.nc"
         logger.info("Writing consolidated file: %s", out_path)
