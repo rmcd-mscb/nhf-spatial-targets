@@ -137,20 +137,30 @@ def apply_cf_metadata(
     Parameters
     ----------
     ds : xr.Dataset
-        Dataset to annotate. Callers must use the return value.
+        Dataset to annotate. The function returns a modified copy;
+        callers must use the return value.
     source_key : str
         Catalog key for looking up variable metadata.
     time_step : str
-        One of ``"monthly"``, ``"daily"``, ``"8-day"``, ``"annual"``.
-        Controls whether ``time_bnds`` is added (monthly only).
+        Temporal resolution. Only ``"monthly"`` triggers automatic
+        ``time_bnds`` generation; all other values (``"daily"``,
+        ``"8-day"``, ``"annual"``) leave time bounds unchanged.
     crs_wkt : str | None
         WKT string for the source CRS. Defaults to WGS84 when ``None``.
+        Only geographic CRS is supported; projected CRS will raise
+        ``NotImplementedError``.
 
     Returns
     -------
     xr.Dataset
     """
     import nhf_spatial_targets.catalog as _catalog
+
+    _VALID_TIME_STEPS = {"monthly", "daily", "8-day", "annual"}
+    if time_step not in _VALID_TIME_STEPS:
+        raise ValueError(
+            f"Invalid time_step {time_step!r}; expected one of {sorted(_VALID_TIME_STEPS)}"
+        )
 
     # 1. Normalize coordinates to lat/lon
     rename_map: dict[str, str] = {}
@@ -188,6 +198,10 @@ def apply_cf_metadata(
             crs_attrs["semi_major_axis"] = ellipsoid.semi_major_metre
             crs_attrs["inverse_flattening"] = ellipsoid.inverse_flattening
             crs_attrs["longitude_of_prime_meridian"] = 0.0
+        else:
+            raise NotImplementedError(
+                f"Only geographic CRS is supported, got projected CRS: {src_crs.name}"
+            )
     else:
         # Default WGS84
         crs_attrs = {
@@ -212,13 +226,7 @@ def apply_cf_metadata(
             ds[var].attrs["grid_mapping"] = "crs"
 
     # 5. Set variable metadata from catalog
-    try:
-        meta = _catalog.source(source_key)
-    except KeyError:
-        logger.warning(
-            "Source '%s' not found in catalog; skipping variable metadata", source_key
-        )
-        meta = {}
+    meta = _catalog.source(source_key)
 
     cat_vars = meta.get("variables", [])
     if cat_vars:
@@ -416,7 +424,7 @@ def consolidate_merra2(
         ds = _fix_time_merra2(ds)
         ds = apply_cf_metadata(ds, "merra2", "monthly")
 
-        # Add CF and provenance global attributes
+        # Add provenance global attributes
         meta = _catalog.source("merra2")
         ds.attrs.update(
             {

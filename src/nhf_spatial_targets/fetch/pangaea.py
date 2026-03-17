@@ -26,8 +26,8 @@ def _cf_fixup(raw_path: Path, output_path: Path) -> Path:
 
     Addresses:
     - Time encoding: reconstructs 'months since 1901-01-01' offsets as datetime64
-    - Grid mapping: adds WGS84 crs variable and grid_mapping attr on data vars
-    - Conventions: sets to CF-1.6
+    - CF-1.6 metadata: delegates to ``apply_cf_metadata`` for grid mapping,
+      coordinate attrs, time_bnds, and Conventions
 
     Writes to a temporary file and atomically renames to avoid leaving
     partial/corrupt output on failure.
@@ -59,7 +59,6 @@ def _cf_fixup(raw_path: Path, output_path: Path) -> Path:
             dates.append(pd.Timestamp(year=int(year), month=int(month), day=1))
         new_time = pd.DatetimeIndex(dates)
         ds = ds.assign_coords(time=new_time)
-        ds.time.attrs = {"standard_name": "time", "long_name": "time", "axis": "T"}
 
         # --- Apply CF-1.6 metadata via shared helper ---
         from nhf_spatial_targets.fetch.consolidate import apply_cf_metadata

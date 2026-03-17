@@ -704,6 +704,32 @@ def test_apply_cf_metadata_daily_no_time_bnds():
     assert result.attrs["Conventions"] == "CF-1.6"
 
 
+def test_apply_cf_metadata_latitude_longitude_rename():
+    """apply_cf_metadata renames latitude/longitude to lat/lon."""
+    from nhf_spatial_targets.fetch.consolidate import apply_cf_metadata
+
+    ds = xr.Dataset(
+        {
+            "var": (
+                ["time", "latitude", "longitude"],
+                np.random.rand(2, 3, 4).astype(np.float32),
+            ),
+        },
+        coords={
+            "time": pd.date_range("2010-01-01", periods=2, freq="MS"),
+            "latitude": np.linspace(25.0, 50.0, 3),
+            "longitude": np.linspace(-125.0, -65.0, 4),
+        },
+    )
+
+    result = apply_cf_metadata(ds, "ncep_ncar", "monthly")
+
+    assert "lat" in result.dims
+    assert "lon" in result.dims
+    assert "latitude" not in result.dims
+    assert "longitude" not in result.dims
+
+
 def test_apply_cf_metadata_skips_existing_time_bnds():
     """apply_cf_metadata skips time_bnds if already present (MERRA-2 case)."""
     from nhf_spatial_targets.fetch.consolidate import apply_cf_metadata
