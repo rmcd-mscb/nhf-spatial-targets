@@ -18,19 +18,20 @@ import xarray as xr
 def _make_reitz_tif(path: Path, *, value: float = 1.0) -> Path:
     """Create a small synthetic GeoTIFF mimicking Reitz output.
 
-    4x4 grid in Albers Equal Area CONUS projection (EPSG:5070).
+    4x4 grid in NAD83 geographic coordinates (EPSG:4269), matching the
+    actual Reitz 2017 source data CRS.
     """
     from rasterio.crs import CRS
     from rasterio.transform import from_bounds
 
     ny, nx = 4, 4
     data = np.full((ny, nx), value, dtype=np.float32)
-    transform = from_bounds(-2356114, 277962, -2355314, 278762, nx, ny)
+    transform = from_bounds(-100.0, 35.0, -99.0, 36.0, nx, ny)
     da = xr.DataArray(
         data[np.newaxis, :, :],  # (band=1, y, x)
         dims=["band", "y", "x"],
     )
-    da.rio.write_crs(CRS.from_epsg(5070), inplace=True)
+    da.rio.write_crs(CRS.from_epsg(4269), inplace=True)
     da.rio.write_transform(transform, inplace=True)
     da.rio.write_nodata(-9999.0, inplace=True)
     da.rio.to_raster(path)
@@ -61,6 +62,34 @@ def test_consolidate_builds_nc(tmp_path: Path):
     # Check data values round-trip
     assert float(ds["total_recharge"].isel(time=0).mean()) == pytest.approx(2005.0)
     assert float(ds["eff_recharge"].isel(time=0).mean()) == pytest.approx(2005.5)
+
+    # CF-compliance: CRS variable
+    assert "crs" in ds.data_vars
+    assert "spatial_ref" not in ds.data_vars
+    crs_attrs = ds["crs"].attrs
+    assert "crs_wkt" in crs_attrs
+    assert "NAD83" in crs_attrs["crs_wkt"]
+    assert crs_attrs["grid_mapping_name"] == "latitude_longitude"
+    assert crs_attrs["semi_major_axis"] == pytest.approx(6378137.0)
+
+    # CF-compliance: grid_mapping on data variables
+    assert ds["total_recharge"].attrs["grid_mapping"] == "crs"
+    assert ds["eff_recharge"].attrs["grid_mapping"] == "crs"
+
+    # CF-compliance: variable metadata
+    assert ds["total_recharge"].attrs["units"] == "inches/year"
+    assert ds["total_recharge"].attrs["long_name"] == "Total recharge"
+    assert ds["eff_recharge"].attrs["units"] == "inches/year"
+
+    # CF-compliance: coordinate metadata
+    assert ds.y.attrs["standard_name"] == "latitude"
+    assert ds.y.attrs["units"] == "degrees_north"
+    assert ds.x.attrs["standard_name"] == "longitude"
+    assert ds.x.attrs["units"] == "degrees_east"
+    assert ds.time.attrs["standard_name"] == "time"
+
+    # CF-compliance: global attribute
+    assert ds.attrs["Conventions"] == "CF-1.6"
     ds.close()
 
 

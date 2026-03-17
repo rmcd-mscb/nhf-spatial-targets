@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 _SOURCE_KEY = "reitz2017"
 _CONSOLIDATED_FILENAME = "reitz2017_consolidated.nc"
-_DATA_PERIOD = (2000, 2013)
+_DATA_PERIOD = (2000, 2013)  # doi:10.5066/F7PN93P0
 
 
 def _year_from_filename(path: Path) -> int:
@@ -76,13 +76,15 @@ def _consolidate(output_dir: Path, period: str) -> Path:
                 da = da.squeeze("band", drop=True).load()
                 if src_crs_wkt is None and da.rio.crs is not None:
                     src_crs_wkt = da.rio.crs.to_wkt()
-                da.close()
             except Exception as exc:
                 raise RuntimeError(
                     f"Failed to read GeoTIFF '{tif_path.name}' for variable "
                     f"'{ds_name}', year {year}. The file may be corrupt — "
                     f"delete it and re-run the fetch. Original error: {exc}"
                 ) from exc
+            finally:
+                if "da" in locals():
+                    da.close()
             var_arrays[ds_name][year] = da
 
     # Validate pairing: every year must have both variables
@@ -116,22 +118,29 @@ def _consolidate(output_dir: Path, period: str) -> Path:
         stacked = stacked.assign_coords(time=time_coords)
         ds[ds_name] = stacked
 
-    # Drop rioxarray's spatial_ref (replaced by CF-compliant crs variable)
+    # Drop rioxarray's spatial_ref (a CF crs variable is added below)
     if "spatial_ref" in ds:
         ds = ds.drop_vars("spatial_ref")
 
-    # Add CF-compliant CRS variable (NAD83 / EPSG:4269)
+    # Parse source CRS for CF metadata (used in both CRS variable and
+    # coordinate attrs below)
+    src_crs = None
     if src_crs_wkt is not None:
-        crs_var = xr.DataArray(
-            np.int32(0),
-            attrs={
-                "grid_mapping_name": "latitude_longitude",
-                "semi_major_axis": 6378137.0,
-                "inverse_flattening": 298.257222101,
-                "longitude_of_prime_meridian": 0.0,
-                "crs_wkt": src_crs_wkt,
-            },
-        )
+        from pyproj import CRS as _CRS
+
+        src_crs = _CRS.from_wkt(src_crs_wkt)
+
+    # Add CF-compliant CRS variable derived from source GeoTIFFs
+    if src_crs is not None:
+        crs_attrs: dict = {"crs_wkt": src_crs_wkt}
+        if src_crs.is_geographic:
+            crs_attrs["grid_mapping_name"] = "latitude_longitude"
+            ellipsoid = src_crs.ellipsoid
+            crs_attrs["semi_major_axis"] = ellipsoid.semi_major_metre
+            crs_attrs["inverse_flattening"] = ellipsoid.inverse_flattening
+            crs_attrs["longitude_of_prime_meridian"] = 0.0
+
+        crs_var = xr.DataArray(np.int32(0), attrs=crs_attrs)
         ds["crs"] = crs_var
         for _, ds_name in var_configs:
             ds[ds_name].attrs["grid_mapping"] = "crs"
@@ -147,8 +156,28 @@ def _consolidate(output_dir: Path, period: str) -> Path:
     )
 
     # Add CF coordinate metadata
-    ds.y.attrs = {"standard_name": "latitude", "units": "degrees_north", "axis": "Y"}
-    ds.x.attrs = {"standard_name": "longitude", "units": "degrees_east", "axis": "X"}
+    if src_crs is not None and src_crs.is_geographic:
+        ds.y.attrs = {
+            "standard_name": "latitude",
+            "units": "degrees_north",
+            "axis": "Y",
+        }
+        ds.x.attrs = {
+            "standard_name": "longitude",
+            "units": "degrees_east",
+            "axis": "X",
+        }
+    else:
+        ds.y.attrs = {
+            "standard_name": "projection_y_coordinate",
+            "units": "m",
+            "axis": "Y",
+        }
+        ds.x.attrs = {
+            "standard_name": "projection_x_coordinate",
+            "units": "m",
+            "axis": "X",
+        }
     ds.time.attrs = {"standard_name": "time", "long_name": "time", "axis": "T"}
     ds.attrs["Conventions"] = "CF-1.6"
 
@@ -161,7 +190,10 @@ def _consolidate(output_dir: Path, period: str) -> Path:
         tmp_path.unlink(missing_ok=True)
         raise
     finally:
-        ds.close()
+        try:
+            ds.close()
+        except Exception:
+            pass
 
     logger.info("Wrote consolidated file: %s", nc_path)
     return nc_path
@@ -191,7 +223,13 @@ def fetch_reitz2017(run_dir: Path, period: str) -> dict:
     meta = _catalog.source(_SOURCE_KEY)
     parse_period(period)  # validate format
 
-    access = meta["access"]
+    access = meta.get("access", {})
+    for key in ("child_item_id", "file_patterns"):
+        if key not in access:
+            raise ValueError(
+                f"Catalog entry for '{_SOURCE_KEY}' is missing "
+                f"'access.{key}'. Check catalog/sources.yml."
+            )
     child_item_id = access["child_item_id"]
     file_patterns = access["file_patterns"]
     license_str = meta.get("license", "unknown")
@@ -213,12 +251,21 @@ def fetch_reitz2017(run_dir: Path, period: str) -> dict:
             f"Run 'nhf-targets init' to create a run workspace first."
         )
     try:
-        json.loads(fabric_path.read_text())
+        fabric_data = json.loads(fabric_path.read_text())
     except json.JSONDecodeError as exc:
         raise ValueError(
             f"fabric.json in {run_dir} is malformed. "
             f"Re-run 'nhf-targets init' to regenerate it."
         ) from exc
+    if "bbox_buffered" not in fabric_data:
+        raise ValueError(
+            f"fabric.json in {run_dir} is missing 'bbox_buffered'. "
+            f"Re-run 'nhf-targets init' to regenerate it."
+        )
+    logger.info(
+        "Reitz 2017 data covers all of CONUS; spatial subsetting "
+        "is applied during the aggregation step."
+    )
 
     output_dir = run_dir / "data" / "raw" / _SOURCE_KEY
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -227,8 +274,15 @@ def fetch_reitz2017(run_dir: Path, period: str) -> dict:
 
     if nc_path.exists():
         # Verify existing file covers the requested period
-        with xr.open_dataset(nc_path) as ds_check:
-            existing_years = set(int(y) for y in ds_check.time.dt.year.values)
+        try:
+            with xr.open_dataset(nc_path) as ds_check:
+                existing_years = set(int(y) for y in ds_check.time.dt.year.values)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Consolidated file {nc_path} exists but cannot be read. "
+                f"It may be corrupt. Delete it and re-run the fetch. "
+                f"Original error: {exc}"
+            ) from exc
         missing = set(requested_years) - existing_years
         if missing:
             raise RuntimeError(
@@ -274,7 +328,13 @@ def fetch_reitz2017(run_dir: Path, period: str) -> dict:
                     f"response. The item may have been deleted or moved."
                 )
 
-            file_infos = sb.get_item_file_info(item)
+            try:
+                file_infos = sb.get_item_file_info(item)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to retrieve file list from ScienceBase item "
+                    f"{child_item_id}: {exc}"
+                ) from exc
             if not file_infos:
                 raise RuntimeError(
                     f"ScienceBase item {child_item_id} has no downloadable "
@@ -326,12 +386,10 @@ def fetch_reitz2017(run_dir: Path, period: str) -> dict:
                             if not tif_names:
                                 raise RuntimeError(f"No .tif file found in {zip_name}")
                             if len(tif_names) > 1:
-                                logger.warning(
-                                    "Zip %s contains %d .tif files: %s. "
-                                    "Using first match.",
-                                    zip_name,
-                                    len(tif_names),
-                                    tif_names,
+                                raise RuntimeError(
+                                    f"Zip '{zip_name}' contains {len(tif_names)} "
+                                    f".tif files: {tif_names}. Expected exactly "
+                                    f"one. The zip structure may have changed."
                                 )
                             # Extract and rename to match the expected
                             # convention (e.g. TotalRecharge_2005.tif).
