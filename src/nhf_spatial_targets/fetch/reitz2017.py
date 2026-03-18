@@ -135,8 +135,8 @@ def _consolidate(output_dir: Path, period: str) -> Path:
     finally:
         try:
             ds.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to close dataset during consolidation: %s", exc)
 
     logger.info("Wrote consolidated file: %s", nc_path)
     return nc_path

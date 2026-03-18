@@ -62,7 +62,21 @@ def load(workdir: Path) -> Workspace:
             f"config.yml not found in {workdir}. "
             f"Run 'nhf-targets init --workdir {workdir}' first."
         )
-    config = yaml.safe_load(config_path.read_text())
+    try:
+        config = yaml.safe_load(config_path.read_text())
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Cannot parse config.yml in {workdir}: {exc}") from exc
+    if not isinstance(config, dict):
+        raise ValueError(
+            f"config.yml in {workdir} is empty or malformed. "
+            f"It must contain YAML key-value pairs."
+        )
+
+    if "datastore" not in config:
+        raise ValueError(
+            f"'datastore' key missing from config.yml in {workdir}. "
+            f"This field is required. Edit config.yml and add the datastore path."
+        )
 
     fabric_path = workdir / "fabric.json"
     if not fabric_path.exists():
@@ -73,7 +87,16 @@ def load(workdir: Path) -> Workspace:
     fabric = json.loads(fabric_path.read_text())
 
     dir_mode_str = config.get("dir_mode")
-    dir_mode = int(dir_mode_str, 8) if dir_mode_str else None
+    if dir_mode_str:
+        try:
+            dir_mode = int(dir_mode_str, 8)
+        except ValueError:
+            raise ValueError(
+                f"Invalid dir_mode '{dir_mode_str}' in config.yml. "
+                f"Expected an octal string like '2775'."
+            ) from None
+    else:
+        dir_mode = None
 
     return Workspace(
         workdir=workdir,

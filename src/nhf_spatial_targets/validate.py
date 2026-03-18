@@ -80,7 +80,15 @@ def _check_config(workdir: Path) -> dict:
             f"config.yml not found in {workdir}. "
             f"Run 'nhf-targets init --workdir {workdir}' first."
         )
-    config = yaml.safe_load(config_path.read_text())
+    try:
+        config = yaml.safe_load(config_path.read_text())
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Cannot parse config.yml in {workdir}: {exc}") from exc
+    if not isinstance(config, dict):
+        raise ValueError(
+            f"config.yml in {workdir} is empty or malformed. "
+            f"It must contain YAML key-value pairs."
+        )
 
     fabric_cfg = config.get("fabric", {}) or {}
     if not fabric_cfg.get("path"):
@@ -119,7 +127,13 @@ def _check_credentials(workdir: Path) -> None:
             f".credentials.yml not found in {workdir}. "
             "Create it with NASA Earthdata credentials before validating."
         )
-    creds = yaml.safe_load(cred_path.read_text()) or {}
+    try:
+        creds = yaml.safe_load(cred_path.read_text()) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(
+            f"Cannot parse {cred_path}: {exc}. "
+            f"Fix the YAML syntax in your credentials file."
+        ) from exc
     earthdata = creds.get("nasa_earthdata", {}) or {}
     if not earthdata.get("username") or not earthdata.get("password"):
         raise ValueError(

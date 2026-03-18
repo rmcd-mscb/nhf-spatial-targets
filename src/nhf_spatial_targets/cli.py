@@ -65,7 +65,15 @@ def run(
         )
         sys.exit(2)
 
-    cfg = yaml.safe_load((workdir / "config.yml").read_text())
+    try:
+        cfg = yaml.safe_load((workdir / "config.yml").read_text())
+    except yaml.YAMLError as exc:
+        print(f"Error: Cannot parse config.yml: {exc}", file=sys.stderr)
+        sys.exit(1)
+    if not isinstance(cfg, dict):
+        print("Error: config.yml is empty or malformed.", file=sys.stderr)
+        sys.exit(1)
+
     targets_cfg = cfg.get("targets", {})
 
     to_run = (
@@ -79,7 +87,12 @@ def run(
             print(f"Error: Unknown target: {name}", file=sys.stderr)
             sys.exit(1)
         print(f"Building target: {name}")
-        _dispatch(name, targets_cfg[name], cfg, workdir=workdir)
+        try:
+            _dispatch(name, targets_cfg[name], cfg, workdir=workdir)
+        except Exception as exc:
+            _logger.exception("Error building target '%s'", name)
+            print(f"Error building target '{name}': {exc}", file=sys.stderr)
+            sys.exit(1)
 
 
 def _dispatch(
@@ -175,8 +188,15 @@ def validate(
 
     try:
         validate_workspace(workdir)
-    except (FileNotFoundError, ValueError) as e:
+    except (FileNotFoundError, ValueError, RuntimeError, OSError) as e:
         print(f"Validation failed: {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        _logger.exception("Unexpected error during validation")
+        print(
+            f"Unexpected validation error ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     console.print(

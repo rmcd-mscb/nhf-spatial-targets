@@ -234,7 +234,12 @@ def _update_manifest(
     ws = _load_workspace(workdir)
     manifest_path = ws.manifest_path
     if manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text())
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"manifest.json in {workdir} is corrupted. Detail: {exc}"
+            ) from exc
     else:
         manifest = {"sources": {}, "steps": []}
 
