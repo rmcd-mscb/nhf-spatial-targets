@@ -25,6 +25,7 @@ from nhf_spatial_targets.fetch.consolidate import (
     consolidate_mod16a2_timestep,
     log_memory,
 )
+from nhf_spatial_targets.workspace import load as _load_workspace
 
 logger = logging.getLogger(__name__)
 
@@ -183,58 +184,18 @@ def _year_from_path(path: Path) -> int:
     return int(m.group(1))
 
 
-def _read_fabric_bbox(run_dir: Path) -> dict:
-    """Read ``bbox_buffered`` from ``fabric.json``.
-
-    Parameters
-    ----------
-    run_dir : Path
-        Run workspace directory containing ``fabric.json``.
-
-    Returns
-    -------
-    dict
-        The ``bbox_buffered`` mapping with minx/miny/maxx/maxy keys.
-
-    Raises
-    ------
-    FileNotFoundError
-        If ``fabric.json`` does not exist.
-    ValueError
-        If ``fabric.json`` is malformed or missing required fields.
-    """
-    fabric_path = run_dir / "fabric.json"
-    if not fabric_path.exists():
-        raise FileNotFoundError(
-            f"fabric.json not found in {run_dir}. "
-            f"Run 'nhf-targets init' to create a run workspace first."
-        )
-    try:
-        fabric = json.loads(fabric_path.read_text())
-        bbox = fabric["bbox_buffered"]
-        # Validate required keys are present
-        _ = bbox["minx"], bbox["miny"], bbox["maxx"], bbox["maxy"]
-    except (json.JSONDecodeError, KeyError) as exc:
-        raise ValueError(
-            f"fabric.json in {run_dir} is malformed or missing required "
-            f"fields (bbox_buffered.{{minx,miny,maxx,maxy}}). "
-            f"Re-run 'nhf-targets init' to regenerate it."
-        ) from exc
-    return bbox
-
-
 def _bbox_tuple(bbox: dict) -> tuple[float, float, float, float]:
     """Convert a bbox dict to ``(minx, miny, maxx, maxy)`` tuple."""
     return (bbox["minx"], bbox["miny"], bbox["maxx"], bbox["maxy"])
 
 
-def _manifest_source_files(run_dir: Path, source_key: str) -> list[dict]:
+def _manifest_source_files(workdir: Path, source_key: str) -> list[dict]:
     """Read file records from ``manifest.json`` for a given source.
 
     Parameters
     ----------
-    run_dir : Path
-        Run workspace directory.
+    workdir : Path
+        Workspace directory.
     source_key : str
         The source key to look up (e.g. ``"mod16a2_v061"``).
 
@@ -243,22 +204,23 @@ def _manifest_source_files(run_dir: Path, source_key: str) -> list[dict]:
     list[dict]
         List of file record dicts, or empty list if not present.
     """
-    manifest_path = run_dir / "manifest.json"
+    ws = _load_workspace(workdir)
+    manifest_path = ws.manifest_path
     if not manifest_path.exists():
         return []
     try:
         manifest = json.loads(manifest_path.read_text())
     except json.JSONDecodeError as exc:
         raise ValueError(
-            f"manifest.json in {run_dir} is corrupted and cannot be parsed. "
+            f"manifest.json in {workdir} is corrupted and cannot be parsed. "
             f"Inspect the file manually or restore from backup. Detail: {exc}"
         ) from exc
     return manifest.get("sources", {}).get(source_key, {}).get("files", [])
 
 
-def _existing_years(run_dir: Path, source_key: str) -> set[int]:
+def _existing_years(workdir: Path, source_key: str) -> set[int]:
     """Return years already fetched for *source_key* from manifest."""
-    records = _manifest_source_files(run_dir, source_key)
+    records = _manifest_source_files(workdir, source_key)
     skipped = sum(1 for f in records if "year" not in f)
     if skipped:
         logger.warning(
@@ -269,11 +231,11 @@ def _existing_years(run_dir: Path, source_key: str) -> set[int]:
     return {f["year"] for f in records if "year" in f}
 
 
-def _existing_file_timestamps(run_dir: Path, source_key: str) -> dict[int, str]:
+def _existing_file_timestamps(workdir: Path, source_key: str) -> dict[int, str]:
     """Return ``{year: downloaded_utc}`` from existing manifest."""
     return {
         f["year"]: f["downloaded_utc"]
-        for f in _manifest_source_files(run_dir, source_key)
+        for f in _manifest_source_files(workdir, source_key)
         if "year" in f and "downloaded_utc" in f
     }
 
@@ -290,7 +252,7 @@ def _check_superseded(meta: dict, source_key: str) -> None:
 
 
 def _update_manifest(
-    run_dir: Path,
+    workdir: Path,
     source_key: str,
     period: str,
     bbox: dict,
@@ -299,13 +261,14 @@ def _update_manifest(
     consolidated_ncs: dict[str, str],
 ) -> None:
     """Merge MODIS provenance into ``manifest.json`` with atomic write."""
-    manifest_path = run_dir / "manifest.json"
+    ws = _load_workspace(workdir)
+    manifest_path = ws.manifest_path
     if manifest_path.exists():
         try:
             manifest = json.loads(manifest_path.read_text())
         except json.JSONDecodeError as exc:
             raise ValueError(
-                f"manifest.json in {run_dir} is corrupted and cannot be parsed. "
+                f"manifest.json in {workdir} is corrupted and cannot be parsed. "
                 f"Inspect the file manually or restore from backup. Detail: {exc}"
             ) from exc
     else:
@@ -348,7 +311,7 @@ def _update_manifest(
 _MOD16A2_SOURCE_KEY = "mod16a2_v061"
 
 
-def fetch_mod16a2(run_dir: Path, period: str) -> dict:
+def fetch_mod16a2(workdir: Path, period: str) -> dict:
     """Download MOD16A2 AET granules for the given period.
 
     Downloads and consolidates per-timestep to limit peak memory.
@@ -357,9 +320,9 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
 
     Parameters
     ----------
-    run_dir : Path
-        Run workspace directory. Reads ``fabric.json`` for bbox,
-        writes files to ``data/raw/mod16a2_v061/``.
+    workdir : Path
+        Workspace directory. Reads ``fabric.json`` for bbox,
+        writes files to the datastore under ``mod16a2_v061/``.
     period : str
         Temporal range as ``"YYYY/YYYY"`` (start/end years inclusive).
 
@@ -368,25 +331,26 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
     dict
         Provenance record for ``manifest.json``.
     """
+    ws = _load_workspace(workdir)
     source_key = _MOD16A2_SOURCE_KEY
     meta = _catalog.source(source_key)
     short_name = meta["access"]["short_name"]
     variables = [v["name"] if isinstance(v, dict) else v for v in meta["variables"]]
 
     _check_superseded(meta, source_key)
-    earthdata_login(run_dir)
+    earthdata_login(workdir)
     logger.info("Authenticated with NASA Earthdata")
     log_memory("after authentication")
 
-    bbox = _read_fabric_bbox(run_dir)
+    bbox = ws.fabric["bbox_buffered"]
     bbox_t = _bbox_tuple(bbox)
 
     # Determine which years need downloading
     all_years = years_in_period(period)
-    already_have = _existing_years(run_dir, source_key)
+    already_have = _existing_years(workdir, source_key)
     needed = [y for y in all_years if y not in already_have]
 
-    output_dir = run_dir / "data" / "raw" / source_key
+    output_dir = ws.raw_dir(source_key)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Clean up stale temp files from prior interrupted runs
@@ -498,7 +462,6 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
                     tmp_paths=tmp_paths,
                     variables=variables,
                     out_path=out_path,
-                    run_dir=run_dir,
                     source_key=source_key,
                     keep_tmp=False,
                 )
@@ -518,20 +481,21 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
     for year in years_on_disk:
         if str(year) not in consolidated_ncs:
             logger.info("Re-consolidating %s year %d", source_key, year)
-            result = consolidate_mod16a2(run_dir, source_key, variables, year, bbox_t)
+            result = consolidate_mod16a2(
+                output_dir, source_key, variables, year, bbox_t
+            )
             consolidated_ncs[str(year)] = result["consolidated_nc"]
 
     # Build file inventory from all .hdf files on disk
-    existing_timestamps = _existing_file_timestamps(run_dir, source_key)
+    existing_timestamps = _existing_file_timestamps(workdir, source_key)
     now_utc = datetime.now(timezone.utc).isoformat()
 
     files = []
     for p in all_hdf_files:
-        rel = str(p.relative_to(run_dir))
         yr = _year_from_path(p)
         files.append(
             {
-                "path": rel,
+                "path": str(p),
                 "year": yr,
                 "size_bytes": p.stat().st_size,
                 "downloaded_utc": existing_timestamps.get(yr, now_utc),
@@ -546,7 +510,7 @@ def fetch_mod16a2(run_dir: Path, period: str) -> dict:
 
     # Update manifest.json (merge, don't overwrite)
     _update_manifest(
-        run_dir,
+        workdir,
         source_key,
         effective_period,
         bbox,
@@ -616,7 +580,7 @@ def _subset_to_conus(hdf_path: Path, bbox: dict | None = None) -> Path:
                 )
             ds = ds.squeeze("band", drop=True)
 
-        # Rename x/y → lon/lat for the subset below
+        # Rename x/y -> lon/lat for the subset below
         rename = {}
         if "x" in ds.dims:
             rename["x"] = "lon"
@@ -648,11 +612,11 @@ def _subset_to_conus(hdf_path: Path, bbox: dict | None = None) -> Path:
         )
 
     hdf_path.unlink()
-    logger.info("Subsetted %s → %s", hdf_path.name, out_path.name)
+    logger.info("Subsetted %s -> %s", hdf_path.name, out_path.name)
     return out_path
 
 
-def fetch_mod10c1(run_dir: Path, period: str) -> dict:
+def fetch_mod10c1(workdir: Path, period: str) -> dict:
     """Download MOD10C1 daily snow cover CMG files for the given period.
 
     Supports incremental download — years already recorded in
@@ -662,9 +626,9 @@ def fetch_mod10c1(run_dir: Path, period: str) -> dict:
 
     Parameters
     ----------
-    run_dir : Path
-        Run workspace directory. Reads ``fabric.json`` for bbox,
-        writes files to ``data/raw/mod10c1_v061/``.
+    workdir : Path
+        Workspace directory. Reads ``fabric.json`` for bbox,
+        writes files to the datastore under ``mod10c1_v061/``.
     period : str
         Temporal range as ``"YYYY/YYYY"`` (start/end years inclusive).
 
@@ -673,23 +637,24 @@ def fetch_mod10c1(run_dir: Path, period: str) -> dict:
     dict
         Provenance record for ``manifest.json``.
     """
+    ws = _load_workspace(workdir)
     source_key = _MOD10C1_SOURCE_KEY
     meta = _catalog.source(source_key)
     short_name = meta["access"]["short_name"]
 
     _check_superseded(meta, source_key)
-    earthdata_login(run_dir)
+    earthdata_login(workdir)
     logger.info("Authenticated with NASA Earthdata")
 
-    bbox = _read_fabric_bbox(run_dir)
+    bbox = ws.fabric["bbox_buffered"]
     bbox_t = _bbox_tuple(bbox)
 
     # Determine which years need downloading
     all_years = years_in_period(period)
-    already_have = _existing_years(run_dir, source_key)
+    already_have = _existing_years(workdir, source_key)
     needed = [y for y in all_years if y not in already_have]
 
-    output_dir = run_dir / "data" / "raw" / source_key
+    output_dir = ws.raw_dir(source_key)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if not needed:
@@ -755,16 +720,15 @@ def fetch_mod10c1(run_dir: Path, period: str) -> dict:
     all_nc_files = sorted(output_dir.glob("*.conus.nc"))
 
     # Preserve original downloaded_utc for files already in manifest
-    existing_timestamps = _existing_file_timestamps(run_dir, source_key)
+    existing_timestamps = _existing_file_timestamps(workdir, source_key)
     now_utc = datetime.now(timezone.utc).isoformat()
 
     files = []
     for p in all_nc_files:
-        rel = str(p.relative_to(run_dir))
         yr = _year_from_path(p)
         files.append(
             {
-                "path": rel,
+                "path": str(p),
                 "year": yr,
                 "size_bytes": p.stat().st_size,
                 "downloaded_utc": existing_timestamps.get(yr, now_utc),
@@ -777,7 +741,7 @@ def fetch_mod10c1(run_dir: Path, period: str) -> dict:
     years_on_disk = sorted({f["year"] for f in files})
     for year in years_on_disk:
         logger.info("Consolidating %s year %d", source_key, year)
-        result = consolidate_mod10c1(run_dir, source_key, variables, year)
+        result = consolidate_mod10c1(output_dir, source_key, variables, year)
         consolidated_ncs[str(year)] = result["consolidated_nc"]
 
     # Compute effective period from actual files on disk
@@ -788,7 +752,7 @@ def fetch_mod10c1(run_dir: Path, period: str) -> dict:
 
     # Update manifest.json (merge, don't overwrite)
     _update_manifest(
-        run_dir,
+        workdir,
         source_key,
         effective_period,
         bbox,

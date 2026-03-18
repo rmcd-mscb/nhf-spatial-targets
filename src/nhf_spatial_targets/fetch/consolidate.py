@@ -381,19 +381,19 @@ def _fix_time_merra2(ds: xr.Dataset) -> xr.Dataset:
 
 
 def consolidate_merra2(
-    run_dir: Path,
+    source_dir: Path,
     variables: list[str],
 ) -> dict:
     """Merge per-granule MERRA-2 files into a single consolidated NetCDF.
 
-    Opens all ``.nc4`` files in ``data/raw/merra2/``, selects the requested
+    Opens all ``.nc4`` files in *source_dir*, selects the requested
     variables, concatenates along time, shifts timestamps to mid-month,
     and writes a single ``merra2_consolidated.nc``.
 
     Parameters
     ----------
-    run_dir : Path
-        Run workspace directory containing ``data/raw/merra2/*.nc4``.
+    source_dir : Path
+        Directory containing ``*.nc4`` MERRA-2 granule files.
     variables : list[str]
         Variable names to include (e.g. ["GWETTOP", "GWETROOT", "GWETPROF"]).
 
@@ -404,12 +404,11 @@ def consolidate_merra2(
     """
     import nhf_spatial_targets.catalog as _catalog
 
-    merra2_dir = run_dir / "data" / "raw" / "merra2"
-    nc_files = sorted(merra2_dir.glob("*.nc4"))
+    nc_files = sorted(source_dir.glob("*.nc4"))
 
     if not nc_files:
         raise FileNotFoundError(
-            f"No .nc4 files found in {merra2_dir}. "
+            f"No .nc4 files found in {source_dir}. "
             f"Run 'nhf-targets fetch merra2' first."
         )
 
@@ -441,7 +440,7 @@ def consolidate_merra2(
             }
         )
 
-        out_path = merra2_dir / "merra2_consolidated.nc"
+        out_path = source_dir / "merra2_consolidated.nc"
         logger.info("Writing consolidated file: %s", out_path)
         encoding = {"time": {"units": "days since 1970-01-01", "calendar": "standard"}}
         _write_netcdf(ds, out_path, encoding=encoding)
@@ -451,7 +450,7 @@ def consolidate_merra2(
             d.close()
 
     return {
-        "consolidated_nc": str(out_path.relative_to(run_dir)),
+        "consolidated_nc": str(out_path),
         "last_consolidated_utc": datetime.now(timezone.utc).isoformat(),
         "n_files": len(nc_files),
         "variables": variables,
@@ -459,7 +458,7 @@ def consolidate_merra2(
 
 
 def consolidate_nldas(
-    run_dir: Path,
+    source_dir: Path,
     source_key: str,
     variables: list[str],
 ) -> dict:
@@ -467,8 +466,8 @@ def consolidate_nldas(
 
     Parameters
     ----------
-    run_dir : Path
-        Run workspace directory.
+    source_dir : Path
+        Directory containing NLDAS granule files.
     source_key : str
         Source key (e.g. "nldas_mosaic" or "nldas_noah").
     variables : list[str]
@@ -479,7 +478,6 @@ def consolidate_nldas(
     dict
         Provenance record.
     """
-    source_dir = run_dir / "data" / "raw" / source_key
     nc_files = sorted(list(source_dir.glob("*.nc4")) + list(source_dir.glob("*.nc")))
 
     if not nc_files:
@@ -507,7 +505,7 @@ def consolidate_nldas(
             d.close()
 
     return {
-        "consolidated_nc": str(out_path.relative_to(run_dir)),
+        "consolidated_nc": str(out_path),
         "last_consolidated_utc": datetime.now(timezone.utc).isoformat(),
         "n_files": len(nc_files),
         "variables": variables,
@@ -524,7 +522,7 @@ def _time_from_modis_filename(path: Path) -> pd.Timestamp:
 
 
 def consolidate_mod10c1(
-    run_dir: Path,
+    source_dir: Path,
     source_key: str,
     variables: list[str],
     year: int,
@@ -533,8 +531,8 @@ def consolidate_mod10c1(
 
     Parameters
     ----------
-    run_dir : Path
-        Run workspace directory.
+    source_dir : Path
+        Directory containing ``*.conus.nc`` MOD10C1 files.
     source_key : str
         Source key (e.g. ``"mod10c1_v061"``).
     variables : list[str]
@@ -547,7 +545,6 @@ def consolidate_mod10c1(
     dict
         Provenance record.
     """
-    source_dir = run_dir / "data" / "raw" / source_key
     year_pattern = re.compile(rf"\.A{year}\d{{3}}\.")
     nc_files = sorted(
         f for f in source_dir.glob("*.conus.nc") if year_pattern.search(f.name)
@@ -587,7 +584,7 @@ def consolidate_mod10c1(
             d.close()
 
     return {
-        "consolidated_nc": str(out_path.relative_to(run_dir)),
+        "consolidated_nc": str(out_path),
         "last_consolidated_utc": datetime.now(timezone.utc).isoformat(),
         "n_files": len(nc_files),
         "variables": variables,
@@ -779,9 +776,9 @@ def consolidate_mod16a2_finalize(
     tmp_paths: list[Path],
     variables: list[str],
     out_path: Path,
-    run_dir: Path,
     source_key: str = "mod16a2_v061",
     keep_tmp: bool = False,
+    **kwargs: object,
 ) -> dict:
     """Concat per-timestep temp files into the final consolidated NetCDF.
 
@@ -793,8 +790,8 @@ def consolidate_mod16a2_finalize(
         Variable names to validate.
     out_path : Path
         Path for the final consolidated file.
-    run_dir : Path
-        Run workspace root (for computing relative paths in provenance).
+    source_key : str
+        Catalog source key for CF metadata lookup.
     keep_tmp : bool
         If True, do not delete temp files after writing the consolidated
         file.  Useful for debugging coordinate alignment issues.
@@ -859,7 +856,7 @@ def consolidate_mod16a2_finalize(
     log_memory(f"after writing {out_path.name}")
 
     return {
-        "consolidated_nc": str(out_path.relative_to(run_dir)),
+        "consolidated_nc": str(out_path),
         "last_consolidated_utc": datetime.now(timezone.utc).isoformat(),
         "n_files": len(tmp_paths),
         "variables": variables,
@@ -867,7 +864,7 @@ def consolidate_mod16a2_finalize(
 
 
 def consolidate_mod16a2(
-    run_dir: Path,
+    source_dir: Path,
     source_key: str,
     variables: list[str],
     year: int,
@@ -882,8 +879,8 @@ def consolidate_mod16a2(
 
     Parameters
     ----------
-    run_dir : Path
-        Run workspace directory.
+    source_dir : Path
+        Directory containing ``*.hdf`` MOD16A2 tile files.
     source_key : str
         Source key (e.g. ``"mod16a2_v061"``).
     variables : list[str]
@@ -902,7 +899,6 @@ def consolidate_mod16a2(
     """
     from collections import defaultdict
 
-    source_dir = run_dir / "data" / "raw" / source_key
     year_pattern = re.compile(rf"\.A({year}\d{{3}})\.")
     hdf_files = sorted(
         f for f in source_dir.glob("*.hdf") if year_pattern.search(f.name)
@@ -969,7 +965,6 @@ def consolidate_mod16a2(
         tmp_paths=tmp_paths,
         variables=variables,
         out_path=out_path,
-        run_dir=run_dir,
         source_key=source_key,
     )
     # Override n_files with HDF count (finalize reports timestep count)
@@ -978,15 +973,15 @@ def consolidate_mod16a2(
 
 
 def consolidate_ncep_ncar(
-    run_dir: Path,
+    source_dir: Path,
     variables: list[str],
 ) -> dict:
     """Merge per-year NCEP/NCAR monthly files into a single consolidated NetCDF.
 
     Parameters
     ----------
-    run_dir : Path
-        Run workspace directory containing ``data/raw/ncep_ncar/*.monthly.nc``.
+    source_dir : Path
+        Directory containing ``*.monthly.nc`` NCEP/NCAR files.
     variables : list[str]
         Variable names to include.
 
@@ -995,12 +990,11 @@ def consolidate_ncep_ncar(
     dict
         Provenance record.
     """
-    ncep_dir = run_dir / "data" / "raw" / "ncep_ncar"
-    nc_files = sorted(ncep_dir.glob("*.monthly.nc"))
+    nc_files = sorted(source_dir.glob("*.monthly.nc"))
 
     if not nc_files:
         raise FileNotFoundError(
-            f"No .monthly.nc files found in {ncep_dir}. "
+            f"No .monthly.nc files found in {source_dir}. "
             "Run 'nhf-targets fetch ncep-ncar' first."
         )
 
@@ -1033,7 +1027,7 @@ def consolidate_ncep_ncar(
                 "these will be included in merge but filtered out during "
                 "variable selection.",
                 key,
-                ncep_dir,
+                source_dir,
             )
 
     merged_parts: list[xr.Dataset] = []
@@ -1057,7 +1051,7 @@ def consolidate_ncep_ncar(
         ds = ds[variables]
         ds = apply_cf_metadata(ds, "ncep_ncar", "monthly")
 
-        out_path = ncep_dir / "ncep_ncar_consolidated.nc"
+        out_path = source_dir / "ncep_ncar_consolidated.nc"
         logger.info("Writing consolidated file: %s", out_path)
         _write_netcdf(ds, out_path)
         logger.info("Wrote %s", out_path)
@@ -1066,7 +1060,7 @@ def consolidate_ncep_ncar(
             part.close()
 
     return {
-        "consolidated_nc": str(out_path.relative_to(run_dir)),
+        "consolidated_nc": str(out_path),
         "last_consolidated_utc": datetime.now(timezone.utc).isoformat(),
         "n_files": len(nc_files),
         "variables": variables,

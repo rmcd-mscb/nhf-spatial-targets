@@ -15,6 +15,7 @@ import xarray as xr
 
 import nhf_spatial_targets.catalog as _catalog
 from nhf_spatial_targets.fetch._period import parse_period, years_in_period
+from nhf_spatial_targets.workspace import load as _load_workspace
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +142,7 @@ def _consolidate(output_dir: Path, period: str) -> Path:
     return nc_path
 
 
-def fetch_reitz2017(run_dir: Path, period: str) -> dict:
+def fetch_reitz2017(workdir: Path, period: str) -> dict:
     """Download Reitz 2017 recharge estimates from USGS ScienceBase.
 
     Downloads annual zipped GeoTIFFs for total and effective recharge,
@@ -150,8 +151,8 @@ def fetch_reitz2017(run_dir: Path, period: str) -> dict:
 
     Parameters
     ----------
-    run_dir : Path
-        Run workspace directory.
+    workdir : Path
+        Workspace directory.
     period : str
         Temporal range as "YYYY/YYYY".
 
@@ -162,6 +163,7 @@ def fetch_reitz2017(run_dir: Path, period: str) -> dict:
     """
     import zipfile
 
+    ws = _load_workspace(workdir)
     meta = _catalog.source(_SOURCE_KEY)
     parse_period(period)  # validate format
 
@@ -182,34 +184,16 @@ def fetch_reitz2017(run_dir: Path, period: str) -> dict:
         if y < _DATA_PERIOD[0] or y > _DATA_PERIOD[1]:
             raise ValueError(
                 f"Year {y} is outside the Reitz 2017 data range "
-                f"({_DATA_PERIOD[0]}–{_DATA_PERIOD[1]}). "
+                f"({_DATA_PERIOD[0]}-{_DATA_PERIOD[1]}). "
                 f"Adjust the --period argument."
             )
 
-    fabric_path = run_dir / "fabric.json"
-    if not fabric_path.exists():
-        raise FileNotFoundError(
-            f"fabric.json not found in {run_dir}. "
-            f"Run 'nhf-targets init' to create a run workspace first."
-        )
-    try:
-        fabric_data = json.loads(fabric_path.read_text())
-    except json.JSONDecodeError as exc:
-        raise ValueError(
-            f"fabric.json in {run_dir} is malformed. "
-            f"Re-run 'nhf-targets init' to regenerate it."
-        ) from exc
-    if "bbox_buffered" not in fabric_data:
-        raise ValueError(
-            f"fabric.json in {run_dir} is missing 'bbox_buffered'. "
-            f"Re-run 'nhf-targets init' to regenerate it."
-        )
     logger.info(
         "Reitz 2017 data covers all of CONUS; spatial subsetting "
         "is applied during the aggregation step."
     )
 
-    output_dir = run_dir / "data" / "raw" / _SOURCE_KEY
+    output_dir = ws.raw_dir(_SOURCE_KEY)
     output_dir.mkdir(parents=True, exist_ok=True)
     nc_path = output_dir / _CONSOLIDATED_FILENAME
     now_utc = datetime.now(timezone.utc).isoformat()
@@ -357,13 +341,13 @@ def fetch_reitz2017(run_dir: Path, period: str) -> dict:
 
     # Build provenance
     file_info = {
-        "path": str(nc_path.relative_to(run_dir)),
+        "path": str(nc_path),
         "size_bytes": nc_path.stat().st_size,
         "downloaded_utc": now_utc,
         "years": requested_years,
     }
 
-    _update_manifest(run_dir, period, meta, license_str, file_info)
+    _update_manifest(workdir, period, meta, license_str, file_info)
 
     return {
         "source_key": _SOURCE_KEY,
@@ -379,20 +363,21 @@ def fetch_reitz2017(run_dir: Path, period: str) -> dict:
 
 
 def _update_manifest(
-    run_dir: Path,
+    workdir: Path,
     period: str,
     meta: dict,
     license_str: str,
     file_info: dict,
 ) -> None:
     """Merge Reitz 2017 provenance into manifest.json."""
-    manifest_path = run_dir / "manifest.json"
+    ws = _load_workspace(workdir)
+    manifest_path = ws.manifest_path
     if manifest_path.exists():
         try:
             manifest = json.loads(manifest_path.read_text())
         except json.JSONDecodeError as exc:
             raise ValueError(
-                f"manifest.json in {run_dir} is corrupt and cannot be "
+                f"manifest.json in {workdir} is corrupt and cannot be "
                 f"parsed. You may need to delete it and re-run the fetch "
                 f"step. Original error: {exc}"
             ) from exc

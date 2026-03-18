@@ -49,14 +49,16 @@ def test_time_from_modis_filename_bad():
 
 @pytest.fixture()
 def mod10c1_run_dir(tmp_path: Path) -> Path:
-    """Create a run workspace with 3 synthetic MOD10C1 .conus.nc files.
+    """Create a source directory with 3 synthetic MOD10C1 .conus.nc files.
 
     Files simulate DOY 1, 2, 3 of year 2010.  Each has Day_CMG_Snow_Cover
     and Snow_Spatial_QA on a small lat/lon grid (4x6) with NO time dimension,
     matching real ``_subset_to_conus`` output.
+
+    Returns the source directory (not the parent).
     """
     source_key = "mod10c1_v061"
-    out = tmp_path / "data" / "raw" / source_key
+    out = tmp_path / source_key
     out.mkdir(parents=True)
 
     lat = np.linspace(25.0, 50.0, 4)
@@ -79,7 +81,7 @@ def mod10c1_run_dir(tmp_path: Path) -> Path:
         fname = f"MOD10C1.A2010{doy:03d}.061.conus.nc"
         ds.to_netcdf(out / fname)
 
-    return tmp_path
+    return out
 
 
 def test_consolidate_mod10c1_basic(mod10c1_run_dir: Path) -> None:
@@ -90,19 +92,13 @@ def test_consolidate_mod10c1_basic(mod10c1_run_dir: Path) -> None:
     variables = ["Day_CMG_Snow_Cover", "Snow_Spatial_QA"]
 
     result = consolidate_mod10c1(
-        run_dir=mod10c1_run_dir,
+        source_dir=mod10c1_run_dir,
         source_key=source_key,
         variables=variables,
         year=2010,
     )
 
-    out_path = (
-        mod10c1_run_dir
-        / "data"
-        / "raw"
-        / source_key
-        / f"{source_key}_2010_consolidated.nc"
-    )
+    out_path = mod10c1_run_dir / f"{source_key}_2010_consolidated.nc"
     assert out_path.exists()
 
     ds = xr.open_dataset(out_path)
@@ -112,10 +108,7 @@ def test_consolidate_mod10c1_basic(mod10c1_run_dir: Path) -> None:
     assert "Snow_Spatial_QA" in ds.data_vars
     ds.close()
 
-    assert (
-        result["consolidated_nc"]
-        == f"data/raw/{source_key}/{source_key}_2010_consolidated.nc"
-    )
+    assert f"{source_key}_2010_consolidated.nc" in result["consolidated_nc"]
     assert "last_consolidated_utc" in result
     assert result["n_files"] == 3
     assert result["variables"] == variables
@@ -126,11 +119,12 @@ def test_consolidate_mod10c1_no_files(tmp_path: Path) -> None:
     from nhf_spatial_targets.fetch.consolidate import consolidate_mod10c1
 
     source_key = "mod10c1_v061"
-    (tmp_path / "data" / "raw" / source_key).mkdir(parents=True)
+    source_dir = tmp_path / source_key
+    source_dir.mkdir(parents=True)
 
     with pytest.raises(FileNotFoundError, match="No .conus.nc files"):
         consolidate_mod10c1(
-            run_dir=tmp_path,
+            source_dir=source_dir,
             source_key=source_key,
             variables=["Day_CMG_Snow_Cover"],
             year=2010,
@@ -145,13 +139,13 @@ def test_consolidate_mod10c1_overwrites_existing(mod10c1_run_dir: Path) -> None:
     variables = ["Day_CMG_Snow_Cover"]
 
     result1 = consolidate_mod10c1(
-        run_dir=mod10c1_run_dir,
+        source_dir=mod10c1_run_dir,
         source_key=source_key,
         variables=variables,
         year=2010,
     )
     result2 = consolidate_mod10c1(
-        run_dir=mod10c1_run_dir,
+        source_dir=mod10c1_run_dir,
         source_key=source_key,
         variables=variables,
         year=2010,
@@ -168,7 +162,7 @@ def test_consolidate_mod10c1_missing_variable_raises(mod10c1_run_dir: Path) -> N
 
     with pytest.raises(ValueError, match="NONEXISTENT"):
         consolidate_mod10c1(
-            run_dir=mod10c1_run_dir,
+            source_dir=mod10c1_run_dir,
             source_key="mod10c1_v061",
             variables=["NONEXISTENT"],
             year=2010,
@@ -180,7 +174,7 @@ def test_consolidate_mod10c1_filters_variables(tmp_path: Path) -> None:
     from nhf_spatial_targets.fetch.consolidate import consolidate_mod10c1
 
     source_key = "mod10c1_v061"
-    out = tmp_path / "data" / "raw" / source_key
+    out = tmp_path / source_key
     out.mkdir(parents=True)
 
     lat = np.linspace(25.0, 50.0, 4)
@@ -203,14 +197,14 @@ def test_consolidate_mod10c1_filters_variables(tmp_path: Path) -> None:
         fname = f"MOD10C1.A2010{doy:03d}.061.conus.nc"
         ds.to_netcdf(out / fname)
 
-    result = consolidate_mod10c1(
-        run_dir=tmp_path,
+    consolidate_mod10c1(
+        source_dir=out,
         source_key=source_key,
         variables=["Day_CMG_Snow_Cover"],
         year=2010,
     )
 
-    out_path = tmp_path / result["consolidated_nc"]
+    out_path = out / f"{source_key}_2010_consolidated.nc"
     ds_out = xr.open_dataset(out_path)
     assert "Day_CMG_Snow_Cover" in ds_out.data_vars
     assert "ExtraVar" not in ds_out.data_vars
@@ -222,13 +216,13 @@ def test_consolidate_mod10c1_sorts_time(mod10c1_run_dir: Path) -> None:
     from nhf_spatial_targets.fetch.consolidate import consolidate_mod10c1
 
     result = consolidate_mod10c1(
-        run_dir=mod10c1_run_dir,
+        source_dir=mod10c1_run_dir,
         source_key="mod10c1_v061",
         variables=["Day_CMG_Snow_Cover"],
         year=2010,
     )
 
-    out_path = mod10c1_run_dir / result["consolidated_nc"]
+    out_path = Path(result["consolidated_nc"])
     ds = xr.open_dataset(out_path)
     assert pd.DatetimeIndex(ds.time.values).is_monotonic_increasing
     ds.close()
@@ -239,7 +233,7 @@ def test_consolidate_mod10c1_filters_year(mod10c1_run_dir: Path) -> None:
     from nhf_spatial_targets.fetch.consolidate import consolidate_mod10c1
 
     source_key = "mod10c1_v061"
-    source_dir = mod10c1_run_dir / "data" / "raw" / source_key
+    source_dir = mod10c1_run_dir
 
     # Add a file for 2011 DOY 1
     lat = np.linspace(25.0, 50.0, 4)
@@ -260,7 +254,7 @@ def test_consolidate_mod10c1_filters_year(mod10c1_run_dir: Path) -> None:
     ds.to_netcdf(source_dir / "MOD10C1.A2011001.061.conus.nc")
 
     result = consolidate_mod10c1(
-        run_dir=mod10c1_run_dir,
+        source_dir=mod10c1_run_dir,
         source_key=source_key,
         variables=["Day_CMG_Snow_Cover", "Snow_Spatial_QA"],
         year=2010,
@@ -268,7 +262,7 @@ def test_consolidate_mod10c1_filters_year(mod10c1_run_dir: Path) -> None:
 
     assert result["n_files"] == 3
 
-    out_path = mod10c1_run_dir / result["consolidated_nc"]
+    out_path = Path(result["consolidated_nc"])
     ds_out = xr.open_dataset(out_path)
     assert len(ds_out.time) == 3
     ds_out.close()
@@ -303,16 +297,17 @@ def _make_sinusoidal_tile(path: Path, h: int, v: int, value: int = 42) -> None:
 
 @pytest.fixture()
 def mod16a2_run_dir(tmp_path):
-    """Create a run workspace with 2 timesteps × 2 tiles of synthetic HDF files."""
-    rd = tmp_path / "run"
-    rd.mkdir()
-    source_dir = rd / "data" / "raw" / "mod16a2_v061"
+    """Create a source directory with 2 timesteps x 2 tiles of synthetic HDF files.
+
+    Returns the source directory directly.
+    """
+    source_dir = tmp_path / "mod16a2_v061"
     source_dir.mkdir(parents=True)
     for doy in [1, 9]:
         for h, v in [(8, 4), (9, 4)]:
             fname = f"MOD16A2GF.A2010{doy:03d}.h{h:02d}v{v:02d}.061.2020256154955.hdf"
             _make_sinusoidal_tile(source_dir / fname, h, v, value=doy * 10)
-    return rd
+    return source_dir
 
 
 def test_consolidate_mod16a2_no_files(tmp_path: Path) -> None:
@@ -320,11 +315,12 @@ def test_consolidate_mod16a2_no_files(tmp_path: Path) -> None:
     from nhf_spatial_targets.fetch.consolidate import consolidate_mod16a2
 
     source_key = "mod16a2_v061"
-    (tmp_path / "data" / "raw" / source_key).mkdir(parents=True)
+    source_dir = tmp_path / source_key
+    source_dir.mkdir(parents=True)
 
     with pytest.raises(FileNotFoundError, match="No .hdf files"):
         consolidate_mod16a2(
-            run_dir=tmp_path,
+            source_dir=source_dir,
             source_key=source_key,
             variables=["ET_500m"],
             year=2010,
@@ -340,14 +336,14 @@ def test_consolidate_mod16a2_synthetic(mod16a2_run_dir: Path) -> None:
     variables = ["ET_500m"]
 
     result = consolidate_mod16a2(
-        run_dir=mod16a2_run_dir,
+        source_dir=mod16a2_run_dir,
         source_key=source_key,
         variables=variables,
         year=2010,
         bbox=_TEST_BBOX,
     )
 
-    out_path = mod16a2_run_dir / result["consolidated_nc"]
+    out_path = Path(result["consolidated_nc"])
     assert out_path.exists()
 
     ds = xr.open_dataset(out_path)
@@ -369,10 +365,7 @@ def test_consolidate_mod16a2_synthetic(mod16a2_run_dir: Path) -> None:
     assert result["n_files"] == 4
     assert result["variables"] == variables
     assert "last_consolidated_utc" in result
-    assert (
-        result["consolidated_nc"]
-        == f"data/raw/{source_key}/{source_key}_2010_consolidated.nc"
-    )
+    assert f"{source_key}_2010_consolidated.nc" in result["consolidated_nc"]
 
 
 def test_consolidate_mod16a2_partial_tiles(mod16a2_run_dir: Path) -> None:
@@ -380,7 +373,7 @@ def test_consolidate_mod16a2_partial_tiles(mod16a2_run_dir: Path) -> None:
     from nhf_spatial_targets.fetch.consolidate import consolidate_mod16a2
 
     source_key = "mod16a2_v061"
-    source_dir = mod16a2_run_dir / "data" / "raw" / source_key
+    source_dir = mod16a2_run_dir
 
     # Delete the h09v04 tile from DOY 009
     doy9_h09 = list(source_dir.glob("MOD16A2GF.A2010009.h09v04.*"))
@@ -388,7 +381,7 @@ def test_consolidate_mod16a2_partial_tiles(mod16a2_run_dir: Path) -> None:
     doy9_h09[0].unlink()
 
     result = consolidate_mod16a2(
-        run_dir=mod16a2_run_dir,
+        source_dir=mod16a2_run_dir,
         source_key=source_key,
         variables=["ET_500m"],
         year=2010,
@@ -398,7 +391,7 @@ def test_consolidate_mod16a2_partial_tiles(mod16a2_run_dir: Path) -> None:
     # 3 remaining HDF files (2 for DOY 001, 1 for DOY 009)
     assert result["n_files"] == 3
 
-    out_path = mod16a2_run_dir / result["consolidated_nc"]
+    out_path = Path(result["consolidated_nc"])
     ds = xr.open_dataset(out_path)
     # Both timesteps should still be present
     assert ds.sizes["time"] == 2
@@ -413,14 +406,14 @@ def test_consolidate_mod16a2_overwrites_existing(mod16a2_run_dir: Path) -> None:
     variables = ["ET_500m"]
 
     result1 = consolidate_mod16a2(
-        run_dir=mod16a2_run_dir,
+        source_dir=mod16a2_run_dir,
         source_key=source_key,
         variables=variables,
         year=2010,
         bbox=_TEST_BBOX,
     )
     result2 = consolidate_mod16a2(
-        run_dir=mod16a2_run_dir,
+        source_dir=mod16a2_run_dir,
         source_key=source_key,
         variables=variables,
         year=2010,
@@ -445,8 +438,7 @@ def test_consolidate_mod16a2_timestep_writes_temp(mod16a2_run_dir: Path) -> None
     """consolidate_mod16a2_timestep writes a temp NetCDF and returns its path."""
     from nhf_spatial_targets.fetch.consolidate import consolidate_mod16a2_timestep
 
-    source_key = "mod16a2_v061"
-    source_dir = mod16a2_run_dir / "data" / "raw" / source_key
+    source_dir = mod16a2_run_dir
 
     # Collect DOY 001 tiles
     tile_paths = sorted(source_dir.glob("MOD16A2GF.A2010001.*.hdf"))
@@ -485,7 +477,7 @@ def test_consolidate_mod16a2_finalize_concats_and_cleans(tmp_path: Path) -> None
     """finalize lazy-concats temp files, writes consolidated, cleans up temps."""
     from nhf_spatial_targets.fetch.consolidate import consolidate_mod16a2_finalize
 
-    source_dir = tmp_path / "data" / "raw" / "mod16a2_v061"
+    source_dir = tmp_path / "mod16a2_v061"
     source_dir.mkdir(parents=True)
 
     lat = np.linspace(25.0, 50.0, 4)
@@ -512,7 +504,6 @@ def test_consolidate_mod16a2_finalize_concats_and_cleans(tmp_path: Path) -> None
         tmp_paths=tmp_paths,
         variables=["ET_500m"],
         out_path=out_path,
-        run_dir=tmp_path,
     )
 
     # Final file exists
@@ -536,7 +527,7 @@ def test_consolidate_mod16a2_finalize_cleans_on_failure(tmp_path: Path) -> None:
     """Temp files are cleaned up even when the final write fails."""
     from nhf_spatial_targets.fetch.consolidate import consolidate_mod16a2_finalize
 
-    source_dir = tmp_path / "data" / "raw" / "mod16a2_v061"
+    source_dir = tmp_path / "mod16a2_v061"
     source_dir.mkdir(parents=True)
 
     # Create a temp file that cannot be opened as NetCDF
@@ -549,7 +540,6 @@ def test_consolidate_mod16a2_finalize_cleans_on_failure(tmp_path: Path) -> None:
             tmp_paths=[bad_tmp],
             variables=["ET_500m"],
             out_path=out_path,
-            run_dir=tmp_path,
         )
 
     # Temp file should be cleaned up
@@ -566,7 +556,6 @@ def test_consolidate_mod16a2_finalize_empty_raises(tmp_path: Path) -> None:
             tmp_paths=[],
             variables=["ET_500m"],
             out_path=out_path,
-            run_dir=tmp_path,
         )
 
 
@@ -580,14 +569,14 @@ def test_consolidate_mod16a2_bbox_clips_output(mod16a2_run_dir: Path) -> None:
     tight_bbox = (-112.0, 46.0, -108.0, 48.0)
 
     result = consolidate_mod16a2(
-        run_dir=mod16a2_run_dir,
+        source_dir=mod16a2_run_dir,
         source_key=source_key,
         variables=["ET_500m"],
         year=2010,
         bbox=tight_bbox,
     )
 
-    out_path = mod16a2_run_dir / result["consolidated_nc"]
+    out_path = Path(result["consolidated_nc"])
     ds = xr.open_dataset(out_path)
 
     # Verify the spatial extent is bounded by the tight bbox
@@ -610,14 +599,14 @@ def test_consolidate_mod16a2_cf_metadata(mod16a2_run_dir: Path) -> None:
 
     source_key = "mod16a2_v061"
     result = consolidate_mod16a2(
-        run_dir=mod16a2_run_dir,
+        source_dir=mod16a2_run_dir,
         source_key=source_key,
         variables=["ET_500m"],
         year=2010,
         bbox=_TEST_BBOX,
     )
 
-    out_path = mod16a2_run_dir / result["consolidated_nc"]
+    out_path = Path(result["consolidated_nc"])
     ds = xr.open_dataset(out_path)
     assert ds.attrs["Conventions"] == "CF-1.6"
     assert "crs" in ds.data_vars
@@ -637,19 +626,13 @@ def test_consolidate_mod10c1_cf_metadata(mod10c1_run_dir: Path) -> None:
 
     source_key = "mod10c1_v061"
     consolidate_mod10c1(
-        run_dir=mod10c1_run_dir,
+        source_dir=mod10c1_run_dir,
         source_key=source_key,
         variables=["Day_CMG_Snow_Cover", "Snow_Spatial_QA"],
         year=2010,
     )
 
-    out_path = (
-        mod10c1_run_dir
-        / "data"
-        / "raw"
-        / source_key
-        / f"{source_key}_2010_consolidated.nc"
-    )
+    out_path = mod10c1_run_dir / f"{source_key}_2010_consolidated.nc"
     ds = xr.open_dataset(out_path)
     assert ds.attrs["Conventions"] == "CF-1.6"
     assert "crs" in ds.data_vars

@@ -15,12 +15,13 @@ from tqdm import tqdm
 
 import nhf_spatial_targets.catalog as _catalog
 from nhf_spatial_targets.fetch._period import parse_period, years_in_period
+from nhf_spatial_targets.workspace import load as _load_workspace
 
 logger = logging.getLogger(__name__)
 _SOURCE_KEY = "ncep_ncar"
 
 
-def consolidate_ncep_ncar(run_dir: Path, variables: list[str]) -> dict:
+def consolidate_ncep_ncar(source_dir: Path, variables: list[str]) -> dict:
     """Delegate to the shared consolidate module for testability.
 
     This thin wrapper exists so tests can patch
@@ -30,34 +31,35 @@ def consolidate_ncep_ncar(run_dir: Path, variables: list[str]) -> dict:
         consolidate_ncep_ncar as _real_consolidate,
     )
 
-    return _real_consolidate(run_dir=run_dir, variables=variables)
+    return _real_consolidate(source_dir=source_dir, variables=variables)
 
 
-def _manifest_ncep_ncar_files(run_dir: Path) -> list[dict]:
+def _manifest_ncep_ncar_files(workdir: Path) -> list[dict]:
     """Read manifest.json and return the ncep_ncar file records list."""
-    manifest_path = run_dir / "manifest.json"
+    ws = _load_workspace(workdir)
+    manifest_path = ws.manifest_path
     if not manifest_path.exists():
         return []
     try:
         manifest = json.loads(manifest_path.read_text())
     except json.JSONDecodeError as exc:
         raise ValueError(
-            f"manifest.json in {run_dir} is corrupted and cannot be parsed. "
+            f"manifest.json in {workdir} is corrupted and cannot be parsed. "
             f"Inspect the file manually or restore from backup. Detail: {exc}"
         ) from exc
     return manifest.get("sources", {}).get(_SOURCE_KEY, {}).get("files", [])
 
 
-def _existing_years(run_dir: Path) -> set[str]:
+def _existing_years(workdir: Path) -> set[str]:
     """Return set of year values already fetched from manifest."""
-    return {f["year"] for f in _manifest_ncep_ncar_files(run_dir) if "year" in f}
+    return {f["year"] for f in _manifest_ncep_ncar_files(workdir) if "year" in f}
 
 
-def _existing_file_timestamps(run_dir: Path) -> dict[str, str]:
+def _existing_file_timestamps(workdir: Path) -> dict[str, str]:
     """Return {year: downloaded_utc} from existing manifest."""
     return {
         f["year"]: f["downloaded_utc"]
-        for f in _manifest_ncep_ncar_files(run_dir)
+        for f in _manifest_ncep_ncar_files(workdir)
         if "year" in f and "downloaded_utc" in f
     }
 
@@ -75,7 +77,7 @@ def _year_from_monthly_path(path: Path) -> str:
     raise ValueError(f"Cannot extract year from NCEP/NCAR filename: {path.name}")
 
 
-def fetch_ncep_ncar(run_dir: Path, period: str) -> dict:
+def fetch_ncep_ncar(workdir: Path, period: str) -> dict:
     """Download NCEP/NCAR Reanalysis soil moisture and aggregate to monthly means.
 
     Downloads annual NetCDF files containing daily averages from NOAA PSL
@@ -85,10 +87,10 @@ def fetch_ncep_ncar(run_dir: Path, period: str) -> dict:
 
     Parameters
     ----------
-    run_dir : Path
-        Run workspace directory. Reads ``fabric.json`` for bbox (stored in
+    workdir : Path
+        Workspace directory. Reads ``fabric.json`` for bbox (stored in
         provenance only — no spatial subsetting). Writes files to
-        ``data/raw/ncep_ncar/``.
+        the datastore under ``ncep_ncar/``.
     period : str
         Temporal range as ``"YYYY/YYYY"`` (start/end years inclusive).
 
@@ -97,6 +99,7 @@ def fetch_ncep_ncar(run_dir: Path, period: str) -> dict:
     dict
         Provenance record for ``manifest.json``.
     """
+    ws = _load_workspace(workdir)
     meta = _catalog.source(_SOURCE_KEY)
 
     if meta.get("status") == "superseded":
@@ -107,30 +110,16 @@ def fetch_ncep_ncar(run_dir: Path, period: str) -> dict:
             stacklevel=2,
         )
 
-    fabric_path = run_dir / "fabric.json"
-    if not fabric_path.exists():
-        raise FileNotFoundError(
-            f"fabric.json not found in {run_dir}. "
-            f"Run 'nhf-targets init' to create a run workspace first."
-        )
-    try:
-        fabric = json.loads(fabric_path.read_text())
-        bbox = fabric["bbox_buffered"]
-    except (json.JSONDecodeError, KeyError) as exc:
-        raise ValueError(
-            f"fabric.json in {run_dir} is malformed or missing required "
-            f"fields (bbox_buffered.{{minx,miny,maxx,maxy}}). "
-            f"Re-run 'nhf-targets init' to regenerate it."
-        ) from exc
+    bbox = ws.fabric["bbox_buffered"]
 
     # Validate and determine needed years
     parse_period(period)
     all_years = years_in_period(period)
 
-    already_have = _existing_years(run_dir)
+    already_have = _existing_years(workdir)
     needed = [y for y in all_years if str(y) not in already_have]
 
-    output_dir = run_dir / "data" / "raw" / _SOURCE_KEY
+    output_dir = ws.raw_dir(_SOURCE_KEY)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if not needed:
@@ -193,16 +182,15 @@ def fetch_ncep_ncar(run_dir: Path, period: str) -> dict:
     # Build file inventory from all *.monthly.nc files on disk
     all_monthly_files = sorted(output_dir.glob("*.monthly.nc"))
 
-    existing_timestamps = _existing_file_timestamps(run_dir)
+    existing_timestamps = _existing_file_timestamps(workdir)
     now_utc = datetime.now(timezone.utc).isoformat()
 
     files = []
     for p in all_monthly_files:
-        rel = str(p.relative_to(run_dir))
         year_str = _year_from_monthly_path(p)
         files.append(
             {
-                "path": rel,
+                "path": str(p),
                 "year": year_str,
                 "size_bytes": p.stat().st_size,
                 "downloaded_utc": existing_timestamps.get(year_str, now_utc),
@@ -211,7 +199,7 @@ def fetch_ncep_ncar(run_dir: Path, period: str) -> dict:
 
     # Consolidate into single NetCDF
     var_names = [v["name"] for v in meta["variables"]]
-    consolidation = consolidate_ncep_ncar(run_dir=run_dir, variables=var_names)
+    consolidation = consolidate_ncep_ncar(source_dir=output_dir, variables=var_names)
 
     # Compute effective period from actual files on disk
     if files:
@@ -220,7 +208,7 @@ def fetch_ncep_ncar(run_dir: Path, period: str) -> dict:
     else:
         effective_period = period
 
-    _update_manifest(run_dir, effective_period, bbox, meta, files, consolidation)
+    _update_manifest(workdir, effective_period, bbox, meta, files, consolidation)
 
     return {
         "source_key": _SOURCE_KEY,
@@ -235,7 +223,7 @@ def fetch_ncep_ncar(run_dir: Path, period: str) -> dict:
 
 
 def _update_manifest(
-    run_dir: Path,
+    workdir: Path,
     period: str,
     bbox: dict,
     meta: dict,
@@ -243,7 +231,8 @@ def _update_manifest(
     consolidation: dict,
 ) -> None:
     """Merge NCEP/NCAR provenance into manifest.json."""
-    manifest_path = run_dir / "manifest.json"
+    ws = _load_workspace(workdir)
+    manifest_path = ws.manifest_path
     if manifest_path.exists():
         manifest = json.loads(manifest_path.read_text())
     else:
