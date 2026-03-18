@@ -21,8 +21,10 @@ app = App(
     version=_pkg_version("nhf-spatial-targets"),
 )
 fetch_app = App(name="fetch", help="Download source datasets into a run workspace.")
+agg_app = App(name="agg", help="Aggregate source datasets to HRU fabric polygons.")
 catalog_app = App(name="catalog", help="Inspect the data source catalog.")
 app.command(fetch_app)
+app.command(agg_app)
 app.command(catalog_app)
 
 
@@ -659,6 +661,88 @@ def fetch_reitz2017_cmd(
 
     console.print("[green]Reitz 2017: downloaded to datastore[/green]")
     console.print(json_mod.dumps(result, indent=2))
+
+
+@agg_app.command(name="ssebop")
+def agg_ssebop_cmd(
+    workdir: Annotated[
+        Path,
+        Parameter(
+            name=["--workdir", "-w"],
+            help="Workspace created by 'nhf-targets init'.",
+        ),
+    ],
+    period: Annotated[
+        str,
+        Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
+    ],
+    batch_size: Annotated[
+        int,
+        Parameter(name="--batch-size", help="Target HRUs per spatial batch."),
+    ] = 500,
+):
+    """Aggregate SSEBop monthly AET to HRU fabric polygons.
+
+    Reads SSEBop data from the USGS NHGF STAC catalog (Zarr), computes
+    area-weighted means per HRU, and writes the result to NetCDF.
+    """
+    from rich.console import Console
+
+    from nhf_spatial_targets.aggregate.ssebop import aggregate_ssebop
+
+    if not workdir.exists():
+        print(f"Error: Workspace not found: {workdir}", file=sys.stderr)
+        sys.exit(2)
+    if not (workdir / "fabric.json").exists():
+        print(
+            f"Error: fabric.json not found in {workdir}. "
+            "Run 'nhf-targets validate' first.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    # Read fabric path and id_col from workspace config
+    try:
+        cfg = yaml.safe_load((workdir / "config.yml").read_text())
+    except yaml.YAMLError as exc:
+        print(f"Error: Cannot parse config.yml: {exc}", file=sys.stderr)
+        sys.exit(1)
+    fabric_path = cfg["fabric"]["path"]
+    id_col = cfg["fabric"].get("id_col", "nhm_id")
+
+    console = Console()
+    console.print(
+        f"[bold]Aggregating SSEBop AET for period {period} "
+        f"(batch_size={batch_size})...[/bold]"
+    )
+
+    try:
+        ds = aggregate_ssebop(
+            fabric_path=fabric_path,
+            id_col=id_col,
+            period=period,
+            workdir=workdir,
+            batch_size=batch_size,
+        )
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        _logger.exception("Unexpected error during SSEBop aggregation")
+        print(
+            f"Unexpected error ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    console.print(
+        f"[green]SSEBop aggregation complete: "
+        f"{ds.sizes.get('time', '?')} time steps x "
+        f"{ds.sizes.get(id_col, '?')} HRUs[/green]"
+    )
+    console.print(
+        f"[green]Output: {workdir / 'data' / 'aggregated' / 'ssebop_aet.nc'}[/green]"
+    )
 
 
 @catalog_app.command(name="sources")

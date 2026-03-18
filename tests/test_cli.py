@@ -401,6 +401,45 @@ def test_fetch_reitz2017_calls_fetch(mock_fetch, tmp_path):
     mock_fetch.assert_called_once_with(workdir=workdir, period="2000/2009")
 
 
+# ---- agg ssebop command ----------------------------------------------------
+
+
+def test_agg_ssebop_nonexistent_workdir(tmp_path):
+    """Exit code 2 when --workdir does not exist."""
+    with pytest.raises(SystemExit, match="2"):
+        _run(
+            "agg",
+            "ssebop",
+            "--workdir",
+            str(tmp_path / "missing"),
+            "--period",
+            "2010/2010",
+        )
+
+
+@patch("nhf_spatial_targets.aggregate.ssebop.aggregate_ssebop")
+def test_agg_ssebop_calls_aggregate(mock_agg, tmp_path):
+    """CLI wires --workdir and --period to aggregate_ssebop()."""
+    import xarray as xr
+
+    mock_agg.return_value = xr.Dataset({"et": (["time", "nhm_id"], [[1.0]])})
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    (workdir / "config.yml").write_text(
+        "fabric:\n  path: /fake/fabric.gpkg\n  id_col: nhm_id\ndatastore: /fake/ds\n"
+    )
+    (workdir / "fabric.json").write_text("{}")
+    _run(
+        "agg",
+        "ssebop",
+        "--workdir",
+        str(workdir),
+        "--period",
+        "2010/2010",
+    )
+    mock_agg.assert_called_once()
+
+
 # ---- catalog commands ------------------------------------------------------
 
 
