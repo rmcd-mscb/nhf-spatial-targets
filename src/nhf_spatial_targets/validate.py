@@ -40,13 +40,12 @@ def validate_workspace(workdir: Path) -> None:
     # 1. Config completeness
     config = _check_config(workdir)
 
-    # 2-3. Fabric exists + feature-ID column
+    # 2. Fabric exists
     fabric_path = Path(config["fabric"]["path"])
     id_col = config["fabric"]["id_col"]
     _check_fabric_exists(fabric_path)
-    _check_id_column(fabric_path, id_col)
 
-    # 4. Fabric metadata (sha256, bbox, hru_count)
+    # 3-4. Fabric metadata (sha256, bbox, hru_count) + id_col check
     buffer_deg = float(config.get("buffer_deg", 0.1))
     fabric_meta = _fabric_metadata(fabric_path, id_col, buffer_deg)
 
@@ -106,13 +105,8 @@ def _check_fabric_exists(fabric_path: Path) -> None:
         raise FileNotFoundError(f"Fabric file not found: {fabric_path}")
 
 
-def _check_id_column(fabric_path: Path, id_col: str) -> None:
-    import geopandas as gpd
-
-    if fabric_path.suffix.lower() in (".parquet", ".geoparquet"):
-        gdf = gpd.read_parquet(fabric_path)
-    else:
-        gdf = gpd.read_file(fabric_path, rows=1)
+def _check_id_column(gdf: object, id_col: str) -> None:
+    """Check that id_col exists in a loaded GeoDataFrame."""
     if id_col not in gdf.columns:
         raise ValueError(
             f"Column '{id_col}' not found in fabric. "
@@ -168,7 +162,7 @@ def _check_catalog_consistency() -> None:
 
 
 def _fabric_metadata(fabric_path: Path, id_col: str, buffer_deg: float) -> dict:
-    """Compute fabric hash and bbox without loading all geometry into memory."""
+    """Compute fabric hash, bbox, and HRU count. Also validates id_col."""
     import geopandas as gpd
     from shapely.geometry import box
 
@@ -178,6 +172,9 @@ def _fabric_metadata(fabric_path: Path, id_col: str, buffer_deg: float) -> dict:
         gdf = gpd.read_parquet(fabric_path)
     else:
         gdf = gpd.read_file(fabric_path, rows=None)
+    # Check id_col here to avoid reading the fabric twice
+    _check_id_column(gdf, id_col)
+
     native_crs = gdf.crs.to_string() if gdf.crs else "unknown"
     hru_count = len(gdf)
 

@@ -24,8 +24,9 @@ fabric:
 # ---------------------------------------------------------------------------
 datastore: /path/to/datastore        # absolute path; may be shared across runs
 
-# Optional Unix directory permissions (octal, e.g. "0o2775" for group-sticky)
-dir_mode: null
+# Optional Unix directory permissions (octal string, e.g. "2775" for setgid + group rwx)
+# Ignored on Windows.
+dir_mode: "2775"
 
 # ---------------------------------------------------------------------------
 # Spatial aggregation (gdptools)

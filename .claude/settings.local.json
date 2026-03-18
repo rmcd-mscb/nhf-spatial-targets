@@ -21,7 +21,10 @@
       "WebFetch(domain:earthaccess.readthedocs.io)",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:wiki.earthdata.nasa.gov)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(.pixi/envs/dev/bin/python -m pytest tests/ -v -m 'not integration' -x --timeout=10)",
+      "Bash(.pixi/envs/dev/bin/python -m pytest tests/ -m 'not integration' -x -v)",
+      "Bash(timeout 30 .pixi/envs/dev/bin/python -m pytest tests/test_cli.py tests/test_init_run.py tests/test_validate.py tests/test_workspace.py tests/test_catalog.py tests/test_period.py tests/test_auth.py -m 'not integration' -q)"
     ]
   }
 }
