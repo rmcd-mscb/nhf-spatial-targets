@@ -90,20 +90,23 @@ sources:
     description: >
       Operational Simplified Surface Energy Balance (SSEBop) AET estimates.
       Used as one of three sources for AET calibration target range.
+      Remote dataset accessed via USGS GDP STAC catalog (no local download).
     citations:
       - "Senay, G.B., and others, 2013"
+    doi: "10.5066/P9L2YMV"
     access:
-      type: usgs_water
-      url: https://earlywarning.usgs.gov/ssebop/
-      notes: Version used in original calibration unclear. Verify current product.
+      type: usgs_gdp_stac
+      collection_id: ssebopeta_monthly
+      endpoint: https://usgs.osn.mghpcc.org/
+      zarr_store: s3://mdmf/gdp/ssebopeta_monthly.zarr/
     variables:
       - actual_et
     time_step: monthly
-    period: "2000/2010"
+    period: "2000/2023"
     spatial_extent: CONUS
     spatial_resolution: 1km
     units: mm/month
-    status: needs_version_verification
+    status: current
 
   # ---------------------------------------------------------------------------
   # RECHARGE
