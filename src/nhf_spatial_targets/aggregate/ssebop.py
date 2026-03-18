@@ -156,7 +156,7 @@ def aggregate_ssebop(
     # 5. Write output
     output_dir = ws.aggregated_dir()
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / "ssebop_aet.nc"
+    output_path = output_dir / "ssebop_agg_aet.nc"
     combined.to_netcdf(output_path)
     logger.info("Output written to %s", output_path)
 
@@ -206,7 +206,7 @@ def _update_manifest(
         "doi": meta.get("doi", ""),
         "period": f"{time_period[0]}/{time_period[1]}",
         "fabric_sha256": fabric_sha,
-        "output_file": str(Path("data") / "aggregated" / "ssebop_aet.nc"),
+        "output_file": str(Path("data") / "aggregated" / "ssebop_agg_aet.nc"),
         "weight_files": weight_files,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }

@@ -741,7 +741,7 @@ def agg_ssebop_cmd(
         f"{ds.sizes.get(id_col, '?')} HRUs[/green]"
     )
     console.print(
-        f"[green]Output: {workdir / 'data' / 'aggregated' / 'ssebop_aet.nc'}[/green]"
+        f"[green]Output: {workdir / 'data' / 'aggregated' / 'ssebop_agg_aet.nc'}[/green]"
     )
 
 
