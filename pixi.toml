@@ -77,6 +77,7 @@ catalog-variables = { cmd = "nhf-targets catalog variables" }
 
 # Development
 test  = { cmd = "pytest tests/ -v -m 'not integration'", description = "Run test suite (excludes integration)" }
+test-quiet = { cmd = "pytest tests/ -q -m 'not integration'", description = "Run test suite quietly (for pre-commit hooks)" }
 test-integration = { cmd = "pytest tests/ -v -m integration", description = "Run integration tests only (requires credentials/network)" }
 lint  = { cmd = "ruff check src/ tests/", description = "Lint source" }
 fmt   = { cmd = "ruff format src/ tests/", description = "Format source" }
