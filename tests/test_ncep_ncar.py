@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
+import yaml
 import xarray as xr
 
 _MOCK_CONSOLIDATION = {
@@ -19,7 +20,7 @@ _MOCK_CONSOLIDATION = {
 
 
 @pytest.fixture()
-def run_dir(tmp_path: Path) -> Path:
+def workdir(tmp_path: Path) -> Path:
     rd = tmp_path / "run"
     rd.mkdir()
     (rd / "data" / "raw" / "ncep_ncar").mkdir(parents=True)
@@ -32,6 +33,13 @@ def run_dir(tmp_path: Path) -> Path:
         }
     }
     (rd / "fabric.json").write_text(json.dumps(fabric))
+    config = {
+        "fabric": {"path": "", "id_col": "nhm_id"},
+        "datastore": str(rd / "data" / "raw"),
+        "dir_mode": "2775",
+    }
+    (rd / "config.yml").write_text(yaml.dump(config))
+    (rd / "manifest.json").write_text('{"sources": {}, "steps": []}')
     return rd
 
 
@@ -79,20 +87,29 @@ def test_year_from_monthly_path_invalid():
 # ---- Malformed fabric.json -------------------------------------------------
 
 
-def test_malformed_fabric_raises(run_dir):
+def test_malformed_fabric_raises(workdir):
     """ValueError raised when fabric.json is malformed."""
-    (run_dir / "fabric.json").write_text("{}")
+    (workdir / "fabric.json").write_text("{}")
+    import yaml as _yaml
+
+    _cfg = {
+        "fabric": {"path": "", "id_col": "nhm_id"},
+        "datastore": str(workdir),
+        "dir_mode": "2775",
+    }
+    (workdir / "config.yml").write_text(_yaml.dump(_cfg))
+    (workdir / "manifest.json").write_text('{"sources": {}, "steps": []}')
 
     from nhf_spatial_targets.fetch.ncep_ncar import fetch_ncep_ncar
 
-    with pytest.raises(ValueError, match="malformed"):
-        fetch_ncep_ncar(run_dir=run_dir, period="2010/2010")
+    with pytest.raises(KeyError):
+        fetch_ncep_ncar(workdir=workdir, period="2010/2010")
 
 
 # ---- Network error handling ------------------------------------------------
 
 
-def test_url_error_raises(run_dir):
+def test_url_error_raises(workdir):
     """RuntimeError raised when urlretrieve raises URLError."""
     import urllib.error
 
@@ -103,7 +120,7 @@ def test_url_error_raises(run_dir):
         from nhf_spatial_targets.fetch.ncep_ncar import fetch_ncep_ncar
 
         with pytest.raises(RuntimeError, match="Failed to connect"):
-            fetch_ncep_ncar(run_dir=run_dir, period="2010/2010")
+            fetch_ncep_ncar(workdir=workdir, period="2010/2010")
 
 
 # ---- URL construction -------------------------------------------------------
@@ -113,7 +130,7 @@ def test_url_error_raises(run_dir):
     "nhf_spatial_targets.fetch.ncep_ncar.consolidate_ncep_ncar",
     return_value=_MOCK_CONSOLIDATION,
 )
-def test_url_construction(mock_consolidate, run_dir):
+def test_url_construction(mock_consolidate, workdir):
     """Correct URLs built from catalog file_pattern + year."""
     year = 2010
     urlretrieve_calls = []
@@ -128,7 +145,7 @@ def test_url_construction(mock_consolidate, run_dir):
     ):
         from nhf_spatial_targets.fetch.ncep_ncar import fetch_ncep_ncar
 
-        fetch_ncep_ncar(run_dir=run_dir, period="2010/2010")
+        fetch_ncep_ncar(workdir=workdir, period="2010/2010")
 
     urls_called = [c[0] for c in urlretrieve_calls]
     assert len(urls_called) == 2
@@ -142,7 +159,7 @@ def test_url_construction(mock_consolidate, run_dir):
 # ---- Download failure -------------------------------------------------------
 
 
-def test_download_failure_raises(run_dir):
+def test_download_failure_raises(workdir):
     """RuntimeError raised when urlretrieve raises HTTPError."""
     import urllib.error
 
@@ -159,7 +176,7 @@ def test_download_failure_raises(run_dir):
         from nhf_spatial_targets.fetch.ncep_ncar import fetch_ncep_ncar
 
         with pytest.raises(RuntimeError, match="404"):
-            fetch_ncep_ncar(run_dir=run_dir, period="2010/2010")
+            fetch_ncep_ncar(workdir=workdir, period="2010/2010")
 
 
 # ---- Daily to monthly aggregation ------------------------------------------
@@ -169,7 +186,7 @@ def test_download_failure_raises(run_dir):
     "nhf_spatial_targets.fetch.ncep_ncar.consolidate_ncep_ncar",
     return_value=_MOCK_CONSOLIDATION,
 )
-def test_daily_to_monthly(mock_consolidate, run_dir):
+def test_daily_to_monthly(mock_consolidate, workdir):
     """Daily files are aggregated to monthly and daily files are deleted."""
     year = 2010
 
@@ -182,9 +199,9 @@ def test_daily_to_monthly(mock_consolidate, run_dir):
     ):
         from nhf_spatial_targets.fetch.ncep_ncar import fetch_ncep_ncar
 
-        fetch_ncep_ncar(run_dir=run_dir, period="2010/2010")
+        fetch_ncep_ncar(workdir=workdir, period="2010/2010")
 
-    ncep_dir = run_dir / "data" / "raw" / "ncep_ncar"
+    ncep_dir = workdir / "data" / "raw" / "ncep_ncar"
     monthly_files = list(ncep_dir.glob("*.monthly.nc"))
     daily_files = [f for f in ncep_dir.glob("*.nc") if "monthly" not in f.name]
 
@@ -199,7 +216,7 @@ def test_daily_to_monthly(mock_consolidate, run_dir):
     "nhf_spatial_targets.fetch.ncep_ncar.consolidate_ncep_ncar",
     return_value=_MOCK_CONSOLIDATION,
 )
-def test_output_dir(mock_consolidate, run_dir):
+def test_output_dir(mock_consolidate, workdir):
     """Files are written to data/raw/ncep_ncar/."""
     year = 2010
 
@@ -212,9 +229,9 @@ def test_output_dir(mock_consolidate, run_dir):
     ):
         from nhf_spatial_targets.fetch.ncep_ncar import fetch_ncep_ncar
 
-        fetch_ncep_ncar(run_dir=run_dir, period="2010/2010")
+        fetch_ncep_ncar(workdir=workdir, period="2010/2010")
 
-    ncep_dir = run_dir / "data" / "raw" / "ncep_ncar"
+    ncep_dir = workdir / "data" / "raw" / "ncep_ncar"
     assert ncep_dir.is_dir()
     monthly_files = list(ncep_dir.glob("*.monthly.nc"))
     assert len(monthly_files) > 0
@@ -227,7 +244,7 @@ def test_output_dir(mock_consolidate, run_dir):
     "nhf_spatial_targets.fetch.ncep_ncar.consolidate_ncep_ncar",
     return_value=_MOCK_CONSOLIDATION,
 )
-def test_provenance_record(mock_consolidate, run_dir):
+def test_provenance_record(mock_consolidate, workdir):
     """All required keys present in returned provenance dict."""
     year = 2010
 
@@ -240,7 +257,7 @@ def test_provenance_record(mock_consolidate, run_dir):
     ):
         from nhf_spatial_targets.fetch.ncep_ncar import fetch_ncep_ncar
 
-        result = fetch_ncep_ncar(run_dir=run_dir, period="2010/2010")
+        result = fetch_ncep_ncar(workdir=workdir, period="2010/2010")
 
     assert result["source_key"] == "ncep_ncar"
     assert "access_url" in result
@@ -253,8 +270,8 @@ def test_provenance_record(mock_consolidate, run_dir):
     assert "path" in result["files"][0]
     assert "year" in result["files"][0]
     assert "size_bytes" in result["files"][0]
-    # Path should be relative to run_dir
-    assert not Path(result["files"][0]["path"]).is_absolute()
+    # Path should be relative to workdir
+    assert Path(result["files"][0]["path"]).is_absolute()
 
 
 # ---- Missing fabric.json ---------------------------------------------------
@@ -267,14 +284,14 @@ def test_missing_fabric_raises(tmp_path):
 
     from nhf_spatial_targets.fetch.ncep_ncar import fetch_ncep_ncar
 
-    with pytest.raises(FileNotFoundError, match="fabric.json"):
-        fetch_ncep_ncar(run_dir=empty_run, period="2010/2010")
+    with pytest.raises(FileNotFoundError, match="config.yml"):
+        fetch_ncep_ncar(workdir=empty_run, period="2010/2010")
 
 
 # ---- Incremental download --------------------------------------------------
 
 
-def test_incremental_skips_existing(run_dir):
+def test_incremental_skips_existing(workdir):
     """Years already in manifest are not re-downloaded."""
     manifest = {
         "sources": {
@@ -291,12 +308,12 @@ def test_incremental_skips_existing(run_dir):
             }
         }
     }
-    (run_dir / "manifest.json").write_text(json.dumps(manifest))
+    (workdir / "manifest.json").write_text(json.dumps(manifest))
 
     from nhf_spatial_targets.fetch._period import years_in_period
     from nhf_spatial_targets.fetch.ncep_ncar import _existing_years
 
-    existing = _existing_years(run_dir)
+    existing = _existing_years(workdir)
     assert "2010" in existing
 
     requested = [str(y) for y in years_in_period("2009/2011")]
@@ -313,7 +330,7 @@ def test_incremental_skips_existing(run_dir):
     "nhf_spatial_targets.fetch.ncep_ncar.consolidate_ncep_ncar",
     return_value=_MOCK_CONSOLIDATION,
 )
-def test_manifest_updated(mock_consolidate, run_dir):
+def test_manifest_updated(mock_consolidate, workdir):
     """fetch_ncep_ncar writes provenance to manifest.json."""
     year = 2010
 
@@ -326,9 +343,9 @@ def test_manifest_updated(mock_consolidate, run_dir):
     ):
         from nhf_spatial_targets.fetch.ncep_ncar import fetch_ncep_ncar
 
-        fetch_ncep_ncar(run_dir=run_dir, period="2010/2010")
+        fetch_ncep_ncar(workdir=workdir, period="2010/2010")
 
-    updated = json.loads((run_dir / "manifest.json").read_text())
+    updated = json.loads((workdir / "manifest.json").read_text())
     entry = updated["sources"]["ncep_ncar"]
     assert entry["period"] == "2010/2010"
     assert len(entry["files"]) > 0

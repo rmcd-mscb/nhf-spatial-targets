@@ -44,15 +44,19 @@ default = { solve-group = "default" }
 dev = { features = ["dev"], solve-group = "default" }
 
 [tasks]
-# Initialise a run workspace.
-# Usage: pixi run init -- --fabric /data/gfv1.1.gpkg --workdir /data/nhf-runs
-init = { cmd = "nhf-targets init", description = "Create a new run workspace for a fabric" }
+# Initialise a workspace.
+# Usage: pixi run init -- --workdir /data/nhf-runs/my-run
+init = { cmd = "nhf-targets init", description = "Create a new workspace skeleton" }
+
+# Validate a workspace (run after editing config.yml).
+# Usage: pixi run validate -- --workdir /data/nhf-runs/my-run
+validate = { cmd = "nhf-targets validate", description = "Validate workspace config and fabric" }
 
 # Run the full pipeline against a workspace.
-# Usage: pixi run run -- --run-dir /data/nhf-runs/2026-03-11_v0.1.0
+# Usage: pixi run run -- --workdir /data/nhf-runs/my-run
 run = { cmd = "nhf-targets run", description = "Run the full target pipeline" }
 
-# Run individual targets — pass --run-dir as extra arg.
+# Run individual targets — pass --workdir as extra arg.
 run-runoff = { cmd = "nhf-targets run --target runoff" }
 run-aet    = { cmd = "nhf-targets run --target aet" }
 run-rch    = { cmd = "nhf-targets run --target recharge" }
@@ -73,6 +77,7 @@ catalog-variables = { cmd = "nhf-targets catalog variables" }
 
 # Development
 test  = { cmd = "pytest tests/ -v -m 'not integration'", description = "Run test suite (excludes integration)" }
+test-quiet = { cmd = "pytest tests/ -q -m 'not integration'", description = "Run test suite quietly (for pre-commit hooks)" }
 test-integration = { cmd = "pytest tests/ -v -m integration", description = "Run integration tests only (requires credentials/network)" }
 lint  = { cmd = "ruff check src/ tests/", description = "Lint source" }
 fmt   = { cmd = "ruff format src/ tests/", description = "Format source" }

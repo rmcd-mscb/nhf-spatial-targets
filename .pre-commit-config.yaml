@@ -20,11 +20,11 @@ repos:
         pass_filenames: false
         types: [python]
 
-      # Integration tests excluded by default in `pixi run -e dev test`.
-      # Use `pixi run -e dev test-integration` to run them explicitly.
+      # Quiet pytest for pre-commit (verbose output can hang in pipes).
+      # Use `pixi run -e dev test` interactively for verbose output.
       - id: test
         name: pytest (unit only)
-        entry: pixi run -e dev test
+        entry: pixi run -e dev test-quiet
         language: system
         pass_filenames: false
         always_run: true

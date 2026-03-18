@@ -15,6 +15,7 @@ import xarray as xr
 
 import nhf_spatial_targets.catalog as _catalog
 from nhf_spatial_targets.fetch._period import parse_period
+from nhf_spatial_targets.workspace import load as _load_workspace
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,7 @@ def _cf_fixup(raw_path: Path, output_path: Path) -> Path:
     return output_path
 
 
-def fetch_watergap22d(run_dir: Path, period: str) -> dict:
+def fetch_watergap22d(workdir: Path, period: str) -> dict:
     """Download WaterGAP 2.2d diffuse groundwater recharge from PANGAEA.
 
     Downloads the single NC4 file via pangaeapy, applies CF compliance
@@ -87,17 +88,18 @@ def fetch_watergap22d(run_dir: Path, period: str) -> dict:
 
     Parameters
     ----------
-    run_dir : Path
-        Run workspace directory.
+    workdir : Path
+        Workspace directory.
     period : str
         Temporal range as ``"YYYY/YYYY"``. Used for provenance only —
-        the downloaded file covers the full 1901–2016 period.
+        the downloaded file covers the full 1901-2016 period.
 
     Returns
     -------
     dict
         Provenance record for ``manifest.json``.
     """
+    ws = _load_workspace(workdir)
     meta = _catalog.source(_SOURCE_KEY)
     parse_period(period)  # validate format
 
@@ -108,23 +110,9 @@ def fetch_watergap22d(run_dir: Path, period: str) -> dict:
     license_str = meta.get("license", "unknown")
     cf_filename = f"{_SOURCE_KEY}_qrdif_cf.nc"
 
-    fabric_path = run_dir / "fabric.json"
-    if not fabric_path.exists():
-        raise FileNotFoundError(
-            f"fabric.json not found in {run_dir}. "
-            f"Run 'nhf-targets init' to create a run workspace first."
-        )
-    try:
-        fabric = json.loads(fabric_path.read_text())
-        bbox = fabric["bbox_buffered"]
-    except (json.JSONDecodeError, KeyError) as exc:
-        raise ValueError(
-            f"fabric.json in {run_dir} is malformed or missing required "
-            f"fields (bbox_buffered.{{minx,miny,maxx,maxy}}). "
-            f"Re-run 'nhf-targets init' to regenerate it."
-        ) from exc
+    bbox = ws.fabric["bbox_buffered"]
 
-    output_dir = run_dir / "data" / "raw" / _SOURCE_KEY
+    output_dir = ws.raw_dir(_SOURCE_KEY)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     raw_path = output_dir / raw_filename
@@ -198,13 +186,13 @@ def fetch_watergap22d(run_dir: Path, period: str) -> dict:
 
     # Build provenance
     file_info = {
-        "path": str(cf_path.relative_to(run_dir)),
-        "raw_path": (str(raw_path.relative_to(run_dir)) if raw_path.exists() else None),
+        "path": str(cf_path),
+        "raw_path": (str(raw_path) if raw_path.exists() else None),
         "size_bytes": cf_path.stat().st_size,
         "downloaded_utc": now_utc,
     }
 
-    _update_manifest(run_dir, period, bbox, meta, license_str, file_info)
+    _update_manifest(workdir, period, bbox, meta, license_str, file_info)
 
     return {
         "source_key": _SOURCE_KEY,
@@ -216,12 +204,12 @@ def fetch_watergap22d(run_dir: Path, period: str) -> dict:
         "bbox": bbox,
         "download_timestamp": now_utc,
         "file": file_info,
-        "cf_corrected_file": str(cf_path.relative_to(run_dir)),
+        "cf_corrected_file": str(cf_path),
     }
 
 
 def _update_manifest(
-    run_dir: Path,
+    workdir: Path,
     period: str,
     bbox: dict,
     meta: dict,
@@ -229,13 +217,14 @@ def _update_manifest(
     file_info: dict,
 ) -> None:
     """Merge WaterGAP 2.2d provenance into manifest.json."""
-    manifest_path = run_dir / "manifest.json"
+    ws = _load_workspace(workdir)
+    manifest_path = ws.manifest_path
     if manifest_path.exists():
         try:
             manifest = json.loads(manifest_path.read_text())
         except json.JSONDecodeError as exc:
             raise ValueError(
-                f"manifest.json in {run_dir} is corrupt and cannot be "
+                f"manifest.json in {workdir} is corrupt and cannot be "
                 f"parsed. You may need to delete it and re-run the fetch "
                 f"step. Original error: {exc}"
             ) from exc

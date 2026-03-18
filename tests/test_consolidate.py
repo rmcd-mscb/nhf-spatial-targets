@@ -13,7 +13,7 @@ import xarray as xr
 @pytest.fixture()
 def merra2_dir(tmp_path: Path) -> Path:
     """Create a directory with small synthetic MERRA-2 NetCDF files."""
-    out = tmp_path / "data" / "raw" / "merra2"
+    out = tmp_path / "merra2"
     out.mkdir(parents=True)
 
     lat = np.arange(-90, 91, 45.0)
@@ -59,9 +59,8 @@ def test_filter_variables(merra2_dir):
     """Consolidated file contains only requested variables plus coordinates."""
     from nhf_spatial_targets.fetch.consolidate import consolidate_merra2
 
-    run_dir = merra2_dir.parent.parent.parent
     consolidate_merra2(
-        run_dir=run_dir,
+        source_dir=merra2_dir,
         variables=["GWETTOP", "GWETROOT", "GWETPROF"],
     )
 
@@ -82,8 +81,7 @@ def test_time_midmonth(merra2_dir):
     """Timestamps are shifted to the 15th of each month."""
     from nhf_spatial_targets.fetch.consolidate import consolidate_merra2
 
-    run_dir = merra2_dir.parent.parent.parent
-    consolidate_merra2(run_dir=run_dir, variables=["GWETTOP"])
+    consolidate_merra2(source_dir=merra2_dir, variables=["GWETTOP"])
 
     ds = xr.open_dataset(merra2_dir / "merra2_consolidated.nc")
     for t in pd.DatetimeIndex(ds.time.values):
@@ -96,8 +94,7 @@ def test_time_bounds(merra2_dir):
     """time_bnds spans first-of-month to first-of-next-month."""
     from nhf_spatial_targets.fetch.consolidate import consolidate_merra2
 
-    run_dir = merra2_dir.parent.parent.parent
-    consolidate_merra2(run_dir=run_dir, variables=["GWETTOP"])
+    consolidate_merra2(source_dir=merra2_dir, variables=["GWETTOP"])
 
     ds = xr.open_dataset(merra2_dir / "merra2_consolidated.nc")
     assert "time_bnds" in ds.data_vars
@@ -114,8 +111,7 @@ def test_global_attributes(merra2_dir):
     """Consolidated file has CF and provenance global attributes."""
     from nhf_spatial_targets.fetch.consolidate import consolidate_merra2
 
-    run_dir = merra2_dir.parent.parent.parent
-    consolidate_merra2(run_dir=run_dir, variables=["GWETTOP"])
+    consolidate_merra2(source_dir=merra2_dir, variables=["GWETTOP"])
 
     ds = xr.open_dataset(merra2_dir / "merra2_consolidated.nc")
     # CF-1.6 compliance
@@ -141,17 +137,17 @@ def test_no_nc4_files_raises(tmp_path):
     """FileNotFoundError raised when no .nc4 files exist."""
     from nhf_spatial_targets.fetch.consolidate import consolidate_merra2
 
-    run_dir = tmp_path
-    (run_dir / "data" / "raw" / "merra2").mkdir(parents=True)
+    source_dir = tmp_path / "merra2"
+    source_dir.mkdir(parents=True)
 
     with pytest.raises(FileNotFoundError, match="No .nc4 files"):
-        consolidate_merra2(run_dir=run_dir, variables=["GWETTOP"])
+        consolidate_merra2(source_dir=source_dir, variables=["GWETTOP"])
 
 
 @pytest.fixture()
 def merra2_dir_year_boundary(tmp_path: Path) -> Path:
     """Create synthetic MERRA-2 files spanning a year boundary (Nov-Dec-Jan)."""
-    out = tmp_path / "data" / "raw" / "merra2"
+    out = tmp_path / "merra2"
     out.mkdir(parents=True)
 
     lat = np.arange(-90, 91, 45.0)
@@ -182,8 +178,7 @@ def test_time_bounds_december_year_boundary(merra2_dir_year_boundary):
     """time_bnds correctly crosses year boundary for December."""
     from nhf_spatial_targets.fetch.consolidate import consolidate_merra2
 
-    run_dir = merra2_dir_year_boundary.parent.parent.parent
-    consolidate_merra2(run_dir=run_dir, variables=["GWETTOP"])
+    consolidate_merra2(source_dir=merra2_dir_year_boundary, variables=["GWETTOP"])
 
     ds = xr.open_dataset(merra2_dir_year_boundary / "merra2_consolidated.nc")
     # December 2010: bounds should be [2010-12-01, 2011-01-01]
@@ -198,13 +193,12 @@ def test_provenance_return(merra2_dir):
     """consolidate_merra2 returns a dict with provenance keys."""
     from nhf_spatial_targets.fetch.consolidate import consolidate_merra2
 
-    run_dir = merra2_dir.parent.parent.parent
     result = consolidate_merra2(
-        run_dir=run_dir,
+        source_dir=merra2_dir,
         variables=["GWETTOP", "GWETROOT", "GWETPROF"],
     )
 
-    assert result["consolidated_nc"] == "data/raw/merra2/merra2_consolidated.nc"
+    assert "merra2_consolidated.nc" in result["consolidated_nc"]
     assert "last_consolidated_utc" in result
     assert result["n_files"] == 3
     assert result["variables"] == ["GWETTOP", "GWETROOT", "GWETPROF"]
@@ -213,7 +207,7 @@ def test_provenance_return(merra2_dir):
 @pytest.fixture()
 def nldas_dir(tmp_path: Path) -> Path:
     """Create synthetic NLDAS NetCDF4 files."""
-    out = tmp_path / "data" / "raw" / "nldas_mosaic"
+    out = tmp_path / "nldas_mosaic"
     out.mkdir(parents=True)
 
     lat = np.arange(25.0, 50.0, 5.0)
@@ -251,9 +245,8 @@ def nldas_dir(tmp_path: Path) -> Path:
 def test_nldas_filter_variables(nldas_dir):
     from nhf_spatial_targets.fetch.consolidate import consolidate_nldas
 
-    run_dir = nldas_dir.parent.parent.parent
     consolidate_nldas(
-        run_dir=run_dir,
+        source_dir=nldas_dir,
         source_key="nldas_mosaic",
         variables=["SoilM_0_10cm", "SoilM_10_40cm", "SoilM_40_200cm"],
     )
@@ -273,16 +266,12 @@ def test_nldas_filter_variables(nldas_dir):
 def test_nldas_provenance_return(nldas_dir):
     from nhf_spatial_targets.fetch.consolidate import consolidate_nldas
 
-    run_dir = nldas_dir.parent.parent.parent
     result = consolidate_nldas(
-        run_dir=run_dir,
+        source_dir=nldas_dir,
         source_key="nldas_mosaic",
         variables=["SoilM_0_10cm", "SoilM_10_40cm", "SoilM_40_200cm"],
     )
-    assert (
-        result["consolidated_nc"]
-        == "data/raw/nldas_mosaic/nldas_mosaic_consolidated.nc"
-    )
+    assert "nldas_mosaic_consolidated.nc" in result["consolidated_nc"]
     assert "last_consolidated_utc" in result
     assert result["n_files"] == 3
 
@@ -290,10 +279,11 @@ def test_nldas_provenance_return(nldas_dir):
 def test_nldas_no_files_raises(tmp_path):
     from nhf_spatial_targets.fetch.consolidate import consolidate_nldas
 
-    (tmp_path / "data" / "raw" / "nldas_mosaic").mkdir(parents=True)
+    source_dir = tmp_path / "nldas_mosaic"
+    source_dir.mkdir(parents=True)
     with pytest.raises(FileNotFoundError):
         consolidate_nldas(
-            run_dir=tmp_path,
+            source_dir=source_dir,
             source_key="nldas_mosaic",
             variables=["SoilM_0_10cm"],
         )
@@ -303,9 +293,8 @@ def test_nldas_cf_metadata(nldas_dir):
     """NLDAS consolidated file has CF-1.6 metadata."""
     from nhf_spatial_targets.fetch.consolidate import consolidate_nldas
 
-    run_dir = nldas_dir.parent.parent.parent
     consolidate_nldas(
-        run_dir=run_dir,
+        source_dir=nldas_dir,
         source_key="nldas_mosaic",
         variables=["SoilM_0_10cm", "SoilM_10_40cm", "SoilM_40_200cm"],
     )
@@ -329,7 +318,7 @@ def test_nldas_cf_metadata(nldas_dir):
 @pytest.fixture()
 def ncep_dir(tmp_path: Path) -> Path:
     """Create synthetic NCEP/NCAR monthly NetCDF3 files."""
-    out = tmp_path / "data" / "raw" / "ncep_ncar"
+    out = tmp_path / "ncep_ncar"
     out.mkdir(parents=True)
 
     lat = np.arange(-90, 91, 45.0)
@@ -359,8 +348,7 @@ def ncep_dir(tmp_path: Path) -> Path:
 def test_ncep_filter_variables(ncep_dir):
     from nhf_spatial_targets.fetch.consolidate import consolidate_ncep_ncar
 
-    run_dir = ncep_dir.parent.parent.parent
-    consolidate_ncep_ncar(run_dir=run_dir, variables=["soilw"])
+    consolidate_ncep_ncar(source_dir=ncep_dir, variables=["soilw"])
 
     nc_path = ncep_dir / "ncep_ncar_consolidated.nc"
     assert nc_path.exists()
@@ -374,26 +362,25 @@ def test_ncep_filter_variables(ncep_dir):
 def test_ncep_provenance_return(ncep_dir):
     from nhf_spatial_targets.fetch.consolidate import consolidate_ncep_ncar
 
-    run_dir = ncep_dir.parent.parent.parent
-    result = consolidate_ncep_ncar(run_dir=run_dir, variables=["soilw"])
-    assert result["consolidated_nc"] == "data/raw/ncep_ncar/ncep_ncar_consolidated.nc"
+    result = consolidate_ncep_ncar(source_dir=ncep_dir, variables=["soilw"])
+    assert "ncep_ncar_consolidated.nc" in result["consolidated_nc"]
     assert result["n_files"] == 3
 
 
 def test_ncep_no_files_raises(tmp_path):
     from nhf_spatial_targets.fetch.consolidate import consolidate_ncep_ncar
 
-    (tmp_path / "data" / "raw" / "ncep_ncar").mkdir(parents=True)
+    source_dir = tmp_path / "ncep_ncar"
+    source_dir.mkdir(parents=True)
     with pytest.raises(FileNotFoundError):
-        consolidate_ncep_ncar(run_dir=tmp_path, variables=["soilw"])
+        consolidate_ncep_ncar(source_dir=source_dir, variables=["soilw"])
 
 
 def test_ncep_cf_metadata(ncep_dir):
     """NCEP/NCAR consolidated file has CF-1.6 metadata."""
     from nhf_spatial_targets.fetch.consolidate import consolidate_ncep_ncar
 
-    run_dir = ncep_dir.parent.parent.parent
-    consolidate_ncep_ncar(run_dir=run_dir, variables=["soilw"])
+    consolidate_ncep_ncar(source_dir=ncep_dir, variables=["soilw"])
 
     ds = xr.open_dataset(ncep_dir / "ncep_ncar_consolidated.nc")
     assert ds.attrs["Conventions"] == "CF-1.6"
@@ -409,7 +396,7 @@ def test_ncep_cf_metadata(ncep_dir):
 @pytest.fixture()
 def merra2_dir_unsorted(tmp_path: Path) -> Path:
     """Create MERRA-2 files in reverse chronological order."""
-    out = tmp_path / "data" / "raw" / "merra2"
+    out = tmp_path / "merra2"
     out.mkdir(parents=True)
 
     lat = np.arange(-90, 91, 45.0)
@@ -440,8 +427,7 @@ def test_time_sorting(merra2_dir_unsorted):
     """Consolidated output has monotonically increasing time regardless of input order."""
     from nhf_spatial_targets.fetch.consolidate import consolidate_merra2
 
-    run_dir = merra2_dir_unsorted.parent.parent.parent
-    consolidate_merra2(run_dir=run_dir, variables=["GWETTOP"])
+    consolidate_merra2(source_dir=merra2_dir_unsorted, variables=["GWETTOP"])
 
     ds = xr.open_dataset(merra2_dir_unsorted / "merra2_consolidated.nc")
     times = pd.DatetimeIndex(ds.time.values)
@@ -456,7 +442,7 @@ def test_time_sorting(merra2_dir_unsorted):
 @pytest.fixture()
 def ncep_multi_var_dir(tmp_path: Path) -> Path:
     """Create NCEP/NCAR files with different variables in separate files."""
-    out = tmp_path / "data" / "raw" / "ncep_ncar"
+    out = tmp_path / "ncep_ncar"
     out.mkdir(parents=True)
 
     lat = np.arange(-90, 91, 45.0)
@@ -501,9 +487,8 @@ def test_ncep_multi_variable_merge(ncep_multi_var_dir):
     """Files with different variables are grouped, concatenated, then merged."""
     from nhf_spatial_targets.fetch.consolidate import consolidate_ncep_ncar
 
-    run_dir = ncep_multi_var_dir.parent.parent.parent
     result = consolidate_ncep_ncar(
-        run_dir=run_dir, variables=["soilw_0_10cm", "soilw_10_200cm"]
+        source_dir=ncep_multi_var_dir, variables=["soilw_0_10cm", "soilw_10_200cm"]
     )
 
     nc_path = ncep_multi_var_dir / "ncep_ncar_consolidated.nc"
@@ -512,7 +497,7 @@ def test_ncep_multi_variable_merge(ncep_multi_var_dir):
     ds = xr.open_dataset(nc_path)
     assert "soilw_0_10cm" in ds.data_vars
     assert "soilw_10_200cm" in ds.data_vars
-    # 2 years × 3 months = 6 timesteps (no duplicates)
+    # 2 years x 3 months = 6 timesteps (no duplicates)
     assert len(ds.time) == 6
     assert pd.DatetimeIndex(ds.time.values).is_monotonic_increasing
     ds.close()
@@ -523,7 +508,7 @@ def test_ncep_multi_variable_merge(ncep_multi_var_dir):
 @pytest.fixture()
 def nldas_noah_dir(tmp_path: Path) -> Path:
     """Create synthetic NLDAS NOAH NetCDF4 files with 4 soil layers."""
-    out = tmp_path / "data" / "raw" / "nldas_noah"
+    out = tmp_path / "nldas_noah"
     out.mkdir(parents=True)
 
     lat = np.arange(25.0, 50.0, 5.0)
@@ -566,10 +551,9 @@ def test_nldas_noah_filter_variables(nldas_noah_dir):
     """NOAH consolidation with 4 soil layers filters correctly."""
     from nhf_spatial_targets.fetch.consolidate import consolidate_nldas
 
-    run_dir = nldas_noah_dir.parent.parent.parent
     noah_vars = ["SoilM_0_10cm", "SoilM_10_40cm", "SoilM_40_100cm", "SoilM_100_200cm"]
     consolidate_nldas(
-        run_dir=run_dir,
+        source_dir=nldas_noah_dir,
         source_key="nldas_noah",
         variables=noah_vars,
     )
@@ -589,10 +573,9 @@ def test_missing_variable_raises(merra2_dir):
     """ValueError raised when a requested variable does not exist in the data."""
     from nhf_spatial_targets.fetch.consolidate import consolidate_merra2
 
-    run_dir = merra2_dir.parent.parent.parent
     with pytest.raises(ValueError, match="not found"):
         consolidate_merra2(
-            run_dir=run_dir,
+            source_dir=merra2_dir,
             variables=["GWETTOP", "NONEXISTENT_VAR"],
         )
 
@@ -604,8 +587,7 @@ def test_open_consolidated(merra2_dir):
         open_consolidated,
     )
 
-    run_dir = merra2_dir.parent.parent.parent
-    consolidate_merra2(run_dir=run_dir, variables=["GWETTOP"])
+    consolidate_merra2(source_dir=merra2_dir, variables=["GWETTOP"])
 
     nc_path = merra2_dir / "merra2_consolidated.nc"
     ds = open_consolidated(nc_path)

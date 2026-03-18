@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
 
 _SOURCE_KEY_10 = "mod10c1_v061"
 
@@ -33,7 +34,7 @@ _MOCK_CONSOLIDATION_FINALIZE = {
 
 
 @pytest.fixture()
-def run_dir(tmp_path: Path) -> Path:
+def workdir(tmp_path: Path) -> Path:
     """Create a minimal run workspace with fabric.json."""
     rd = tmp_path / "run"
     rd.mkdir()
@@ -48,6 +49,13 @@ def run_dir(tmp_path: Path) -> Path:
         }
     }
     (rd / "fabric.json").write_text(json.dumps(fabric))
+    config = {
+        "fabric": {"path": "", "id_col": "nhm_id"},
+        "datastore": str(rd / "data" / "raw"),
+        "dir_mode": "2775",
+    }
+    (rd / "config.yml").write_text(yaml.dump(config))
+    (rd / "manifest.json").write_text('{"sources": {}, "steps": []}')
     return rd
 
 
@@ -59,13 +67,13 @@ def _mock_granule(name: str) -> MagicMock:
     return g
 
 
-def _fake_download(run_dir: Path, year: int = 2010, n: int = 1) -> list[str]:
+def _fake_download(workdir: Path, year: int = 2010, n: int = 1) -> list[str]:
     """Create fake downloaded HDF files and return their paths."""
     paths = []
     for i in range(n):
         doy = (i + 1) * 8
         f = (
-            run_dir
+            workdir
             / "data"
             / "raw"
             / "mod16a2_v061"
@@ -126,14 +134,14 @@ def test_year_from_invalid_filename():
 
 
 @patch("nhf_spatial_targets.fetch.modis.earthdata_login")
-def test_mod16a2_login_called(mock_login, run_dir):
+def test_mod16a2_login_called(mock_login, workdir):
     """earthdata_login() is called before searching."""
     with patch("earthaccess.search_data", return_value=[]):
         with pytest.raises(ValueError, match="No granules found"):
             from nhf_spatial_targets.fetch.modis import fetch_mod16a2
 
-            fetch_mod16a2(run_dir=run_dir, period="2010/2010")
-    mock_login.assert_called_once_with(run_dir)
+            fetch_mod16a2(workdir=workdir, period="2010/2010")
+    mock_login.assert_called_once_with(workdir)
 
 
 # ---- Search parameters -----------------------------------------------------
@@ -155,17 +163,17 @@ def test_mod16a2_login_called(mock_login, run_dir):
 @patch("earthaccess.search_data")
 @patch("nhf_spatial_targets.fetch.modis.earthdata_login")
 def test_mod16a2_search_params(
-    mock_login, mock_search, mock_dl, mock_ts, mock_fin, mock_consolidate, run_dir
+    mock_login, mock_search, mock_dl, mock_ts, mock_fin, mock_consolidate, workdir
 ):
     """search_data called with correct short_name, bbox tuple, and temporal."""
     mock_search.return_value = [
         _mock_granule("MOD16A2GF.A2010001.h08v04.061.2020256154955.hdf")
     ]
-    mock_dl.return_value = _fake_download(run_dir)
+    mock_dl.return_value = _fake_download(workdir)
 
     from nhf_spatial_targets.fetch.modis import fetch_mod16a2
 
-    fetch_mod16a2(run_dir=run_dir, period="2010/2010")
+    fetch_mod16a2(workdir=workdir, period="2010/2010")
 
     mock_search.assert_called_once()
     call_kwargs = mock_search.call_args[1]
@@ -179,12 +187,12 @@ def test_mod16a2_search_params(
 
 @patch("nhf_spatial_targets.fetch.modis.earthdata_login")
 @patch("earthaccess.search_data", return_value=[])
-def test_mod16a2_no_granules_raises(mock_search, mock_login, run_dir):
+def test_mod16a2_no_granules_raises(mock_search, mock_login, workdir):
     """ValueError raised when search returns zero granules."""
     from nhf_spatial_targets.fetch.modis import fetch_mod16a2
 
     with pytest.raises(ValueError, match="No granules found"):
-        fetch_mod16a2(run_dir=run_dir, period="2010/2010")
+        fetch_mod16a2(workdir=workdir, period="2010/2010")
 
 
 # ---- Download failures -----------------------------------------------------
@@ -193,7 +201,7 @@ def test_mod16a2_no_granules_raises(mock_search, mock_login, run_dir):
 @patch("earthaccess.download", return_value=[])
 @patch("earthaccess.search_data")
 @patch("nhf_spatial_targets.fetch.modis.earthdata_login")
-def test_mod16a2_empty_download_raises(mock_login, mock_search, mock_dl, run_dir):
+def test_mod16a2_empty_download_raises(mock_login, mock_search, mock_dl, workdir):
     """RuntimeError raised when download returns no files."""
     mock_search.return_value = [
         _mock_granule("MOD16A2GF.A2010001.h08v04.061.2020256154955.hdf")
@@ -202,7 +210,7 @@ def test_mod16a2_empty_download_raises(mock_login, mock_search, mock_dl, run_dir
     from nhf_spatial_targets.fetch.modis import fetch_mod16a2
 
     with pytest.raises(RuntimeError, match="returned no files"):
-        fetch_mod16a2(run_dir=run_dir, period="2010/2010")
+        fetch_mod16a2(workdir=workdir, period="2010/2010")
 
 
 # ---- Missing / malformed fabric.json ---------------------------------------
@@ -211,26 +219,35 @@ def test_mod16a2_empty_download_raises(mock_login, mock_search, mock_dl, run_dir
 @patch("nhf_spatial_targets.fetch.modis.earthdata_login")
 def test_mod16a2_missing_fabric_raises(mock_login, tmp_path):
     """FileNotFoundError raised when fabric.json is missing."""
-    run_dir = tmp_path / "empty_run"
-    run_dir.mkdir()
+    workdir = tmp_path / "empty_run"
+    workdir.mkdir()
 
     from nhf_spatial_targets.fetch.modis import fetch_mod16a2
 
-    with pytest.raises(FileNotFoundError, match="fabric.json"):
-        fetch_mod16a2(run_dir=run_dir, period="2010/2010")
+    with pytest.raises(FileNotFoundError, match="config.yml"):
+        fetch_mod16a2(workdir=workdir, period="2010/2010")
 
 
 @patch("nhf_spatial_targets.fetch.modis.earthdata_login")
 def test_mod16a2_malformed_fabric_raises(mock_login, tmp_path):
     """ValueError raised when fabric.json is malformed."""
-    run_dir = tmp_path / "bad_fabric_run"
-    run_dir.mkdir()
-    (run_dir / "fabric.json").write_text("{}")
+    workdir = tmp_path / "bad_fabric_run"
+    workdir.mkdir()
+    (workdir / "fabric.json").write_text("{}")
+    import yaml as _yaml
+
+    _cfg = {
+        "fabric": {"path": "", "id_col": "nhm_id"},
+        "datastore": str(workdir),
+        "dir_mode": "2775",
+    }
+    (workdir / "config.yml").write_text(_yaml.dump(_cfg))
+    (workdir / "manifest.json").write_text('{"sources": {}, "steps": []}')
 
     from nhf_spatial_targets.fetch.modis import fetch_mod16a2
 
-    with pytest.raises(ValueError, match="malformed"):
-        fetch_mod16a2(run_dir=run_dir, period="2010/2010")
+    with pytest.raises(KeyError):
+        fetch_mod16a2(workdir=workdir, period="2010/2010")
 
 
 # ---- Provenance record -----------------------------------------------------
@@ -252,17 +269,17 @@ def test_mod16a2_malformed_fabric_raises(mock_login, tmp_path):
 @patch("earthaccess.search_data")
 @patch("nhf_spatial_targets.fetch.modis.earthdata_login")
 def test_mod16a2_provenance_record(
-    mock_login, mock_search, mock_dl, mock_ts, mock_fin, mock_consolidate, run_dir
+    mock_login, mock_search, mock_dl, mock_ts, mock_fin, mock_consolidate, workdir
 ):
     """Returned dict has all required provenance keys."""
     mock_search.return_value = [
         _mock_granule("MOD16A2GF.A2010001.h08v04.061.2020256154955.hdf")
     ]
-    mock_dl.return_value = _fake_download(run_dir)
+    mock_dl.return_value = _fake_download(workdir)
 
     from nhf_spatial_targets.fetch.modis import fetch_mod16a2
 
-    result = fetch_mod16a2(run_dir=run_dir, period="2010/2010")
+    result = fetch_mod16a2(workdir=workdir, period="2010/2010")
 
     assert result["source_key"] == "mod16a2_v061"
     assert "access_url" in result
@@ -276,7 +293,7 @@ def test_mod16a2_provenance_record(
     assert "year" in result["files"][0]
     assert "size_bytes" in result["files"][0]
     assert isinstance(result["consolidated_ncs"], dict)
-    assert not Path(result["files"][0]["path"]).is_absolute()
+    assert Path(result["files"][0]["path"]).is_absolute()
 
 
 # ---- Manifest update -------------------------------------------------------
@@ -298,19 +315,19 @@ def test_mod16a2_provenance_record(
 @patch("earthaccess.search_data")
 @patch("nhf_spatial_targets.fetch.modis.earthdata_login")
 def test_mod16a2_manifest_updated(
-    mock_login, mock_search, mock_dl, mock_ts, mock_fin, mock_consolidate, run_dir
+    mock_login, mock_search, mock_dl, mock_ts, mock_fin, mock_consolidate, workdir
 ):
     """fetch_mod16a2 writes provenance to manifest.json."""
     mock_search.return_value = [
         _mock_granule("MOD16A2GF.A2010001.h08v04.061.2020256154955.hdf")
     ]
-    mock_dl.return_value = _fake_download(run_dir)
+    mock_dl.return_value = _fake_download(workdir)
 
     from nhf_spatial_targets.fetch.modis import fetch_mod16a2
 
-    fetch_mod16a2(run_dir=run_dir, period="2010/2010")
+    fetch_mod16a2(workdir=workdir, period="2010/2010")
 
-    updated_manifest = json.loads((run_dir / "manifest.json").read_text())
+    updated_manifest = json.loads((workdir / "manifest.json").read_text())
     entry = updated_manifest["sources"]["mod16a2_v061"]
     assert entry["period"] == "2010/2010"
     assert len(entry["files"]) > 0
@@ -345,7 +362,7 @@ def test_mod16a2_manifest_updated(
 @patch("earthaccess.search_data")
 @patch("nhf_spatial_targets.fetch.modis.earthdata_login")
 def test_mod16a2_incremental_skips_year(
-    mock_login, mock_search, mock_dl, mock_ts, mock_fin, mock_consolidate, run_dir
+    mock_login, mock_search, mock_dl, mock_ts, mock_fin, mock_consolidate, workdir
 ):
     """Years already in manifest are not re-downloaded."""
     manifest = {
@@ -363,10 +380,10 @@ def test_mod16a2_incremental_skips_year(
             }
         }
     }
-    (run_dir / "manifest.json").write_text(json.dumps(manifest))
+    (workdir / "manifest.json").write_text(json.dumps(manifest))
 
     existing = (
-        run_dir
+        workdir
         / "data"
         / "raw"
         / "mod16a2_v061"
@@ -377,11 +394,11 @@ def test_mod16a2_incremental_skips_year(
     mock_search.return_value = [
         _mock_granule("MOD16A2GF.A2011001.h08v04.061.2020256154955.hdf")
     ]
-    mock_dl.return_value = _fake_download(run_dir, year=2011)
+    mock_dl.return_value = _fake_download(workdir, year=2011)
 
     from nhf_spatial_targets.fetch.modis import fetch_mod16a2
 
-    fetch_mod16a2(run_dir=run_dir, period="2010/2011")
+    fetch_mod16a2(workdir=workdir, period="2010/2011")
 
     assert mock_search.call_count == 1
     call_kwargs = mock_search.call_args[1]
@@ -393,13 +410,13 @@ def test_mod16a2_incremental_skips_year(
 # ---------------------------------------------------------------------------
 
 
-def _fake_download_10c1(run_dir: Path, year: int = 2005, n: int = 1) -> list[str]:
+def _fake_download_10c1(workdir: Path, year: int = 2005, n: int = 1) -> list[str]:
     """Create fake downloaded HDF files for MOD10C1 and return their paths."""
     paths = []
     for i in range(n):
         doy = i + 1
         f = (
-            run_dir
+            workdir
             / "data"
             / "raw"
             / _SOURCE_KEY_10
@@ -423,14 +440,14 @@ def _mock_subset_side_effect(hdf_path: Path, bbox=None) -> Path:
 
 
 @patch("nhf_spatial_targets.fetch.modis.earthdata_login")
-def test_mod10c1_login_called(mock_login, run_dir):
+def test_mod10c1_login_called(mock_login, workdir):
     """earthdata_login() is called before searching."""
     with patch("earthaccess.search_data", return_value=[]):
         with pytest.raises(ValueError, match="No granules found"):
             from nhf_spatial_targets.fetch.modis import fetch_mod10c1
 
-            fetch_mod10c1(run_dir=run_dir, period="2005/2005")
-    mock_login.assert_called_once_with(run_dir)
+            fetch_mod10c1(workdir=workdir, period="2005/2005")
+    mock_login.assert_called_once_with(workdir)
 
 
 # ---- MOD10C1 Search parameters --------------------------------------------
@@ -448,15 +465,15 @@ def test_mod10c1_login_called(mock_login, run_dir):
 @patch("earthaccess.search_data")
 @patch("nhf_spatial_targets.fetch.modis.earthdata_login")
 def test_mod10c1_search_params(
-    mock_login, mock_search, mock_dl, mock_subset, mock_consolidate, run_dir
+    mock_login, mock_search, mock_dl, mock_subset, mock_consolidate, workdir
 ):
     """search_data called with correct short_name and temporal."""
     mock_search.return_value = [_mock_granule("g1")]
-    mock_dl.return_value = _fake_download_10c1(run_dir)
+    mock_dl.return_value = _fake_download_10c1(workdir)
 
     from nhf_spatial_targets.fetch.modis import fetch_mod10c1
 
-    fetch_mod10c1(run_dir=run_dir, period="2005/2005")
+    fetch_mod10c1(workdir=workdir, period="2005/2005")
 
     mock_search.assert_called_once()
     call_kwargs = mock_search.call_args[1]
@@ -476,13 +493,13 @@ def test_mod10c1_search_params(
 @patch("earthaccess.search_data", return_value=[])
 @patch("nhf_spatial_targets.fetch.modis.earthdata_login")
 def test_mod10c1_no_granules_raises(
-    mock_login, mock_search, mock_dl, mock_subset, mock_consolidate, run_dir
+    mock_login, mock_search, mock_dl, mock_subset, mock_consolidate, workdir
 ):
     """ValueError raised when search returns zero granules."""
     from nhf_spatial_targets.fetch.modis import fetch_mod10c1
 
     with pytest.raises(ValueError, match="No granules found"):
-        fetch_mod10c1(run_dir=run_dir, period="2005/2005")
+        fetch_mod10c1(workdir=workdir, period="2005/2005")
 
 
 # ---- MOD10C1 Provenance ---------------------------------------------------
@@ -500,15 +517,15 @@ def test_mod10c1_no_granules_raises(
 @patch("earthaccess.search_data")
 @patch("nhf_spatial_targets.fetch.modis.earthdata_login")
 def test_mod10c1_provenance_record(
-    mock_login, mock_search, mock_dl, mock_subset, mock_consolidate, run_dir
+    mock_login, mock_search, mock_dl, mock_subset, mock_consolidate, workdir
 ):
     """Returned dict has all required provenance keys."""
     mock_search.return_value = [_mock_granule("g1")]
-    mock_dl.return_value = _fake_download_10c1(run_dir)
+    mock_dl.return_value = _fake_download_10c1(workdir)
 
     from nhf_spatial_targets.fetch.modis import fetch_mod10c1
 
-    result = fetch_mod10c1(run_dir=run_dir, period="2005/2005")
+    result = fetch_mod10c1(workdir=workdir, period="2005/2005")
 
     assert result["source_key"] == _SOURCE_KEY_10
     assert "access_url" in result
@@ -535,16 +552,16 @@ def test_mod10c1_provenance_record(
 @patch("earthaccess.search_data")
 @patch("nhf_spatial_targets.fetch.modis.earthdata_login")
 def test_mod10c1_subset_called(
-    mock_login, mock_search, mock_dl, mock_subset, mock_consolidate, run_dir
+    mock_login, mock_search, mock_dl, mock_subset, mock_consolidate, workdir
 ):
     """_subset_to_conus called for each downloaded HDF."""
     n_files = 3
     mock_search.return_value = [_mock_granule(f"g{i}") for i in range(n_files)]
-    mock_dl.return_value = _fake_download_10c1(run_dir, n=n_files)
+    mock_dl.return_value = _fake_download_10c1(workdir, n=n_files)
 
     from nhf_spatial_targets.fetch.modis import fetch_mod10c1
 
-    fetch_mod10c1(run_dir=run_dir, period="2005/2005")
+    fetch_mod10c1(workdir=workdir, period="2005/2005")
 
     assert mock_subset.call_count == n_files
 

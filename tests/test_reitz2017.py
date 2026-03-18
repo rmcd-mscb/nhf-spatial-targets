@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+import yaml
 import rioxarray  # noqa: F401 — registers .rio accessor
 import xarray as xr
 
@@ -110,7 +111,7 @@ def _mock_sciencebasepy():
 
 
 @pytest.fixture()
-def run_dir(tmp_path: Path) -> Path:
+def workdir(tmp_path: Path) -> Path:
     """Create a minimal run workspace."""
     rd = tmp_path / "run"
     rd.mkdir()
@@ -124,6 +125,13 @@ def run_dir(tmp_path: Path) -> Path:
         }
     }
     (rd / "fabric.json").write_text(json.dumps(fabric))
+    config = {
+        "fabric": {"path": "", "id_col": "nhm_id"},
+        "datastore": str(rd / "data" / "raw"),
+        "dir_mode": "2775",
+    }
+    (rd / "config.yml").write_text(yaml.dump(config))
+    (rd / "manifest.json").write_text('{"sources": {}, "steps": []}')
     return rd
 
 
@@ -139,11 +147,11 @@ def _make_reitz_zip(zip_path: Path, tif_name: str, *, value: float = 1.0) -> Pat
 
 def _setup_sb_mock(
     mock_sciencebasepy,
-    run_dir: Path,
+    workdir: Path,
     years: list[int],
 ) -> MagicMock:
     """Configure sciencebasepy mock to serve synthetic zips for given years."""
-    staging = run_dir / ".sb_staging"
+    staging = workdir / ".sb_staging"
     staging.mkdir(exist_ok=True)
 
     # Build file info list matching what ScienceBase returns
@@ -172,22 +180,22 @@ def _setup_sb_mock(
     return mock_sb
 
 
-def test_downloads_and_updates_manifest(run_dir: Path, _mock_sciencebasepy):
+def test_downloads_and_updates_manifest(workdir: Path, _mock_sciencebasepy):
     """Full download flow with mocked ScienceBase."""
     from nhf_spatial_targets.fetch.reitz2017 import fetch_reitz2017
 
-    _setup_sb_mock(_mock_sciencebasepy, run_dir, [2005, 2006])
+    _setup_sb_mock(_mock_sciencebasepy, workdir, [2005, 2006])
 
-    result = fetch_reitz2017(run_dir=run_dir, period="2005/2006")
+    result = fetch_reitz2017(workdir=workdir, period="2005/2006")
 
-    output_dir = run_dir / "data" / "raw" / "reitz2017"
+    output_dir = workdir / "data" / "raw" / "reitz2017"
     # GeoTIFFs extracted
     assert (output_dir / "TotalRecharge_2005.tif").exists()
     assert (output_dir / "EffRecharge_2005.tif").exists()
     # Consolidated NC created
     assert (output_dir / "reitz2017_consolidated.nc").exists()
     # Manifest updated
-    manifest = json.loads((run_dir / "manifest.json").read_text())
+    manifest = json.loads((workdir / "manifest.json").read_text())
     assert "reitz2017" in manifest["sources"]
     assert manifest["sources"]["reitz2017"]["license"] == "public domain (USGS)"
     assert result["source_key"] == "reitz2017"
@@ -239,15 +247,15 @@ def test_missing_fabric_raises(tmp_path: Path):
 
     rd = tmp_path / "run"
     rd.mkdir()
-    with pytest.raises(FileNotFoundError, match="fabric.json"):
-        fetch_reitz2017(run_dir=rd, period="2005/2006")
+    with pytest.raises(FileNotFoundError, match="config.yml"):
+        fetch_reitz2017(workdir=rd, period="2005/2006")
 
 
-def test_skips_existing(run_dir: Path, _mock_sciencebasepy):
+def test_skips_existing(workdir: Path, _mock_sciencebasepy):
     """Skip everything when consolidated NC exists and covers period."""
     from nhf_spatial_targets.fetch.reitz2017 import fetch_reitz2017
 
-    output_dir = run_dir / "data" / "raw" / "reitz2017"
+    output_dir = workdir / "data" / "raw" / "reitz2017"
     # Create synthetic GeoTIFFs and consolidate them
     for year in [2005, 2006]:
         _make_reitz_tif(output_dir / f"TotalRecharge_{year}.tif", value=float(year))
@@ -259,17 +267,17 @@ def test_skips_existing(run_dir: Path, _mock_sciencebasepy):
 
     mock_sb = MagicMock()
     _mock_sciencebasepy.SbSession = mock_sb
-    result = fetch_reitz2017(run_dir=run_dir, period="2005/2006")
+    result = fetch_reitz2017(workdir=workdir, period="2005/2006")
 
     mock_sb.assert_not_called()
     assert result["source_key"] == "reitz2017"
 
 
-def test_existing_nc_period_mismatch_raises(run_dir: Path, _mock_sciencebasepy):
+def test_existing_nc_period_mismatch_raises(workdir: Path, _mock_sciencebasepy):
     """RuntimeError when consolidated NC exists but doesn't cover requested period."""
     from nhf_spatial_targets.fetch.reitz2017 import _consolidate, fetch_reitz2017
 
-    output_dir = run_dir / "data" / "raw" / "reitz2017"
+    output_dir = workdir / "data" / "raw" / "reitz2017"
     # Create NC covering only 2005
     _make_reitz_tif(output_dir / "TotalRecharge_2005.tif", value=2005.0)
     _make_reitz_tif(output_dir / "EffRecharge_2005.tif", value=2005.5)
@@ -277,21 +285,21 @@ def test_existing_nc_period_mismatch_raises(run_dir: Path, _mock_sciencebasepy):
 
     # Request broader period
     with pytest.raises(RuntimeError, match="missing years"):
-        fetch_reitz2017(run_dir=run_dir, period="2005/2006")
+        fetch_reitz2017(workdir=workdir, period="2005/2006")
 
 
-def test_incremental_skips_downloaded_years(run_dir: Path, _mock_sciencebasepy):
+def test_incremental_skips_downloaded_years(workdir: Path, _mock_sciencebasepy):
     """Only download years whose GeoTIFFs are missing."""
     from nhf_spatial_targets.fetch.reitz2017 import fetch_reitz2017
 
-    output_dir = run_dir / "data" / "raw" / "reitz2017"
+    output_dir = workdir / "data" / "raw" / "reitz2017"
     # Pre-create 2005 GeoTIFFs
     _make_reitz_tif(output_dir / "TotalRecharge_2005.tif", value=2005.0)
     _make_reitz_tif(output_dir / "EffRecharge_2005.tif", value=2005.5)
 
-    mock_sb = _setup_sb_mock(_mock_sciencebasepy, run_dir, [2006])
+    mock_sb = _setup_sb_mock(_mock_sciencebasepy, workdir, [2006])
 
-    result = fetch_reitz2017(run_dir=run_dir, period="2005/2006")
+    result = fetch_reitz2017(workdir=workdir, period="2005/2006")
 
     # ScienceBase should only be called for 2006 files
     calls = mock_sb.download_file.call_args_list
@@ -301,7 +309,7 @@ def test_incremental_skips_downloaded_years(run_dir: Path, _mock_sciencebasepy):
     assert result["source_key"] == "reitz2017"
 
 
-def test_manifest_preserves_existing_sources(run_dir: Path, _mock_sciencebasepy):
+def test_manifest_preserves_existing_sources(workdir: Path, _mock_sciencebasepy):
     """Manifest merge must not overwrite entries from other sources."""
     from nhf_spatial_targets.fetch.reitz2017 import fetch_reitz2017
 
@@ -311,28 +319,28 @@ def test_manifest_preserves_existing_sources(run_dir: Path, _mock_sciencebasepy)
         },
         "steps": [],
     }
-    (run_dir / "manifest.json").write_text(json.dumps(existing_manifest))
+    (workdir / "manifest.json").write_text(json.dumps(existing_manifest))
 
-    _setup_sb_mock(_mock_sciencebasepy, run_dir, [2005])
-    fetch_reitz2017(run_dir=run_dir, period="2005/2005")
+    _setup_sb_mock(_mock_sciencebasepy, workdir, [2005])
+    fetch_reitz2017(workdir=workdir, period="2005/2005")
 
-    manifest = json.loads((run_dir / "manifest.json").read_text())
+    manifest = json.loads((workdir / "manifest.json").read_text())
     assert "merra2" in manifest["sources"]
     assert "reitz2017" in manifest["sources"]
 
 
-def test_corrupt_manifest_raises(run_dir: Path, _mock_sciencebasepy):
+def test_corrupt_manifest_raises(workdir: Path, _mock_sciencebasepy):
     """ValueError when manifest.json is corrupt."""
     from nhf_spatial_targets.fetch.reitz2017 import fetch_reitz2017
 
-    (run_dir / "manifest.json").write_text("not valid json{{{")
-    _setup_sb_mock(_mock_sciencebasepy, run_dir, [2005])
+    (workdir / "manifest.json").write_text("not valid json{{{")
+    _setup_sb_mock(_mock_sciencebasepy, workdir, [2005])
 
     with pytest.raises(ValueError, match="corrupt"):
-        fetch_reitz2017(run_dir=run_dir, period="2005/2005")
+        fetch_reitz2017(workdir=workdir, period="2005/2005")
 
 
-def test_download_failure_raises(run_dir: Path, _mock_sciencebasepy):
+def test_download_failure_raises(workdir: Path, _mock_sciencebasepy):
     """RuntimeError when ScienceBase download fails."""
     from nhf_spatial_targets.fetch.reitz2017 import fetch_reitz2017
 
@@ -346,22 +354,22 @@ def test_download_failure_raises(run_dir: Path, _mock_sciencebasepy):
     _mock_sciencebasepy.SbSession = MagicMock(return_value=mock_sb)
 
     with pytest.raises(RuntimeError, match="ScienceBase download failed"):
-        fetch_reitz2017(run_dir=run_dir, period="2005/2005")
+        fetch_reitz2017(workdir=workdir, period="2005/2005")
 
 
-def test_period_out_of_range_raises(run_dir: Path):
+def test_period_out_of_range_raises(workdir: Path):
     """ValueError for period outside 2000-2013."""
     from nhf_spatial_targets.fetch.reitz2017 import fetch_reitz2017
 
     with pytest.raises(ValueError, match="outside"):
-        fetch_reitz2017(run_dir=run_dir, period="1990/1995")
+        fetch_reitz2017(workdir=workdir, period="1990/1995")
 
 
-def test_zip_no_tif_raises(run_dir: Path, _mock_sciencebasepy):
+def test_zip_no_tif_raises(workdir: Path, _mock_sciencebasepy):
     """RuntimeError when zip contains no .tif file."""
     from nhf_spatial_targets.fetch.reitz2017 import fetch_reitz2017
 
-    staging = run_dir / ".sb_staging"
+    staging = workdir / ".sb_staging"
     staging.mkdir()
     # Create a zip with a non-tif file
     zip_path = staging / "TotalRecharge_2005.zip"
@@ -391,7 +399,7 @@ def test_zip_no_tif_raises(run_dir: Path, _mock_sciencebasepy):
     _mock_sciencebasepy.SbSession = MagicMock(return_value=mock_sb)
 
     with pytest.raises(RuntimeError, match="No .tif file"):
-        fetch_reitz2017(run_dir=run_dir, period="2005/2005")
+        fetch_reitz2017(workdir=workdir, period="2005/2005")
 
 
 def test_cli_nonexistent_run_dir(tmp_path: Path):
@@ -403,7 +411,7 @@ def test_cli_nonexistent_run_dir(tmp_path: Path):
             [
                 "fetch",
                 "reitz2017",
-                "--run-dir",
+                "--workdir",
                 str(tmp_path / "nope"),
                 "--period",
                 "2005/2006",
@@ -433,8 +441,17 @@ def test_fetch_reitz2017_real_download(tmp_path: Path):
         }
     }
     (rd / "fabric.json").write_text(json.dumps(fabric))
+    import yaml as _yaml
 
-    result = fetch_reitz2017(run_dir=rd, period="2005/2005")
+    _cfg = {
+        "fabric": {"path": "", "id_col": "nhm_id"},
+        "datastore": str(rd / "data" / "raw"),
+        "dir_mode": "2775",
+    }
+    (rd / "config.yml").write_text(_yaml.dump(_cfg))
+    (rd / "manifest.json").write_text(json.dumps({"sources": {}, "steps": []}))
+
+    result = fetch_reitz2017(workdir=rd, period="2005/2005")
 
     assert result["source_key"] == "reitz2017"
 

@@ -14,6 +14,7 @@ import earthaccess
 import nhf_spatial_targets.catalog as _catalog
 from nhf_spatial_targets.fetch._auth import earthdata_login
 from nhf_spatial_targets.fetch._period import months_in_period, parse_period
+from nhf_spatial_targets.workspace import load as _load_workspace
 
 logger = logging.getLogger(__name__)
 
@@ -31,26 +32,27 @@ def _granule_year_month(granule: object) -> str | None:
     return None
 
 
-def _manifest_nldas_files(run_dir: Path, source_key: str) -> list[dict]:
+def _manifest_nldas_files(workdir: Path, source_key: str) -> list[dict]:
     """Read manifest.json and return the NLDAS file records list."""
-    manifest_path = run_dir / "manifest.json"
+    ws = _load_workspace(workdir)
+    manifest_path = ws.manifest_path
     if not manifest_path.exists():
         return []
     try:
         manifest = json.loads(manifest_path.read_text())
     except json.JSONDecodeError as exc:
         raise ValueError(
-            f"manifest.json in {run_dir} is corrupted and cannot be parsed. "
+            f"manifest.json in {workdir} is corrupted and cannot be parsed. "
             f"Inspect the file manually or restore from backup. Detail: {exc}"
         ) from exc
     return manifest.get("sources", {}).get(source_key, {}).get("files", [])
 
 
-def _existing_months(run_dir: Path, source_key: str) -> set[str]:
+def _existing_months(workdir: Path, source_key: str) -> set[str]:
     """Return set of year_month values already fetched from manifest."""
     return {
         f["year_month"]
-        for f in _manifest_nldas_files(run_dir, source_key)
+        for f in _manifest_nldas_files(workdir, source_key)
         if "year_month" in f
     }
 
@@ -63,23 +65,23 @@ def _year_month_from_path(path: Path) -> str:
     return f"{m.group(1)}-{m.group(2)}"
 
 
-def _existing_file_timestamps(run_dir: Path, source_key: str) -> dict[str, str]:
+def _existing_file_timestamps(workdir: Path, source_key: str) -> dict[str, str]:
     """Return {year_month: downloaded_utc} from existing manifest."""
     return {
         f["year_month"]: f["downloaded_utc"]
-        for f in _manifest_nldas_files(run_dir, source_key)
+        for f in _manifest_nldas_files(workdir, source_key)
         if "year_month" in f and "downloaded_utc" in f
     }
 
 
-def fetch_nldas_mosaic(run_dir: Path, period: str) -> dict:
+def fetch_nldas_mosaic(workdir: Path, period: str) -> dict:
     """Download NLDAS-2 MOSAIC monthly soil moisture.
 
     Parameters
     ----------
-    run_dir : Path
-        Run workspace directory. Reads ``fabric.json`` for bbox,
-        writes files to ``data/raw/nldas_mosaic/``.
+    workdir : Path
+        Workspace directory. Reads ``fabric.json`` for bbox,
+        writes files to the datastore under ``nldas_mosaic/``.
     period : str
         Temporal range as ``"YYYY/YYYY"`` (start/end years inclusive).
 
@@ -88,17 +90,17 @@ def fetch_nldas_mosaic(run_dir: Path, period: str) -> dict:
     dict
         Provenance record for ``manifest.json``.
     """
-    return _fetch_nldas("nldas_mosaic", run_dir, period)
+    return _fetch_nldas("nldas_mosaic", workdir, period)
 
 
-def fetch_nldas_noah(run_dir: Path, period: str) -> dict:
+def fetch_nldas_noah(workdir: Path, period: str) -> dict:
     """Download NLDAS-2 NOAH monthly soil moisture.
 
     Parameters
     ----------
-    run_dir : Path
-        Run workspace directory. Reads ``fabric.json`` for bbox,
-        writes files to ``data/raw/nldas_noah/``.
+    workdir : Path
+        Workspace directory. Reads ``fabric.json`` for bbox,
+        writes files to the datastore under ``nldas_noah/``.
     period : str
         Temporal range as ``"YYYY/YYYY"`` (start/end years inclusive).
 
@@ -107,10 +109,10 @@ def fetch_nldas_noah(run_dir: Path, period: str) -> dict:
     dict
         Provenance record for ``manifest.json``.
     """
-    return _fetch_nldas("nldas_noah", run_dir, period)
+    return _fetch_nldas("nldas_noah", workdir, period)
 
 
-def _fetch_nldas(source_key: str, run_dir: Path, period: str) -> dict:
+def _fetch_nldas(source_key: str, workdir: Path, period: str) -> dict:
     """Download NLDAS-2 granules for the given source and period.
 
     Supports incremental download — months already recorded in
@@ -121,9 +123,9 @@ def _fetch_nldas(source_key: str, run_dir: Path, period: str) -> dict:
     ----------
     source_key : str
         Catalog key: ``"nldas_mosaic"`` or ``"nldas_noah"``.
-    run_dir : Path
-        Run workspace directory. Reads ``fabric.json`` for bbox,
-        writes files to ``data/raw/<source_key>/``.
+    workdir : Path
+        Workspace directory. Reads ``fabric.json`` for bbox,
+        writes files to the datastore under ``<source_key>/``.
     period : str
         Temporal range as ``"YYYY/YYYY"`` (start/end years inclusive).
 
@@ -134,6 +136,7 @@ def _fetch_nldas(source_key: str, run_dir: Path, period: str) -> dict:
     """
     from nhf_spatial_targets.fetch.consolidate import consolidate_nldas  # noqa: PLC0415
 
+    ws = _load_workspace(workdir)
     meta = _catalog.source(source_key)
     short_name = meta["access"]["short_name"]
 
@@ -145,32 +148,18 @@ def _fetch_nldas(source_key: str, run_dir: Path, period: str) -> dict:
             stacklevel=3,
         )
 
-    earthdata_login(run_dir)
+    earthdata_login(workdir)
     logger.info("Authenticated with NASA Earthdata")
 
-    fabric_path = run_dir / "fabric.json"
-    if not fabric_path.exists():
-        raise FileNotFoundError(
-            f"fabric.json not found in {run_dir}. "
-            f"Run 'nhf-targets init' to create a run workspace first."
-        )
-    try:
-        fabric = json.loads(fabric_path.read_text())
-        bbox = fabric["bbox_buffered"]
-        bbox_tuple = (bbox["minx"], bbox["miny"], bbox["maxx"], bbox["maxy"])
-    except (json.JSONDecodeError, KeyError) as exc:
-        raise ValueError(
-            f"fabric.json in {run_dir} is malformed or missing required "
-            f"fields (bbox_buffered.{{minx,miny,maxx,maxy}}). "
-            f"Re-run 'nhf-targets init' to regenerate it."
-        ) from exc
+    bbox = ws.fabric["bbox_buffered"]
+    bbox_tuple = (bbox["minx"], bbox["miny"], bbox["maxx"], bbox["maxy"])
 
     # Determine which months need downloading
-    already_have = _existing_months(run_dir, source_key)
+    already_have = _existing_months(workdir, source_key)
     all_months = months_in_period(period)
     needed = [m for m in all_months if m not in already_have]
 
-    output_dir = run_dir / "data" / "raw" / source_key
+    output_dir = ws.raw_dir(source_key)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if not needed:
@@ -236,16 +225,15 @@ def _fetch_nldas(source_key: str, run_dir: Path, period: str) -> dict:
     )
 
     # Preserve original downloaded_utc for files already in manifest
-    existing_timestamps = _existing_file_timestamps(run_dir, source_key)
+    existing_timestamps = _existing_file_timestamps(workdir, source_key)
     now_utc = datetime.now(timezone.utc).isoformat()
 
     files = []
     for p in all_nc_files:
-        rel = str(p.relative_to(run_dir))
         ym = _year_month_from_path(p)
         files.append(
             {
-                "path": rel,
+                "path": str(p),
                 "year_month": ym,
                 "size_bytes": p.stat().st_size,
                 "downloaded_utc": existing_timestamps.get(ym, now_utc),
@@ -255,7 +243,7 @@ def _fetch_nldas(source_key: str, run_dir: Path, period: str) -> dict:
     # Consolidate into single NetCDF
     var_names = [v["name"] for v in meta["variables"]]
     consolidation = consolidate_nldas(
-        run_dir=run_dir, source_key=source_key, variables=var_names
+        source_dir=output_dir, source_key=source_key, variables=var_names
     )
 
     # Compute effective period from actual files on disk
@@ -269,7 +257,7 @@ def _fetch_nldas(source_key: str, run_dir: Path, period: str) -> dict:
 
     # Update manifest.json (merge, don't overwrite)
     _update_manifest(
-        run_dir, source_key, effective_period, bbox, meta, files, consolidation
+        workdir, source_key, effective_period, bbox, meta, files, consolidation
     )
 
     return {
@@ -285,7 +273,7 @@ def _fetch_nldas(source_key: str, run_dir: Path, period: str) -> dict:
 
 
 def _update_manifest(
-    run_dir: Path,
+    workdir: Path,
     source_key: str,
     period: str,
     bbox: dict,
@@ -294,9 +282,15 @@ def _update_manifest(
     consolidation: dict,
 ) -> None:
     """Merge NLDAS provenance into manifest.json."""
-    manifest_path = run_dir / "manifest.json"
+    ws = _load_workspace(workdir)
+    manifest_path = ws.manifest_path
     if manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text())
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"manifest.json in {workdir} is corrupted. Detail: {exc}"
+            ) from exc
     else:
         manifest = {"sources": {}, "steps": []}
 

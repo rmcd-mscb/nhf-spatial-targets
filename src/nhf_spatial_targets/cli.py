@@ -13,8 +13,6 @@ from cyclopts import App, Parameter
 
 from nhf_spatial_targets._logging import setup_logging
 
-_DEFAULT_CONFIG = Path(__file__).parent.parent.parent / "config" / "pipeline.yml"
-_DEFAULT_WORKDIR = Path("runs")
 _logger = logging.getLogger(__name__)
 
 app = App(
@@ -40,37 +38,42 @@ def launcher(
 
 @app.command
 def run(
-    run_dir: Annotated[
-        Path | None,
+    workdir: Annotated[
+        Path,
         Parameter(
-            name=["--run-dir", "-r"],
-            help="Run workspace created by 'nhf-targets init'.",
+            name=["--workdir", "-w"],
+            help="Workspace created by 'nhf-targets init'.",
         ),
-    ] = None,
-    config: Annotated[
-        Path | None,
-        Parameter(name=["--config", "-c"], help="Explicit pipeline.yml path."),
-    ] = None,
+    ],
     target: Annotated[
         str | None,
         Parameter(
-            name=["--target", "-t"], help="Run a single target (default: all enabled)."
+            name=["--target", "-t"],
+            help="Run a single target (default: all enabled).",
         ),
     ] = None,
 ):
     """Run the calibration target pipeline."""
-    if run_dir is None and config is None:
-        print("Error: Provide either --run-dir or --config.", file=sys.stderr)
+    if not workdir.exists():
+        print(f"Error: Workspace not found: {workdir}", file=sys.stderr)
         sys.exit(2)
-    if run_dir is not None and config is not None:
-        print("Error: Provide --run-dir or --config, not both.", file=sys.stderr)
-        sys.exit(2)
-    if run_dir is not None and not run_dir.exists():
-        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+    if not (workdir / "fabric.json").exists():
+        print(
+            f"Error: fabric.json not found in {workdir}. "
+            "Run 'nhf-targets validate' first.",
+            file=sys.stderr,
+        )
         sys.exit(2)
 
-    config_path = (run_dir / "config.yml") if run_dir else config
-    cfg = yaml.safe_load(config_path.read_text())
+    try:
+        cfg = yaml.safe_load((workdir / "config.yml").read_text())
+    except yaml.YAMLError as exc:
+        print(f"Error: Cannot parse config.yml: {exc}", file=sys.stderr)
+        sys.exit(1)
+    if not isinstance(cfg, dict):
+        print("Error: config.yml is empty or malformed.", file=sys.stderr)
+        sys.exit(1)
+
     targets_cfg = cfg.get("targets", {})
 
     to_run = (
@@ -84,14 +87,19 @@ def run(
             print(f"Error: Unknown target: {name}", file=sys.stderr)
             sys.exit(1)
         print(f"Building target: {name}")
-        _dispatch(name, targets_cfg[name], cfg, run_dir=run_dir)
+        try:
+            _dispatch(name, targets_cfg[name], cfg, workdir=workdir)
+        except Exception as exc:
+            _logger.exception("Error building target '%s'", name)
+            print(f"Error building target '{name}': {exc}", file=sys.stderr)
+            sys.exit(1)
 
 
 def _dispatch(
     name: str,
     target_cfg: dict,
     pipeline_cfg: dict,
-    run_dir: Path | None = None,
+    workdir: Path | None = None,
 ) -> None:
     """Dispatch to the appropriate target builder module."""
     from nhf_spatial_targets.targets import aet, rch, run, sca, som
@@ -108,8 +116,8 @@ def _dispatch(
         sys.exit(1)
 
     fabric_path = pipeline_cfg["fabric"]["path"]
-    if run_dir is not None:
-        output_path = str(run_dir / "targets")
+    if workdir is not None:
+        output_path = str(workdir / "targets")
     else:
         output_path = pipeline_cfg["output"]["dir"]
 
@@ -118,115 +126,91 @@ def _dispatch(
 
 @app.command
 def init(
-    fabric: Annotated[
+    workdir: Annotated[
         Path,
         Parameter(
-            name=["--fabric", "-f"],
-            help="Path to the HRU fabric (.gpkg, .gdb, .parquet, or .geoparquet).",
+            name=["--workdir", "-w"],
+            help="Directory to create as the new workspace.",
         ),
     ],
-    id_col: Annotated[
-        str,
-        Parameter(name="--id-col", help="HRU ID column name in the fabric."),
-    ] = "nhm_id",
-    config: Annotated[
-        Path | None,
-        Parameter(
-            name=["--config", "-c"],
-            help="Pipeline config to copy into the run workspace.",
-        ),
-    ] = None,
-    workdir: Annotated[
-        Path | None,
-        Parameter(name=["--workdir", "-w"], help="Root directory for run workspaces."),
-    ] = None,
-    run_label: Annotated[
-        str | None,
-        Parameter(
-            name="--id", help="Short label embedded in the run ID (e.g. 'gfv11')."
-        ),
-    ] = None,
-    buffer: Annotated[
-        float,
-        Parameter(name="--buffer", help="Degrees to buffer the fabric bounding box."),
-    ] = 0.1,
 ):
-    """Initialise a new run workspace tied to a specific fabric.
+    """Initialise a new workspace with a config template.
 
-    Creates a dated directory under WORKDIR containing a folder skeleton,
-    a snapshot of the pipeline config, a credentials template, and a
-    fabric metadata file (path, bounding box, sha256).
+    Creates a directory skeleton with config.yml and .credentials.yml.
+    Edit those files, then run 'nhf-targets validate --workdir <dir>'.
     """
-    from nhf_spatial_targets.init_run import init_run
+    from nhf_spatial_targets.init_run import init_workspace
     from rich.console import Console
     from rich.panel import Panel
     from rich.text import Text
 
     console = Console()
 
-    if not fabric.exists():
-        print(f"Error: Fabric file not found: {fabric}", file=sys.stderr)
-        sys.exit(1)
-    suffix = fabric.suffix.lower()
-    if suffix == ".gdb":
-        if not fabric.is_dir():
-            print(
-                f"Error: .gdb fabric must be a directory (File Geodatabase): {fabric}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-    elif fabric.is_dir():
-        print(
-            f"Error: Fabric path is a directory, not a file: {fabric}", file=sys.stderr
-        )
-        sys.exit(1)
-
-    config_path = config or _DEFAULT_CONFIG
-    if not config_path.exists():
-        print(
-            f"Error: Config file not found: {config_path}\n"
-            "Pass --config to specify a different path.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    workdir_path = workdir or _DEFAULT_WORKDIR
-
-    console.print(f"[bold]Fabric:[/bold]  {fabric}")
-    console.print(f"[bold]Workdir:[/bold] {workdir_path.resolve()}")
-    console.print(f"[bold]Buffer:[/bold]  {buffer}°\n")
-    console.print("[dim]Computing fabric bbox and sha256 (reading full file)...[/dim]")
-
     try:
-        run_dir = init_run(
-            fabric_path=fabric,
-            id_col=id_col,
-            config_path=config_path,
-            workdir=workdir_path,
-            run_label=run_label,
-            buffer_deg=buffer,
-        )
+        result = init_workspace(workdir)
     except FileExistsError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
     msg = Text()
-    msg.append("Run workspace created:\n", style="bold green")
-    msg.append(f"  {run_dir}\n\n")
+    msg.append("Workspace created:\n", style="bold green")
+    msg.append(f"  {result}\n\n")
     msg.append("Next steps:\n", style="bold")
-    msg.append(f"  1. Edit   {run_dir / 'config.yml'}\n")
-    msg.append(f"  2. Fill   {run_dir / '.credentials.yml'}\n")
-    msg.append(f"  3. Run    nhf-targets run --run-dir {run_dir}\n")
+    msg.append(f"  1. Edit   {result / 'config.yml'}\n")
+    msg.append(f"  2. Fill   {result / '.credentials.yml'}\n")
+    msg.append(f"  3. Run    nhf-targets validate --workdir {result}\n")
     console.print(Panel(msg, title="nhf-targets init", border_style="green"))
+
+
+@app.command
+def validate(
+    workdir: Annotated[
+        Path,
+        Parameter(
+            name=["--workdir", "-w"],
+            help="Workspace directory to validate.",
+        ),
+    ],
+):
+    """Validate a workspace: check config, fabric, credentials, and catalog.
+
+    On success, writes fabric.json and manifest.json into the workspace.
+    """
+    from rich.console import Console
+
+    from nhf_spatial_targets.validate import validate_workspace
+
+    console = Console()
+
+    if not workdir.exists():
+        print(f"Error: Workspace not found: {workdir}", file=sys.stderr)
+        sys.exit(2)
+
+    try:
+        validate_workspace(workdir)
+    except (FileNotFoundError, ValueError, RuntimeError, OSError) as e:
+        print(f"Validation failed: {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        _logger.exception("Unexpected error during validation")
+        print(
+            f"Unexpected validation error ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    console.print(
+        f"[bold green]Workspace validated successfully:[/bold green] {workdir}"
+    )
 
 
 @fetch_app.command(name="all")
 def fetch_all_cmd(
-    run_dir: Annotated[
+    workdir: Annotated[
         Path,
         Parameter(
-            name=["--run-dir", "-r"],
-            help="Run workspace created by 'nhf-targets init'.",
+            name=["--workdir", "-w"],
+            help="Workspace created by 'nhf-targets init'.",
         ),
     ],
     period: Annotated[
@@ -234,15 +218,15 @@ def fetch_all_cmd(
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
     ],
 ):
-    """Download all source datasets into the run workspace.
+    """Download all source datasets into the workspace datastore.
 
     Iterates through every registered fetch module in sequence.
     Stops on the first failure.
     """
     from rich.console import Console
 
-    if not run_dir.exists():
-        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+    if not workdir.exists():
+        print(f"Error: Workspace not found: {workdir}", file=sys.stderr)
         sys.exit(2)
 
     console = Console()
@@ -294,9 +278,9 @@ def fetch_all_cmd(
             console.print(f"[bold]Fetching {name} for period {period}...[/bold]")
 
         try:
-            result = fetch_fn(run_dir=run_dir, period=clamped)
+            result = fetch_fn(workdir=workdir, period=clamped)
             results[name] = result
-            console.print(f"[green]{name}: done[/green]")
+            console.print(f"[green]{name}: downloaded to datastore[/green]")
         except (ValueError, FileNotFoundError, RuntimeError) as exc:
             print(f"Error fetching {name}: {exc}", file=sys.stderr)
             sys.exit(1)
@@ -315,11 +299,11 @@ def fetch_all_cmd(
 
 @fetch_app.command(name="merra2")
 def fetch_merra2_cmd(
-    run_dir: Annotated[
+    workdir: Annotated[
         Path,
         Parameter(
-            name=["--run-dir", "-r"],
-            help="Run workspace created by 'nhf-targets init'.",
+            name=["--workdir", "-w"],
+            help="Workspace created by 'nhf-targets init'.",
         ),
     ],
     period: Annotated[
@@ -338,15 +322,15 @@ def fetch_merra2_cmd(
 
     from nhf_spatial_targets.fetch.merra2 import fetch_merra2
 
-    if not run_dir.exists():
-        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+    if not workdir.exists():
+        print(f"Error: Workspace not found: {workdir}", file=sys.stderr)
         sys.exit(2)
 
     console = Console()
     console.print(f"[bold]Fetching MERRA-2 for period {period}...[/bold]")
 
     try:
-        result = fetch_merra2(run_dir=run_dir, period=period)
+        result = fetch_merra2(workdir=workdir, period=period)
     except (ValueError, FileNotFoundError, RuntimeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -358,24 +342,17 @@ def fetch_merra2_cmd(
         )
         sys.exit(1)
 
-    console.print(
-        f"[green]Downloaded {len(result['files'])} files "
-        f"to {run_dir / 'data' / 'raw' / 'merra2'}[/green]"
-    )
-    if "consolidated_nc" in result:
-        console.print(
-            f"[green]Consolidated file: {run_dir / result['consolidated_nc']}[/green]"
-        )
+    console.print("[green]MERRA-2: downloaded to datastore[/green]")
     console.print(json_mod.dumps(result, indent=2))
 
 
 @fetch_app.command(name="nldas-mosaic")
 def fetch_nldas_mosaic_cmd(
-    run_dir: Annotated[
+    workdir: Annotated[
         Path,
         Parameter(
-            name=["--run-dir", "-r"],
-            help="Run workspace created by 'nhf-targets init'.",
+            name=["--workdir", "-w"],
+            help="Workspace created by 'nhf-targets init'.",
         ),
     ],
     period: Annotated[
@@ -383,26 +360,22 @@ def fetch_nldas_mosaic_cmd(
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
     ],
 ):
-    """Download NLDAS-2 MOSAIC soil moisture data.
-
-    Authenticates via earthaccess, searches for granules matching the
-    fabric bounding box, downloads them, and prints the provenance record.
-    """
+    """Download NLDAS-2 MOSAIC soil moisture data."""
     import json as json_mod
 
     from rich.console import Console
 
     from nhf_spatial_targets.fetch.nldas import fetch_nldas_mosaic
 
-    if not run_dir.exists():
-        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+    if not workdir.exists():
+        print(f"Error: Workspace not found: {workdir}", file=sys.stderr)
         sys.exit(2)
 
     console = Console()
     console.print(f"[bold]Fetching NLDAS-2 MOSAIC for period {period}...[/bold]")
 
     try:
-        result = fetch_nldas_mosaic(run_dir=run_dir, period=period)
+        result = fetch_nldas_mosaic(workdir=workdir, period=period)
     except (ValueError, FileNotFoundError, RuntimeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -414,24 +387,17 @@ def fetch_nldas_mosaic_cmd(
         )
         sys.exit(1)
 
-    console.print(
-        f"[green]Downloaded {len(result['files'])} files "
-        f"to {run_dir / 'data' / 'raw' / 'nldas_mosaic'}[/green]"
-    )
-    if "consolidated_nc" in result:
-        console.print(
-            f"[green]Consolidated file: {run_dir / result['consolidated_nc']}[/green]"
-        )
+    console.print("[green]NLDAS-2 MOSAIC: downloaded to datastore[/green]")
     console.print(json_mod.dumps(result, indent=2))
 
 
 @fetch_app.command(name="nldas-noah")
 def fetch_nldas_noah_cmd(
-    run_dir: Annotated[
+    workdir: Annotated[
         Path,
         Parameter(
-            name=["--run-dir", "-r"],
-            help="Run workspace created by 'nhf-targets init'.",
+            name=["--workdir", "-w"],
+            help="Workspace created by 'nhf-targets init'.",
         ),
     ],
     period: Annotated[
@@ -439,26 +405,22 @@ def fetch_nldas_noah_cmd(
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
     ],
 ):
-    """Download NLDAS-2 NOAH soil moisture data.
-
-    Authenticates via earthaccess, searches for granules matching the
-    fabric bounding box, downloads them, and prints the provenance record.
-    """
+    """Download NLDAS-2 NOAH soil moisture data."""
     import json as json_mod
 
     from rich.console import Console
 
     from nhf_spatial_targets.fetch.nldas import fetch_nldas_noah
 
-    if not run_dir.exists():
-        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+    if not workdir.exists():
+        print(f"Error: Workspace not found: {workdir}", file=sys.stderr)
         sys.exit(2)
 
     console = Console()
     console.print(f"[bold]Fetching NLDAS-2 NOAH for period {period}...[/bold]")
 
     try:
-        result = fetch_nldas_noah(run_dir=run_dir, period=period)
+        result = fetch_nldas_noah(workdir=workdir, period=period)
     except (ValueError, FileNotFoundError, RuntimeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -470,24 +432,17 @@ def fetch_nldas_noah_cmd(
         )
         sys.exit(1)
 
-    console.print(
-        f"[green]Downloaded {len(result['files'])} files "
-        f"to {run_dir / 'data' / 'raw' / 'nldas_noah'}[/green]"
-    )
-    if "consolidated_nc" in result:
-        console.print(
-            f"[green]Consolidated file: {run_dir / result['consolidated_nc']}[/green]"
-        )
+    console.print("[green]NLDAS-2 NOAH: downloaded to datastore[/green]")
     console.print(json_mod.dumps(result, indent=2))
 
 
 @fetch_app.command(name="ncep-ncar")
 def fetch_ncep_ncar_cmd(
-    run_dir: Annotated[
+    workdir: Annotated[
         Path,
         Parameter(
-            name=["--run-dir", "-r"],
-            help="Run workspace created by 'nhf-targets init'.",
+            name=["--workdir", "-w"],
+            help="Workspace created by 'nhf-targets init'.",
         ),
     ],
     period: Annotated[
@@ -495,26 +450,22 @@ def fetch_ncep_ncar_cmd(
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
     ],
 ):
-    """Download NCEP/NCAR Reanalysis soil moisture data.
-
-    Downloads daily files from NOAA PSL, resamples to monthly means,
-    and prints the provenance record.
-    """
+    """Download NCEP/NCAR Reanalysis soil moisture data."""
     import json as json_mod
 
     from rich.console import Console
 
     from nhf_spatial_targets.fetch.ncep_ncar import fetch_ncep_ncar
 
-    if not run_dir.exists():
-        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+    if not workdir.exists():
+        print(f"Error: Workspace not found: {workdir}", file=sys.stderr)
         sys.exit(2)
 
     console = Console()
     console.print(f"[bold]Fetching NCEP/NCAR Reanalysis for period {period}...[/bold]")
 
     try:
-        result = fetch_ncep_ncar(run_dir=run_dir, period=period)
+        result = fetch_ncep_ncar(workdir=workdir, period=period)
     except (ValueError, FileNotFoundError, RuntimeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -526,24 +477,17 @@ def fetch_ncep_ncar_cmd(
         )
         sys.exit(1)
 
-    console.print(
-        f"[green]Downloaded {len(result['files'])} files "
-        f"to {run_dir / 'data' / 'raw' / 'ncep_ncar'}[/green]"
-    )
-    if "consolidated_nc" in result:
-        console.print(
-            f"[green]Consolidated file: {run_dir / result['consolidated_nc']}[/green]"
-        )
+    console.print("[green]NCEP/NCAR: downloaded to datastore[/green]")
     console.print(json_mod.dumps(result, indent=2))
 
 
 @fetch_app.command(name="mod16a2")
 def fetch_mod16a2_cmd(
-    run_dir: Annotated[
+    workdir: Annotated[
         Path,
         Parameter(
-            name=["--run-dir", "-r"],
-            help="Run workspace created by 'nhf-targets init'.",
+            name=["--workdir", "-w"],
+            help="Workspace created by 'nhf-targets init'.",
         ),
     ],
     period: Annotated[
@@ -551,26 +495,22 @@ def fetch_mod16a2_cmd(
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
     ],
 ):
-    """Download MODIS MOD16A2 v061 AET data (8-day composites, 500m).
-
-    Authenticates via earthaccess, searches for tiles matching the
-    fabric bounding box, downloads them, and prints the provenance record.
-    """
+    """Download MODIS MOD16A2 v061 AET data (8-day composites, 500m)."""
     import json as json_mod
 
     from rich.console import Console
 
     from nhf_spatial_targets.fetch.modis import fetch_mod16a2
 
-    if not run_dir.exists():
-        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+    if not workdir.exists():
+        print(f"Error: Workspace not found: {workdir}", file=sys.stderr)
         sys.exit(2)
 
     console = Console()
     console.print(f"[bold]Fetching MOD16A2 v061 for period {period}...[/bold]")
 
     try:
-        result = fetch_mod16a2(run_dir=run_dir, period=period)
+        result = fetch_mod16a2(workdir=workdir, period=period)
     except (ValueError, FileNotFoundError, RuntimeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -582,23 +522,17 @@ def fetch_mod16a2_cmd(
         )
         sys.exit(1)
 
-    console.print(
-        f"[green]Downloaded {len(result['files'])} files "
-        f"to {run_dir / 'data' / 'raw' / 'mod16a2_v061'}[/green]"
-    )
-    if result.get("consolidated_ncs"):
-        for yr, nc in result["consolidated_ncs"].items():
-            console.print(f"[green]Consolidated {yr}: {run_dir / nc}[/green]")
+    console.print("[green]MOD16A2: downloaded to datastore[/green]")
     console.print(json_mod.dumps(result, indent=2))
 
 
 @fetch_app.command(name="mod10c1")
 def fetch_mod10c1_cmd(
-    run_dir: Annotated[
+    workdir: Annotated[
         Path,
         Parameter(
-            name=["--run-dir", "-r"],
-            help="Run workspace created by 'nhf-targets init'.",
+            name=["--workdir", "-w"],
+            help="Workspace created by 'nhf-targets init'.",
         ),
     ],
     period: Annotated[
@@ -606,26 +540,22 @@ def fetch_mod10c1_cmd(
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
     ],
 ):
-    """Download MODIS MOD10C1 v061 daily snow cover data (0.05deg CMG).
-
-    Authenticates via earthaccess, downloads global CMG files, subsets
-    to CONUS, and prints the provenance record.
-    """
+    """Download MODIS MOD10C1 v061 daily snow cover data (0.05deg CMG)."""
     import json as json_mod
 
     from rich.console import Console
 
     from nhf_spatial_targets.fetch.modis import fetch_mod10c1
 
-    if not run_dir.exists():
-        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+    if not workdir.exists():
+        print(f"Error: Workspace not found: {workdir}", file=sys.stderr)
         sys.exit(2)
 
     console = Console()
     console.print(f"[bold]Fetching MOD10C1 v061 for period {period}...[/bold]")
 
     try:
-        result = fetch_mod10c1(run_dir=run_dir, period=period)
+        result = fetch_mod10c1(workdir=workdir, period=period)
     except (ValueError, FileNotFoundError, RuntimeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -637,23 +567,17 @@ def fetch_mod10c1_cmd(
         )
         sys.exit(1)
 
-    console.print(
-        f"[green]Downloaded {len(result['files'])} files "
-        f"to {run_dir / 'data' / 'raw' / 'mod10c1_v061'}[/green]"
-    )
-    if result.get("consolidated_ncs"):
-        for yr, nc in result["consolidated_ncs"].items():
-            console.print(f"[green]Consolidated {yr}: {run_dir / nc}[/green]")
+    console.print("[green]MOD10C1: downloaded to datastore[/green]")
     console.print(json_mod.dumps(result, indent=2))
 
 
 @fetch_app.command(name="watergap22d")
 def fetch_watergap22d_cmd(
-    run_dir: Annotated[
+    workdir: Annotated[
         Path,
         Parameter(
-            name=["--run-dir", "-r"],
-            help="Run workspace created by 'nhf-targets init'.",
+            name=["--workdir", "-w"],
+            help="Workspace created by 'nhf-targets init'.",
         ),
     ],
     period: Annotated[
@@ -661,26 +585,22 @@ def fetch_watergap22d_cmd(
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
     ],
 ):
-    """Download WaterGAP 2.2d groundwater recharge from PANGAEA.
-
-    Downloads the diffuse groundwater recharge (qrdif) NC4 file,
-    applies CF compliance fixes, and prints the provenance record.
-    """
+    """Download WaterGAP 2.2d groundwater recharge from PANGAEA."""
     import json as json_mod
 
     from rich.console import Console
 
     from nhf_spatial_targets.fetch.pangaea import fetch_watergap22d
 
-    if not run_dir.exists():
-        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+    if not workdir.exists():
+        print(f"Error: Workspace not found: {workdir}", file=sys.stderr)
         sys.exit(2)
 
     console = Console()
     console.print(f"[bold]Fetching WaterGAP 2.2d for period {period}...[/bold]")
 
     try:
-        result = fetch_watergap22d(run_dir=run_dir, period=period)
+        result = fetch_watergap22d(workdir=workdir, period=period)
     except (ValueError, FileNotFoundError, RuntimeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -692,20 +612,17 @@ def fetch_watergap22d_cmd(
         )
         sys.exit(1)
 
-    console.print(
-        f"[green]Downloaded WaterGAP 2.2d to "
-        f"{run_dir / 'data' / 'raw' / 'watergap22d'}[/green]"
-    )
+    console.print("[green]WaterGAP 2.2d: downloaded to datastore[/green]")
     console.print(json_mod.dumps(result, indent=2))
 
 
 @fetch_app.command(name="reitz2017")
 def fetch_reitz2017_cmd(
-    run_dir: Annotated[
+    workdir: Annotated[
         Path,
         Parameter(
-            name=["--run-dir", "-r"],
-            help="Run workspace created by 'nhf-targets init'.",
+            name=["--workdir", "-w"],
+            help="Workspace created by 'nhf-targets init'.",
         ),
     ],
     period: Annotated[
@@ -713,26 +630,22 @@ def fetch_reitz2017_cmd(
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
     ],
 ):
-    """Download Reitz 2017 annual recharge estimates from USGS ScienceBase.
-
-    Downloads total and effective recharge GeoTIFFs, consolidates into
-    a single NetCDF, and prints the provenance record.
-    """
+    """Download Reitz 2017 annual recharge estimates from USGS ScienceBase."""
     import json as json_mod
 
     from rich.console import Console
 
     from nhf_spatial_targets.fetch.reitz2017 import fetch_reitz2017
 
-    if not run_dir.exists():
-        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+    if not workdir.exists():
+        print(f"Error: Workspace not found: {workdir}", file=sys.stderr)
         sys.exit(2)
 
     console = Console()
     console.print(f"[bold]Fetching Reitz 2017 recharge for period {period}...[/bold]")
 
     try:
-        result = fetch_reitz2017(run_dir=run_dir, period=period)
+        result = fetch_reitz2017(workdir=workdir, period=period)
     except (ValueError, FileNotFoundError, RuntimeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -744,10 +657,7 @@ def fetch_reitz2017_cmd(
         )
         sys.exit(1)
 
-    console.print(
-        f"[green]Downloaded Reitz 2017 recharge to "
-        f"{run_dir / 'data' / 'raw' / 'reitz2017'}[/green]"
-    )
+    console.print("[green]Reitz 2017: downloaded to datastore[/green]")
     console.print(json_mod.dumps(result, indent=2))
 
 

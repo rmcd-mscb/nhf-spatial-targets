@@ -15,6 +15,7 @@ import nhf_spatial_targets.catalog as _catalog
 from nhf_spatial_targets.fetch._auth import earthdata_login
 from nhf_spatial_targets.fetch._period import months_in_period, parse_period
 from nhf_spatial_targets.fetch.consolidate import consolidate_merra2
+from nhf_spatial_targets.workspace import load as _load_workspace
 
 _SOURCE_KEY = "merra2"
 logger = logging.getLogger(__name__)
@@ -32,25 +33,26 @@ def _granule_year_month(granule: object) -> str | None:
     return None
 
 
-def _manifest_merra2_files(run_dir: Path) -> list[dict]:
+def _manifest_merra2_files(workdir: Path) -> list[dict]:
     """Read manifest.json and return the merra2 file records list."""
-    manifest_path = run_dir / "manifest.json"
+    ws = _load_workspace(workdir)
+    manifest_path = ws.manifest_path
     if not manifest_path.exists():
         return []
     try:
         manifest = json.loads(manifest_path.read_text())
     except json.JSONDecodeError as exc:
         raise ValueError(
-            f"manifest.json in {run_dir} is corrupted and cannot be parsed. "
+            f"manifest.json in {workdir} is corrupted and cannot be parsed. "
             f"Inspect the file manually or restore from backup. Detail: {exc}"
         ) from exc
     return manifest.get("sources", {}).get("merra2", {}).get("files", [])
 
 
-def _existing_months(run_dir: Path) -> set[str]:
+def _existing_months(workdir: Path) -> set[str]:
     """Return set of year_month values already fetched from manifest."""
     return {
-        f["year_month"] for f in _manifest_merra2_files(run_dir) if "year_month" in f
+        f["year_month"] for f in _manifest_merra2_files(workdir) if "year_month" in f
     }
 
 
@@ -62,16 +64,16 @@ def _year_month_from_path(path: Path) -> str:
     return f"{m.group(1)}-{m.group(2)}"
 
 
-def _existing_file_timestamps(run_dir: Path) -> dict[str, str]:
+def _existing_file_timestamps(workdir: Path) -> dict[str, str]:
     """Return {year_month: downloaded_utc} from existing manifest."""
     return {
         f["year_month"]: f["downloaded_utc"]
-        for f in _manifest_merra2_files(run_dir)
+        for f in _manifest_merra2_files(workdir)
         if "year_month" in f and "downloaded_utc" in f
     }
 
 
-def fetch_merra2(run_dir: Path, period: str) -> dict:
+def fetch_merra2(workdir: Path, period: str) -> dict:
     """Download MERRA-2 M2TMNXLND granules for the given period.
 
     Supports incremental download — months already recorded in
@@ -80,9 +82,9 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
 
     Parameters
     ----------
-    run_dir : Path
-        Run workspace directory. Reads ``fabric.json`` for bbox,
-        writes files to ``data/raw/merra2/``.
+    workdir : Path
+        Workspace directory. Reads ``fabric.json`` for bbox,
+        writes files to the datastore under ``merra2/``.
     period : str
         Temporal range as ``"YYYY/YYYY"`` (start/end years inclusive).
 
@@ -91,6 +93,7 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
     dict
         Provenance record for ``manifest.json``.
     """
+    ws = _load_workspace(workdir)
     meta = _catalog.source(_SOURCE_KEY)
     short_name = meta["access"]["short_name"]
 
@@ -102,30 +105,19 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
             stacklevel=2,
         )
 
-    earthdata_login(run_dir)
+    earthdata_login(workdir)
     logger.info("Authenticated with NASA Earthdata")
 
-    fabric_path = run_dir / "fabric.json"
-    if not fabric_path.exists():
-        raise FileNotFoundError(
-            f"fabric.json not found in {run_dir}. "
-            f"Run 'nhf-targets init' to create a run workspace first."
-        )
-    try:
-        fabric = json.loads(fabric_path.read_text())
-        bbox = fabric["bbox_buffered"]
-        bbox_tuple = (bbox["minx"], bbox["miny"], bbox["maxx"], bbox["maxy"])
-    except (json.JSONDecodeError, KeyError) as exc:
-        raise ValueError(
-            f"fabric.json in {run_dir} is malformed or missing required "
-            f"fields (bbox_buffered.{{minx,miny,maxx,maxy}}). "
-            f"Re-run 'nhf-targets init' to regenerate it."
-        ) from exc
+    bbox = ws.fabric["bbox_buffered"]
+    bbox_tuple = (bbox["minx"], bbox["miny"], bbox["maxx"], bbox["maxy"])
 
     # Determine which months need downloading
-    already_have = _existing_months(run_dir)
+    already_have = _existing_months(workdir)
     all_months = months_in_period(period)
     needed = [m for m in all_months if m not in already_have]
+
+    output_dir = ws.raw_dir(_SOURCE_KEY)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     if not needed:
         logger.info(
@@ -164,9 +156,6 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
                 len(needed),
             )
 
-            output_dir = run_dir / "data" / "raw" / _SOURCE_KEY
-            output_dir.mkdir(parents=True, exist_ok=True)
-
             downloaded = earthaccess.download(
                 granules,
                 local_path=str(output_dir),
@@ -188,20 +177,18 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
             logger.info("Downloaded %d files to %s", len(downloaded), output_dir)
 
     # Build file inventory from all .nc4 files on disk
-    output_dir = run_dir / "data" / "raw" / _SOURCE_KEY
     all_nc_files = sorted(output_dir.glob("*.nc4"))
 
     # Preserve original downloaded_utc for files already in manifest
-    existing_timestamps = _existing_file_timestamps(run_dir)
+    existing_timestamps = _existing_file_timestamps(workdir)
     now_utc = datetime.now(timezone.utc).isoformat()
 
     files = []
     for p in all_nc_files:
-        rel = str(p.relative_to(run_dir))
         ym = _year_month_from_path(p)
         files.append(
             {
-                "path": rel,
+                "path": str(p),
                 "year_month": ym,
                 "size_bytes": p.stat().st_size,
                 "downloaded_utc": existing_timestamps.get(ym, now_utc),
@@ -210,7 +197,7 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
 
     # Consolidate into single NetCDF
     var_names = [v["name"] for v in meta["variables"]]
-    consolidation = consolidate_merra2(run_dir=run_dir, variables=var_names)
+    consolidation = consolidate_merra2(source_dir=output_dir, variables=var_names)
 
     # Compute effective period from actual files on disk
     if files:
@@ -222,7 +209,7 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
         effective_period = period
 
     # Update manifest.json (merge, don't overwrite)
-    _update_manifest(run_dir, effective_period, bbox, meta, files, consolidation)
+    _update_manifest(workdir, effective_period, bbox, meta, files, consolidation)
 
     return {
         "source_key": _SOURCE_KEY,
@@ -237,7 +224,7 @@ def fetch_merra2(run_dir: Path, period: str) -> dict:
 
 
 def _update_manifest(
-    run_dir: Path,
+    workdir: Path,
     period: str,
     bbox: dict,
     meta: dict,
@@ -245,9 +232,15 @@ def _update_manifest(
     consolidation: dict,
 ) -> None:
     """Merge MERRA-2 provenance into manifest.json."""
-    manifest_path = run_dir / "manifest.json"
+    ws = _load_workspace(workdir)
+    manifest_path = ws.manifest_path
     if manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text())
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"manifest.json in {workdir} is corrupted. Detail: {exc}"
+            ) from exc
     else:
         manifest = {"sources": {}, "steps": []}
 
