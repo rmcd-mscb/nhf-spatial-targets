@@ -397,7 +397,7 @@ def test_cli_watergap22d_nonexistent_run_dir(tmp_path: Path):
             [
                 "fetch",
                 "watergap22d",
-                "--run-dir",
+                "--workdir",
                 str(tmp_path / "nope"),
                 "--period",
                 "2000/2009",

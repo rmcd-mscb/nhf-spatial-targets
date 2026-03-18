@@ -30,41 +30,34 @@ def _run_meta(*tokens: str) -> None:
 # ---- run command -----------------------------------------------------------
 
 
-def test_run_missing_both_options():
-    """Exit code 2 when neither --run-dir nor --config is provided."""
+def test_run_nonexistent_workdir(tmp_path):
+    """Exit code 2 when --workdir does not exist."""
     with pytest.raises(SystemExit, match="2"):
-        _run("run")
+        _run("run", "--workdir", str(tmp_path / "missing"))
 
 
-def test_run_both_options(tmp_path):
-    """Exit code 2 when both --run-dir and --config are provided."""
-    run_dir = tmp_path / "workspace"
-    run_dir.mkdir()
-    config = tmp_path / "pipeline.yml"
-    config.write_text("targets: {}")
+def test_run_missing_fabric_json(tmp_path):
+    """Exit code 2 when fabric.json is missing (validate not run yet)."""
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    (workdir / "config.yml").write_text("targets: {}")
     with pytest.raises(SystemExit, match="2"):
-        _run("run", "--run-dir", str(run_dir), "--config", str(config))
-
-
-def test_run_nonexistent_run_dir(tmp_path):
-    """Exit code 2 when --run-dir does not exist."""
-    with pytest.raises(SystemExit, match="2"):
-        _run("run", "--run-dir", str(tmp_path / "missing"))
+        _run("run", "--workdir", str(workdir))
 
 
 def test_run_dispatches_enabled_targets(tmp_path):
     """Dispatches to builder for each enabled target."""
-    run_dir = tmp_path / "workspace"
-    run_dir.mkdir()
-    config = run_dir / "config.yml"
-    config.write_text(
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    (workdir / "config.yml").write_text(
         "fabric:\n  path: /fake/fabric.gpkg\n"
         "output:\n  dir: /fake/out\n"
         "targets:\n  runoff:\n    enabled: true\n  aet:\n    enabled: false\n"
     )
+    (workdir / "fabric.json").write_text("{}")
 
     with patch("nhf_spatial_targets.cli._dispatch") as mock_dispatch:
-        _run("run", "--run-dir", str(run_dir))
+        _run("run", "--workdir", str(workdir))
 
     mock_dispatch.assert_called_once()
     assert mock_dispatch.call_args[0][0] == "runoff"
@@ -72,17 +65,17 @@ def test_run_dispatches_enabled_targets(tmp_path):
 
 def test_run_single_target(tmp_path):
     """--target selects a single target by name."""
-    run_dir = tmp_path / "workspace"
-    run_dir.mkdir()
-    config = run_dir / "config.yml"
-    config.write_text(
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    (workdir / "config.yml").write_text(
         "fabric:\n  path: /fake/fabric.gpkg\n"
         "output:\n  dir: /fake/out\n"
         "targets:\n  runoff:\n    enabled: true\n  aet:\n    enabled: true\n"
     )
+    (workdir / "fabric.json").write_text("{}")
 
     with patch("nhf_spatial_targets.cli._dispatch") as mock_dispatch:
-        _run("run", "--run-dir", str(run_dir), "--target", "aet")
+        _run("run", "--workdir", str(workdir), "--target", "aet")
 
     mock_dispatch.assert_called_once()
     assert mock_dispatch.call_args[0][0] == "aet"
@@ -90,80 +83,85 @@ def test_run_single_target(tmp_path):
 
 def test_run_unknown_target(tmp_path):
     """Exit code 1 for an unknown target name."""
-    run_dir = tmp_path / "workspace"
-    run_dir.mkdir()
-    config = run_dir / "config.yml"
-    config.write_text(
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    (workdir / "config.yml").write_text(
         "fabric:\n  path: /fake/fabric.gpkg\n"
         "output:\n  dir: /fake/out\n"
         "targets:\n  runoff:\n    enabled: true\n"
     )
+    (workdir / "fabric.json").write_text("{}")
 
     with pytest.raises(SystemExit, match="1"):
-        _run("run", "--run-dir", str(run_dir), "--target", "bogus")
+        _run("run", "--workdir", str(workdir), "--target", "bogus")
 
 
 # ---- init command ----------------------------------------------------------
 
 
-def test_init_missing_fabric(tmp_path):
-    """Exit code 1 when --fabric file does not exist."""
-    with pytest.raises(SystemExit, match="1"):
-        _run("init", "--fabric", str(tmp_path / "missing.gpkg"))
+def test_init_calls_init_workspace(tmp_path):
+    """init command calls init_workspace with the provided workdir."""
+    workdir = tmp_path / "new-ws"
+    with patch(
+        "nhf_spatial_targets.init_run.init_workspace", return_value=workdir
+    ) as mock_init:
+        _run("init", "--workdir", str(workdir))
+
+    mock_init.assert_called_once_with(workdir)
 
 
-def test_init_fabric_is_directory(tmp_path):
-    """Exit code 1 when --fabric points to a non-.gdb directory."""
-    with pytest.raises(SystemExit, match="1"):
-        _run("init", "--fabric", str(tmp_path))
+def test_init_existing_workspace_exits(tmp_path):
+    """Exit code 1 when workspace already exists."""
+    workdir = tmp_path / "existing-ws"
+    with patch(
+        "nhf_spatial_targets.init_run.init_workspace",
+        side_effect=FileExistsError("already exists"),
+    ):
+        with pytest.raises(SystemExit, match="1"):
+            _run("init", "--workdir", str(workdir))
 
 
-def test_init_gdb_file_not_directory(tmp_path):
-    """Exit code 1 when --fabric is a .gdb file (not a directory)."""
-    fake_gdb = tmp_path / "fabric.gdb"
-    fake_gdb.write_bytes(b"not a real geodatabase")
-    with pytest.raises(SystemExit, match="1"):
-        _run("init", "--fabric", str(fake_gdb))
+# ---- validate command ------------------------------------------------------
 
 
-def test_init_missing_parquet_fabric(tmp_path):
-    """Exit code 1 when --fabric .parquet file does not exist."""
-    with pytest.raises(SystemExit, match="1"):
-        _run("init", "--fabric", str(tmp_path / "missing.parquet"))
+def test_validate_nonexistent_workdir(tmp_path):
+    """Exit code 2 when --workdir does not exist."""
+    with pytest.raises(SystemExit, match="2"):
+        _run("validate", "--workdir", str(tmp_path / "missing"))
 
 
-def test_init_parquet_directory_rejected(tmp_path):
-    """Exit code 1 when --fabric .parquet path is a directory."""
-    d = tmp_path / "fabric.parquet"
-    d.mkdir()
-    with pytest.raises(SystemExit, match="1"):
-        _run("init", "--fabric", str(d))
+def test_validate_calls_validate_workspace(tmp_path):
+    """validate command calls validate_workspace with the provided workdir."""
+    workdir = tmp_path / "ws"
+    workdir.mkdir()
+    with patch("nhf_spatial_targets.validate.validate_workspace") as mock_validate:
+        _run("validate", "--workdir", str(workdir))
+
+    mock_validate.assert_called_once_with(workdir)
 
 
-def test_init_missing_config(tmp_path):
-    """Exit code 1 when resolved config does not exist."""
-    fabric = tmp_path / "fabric.gpkg"
-    fabric.write_bytes(b"fake")
-    with pytest.raises(SystemExit, match="1"):
-        _run(
-            "init",
-            "--fabric",
-            str(fabric),
-            "--config",
-            str(tmp_path / "no-such-config.yml"),
-        )
+def test_validate_failure_exits(tmp_path):
+    """Exit code 1 when validation fails."""
+    workdir = tmp_path / "ws"
+    workdir.mkdir()
+    with patch(
+        "nhf_spatial_targets.validate.validate_workspace",
+        side_effect=ValueError("bad config"),
+    ):
+        with pytest.raises(SystemExit, match="1"):
+            _run("validate", "--workdir", str(workdir))
 
 
 # ---- fetch merra2 command -------------------------------------------------
 
 
-def test_fetch_merra2_nonexistent_run_dir(tmp_path):
-    """Exit code 2 when --run-dir does not exist."""
+def test_fetch_merra2_nonexistent_workdir(tmp_path):
+    """Exit code 2 when --workdir does not exist."""
     with pytest.raises(SystemExit, match="2"):
         _run(
             "fetch",
             "merra2",
-            "--run-dir",
+            "--workdir",
             str(tmp_path / "missing"),
             "--period",
             "2010/2010",
@@ -171,9 +169,9 @@ def test_fetch_merra2_nonexistent_run_dir(tmp_path):
 
 
 def test_fetch_merra2_calls_fetch(tmp_path):
-    """CLI wires --run-dir and --period to fetch_merra2()."""
-    run_dir = tmp_path / "workspace"
-    run_dir.mkdir()
+    """CLI wires --workdir and --period to fetch_merra2()."""
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
 
     mock_result = {
         "source_key": "merra2",
@@ -192,120 +190,121 @@ def test_fetch_merra2_calls_fetch(tmp_path):
         _run(
             "fetch",
             "merra2",
-            "--run-dir",
-            str(run_dir),
+            "--workdir",
+            str(workdir),
             "--period",
             "2010/2010",
         )
 
-    mock_fetch.assert_called_once_with(run_dir=run_dir, period="2010/2010")
+    mock_fetch.assert_called_once_with(workdir=workdir, period="2010/2010")
 
 
 # ---- fetch nldas-mosaic command --------------------------------------------
 
 
-def test_fetch_nldas_mosaic_nonexistent_run_dir(capsys):
-    from nhf_spatial_targets.cli import main
-
+def test_fetch_nldas_mosaic_nonexistent_workdir():
     with pytest.raises(SystemExit):
-        main(
-            [
-                "fetch",
-                "nldas-mosaic",
-                "--run-dir",
-                "/no/such/dir",
-                "--period",
-                "2010/2010",
-            ]
-        )
-
-
-def test_fetch_nldas_noah_nonexistent_run_dir(capsys):
-    from nhf_spatial_targets.cli import main
-
-    with pytest.raises(SystemExit):
-        main(
-            [
-                "fetch",
-                "nldas-noah",
-                "--run-dir",
-                "/no/such/dir",
-                "--period",
-                "2010/2010",
-            ]
-        )
-
-
-def test_fetch_ncep_ncar_nonexistent_run_dir(capsys):
-    from nhf_spatial_targets.cli import main
-
-    with pytest.raises(SystemExit):
-        main(
-            ["fetch", "ncep-ncar", "--run-dir", "/no/such/dir", "--period", "2010/2010"]
+        _run(
+            "fetch",
+            "nldas-mosaic",
+            "--workdir",
+            "/no/such/dir",
+            "--period",
+            "2010/2010",
         )
 
 
 @patch("nhf_spatial_targets.fetch.nldas.fetch_nldas_mosaic")
 def test_fetch_nldas_mosaic_calls_fetch(mock_fetch, tmp_path):
-    """CLI wires --run-dir and --period to fetch_nldas_mosaic()."""
+    """CLI wires --workdir and --period to fetch_nldas_mosaic()."""
     mock_fetch.return_value = {"files": [], "consolidated_nc": "consolidated.nc"}
-    run_dir = tmp_path / "workspace"
-    run_dir.mkdir()
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
     _run(
         "fetch",
         "nldas-mosaic",
-        "--run-dir",
-        str(run_dir),
+        "--workdir",
+        str(workdir),
         "--period",
         "2010/2010",
     )
-    mock_fetch.assert_called_once()
+    mock_fetch.assert_called_once_with(workdir=workdir, period="2010/2010")
+
+
+# ---- fetch nldas-noah command ----------------------------------------------
+
+
+def test_fetch_nldas_noah_nonexistent_workdir():
+    with pytest.raises(SystemExit):
+        _run(
+            "fetch",
+            "nldas-noah",
+            "--workdir",
+            "/no/such/dir",
+            "--period",
+            "2010/2010",
+        )
 
 
 @patch("nhf_spatial_targets.fetch.nldas.fetch_nldas_noah")
 def test_fetch_nldas_noah_calls_fetch(mock_fetch, tmp_path):
-    """CLI wires --run-dir and --period to fetch_nldas_noah()."""
+    """CLI wires --workdir and --period to fetch_nldas_noah()."""
     mock_fetch.return_value = {"files": [], "consolidated_nc": "consolidated.nc"}
-    run_dir = tmp_path / "workspace"
-    run_dir.mkdir()
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
     _run(
         "fetch",
         "nldas-noah",
-        "--run-dir",
-        str(run_dir),
+        "--workdir",
+        str(workdir),
         "--period",
         "2010/2010",
     )
-    mock_fetch.assert_called_once()
+    mock_fetch.assert_called_once_with(workdir=workdir, period="2010/2010")
+
+
+# ---- fetch ncep-ncar command -----------------------------------------------
+
+
+def test_fetch_ncep_ncar_nonexistent_workdir():
+    with pytest.raises(SystemExit):
+        _run(
+            "fetch",
+            "ncep-ncar",
+            "--workdir",
+            "/no/such/dir",
+            "--period",
+            "2010/2010",
+        )
 
 
 @patch("nhf_spatial_targets.fetch.ncep_ncar.fetch_ncep_ncar")
 def test_fetch_ncep_ncar_calls_fetch(mock_fetch, tmp_path):
-    """CLI wires --run-dir and --period to fetch_ncep_ncar()."""
+    """CLI wires --workdir and --period to fetch_ncep_ncar()."""
     mock_fetch.return_value = {"files": [], "consolidated_nc": "consolidated.nc"}
-    run_dir = tmp_path / "workspace"
-    run_dir.mkdir()
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
     _run(
         "fetch",
         "ncep-ncar",
-        "--run-dir",
-        str(run_dir),
+        "--workdir",
+        str(workdir),
         "--period",
         "2010/2010",
     )
-    mock_fetch.assert_called_once()
+    mock_fetch.assert_called_once_with(workdir=workdir, period="2010/2010")
 
 
 # ---- fetch mod16a2 command -------------------------------------------------
 
 
-def test_fetch_mod16a2_nonexistent_run_dir(capsys):
-    """mod16a2 fetch fails with nonexistent --run-dir."""
+def test_fetch_mod16a2_nonexistent_workdir():
+    """mod16a2 fetch fails with nonexistent --workdir."""
     with pytest.raises(SystemExit):
         _run(
             "fetch",
             "mod16a2",
-            "--run-dir",
+            "--workdir",
             "/no/such/dir",
             "--period",
             "2005/2005",
@@ -314,31 +313,31 @@ def test_fetch_mod16a2_nonexistent_run_dir(capsys):
 
 @patch("nhf_spatial_targets.fetch.modis.fetch_mod16a2")
 def test_fetch_mod16a2_calls_fetch(mock_fetch, tmp_path):
-    """CLI wires --run-dir and --period to fetch_mod16a2()."""
+    """CLI wires --workdir and --period to fetch_mod16a2()."""
     mock_fetch.return_value = {"files": [], "consolidated_ncs": {}}
-    run_dir = tmp_path / "workspace"
-    run_dir.mkdir()
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
     _run(
         "fetch",
         "mod16a2",
-        "--run-dir",
-        str(run_dir),
+        "--workdir",
+        str(workdir),
         "--period",
         "2005/2005",
     )
-    mock_fetch.assert_called_once_with(run_dir=run_dir, period="2005/2005")
+    mock_fetch.assert_called_once_with(workdir=workdir, period="2005/2005")
 
 
 # ---- fetch mod10c1 command -------------------------------------------------
 
 
-def test_fetch_mod10c1_nonexistent_run_dir(capsys):
-    """mod10c1 fetch fails with nonexistent --run-dir."""
+def test_fetch_mod10c1_nonexistent_workdir():
+    """mod10c1 fetch fails with nonexistent --workdir."""
     with pytest.raises(SystemExit):
         _run(
             "fetch",
             "mod10c1",
-            "--run-dir",
+            "--workdir",
             "/no/such/dir",
             "--period",
             "2005/2005",
@@ -347,19 +346,59 @@ def test_fetch_mod10c1_nonexistent_run_dir(capsys):
 
 @patch("nhf_spatial_targets.fetch.modis.fetch_mod10c1")
 def test_fetch_mod10c1_calls_fetch(mock_fetch, tmp_path):
-    """CLI wires --run-dir and --period to fetch_mod10c1()."""
+    """CLI wires --workdir and --period to fetch_mod10c1()."""
     mock_fetch.return_value = {"files": [], "consolidated_ncs": {}}
-    run_dir = tmp_path / "workspace"
-    run_dir.mkdir()
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
     _run(
         "fetch",
         "mod10c1",
-        "--run-dir",
-        str(run_dir),
+        "--workdir",
+        str(workdir),
         "--period",
         "2005/2005",
     )
-    mock_fetch.assert_called_once_with(run_dir=run_dir, period="2005/2005")
+    mock_fetch.assert_called_once_with(workdir=workdir, period="2005/2005")
+
+
+# ---- fetch watergap22d command ---------------------------------------------
+
+
+@patch("nhf_spatial_targets.fetch.pangaea.fetch_watergap22d")
+def test_fetch_watergap22d_calls_fetch(mock_fetch, tmp_path):
+    """CLI wires --workdir and --period to fetch_watergap22d()."""
+    mock_fetch.return_value = {"files": []}
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    _run(
+        "fetch",
+        "watergap22d",
+        "--workdir",
+        str(workdir),
+        "--period",
+        "2000/2009",
+    )
+    mock_fetch.assert_called_once_with(workdir=workdir, period="2000/2009")
+
+
+# ---- fetch reitz2017 command -----------------------------------------------
+
+
+@patch("nhf_spatial_targets.fetch.reitz2017.fetch_reitz2017")
+def test_fetch_reitz2017_calls_fetch(mock_fetch, tmp_path):
+    """CLI wires --workdir and --period to fetch_reitz2017()."""
+    mock_fetch.return_value = {"files": []}
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    _run(
+        "fetch",
+        "reitz2017",
+        "--workdir",
+        str(workdir),
+        "--period",
+        "2000/2009",
+    )
+    mock_fetch.assert_called_once_with(workdir=workdir, period="2000/2009")
 
 
 # ---- catalog commands ------------------------------------------------------
@@ -392,81 +431,3 @@ def test_default_no_verbose():
         _run_meta("catalog", "sources")
 
     mock_setup.assert_called_once_with(False)
-
-
-# ---- _sha256 directory hashing --------------------------------------------
-
-
-def test_sha256_directory_consistent(tmp_path):
-    """_sha256 on a directory returns a consistent digest."""
-    from nhf_spatial_targets.init_run import _sha256
-
-    gdb = tmp_path / "test.gdb"
-    gdb.mkdir()
-    (gdb / "a.gdbtable").write_bytes(b"table data")
-    (gdb / "b.gdbtablx").write_bytes(b"index data")
-
-    h1 = _sha256(gdb)
-    h2 = _sha256(gdb)
-    assert h1 == h2
-    assert len(h1) == 64  # sha256 hex digest
-
-
-def test_sha256_directory_includes_filenames(tmp_path):
-    """Two dirs with same bytes but different filenames produce different hashes."""
-    from nhf_spatial_targets.init_run import _sha256
-
-    dir_a = tmp_path / "a.gdb"
-    dir_a.mkdir()
-    (dir_a / "file_one.dat").write_bytes(b"same content")
-
-    dir_b = tmp_path / "b.gdb"
-    dir_b.mkdir()
-    (dir_b / "file_two.dat").write_bytes(b"same content")
-
-    assert _sha256(dir_a) != _sha256(dir_b)
-
-
-# ---- _fabric_metadata parquet support -------------------------------------
-
-
-def test_fabric_metadata_reads_parquet(tmp_path):
-    """_fabric_metadata can read a GeoParquet fabric file."""
-    import geopandas as gpd
-    from shapely.geometry import box
-
-    from nhf_spatial_targets.init_run import _fabric_metadata
-
-    gdf = gpd.GeoDataFrame(
-        {"nhm_id": [1, 2]},
-        geometry=[box(0, 0, 1, 1), box(1, 1, 2, 2)],
-        crs="EPSG:4326",
-    )
-    parquet_path = tmp_path / "fabric.parquet"
-    gdf.to_parquet(parquet_path)
-
-    meta = _fabric_metadata(parquet_path, "nhm_id", buffer_deg=0.1)
-    assert meta["hru_count"] == 2
-    assert meta["id_col"] == "nhm_id"
-    assert len(meta["sha256"]) == 64
-    assert meta["bbox"]["minx"] == 0.0
-    assert meta["bbox"]["maxy"] == 2.0
-
-
-def test_fabric_metadata_reads_geoparquet(tmp_path):
-    """_fabric_metadata handles the .geoparquet extension."""
-    import geopandas as gpd
-    from shapely.geometry import box
-
-    from nhf_spatial_targets.init_run import _fabric_metadata
-
-    gdf = gpd.GeoDataFrame(
-        {"nhm_id": [1, 2]},
-        geometry=[box(0, 0, 1, 1), box(1, 1, 2, 2)],
-        crs="EPSG:4326",
-    )
-    geoparquet_path = tmp_path / "fabric.geoparquet"
-    gdf.to_parquet(geoparquet_path)
-
-    meta = _fabric_metadata(geoparquet_path, "nhm_id", buffer_deg=0.1)
-    assert meta["hru_count"] == 2
