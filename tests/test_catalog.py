@@ -26,6 +26,13 @@ def test_variable_lookup():
     assert "mod16a2_v061" in v["sources"]
 
 
+def test_ssebop_source_is_usgs_gdp_stac():
+    s = source("ssebop")
+    assert s["access"]["type"] == "usgs_gdp_stac"
+    assert s["access"]["collection_id"] == "ssebopeta_monthly"
+    assert s["status"] == "current"
+
+
 def test_source_missing():
     with pytest.raises(KeyError):
         source("not_a_real_source")
