@@ -128,7 +128,10 @@ def aggregate_ssebop(
 
     # 2. Load and batch the fabric
     logger.info("Loading fabric: %s", fabric_path)
-    gdf = gpd.read_file(fabric_path)
+    if fabric_path.suffix.lower() in (".parquet", ".geoparquet"):
+        gdf = gpd.read_parquet(fabric_path)
+    else:
+        gdf = gpd.read_file(fabric_path)
     batched = spatial_batch(gdf, batch_size=batch_size)
     n_batches = batched["batch_id"].nunique()
     logger.info("Fabric split into %d spatial batches", n_batches)
