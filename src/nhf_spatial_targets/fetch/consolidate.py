@@ -130,6 +130,8 @@ def _write_netcdf(
         tmp_path.replace(out_path)
     except BaseException as exc:
         tmp_path.unlink(missing_ok=True)
+        if not isinstance(exc, Exception):
+            raise  # Don't wrap KeyboardInterrupt/SystemExit
         raise RuntimeError(
             f"Failed to write consolidated file {out_path}. "
             f"Check available disk space and permissions. Detail: {exc}"
@@ -707,6 +709,8 @@ def _mosaic_and_reproject_timestep(
         # Load into memory as float32 (MODIS source is int16; float64
         # is unnecessary and doubles file size).
         result_da = reprojected.load().astype(np.float32)
+        reprojected.close()
+        del reprojected
 
         # Drop spatial_ref coord — it causes conflicts when temp files
         # are later concatenated via open_mfdataset.
