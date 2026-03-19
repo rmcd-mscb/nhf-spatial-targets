@@ -671,6 +671,8 @@ def _mosaic_and_reproject_timestep(
             result.close()
         arrays.append(da)
 
+    mosaic = None
+    reprojected = None
     try:
         if len(arrays) == 1:
             mosaic = arrays[0]
@@ -680,8 +682,11 @@ def _mosaic_and_reproject_timestep(
         # Release individual tiles — the mosaic holds the merged data.
         for a in arrays:
             if a is not mosaic:
-                a.close()
-        del arrays
+                try:
+                    a.close()
+                except Exception:
+                    pass  # tiles already .load()ed; cleanup is best-effort
+        arrays.clear()
         gc.collect()
 
         # Build a deterministic output grid from bbox + resolution so that
@@ -702,15 +707,21 @@ def _mosaic_and_reproject_timestep(
         )
 
         # Release the sinusoidal mosaic — reprojected holds the result.
-        mosaic.close()
-        del mosaic
+        try:
+            mosaic.close()
+        except Exception:
+            pass
+        mosaic = None
         gc.collect()
 
         # Load into memory as float32 (MODIS source is int16; float64
         # is unnecessary and doubles file size).
         result_da = reprojected.load().astype(np.float32)
-        reprojected.close()
-        del reprojected
+        try:
+            reprojected.close()
+        except Exception:
+            pass
+        reprojected = None
 
         # Drop spatial_ref coord — it causes conflicts when temp files
         # are later concatenated via open_mfdataset.
@@ -719,10 +730,25 @@ def _mosaic_and_reproject_timestep(
 
     except Exception as exc:
         raise RuntimeError(
-            f"Failed to mosaic/reproject/clip tiles for "
+            f"Failed to mosaic/reproject/clip {len(tile_paths)} tiles for "
             f"variable '{variable}'. "
             f"Tiles: {[p.name for p in tile_paths]}. Detail: {exc}"
         ) from exc
+    finally:
+        # Clean up any remaining references on error paths.
+        # mosaic/reprojected are set to None after successful release;
+        # arrays is cleared on the happy path.
+        for obj in (mosaic, reprojected):
+            if obj is not None:
+                try:
+                    obj.close()
+                except Exception:
+                    pass
+        for a in arrays:
+            try:
+                a.close()
+            except Exception:
+                pass
 
     return result_da
 

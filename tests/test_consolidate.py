@@ -776,3 +776,42 @@ def test_apply_cf_metadata_custom_crs_wkt():
     # y/x renamed to lat/lon
     assert "lat" in result.dims
     assert "lon" in result.dims
+
+
+# ---------------------------------------------------------------------------
+# _write_netcdf — atomic write tests
+# ---------------------------------------------------------------------------
+
+
+def test_write_netcdf_atomic_success(tmp_path):
+    """Successful write produces final file with no temp files left."""
+    from nhf_spatial_targets.fetch.consolidate import _write_netcdf
+
+    ds = xr.Dataset({"x": (["t"], [1.0, 2.0])})
+    out = tmp_path / "output.nc"
+    _write_netcdf(ds, out)
+
+    assert out.exists()
+    # No leftover temp files
+    assert not list(tmp_path.glob("*.nc.tmp"))
+    # Verify contents
+    result = xr.open_dataset(out)
+    assert "x" in result.data_vars
+    result.close()
+
+
+def test_write_netcdf_atomic_failure_no_partial(tmp_path):
+    """Failed write leaves no file at the output path."""
+    from unittest.mock import patch
+
+    from nhf_spatial_targets.fetch.consolidate import _write_netcdf
+
+    ds = xr.Dataset({"x": (["t"], [1.0, 2.0])})
+    out = tmp_path / "output.nc"
+
+    with patch("xarray.Dataset.to_netcdf", side_effect=OSError("disk full")):
+        with pytest.raises(RuntimeError, match="disk full"):
+            _write_netcdf(ds, out)
+
+    assert not out.exists()
+    assert not list(tmp_path.glob("*.nc.tmp"))
