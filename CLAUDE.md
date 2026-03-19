@@ -148,7 +148,9 @@ See `catalog/sources.yml` `status:` and `notes:` fields for per-source gaps.
 
 **Still open:**
 - SCA CI-bounds formula — PRMSobjfun.f not publicly available; formula unconfirmed
-- SSEBop — version and access URL used in original TM 6-B10 unconfirmed
+
+**Resolved (previously open):**
+- SSEBop — accessed via USGS NHGF STAC catalog (collection `ssebopeta_monthly`, doi:10.5066/P9L2YMV, 2000–2023 monthly, 1km). Aggregated directly to HRU fabric via gdptools — no local download. See PR #34.
 
 ## Testing
 

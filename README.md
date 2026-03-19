@@ -20,66 +20,84 @@ Builds the five baseline calibration targets documented in [Hay and others (2022
 # Install with pixi
 pixi install
 
-# 1. Create a workspace
-pixi run init -- --workdir /data/nhf-runs/my-run
+# 1. Create a project
+pixi run init -- --project-dir /data/gfv11-targets
 
 # 2. Edit the generated config.yml to set:
 #    - fabric.path     (path to HRU GeoPackage)
 #    - fabric.id_col   (HRU identifier column)
-#    - datastore        (shared raw-data directory)
+#    - datastore        (shared raw-data directory, e.g. /data/nhf-datastore)
 #    Then fill in .credentials.yml with NASA Earthdata credentials.
 
-# 3. Validate the workspace (writes fabric.json and manifest.json)
-pixi run validate -- --workdir /data/nhf-runs/my-run
+# 3. Validate the project (writes fabric.json and manifest.json)
+pixi run validate -- --project-dir /data/gfv11-targets
 
 # 4. Fetch source datasets into the shared datastore
-pixi run fetch-all -- --workdir /data/nhf-runs/my-run --period 2000/2020
+pixi run fetch-all -- --project-dir /data/gfv11-targets --period 2000/2020
 
 # Or fetch individual sources:
-pixi run fetch-merra2       -- --workdir /data/nhf-runs/my-run --period 1980/2020
-pixi run fetch-nldas-mosaic -- --workdir /data/nhf-runs/my-run --period 1980/2020
-pixi run fetch-nldas-noah   -- --workdir /data/nhf-runs/my-run --period 1980/2020
-pixi run fetch-ncep-ncar    -- --workdir /data/nhf-runs/my-run --period 1980/2020
-pixi run fetch-mod16a2      -- --workdir /data/nhf-runs/my-run --period 2000/2020
-pixi run fetch-mod10c1      -- --workdir /data/nhf-runs/my-run --period 2000/2020
-pixi run fetch-watergap22d  -- --workdir /data/nhf-runs/my-run --period 1901/2016
-pixi run fetch-reitz2017    -- --workdir /data/nhf-runs/my-run --period 2000/2013
+pixi run fetch-merra2       -- --project-dir /data/gfv11-targets --period 1980/2020
+pixi run fetch-nldas-mosaic -- --project-dir /data/gfv11-targets --period 1980/2020
+pixi run fetch-nldas-noah   -- --project-dir /data/gfv11-targets --period 1980/2020
+pixi run fetch-ncep-ncar    -- --project-dir /data/gfv11-targets --period 1980/2020
+pixi run fetch-mod16a2      -- --project-dir /data/gfv11-targets --period 2000/2020
+pixi run fetch-mod10c1      -- --project-dir /data/gfv11-targets --period 2000/2020
+pixi run fetch-watergap22d  -- --project-dir /data/gfv11-targets --period 1901/2016
+pixi run fetch-reitz2017    -- --project-dir /data/gfv11-targets --period 2000/2013
 
 # 5. Aggregate (sources that use remote/STAC data)
-pixi run agg-ssebop -- --workdir /data/nhf-runs/my-run --period 2000/2020  # --batch-size N (default 500)
+pixi run agg-ssebop -- --project-dir /data/gfv11-targets --period 2000/2020  # --batch-size N (default 500)
 
 # 6. Run all targets
-pixi run run -- --workdir /data/nhf-runs/my-run
+pixi run run -- --project-dir /data/gfv11-targets
 
 # Inspect the catalog
 pixi run catalog-sources
 pixi run catalog-variables
 ```
 
-## Workspaces & Datastore
+## Projects & Datastore
 
-The project separates **workspaces** (fabric-dependent run directories) from the **datastore** (shared raw downloads, fabric-independent).
+The pipeline separates **projects** (fabric-specific) from the **datastore** (shared raw data, fabric-independent). Multiple projects can share one datastore — if data has already been fetched, another project pointing to the same datastore will reuse it.
+
+```
+/data/nhf-datastore/               # DATASTORE (shared, fabric-independent)
+  ├── merra2/                      #   consolidated NCs from fetch
+  ├── nldas_mosaic/
+  ├── reitz2017/
+  └── ...
+
+/data/gfv11-targets/               # PROJECT (fabric-specific)
+  ├── config.yml                   #   points to datastore + fabric
+  ├── .credentials.yml
+  ├── fabric.json
+  ├── manifest.json
+  ├── data/aggregated/             #   aggregated outputs
+  ├── targets/                     #   final calibration targets
+  └── weights/                     #   weight caches (fabric × source grid)
+```
 
 **Workflow:** `init` &rarr; edit config &rarr; `validate` &rarr; `fetch` &rarr; `run`
 
 | Step | Command | What it does |
 |---|---|---|
-| 1 | `nhf-targets init --workdir <dir>` | Creates workspace skeleton with `config.yml` and `.credentials.yml` templates |
+| 1 | `nhf-targets init --project-dir <dir>` | Creates project skeleton with `config.yml` and `.credentials.yml` templates |
 | 2 | *(manual)* | Edit `config.yml` to set fabric path, datastore, and target settings |
-| 3 | `nhf-targets validate --workdir <dir>` | Verifies config, fabric, credentials; writes `fabric.json` and `manifest.json` |
-| 4 | `nhf-targets fetch <source> --workdir <dir> --period YYYY/YYYY` | Downloads source granules into `<datastore>/<source_key>/` |
-| 5 | `nhf-targets agg <source> --workdir <dir> --period YYYY/YYYY` | Aggregates remote data to HRU fabric |
-| 6 | `nhf-targets run --workdir <dir>` | Builds calibration targets from fetched/aggregated data |
+| 3 | `nhf-targets validate --project-dir <dir>` | Verifies config, fabric, credentials; writes `fabric.json` and `manifest.json` |
+| 4 | `nhf-targets fetch <source> --project-dir <dir> --period YYYY/YYYY` | Downloads source granules into `<datastore>/<source_key>/` |
+| 5 | `nhf-targets agg <source> --project-dir <dir> --period YYYY/YYYY` | Aggregates remote data to HRU fabric |
+| 6 | `nhf-targets run --project-dir <dir>` | Builds calibration targets from fetched/aggregated data |
 
 **Key paths:**
 
-- `<workdir>/config.yml` — workspace configuration (fabric, datastore, targets, dir_mode)
-- `<workdir>/fabric.json` — computed fabric metadata (bbox, HRU count, CRS, sha256)
-- `<workdir>/manifest.json` — provenance record (download timestamps, checksums, periods)
-- `<workdir>/.credentials.yml` — NASA Earthdata credentials (gitignored)
+- `<project>/config.yml` — project configuration (fabric, datastore, targets, dir_mode)
+- `<project>/fabric.json` — computed fabric metadata (bbox, HRU count, CRS, sha256)
+- `<project>/manifest.json` — provenance record (download timestamps, checksums, periods)
+- `<project>/.credentials.yml` — NASA Earthdata credentials (gitignored)
 - `<datastore>/<source_key>/` — shared raw downloads (can be on a separate drive)
-- `<workdir>/data/aggregated/` — spatially aggregated outputs
-- `<workdir>/targets/` — final calibration target datasets
+- `<project>/data/aggregated/` — spatially aggregated outputs
+- `<project>/targets/` — final calibration target datasets
+- `<project>/weights/` — gdptools weight caches (reusable across runs)
 
 ## Fetch & Consolidation Pipeline
 
@@ -133,9 +151,9 @@ nhf-spatial-targets/
 │   ├── cli.py               # nhf-targets CLI (cyclopts)
 │   ├── _logging.py          # structured logging setup
 │   ├── catalog.py           # catalog interface to YAML files
-│   ├── workspace.py         # workspace path resolution
+│   ├── project.py         # project path resolution
 │   ├── validate.py          # preflight checks
-│   ├── init_run.py          # workspace skeleton creation
+│   ├── init_run.py          # project skeleton creation
 │   ├── fetch/               # per-source download & consolidation
 │   │   ├── consolidate.py   # xarray merge + CF-1.6 compliance
 │   │   ├── merra2.py        # MERRA-2 via earthaccess
@@ -218,7 +236,7 @@ Pixi supports **linux-64**, **osx-arm64**, and **win-64** (see `pixi.toml`).
 |---|---|
 | Project infrastructure (pixi, ruff, pytest, pre-commit) | Done |
 | CLI with cyclopts + structured logging | Done |
-| Workspace init / validate / config | Done |
+| Project init / validate / config (project + datastore model) | Done |
 | Catalog YAML registry (`sources.yml`, `variables.yml`) | Done |
 | MERRA-2 fetch + consolidation | Done |
 | NLDAS-2 MOSAIC fetch + consolidation | Done |
@@ -255,7 +273,9 @@ See `catalog/sources.yml` `status:` and `notes:` fields for per-source details.
 
 **Still open:**
 - SCA CI-bounds formula — `PRMSobjfun.f` not publicly available; formula unconfirmed
-- SSEBop — version and access URL used in original TM 6-B10 unconfirmed
+
+**Resolved (previously open):**
+- SSEBop — accessed via USGS NHGF STAC catalog (collection `ssebopeta_monthly`, doi:10.5066/P9L2YMV, 2000–2023 monthly, 1km). Aggregated directly to HRU fabric via gdptools.
 
 ## References
 
