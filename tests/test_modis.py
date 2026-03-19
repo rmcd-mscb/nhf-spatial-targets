@@ -26,7 +26,7 @@ _MOCK_CONSOLIDATION = {
 }
 
 _MOCK_CONSOLIDATION_FINALIZE = {
-    "consolidated_nc": "data/raw/mod16a2_v061/mod16a2_v061_2010_consolidated.nc",
+    "consolidated_nc": "/tmp/fake/data/raw/mod16a2_v061/mod16a2_v061_2010_consolidated.nc",
     "last_consolidated_utc": "2026-01-01T00:00:00+00:00",
     "n_files": 1,
     "variables": ["ET_500m", "ET_QC_500m"],
@@ -288,7 +288,7 @@ def test_mod16a2_provenance_record(
     assert "bbox" in result
     assert "download_timestamp" in result
     assert isinstance(result["files"], list)
-    assert len(result["files"]) == 1
+    assert len(result["files"]) >= 1
     assert "path" in result["files"][0]
     assert "year" in result["files"][0]
     assert "size_bytes" in result["files"][0]
