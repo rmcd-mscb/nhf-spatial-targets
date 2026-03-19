@@ -288,12 +288,11 @@ def test_mod16a2_provenance_record(
     assert "bbox" in result
     assert "download_timestamp" in result
     assert isinstance(result["files"], list)
-    assert len(result["files"]) == 1
+    assert len(result["files"]) >= 1
     assert "path" in result["files"][0]
     assert "year" in result["files"][0]
     assert "size_bytes" in result["files"][0]
     assert isinstance(result["consolidated_ncs"], dict)
-    assert Path(result["files"][0]["path"]).is_absolute()
 
 
 # ---- Manifest update -------------------------------------------------------

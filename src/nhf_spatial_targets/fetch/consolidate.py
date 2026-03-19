@@ -110,16 +110,26 @@ def _write_netcdf(
     out_path: Path,
     encoding: dict | None = None,
 ) -> None:
-    """Write dataset to NetCDF, removing partial file on failure."""
+    """Write dataset to NetCDF atomically (temp file + rename).
+
+    Writes to a temporary file first so that ``out_path`` only appears
+    once the write is fully complete.  A partial or corrupt file is
+    never left at the final path.
+    """
+    import tempfile as _tempfile
+
+    tmp_fd, tmp_name = _tempfile.mkstemp(dir=out_path.parent, suffix=".nc.tmp")
+    os.close(tmp_fd)
+    tmp_path = Path(tmp_name)
     try:
         kwargs: dict = {}
         if encoding is not None:
             kwargs["encoding"] = encoding
         with ProgressBar():
-            ds.to_netcdf(out_path, **kwargs)
-    except Exception as exc:
-        if out_path.exists():
-            out_path.unlink()
+            ds.to_netcdf(tmp_path, **kwargs)
+        tmp_path.replace(out_path)
+    except BaseException as exc:
+        tmp_path.unlink(missing_ok=True)
         raise RuntimeError(
             f"Failed to write consolidated file {out_path}. "
             f"Check available disk space and permissions. Detail: {exc}"
@@ -665,6 +675,13 @@ def _mosaic_and_reproject_timestep(
         else:
             mosaic = merge_arrays(arrays)
 
+        # Release individual tiles — the mosaic holds the merged data.
+        for a in arrays:
+            if a is not mosaic:
+                a.close()
+        del arrays
+        gc.collect()
+
         # Build a deterministic output grid from bbox + resolution so that
         # every timestep produces identical lon/lat coordinates regardless
         # of which tiles are present.
@@ -682,19 +699,26 @@ def _mosaic_and_reproject_timestep(
             resampling=resampling,
         )
 
+        # Release the sinusoidal mosaic — reprojected holds the result.
+        mosaic.close()
+        del mosaic
+        gc.collect()
+
         # Load into memory as float32 (MODIS source is int16; float64
         # is unnecessary and doubles file size).
         result_da = reprojected.load().astype(np.float32)
+
+        # Drop spatial_ref coord — it causes conflicts when temp files
+        # are later concatenated via open_mfdataset.
+        if "spatial_ref" in result_da.coords:
+            result_da = result_da.drop_vars("spatial_ref")
+
     except Exception as exc:
         raise RuntimeError(
-            f"Failed to mosaic/reproject/clip {len(arrays)} tiles for "
+            f"Failed to mosaic/reproject/clip tiles for "
             f"variable '{variable}'. "
             f"Tiles: {[p.name for p in tile_paths]}. Detail: {exc}"
         ) from exc
-    finally:
-        for a in arrays:
-            a.close()
-        del arrays
 
     return result_da
 
