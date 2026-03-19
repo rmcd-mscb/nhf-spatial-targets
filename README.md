@@ -160,18 +160,57 @@ nhf-spatial-targets/
 
 ## Development
 
+### Prerequisites
+
+Install [pixi](https://pixi.sh) — the only prerequisite. Pixi manages Python, all
+dependencies, and task runners. Do **not** use pip, conda, or system Python directly.
+
+**Linux / macOS:**
+
 ```bash
-# Install dev environment
+curl -fsSL https://pixi.sh/install.sh | sh
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://pixi.sh/install.ps1 | iex
+```
+
+### Setup
+
+```bash
+# Install the default environment
+pixi install
+
+# Install the dev environment (adds pytest, ruff, mypy, pre-commit, ipykernel)
 pixi install -e dev
 
 # Set up pre-commit hooks (ruff, pytest, nbstripout)
 pixi run -e dev pre-commit install
-
-# Run tests / lint / format
-pixi run -e dev test
-pixi run -e dev lint
-pixi run -e dev fmt
 ```
+
+### Day-to-day commands
+
+```bash
+pixi run -e dev test          # unit tests (excludes integration)
+pixi run -e dev test-integration  # integration tests (requires credentials/network)
+pixi run -e dev lint          # ruff check src/ tests/
+pixi run -e dev fmt           # ruff format src/ tests/
+pixi run -e dev fmt-check     # ruff format --check (used by pre-commit)
+```
+
+### Platform notes
+
+Pixi supports **linux-64**, **osx-arm64**, and **win-64** (see `pixi.toml`).
+
+| Feature | Linux / macOS | Windows |
+|---|---|---|
+| `dir_mode` in config.yml | Applied (e.g. `"2775"` for setgid + group-writable) | Ignored — Windows does not support Unix permissions |
+| `libgdal-hdf4` (HDF4 support for MODIS) | Installed via conda-forge | Installed via conda-forge |
+| NASA Earthdata credentials | `.credentials.yml` or `~/.netrc` | `.credentials.yml` (netrc path may differ) |
+| Peak memory logging | Uses `/proc` (Linux) or `resource` (macOS) | Gracefully skipped |
+| Pre-commit hooks | Fully supported | Fully supported |
 
 ## Implementation Status
 
