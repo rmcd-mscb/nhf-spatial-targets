@@ -81,30 +81,57 @@ tests/
 - When adding a new source, add it to `catalog/sources.yml` first, then write the fetch module
 - Mark superseded sources with `superseded_by:` key and `status: superseded`
 
-## Workspaces & Datastore
+## Projects & Datastore
 
-The project separates **workspaces** (fabric-dependent) from the **datastore** (shared raw data, fabric-independent).
+The pipeline separates **projects** (fabric-specific) from the **datastore** (shared raw data, fabric-independent). Multiple projects can share one datastore — if data has already been fetched for one project, another project pointing to the same datastore will find and reuse it.
+
+**Conceptual layout:**
+```
+/mnt/d/nhf-datastore/              # DATASTORE (shared, fabric-independent)
+  ├── merra2/                      #   consolidated NCs from fetch
+  ├── nldas_mosaic/
+  ├── reitz2017/
+  └── ...
+
+/mnt/d/gfv11-spatial-targets/      # PROJECT (fabric-specific)
+  ├── config.yml                   #   points to datastore + fabric
+  ├── .credentials.yml
+  ├── fabric.json
+  ├── manifest.json
+  ├── data/aggregated/             #   aggregated outputs
+  ├── targets/                     #   final calibration targets
+  ├── weights/                     #   weight caches (fabric × source grid)
+  └── logs/
+
+/mnt/d/gfv20-spatial-targets/      # ANOTHER PROJECT, same datastore
+  ├── config.yml                   #   same datastore, different fabric
+  └── ...
+```
 
 **Workflow:**
-1. `nhf-targets init --workdir <dir>` creates a workspace skeleton with `config.yml` template
+1. `nhf-targets init --workdir <project-dir>` creates a project skeleton with `config.yml` template
 2. User edits `config.yml` to set `fabric.path`, `fabric.id_col`, `datastore` path, and credentials
-3. `nhf-targets validate --workdir <dir>` runs preflight checks and writes `fabric.json`
-4. `nhf-targets fetch <source> --workdir <dir>` downloads to the shared datastore
-5. `nhf-targets run --workdir <dir>` builds calibration targets
+3. `nhf-targets validate --workdir <project-dir>` runs preflight checks and writes `fabric.json`
+4. `nhf-targets fetch <source> --workdir <project-dir>` downloads to the shared datastore
+5. `nhf-targets agg ssebop --workdir <project-dir>` aggregates remote data to fabric
+6. `nhf-targets run --workdir <project-dir>` builds calibration targets
 
 **Key paths:**
-- `<workdir>/config.yml` — workspace configuration (fabric, datastore, targets, dir_mode)
-- `<workdir>/fabric.json` — computed fabric metadata (written by `validate`, required before `fetch`/`run`)
-- `<workdir>/manifest.json` — provenance record; populated as the pipeline runs
-- `<workdir>/.credentials.yml` — NASA Earthdata credentials (gitignored, never commit)
+- `<project>/config.yml` — project configuration (fabric, datastore, targets, dir_mode)
+- `<project>/fabric.json` — computed fabric metadata (written by `validate`, required before `fetch`/`run`)
+- `<project>/manifest.json` — provenance record; populated as the pipeline runs
+- `<project>/.credentials.yml` — NASA Earthdata credentials (gitignored, never commit)
 - `<datastore>/<source_key>/` — shared raw downloads (fabric-independent, can be on a separate drive)
-- `<workdir>/data/aggregated/` — spatially aggregated outputs (fabric-dependent)
-- `<workdir>/targets/` — final calibration target datasets
+- `<project>/data/aggregated/` — spatially aggregated outputs (fabric-specific)
+- `<project>/targets/` — final calibration target datasets
+- `<project>/weights/` — gdptools weight caches (fabric × source grid, reusable)
 
 **Notes:**
-- `--workdir` and datastore can be outside the repo (recommended for large datasets)
+- Projects and datastore should be outside the repo (recommended for large datasets)
+- The datastore path must be explicitly set in `config.yml` — it should not be the same as the project directory
 - `dir_mode` in config.yml sets Unix directory permissions (e.g., "2775" for setgid + group-writable); ignored on Windows
-- Never delete a workspace — it is the audit trail
+- Never delete a project directory — it is the audit trail
+- Issue #38 tracks renaming `--workdir` to `--project-dir` in the CLI
 
 ## Known Gaps (do not implement until resolved)
 
