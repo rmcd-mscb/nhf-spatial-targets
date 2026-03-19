@@ -70,6 +70,12 @@ fetch-nldas-noah = { cmd = "nhf-targets fetch nldas-noah", description = "Downlo
 fetch-ncep-ncar = { cmd = "nhf-targets fetch ncep-ncar", description = "Download NCEP/NCAR Reanalysis data into a run workspace" }
 fetch-watergap22d = { cmd = "nhf-targets fetch watergap22d", description = "Download WaterGAP 2.2d groundwater recharge from PANGAEA" }
 fetch-reitz2017 = { cmd = "nhf-targets fetch reitz2017", description = "Download Reitz 2017 recharge estimates from ScienceBase" }
+fetch-mod16a2 = { cmd = "nhf-targets fetch mod16a2", description = "Download MOD16A2 v061 AET data via earthaccess" }
+fetch-mod10c1 = { cmd = "nhf-targets fetch mod10c1", description = "Download MOD10C1 v061 snow cover data via earthaccess" }
+fetch-all = { cmd = "nhf-targets fetch all", description = "Download all source datasets sequentially" }
+
+# Aggregation
+agg-ssebop = { cmd = "nhf-targets agg ssebop", description = "Aggregate SSEBop AET to HRU fabric via STAC" }
 
 # Catalog inspection
 catalog-sources   = { cmd = "nhf-targets catalog sources" }
