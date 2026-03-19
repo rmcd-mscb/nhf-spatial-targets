@@ -412,39 +412,46 @@ def fetch_mod16a2(workdir: Path, period: str) -> dict:
             tmp_paths: list[Path] = []
 
             try:
-                for i, ydoy in enumerate(sorted_ydoys, 1):
-                    batch = ts_groups[ydoy]
-                    logger.info(
-                        "Downloading timestep %d/%d (A%s): %d granules",
-                        i,
-                        n_steps,
-                        ydoy,
-                        len(batch),
-                    )
+                from concurrent.futures import ThreadPoolExecutor
 
-                    downloaded = earthaccess.download(
+                def _download_timestep(
+                    ydoy: str,
+                    batch: list,
+                ) -> tuple[str, list[str]]:
+                    """Download tiles for one timestep (runs in thread)."""
+                    result = earthaccess.download(
                         batch,
                         local_path=str(output_dir),
                     )
+                    return ydoy, result
 
+                def _validate_download(
+                    ydoy: str,
+                    downloaded: list[str],
+                    n_expected: int,
+                ) -> list[Path]:
+                    """Check download result and return tile paths."""
                     if not downloaded:
                         raise RuntimeError(
                             f"earthaccess.download() returned no files for "
-                            f"timestep A{ydoy} ({len(batch)} granules). "
+                            f"timestep A{ydoy} ({n_expected} granules). "
                             f"Check network connectivity and Earthdata credentials."
                         )
-                    if len(downloaded) < len(batch):
+                    if len(downloaded) < n_expected:
                         logger.warning(
                             "Partial download for timestep A%s: got %d of %d granules.",
                             ydoy,
                             len(downloaded),
-                            len(batch),
+                            n_expected,
                         )
+                    return [Path(f) for f in downloaded]
 
-                    log_memory(f"after downloading timestep {i}/{n_steps} (A{ydoy})")
-
-                    # Consolidate this timestep immediately
-                    tile_paths = [Path(f) for f in downloaded]
+                def _consolidate_and_cleanup(
+                    tile_paths: list[Path],
+                    ydoy: str,
+                    step_num: int,
+                ) -> Path:
+                    """Consolidate timestep and delete HDF tiles."""
                     tmp_path = consolidate_mod16a2_timestep(
                         tile_paths=tile_paths,
                         variables=variables,
@@ -452,18 +459,74 @@ def fetch_mod16a2(workdir: Path, period: str) -> dict:
                         ydoy=ydoy,
                         bbox=bbox_t,
                     )
-                    tmp_paths.append(tmp_path)
-
                     # Delete HDF tiles — data is now in the temp NetCDF.
-                    # Frees disk space and reduces GDAL file handle caching.
                     for tp in tile_paths:
                         try:
                             tp.unlink()
                         except OSError as exc:
                             logger.warning("Could not remove tile %s: %s", tp.name, exc)
-
                     gc.collect()
-                    log_memory(f"after consolidating timestep {i}/{n_steps} (A{ydoy})")
+                    log_memory(
+                        f"after consolidating timestep {step_num}/{n_steps} (A{ydoy})"
+                    )
+                    return tmp_path
+
+                # Pipeline: prefetch next timestep while consolidating current.
+                # Download is I/O-bound (network), consolidation is CPU-bound
+                # (mosaic + reproject). Overlapping them hides download latency.
+                # Memory impact is negligible — downloads write to disk, not RAM.
+                with ThreadPoolExecutor(max_workers=1) as prefetch:
+                    prefetch_future = None
+
+                    for i, ydoy in enumerate(sorted_ydoys, 1):
+                        batch = ts_groups[ydoy]
+
+                        # Get tiles: from prefetch future or direct download
+                        if prefetch_future is not None:
+                            _pf_ydoy, _pf_downloaded = prefetch_future.result()
+                            tile_paths = _validate_download(
+                                _pf_ydoy, _pf_downloaded, len(batch)
+                            )
+                        else:
+                            logger.info(
+                                "Downloading timestep %d/%d (A%s): %d granules",
+                                i,
+                                n_steps,
+                                ydoy,
+                                len(batch),
+                            )
+                            downloaded = earthaccess.download(
+                                batch, local_path=str(output_dir)
+                            )
+                            tile_paths = _validate_download(
+                                ydoy, downloaded, len(batch)
+                            )
+
+                        log_memory(
+                            f"after downloading timestep {i}/{n_steps} (A{ydoy})"
+                        )
+
+                        # Start prefetching next timestep (I/O) while we
+                        # consolidate this one (CPU)
+                        if i < n_steps:
+                            next_ydoy = sorted_ydoys[i]
+                            next_batch = ts_groups[next_ydoy]
+                            logger.info(
+                                "Prefetching timestep %d/%d (A%s): %d granules",
+                                i + 1,
+                                n_steps,
+                                next_ydoy,
+                                len(next_batch),
+                            )
+                            prefetch_future = prefetch.submit(
+                                _download_timestep, next_ydoy, next_batch
+                            )
+                        else:
+                            prefetch_future = None
+
+                        # Consolidate current timestep (CPU-bound)
+                        tmp_path = _consolidate_and_cleanup(tile_paths, ydoy, i)
+                        tmp_paths.append(tmp_path)
 
                 # Finalize: lazy-concat temp files into consolidated NetCDF
                 out_path = output_dir / f"{source_key}_{year}_consolidated.nc"
