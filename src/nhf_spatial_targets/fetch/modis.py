@@ -453,6 +453,15 @@ def fetch_mod16a2(workdir: Path, period: str) -> dict:
                         bbox=bbox_t,
                     )
                     tmp_paths.append(tmp_path)
+
+                    # Delete HDF tiles — data is now in the temp NetCDF.
+                    # Frees disk space and reduces GDAL file handle caching.
+                    for tp in tile_paths:
+                        try:
+                            tp.unlink()
+                        except OSError as exc:
+                            logger.warning("Could not remove tile %s: %s", tp.name, exc)
+
                     gc.collect()
                     log_memory(f"after consolidating timestep {i}/{n_steps} (A{ydoy})")
 
@@ -474,37 +483,46 @@ def fetch_mod16a2(workdir: Path, period: str) -> dict:
                         logger.debug("Cleaned up temp file after failure: %s", p.name)
                 raise
 
-    # Re-consolidate any years that were already downloaded but not yet
-    # consolidated in this run (e.g. prior download, no consolidated file)
+    # Re-consolidate any years with leftover HDF files from prior runs
+    # (e.g. interrupted run that downloaded but didn't consolidate).
+    # New runs delete HDF tiles after consolidation, so this only
+    # applies to data from older pipeline versions.
     all_hdf_files = sorted(output_dir.glob("*.hdf"))
-    years_on_disk = sorted({_year_from_path(p) for p in all_hdf_files})
-    for year in years_on_disk:
-        if str(year) not in consolidated_ncs:
-            logger.info("Re-consolidating %s year %d", source_key, year)
-            result = consolidate_mod16a2(
-                output_dir, source_key, variables, year, bbox_t
-            )
-            consolidated_ncs[str(year)] = result["consolidated_nc"]
+    if all_hdf_files:
+        years_on_disk = sorted({_year_from_path(p) for p in all_hdf_files})
+        for year in years_on_disk:
+            if str(year) not in consolidated_ncs:
+                logger.info(
+                    "Re-consolidating %s year %d from leftover HDF",
+                    source_key,
+                    year,
+                )
+                result = consolidate_mod16a2(
+                    output_dir, source_key, variables, year, bbox_t
+                )
+                consolidated_ncs[str(year)] = result["consolidated_nc"]
 
-    # Build file inventory from all .hdf files on disk
+    # Build file inventory from consolidated NetCDFs (HDF tiles are
+    # deleted after consolidation to save disk space).
     existing_timestamps = _existing_file_timestamps(workdir, source_key)
     now_utc = datetime.now(timezone.utc).isoformat()
 
     files = []
-    for p in all_hdf_files:
-        yr = _year_from_path(p)
+    for yr_str, nc_path in sorted(consolidated_ncs.items()):
+        nc = Path(nc_path)
         files.append(
             {
-                "path": str(p),
-                "year": yr,
-                "size_bytes": p.stat().st_size,
-                "downloaded_utc": existing_timestamps.get(yr, now_utc),
+                "path": str(nc),
+                "year": int(yr_str),
+                "size_bytes": nc.stat().st_size if nc.exists() else 0,
+                "downloaded_utc": existing_timestamps.get(int(yr_str), now_utc),
             }
         )
 
-    # Compute effective period from actual files on disk
-    if years_on_disk:
-        effective_period = f"{years_on_disk[0]}/{years_on_disk[-1]}"
+    # Compute effective period from consolidated years
+    if consolidated_ncs:
+        years_consolidated = sorted(int(y) for y in consolidated_ncs)
+        effective_period = f"{years_consolidated[0]}/{years_consolidated[-1]}"
     else:
         effective_period = period
 
