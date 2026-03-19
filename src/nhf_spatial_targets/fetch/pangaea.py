@@ -15,7 +15,7 @@ import xarray as xr
 
 import nhf_spatial_targets.catalog as _catalog
 from nhf_spatial_targets.fetch._period import parse_period
-from nhf_spatial_targets.workspace import load as _load_workspace
+from nhf_spatial_targets.workspace import load as _load_project
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +89,7 @@ def fetch_watergap22d(workdir: Path, period: str) -> dict:
     Parameters
     ----------
     workdir : Path
-        Workspace directory.
+        Project directory.
     period : str
         Temporal range as ``"YYYY/YYYY"``. Used for provenance only —
         the downloaded file covers the full 1901-2016 period.
@@ -99,7 +99,7 @@ def fetch_watergap22d(workdir: Path, period: str) -> dict:
     dict
         Provenance record for ``manifest.json``.
     """
-    ws = _load_workspace(workdir)
+    ws = _load_project(workdir)
     meta = _catalog.source(_SOURCE_KEY)
     parse_period(period)  # validate format
 
@@ -217,7 +217,7 @@ def _update_manifest(
     file_info: dict,
 ) -> None:
     """Merge WaterGAP 2.2d provenance into manifest.json."""
-    ws = _load_workspace(workdir)
+    ws = _load_project(workdir)
     manifest_path = ws.manifest_path
     if manifest_path.exists():
         try:

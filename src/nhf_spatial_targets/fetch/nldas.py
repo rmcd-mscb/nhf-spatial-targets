@@ -14,7 +14,7 @@ import earthaccess
 import nhf_spatial_targets.catalog as _catalog
 from nhf_spatial_targets.fetch._auth import earthdata_login
 from nhf_spatial_targets.fetch._period import months_in_period, parse_period
-from nhf_spatial_targets.workspace import load as _load_workspace
+from nhf_spatial_targets.workspace import load as _load_project
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ def _granule_year_month(granule: object) -> str | None:
 
 def _manifest_nldas_files(workdir: Path, source_key: str) -> list[dict]:
     """Read manifest.json and return the NLDAS file records list."""
-    ws = _load_workspace(workdir)
+    ws = _load_project(workdir)
     manifest_path = ws.manifest_path
     if not manifest_path.exists():
         return []
@@ -80,7 +80,7 @@ def fetch_nldas_mosaic(workdir: Path, period: str) -> dict:
     Parameters
     ----------
     workdir : Path
-        Workspace directory. Reads ``fabric.json`` for bbox,
+        Project directory. Reads ``fabric.json`` for bbox,
         writes files to the datastore under ``nldas_mosaic/``.
     period : str
         Temporal range as ``"YYYY/YYYY"`` (start/end years inclusive).
@@ -99,7 +99,7 @@ def fetch_nldas_noah(workdir: Path, period: str) -> dict:
     Parameters
     ----------
     workdir : Path
-        Workspace directory. Reads ``fabric.json`` for bbox,
+        Project directory. Reads ``fabric.json`` for bbox,
         writes files to the datastore under ``nldas_noah/``.
     period : str
         Temporal range as ``"YYYY/YYYY"`` (start/end years inclusive).
@@ -124,7 +124,7 @@ def _fetch_nldas(source_key: str, workdir: Path, period: str) -> dict:
     source_key : str
         Catalog key: ``"nldas_mosaic"`` or ``"nldas_noah"``.
     workdir : Path
-        Workspace directory. Reads ``fabric.json`` for bbox,
+        Project directory. Reads ``fabric.json`` for bbox,
         writes files to the datastore under ``<source_key>/``.
     period : str
         Temporal range as ``"YYYY/YYYY"`` (start/end years inclusive).
@@ -136,7 +136,7 @@ def _fetch_nldas(source_key: str, workdir: Path, period: str) -> dict:
     """
     from nhf_spatial_targets.fetch.consolidate import consolidate_nldas  # noqa: PLC0415
 
-    ws = _load_workspace(workdir)
+    ws = _load_project(workdir)
     meta = _catalog.source(source_key)
     short_name = meta["access"]["short_name"]
 
@@ -282,7 +282,7 @@ def _update_manifest(
     consolidation: dict,
 ) -> None:
     """Merge NLDAS provenance into manifest.json."""
-    ws = _load_workspace(workdir)
+    ws = _load_project(workdir)
     manifest_path = ws.manifest_path
     if manifest_path.exists():
         try:

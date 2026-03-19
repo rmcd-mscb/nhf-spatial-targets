@@ -25,7 +25,7 @@ from nhf_spatial_targets.fetch.consolidate import (
     consolidate_mod16a2_timestep,
     log_memory,
 )
-from nhf_spatial_targets.workspace import load as _load_workspace
+from nhf_spatial_targets.workspace import load as _load_project
 
 logger = logging.getLogger(__name__)
 
@@ -195,7 +195,7 @@ def _manifest_source_files(workdir: Path, source_key: str) -> list[dict]:
     Parameters
     ----------
     workdir : Path
-        Workspace directory.
+        Project directory.
     source_key : str
         The source key to look up (e.g. ``"mod16a2_v061"``).
 
@@ -204,7 +204,7 @@ def _manifest_source_files(workdir: Path, source_key: str) -> list[dict]:
     list[dict]
         List of file record dicts, or empty list if not present.
     """
-    ws = _load_workspace(workdir)
+    ws = _load_project(workdir)
     manifest_path = ws.manifest_path
     if not manifest_path.exists():
         return []
@@ -261,7 +261,7 @@ def _update_manifest(
     consolidated_ncs: dict[str, str],
 ) -> None:
     """Merge MODIS provenance into ``manifest.json`` with atomic write."""
-    ws = _load_workspace(workdir)
+    ws = _load_project(workdir)
     manifest_path = ws.manifest_path
     if manifest_path.exists():
         try:
@@ -321,7 +321,7 @@ def fetch_mod16a2(workdir: Path, period: str) -> dict:
     Parameters
     ----------
     workdir : Path
-        Workspace directory. Reads ``fabric.json`` for bbox,
+        Project directory. Reads ``fabric.json`` for bbox,
         writes files to the datastore under ``mod16a2_v061/``.
     period : str
         Temporal range as ``"YYYY/YYYY"`` (start/end years inclusive).
@@ -331,7 +331,7 @@ def fetch_mod16a2(workdir: Path, period: str) -> dict:
     dict
         Provenance record for ``manifest.json``.
     """
-    ws = _load_workspace(workdir)
+    ws = _load_project(workdir)
     source_key = _MOD16A2_SOURCE_KEY
     meta = _catalog.source(source_key)
     short_name = meta["access"]["short_name"]
@@ -412,39 +412,46 @@ def fetch_mod16a2(workdir: Path, period: str) -> dict:
             tmp_paths: list[Path] = []
 
             try:
-                for i, ydoy in enumerate(sorted_ydoys, 1):
-                    batch = ts_groups[ydoy]
-                    logger.info(
-                        "Downloading timestep %d/%d (A%s): %d granules",
-                        i,
-                        n_steps,
-                        ydoy,
-                        len(batch),
-                    )
+                from concurrent.futures import ThreadPoolExecutor
 
-                    downloaded = earthaccess.download(
+                def _download_timestep(
+                    ydoy: str,
+                    batch: list,
+                ) -> tuple[str, list[str]]:
+                    """Download tiles for one timestep (runs in thread)."""
+                    result = earthaccess.download(
                         batch,
                         local_path=str(output_dir),
                     )
+                    return ydoy, result
 
+                def _validate_download(
+                    ydoy: str,
+                    downloaded: list[str],
+                    n_expected: int,
+                ) -> list[Path]:
+                    """Check download result and return tile paths."""
                     if not downloaded:
                         raise RuntimeError(
                             f"earthaccess.download() returned no files for "
-                            f"timestep A{ydoy} ({len(batch)} granules). "
+                            f"timestep A{ydoy} ({n_expected} granules). "
                             f"Check network connectivity and Earthdata credentials."
                         )
-                    if len(downloaded) < len(batch):
+                    if len(downloaded) < n_expected:
                         logger.warning(
                             "Partial download for timestep A%s: got %d of %d granules.",
                             ydoy,
                             len(downloaded),
-                            len(batch),
+                            n_expected,
                         )
+                    return [Path(f) for f in downloaded]
 
-                    log_memory(f"after downloading timestep {i}/{n_steps} (A{ydoy})")
-
-                    # Consolidate this timestep immediately
-                    tile_paths = [Path(f) for f in downloaded]
+                def _consolidate_and_cleanup(
+                    tile_paths: list[Path],
+                    ydoy: str,
+                    step_num: int,
+                ) -> Path:
+                    """Consolidate timestep and delete HDF tiles."""
                     tmp_path = consolidate_mod16a2_timestep(
                         tile_paths=tile_paths,
                         variables=variables,
@@ -452,9 +459,75 @@ def fetch_mod16a2(workdir: Path, period: str) -> dict:
                         ydoy=ydoy,
                         bbox=bbox_t,
                     )
-                    tmp_paths.append(tmp_path)
+                    # Delete HDF tiles — data is now in the temp NetCDF.
+                    for tp in tile_paths:
+                        try:
+                            tp.unlink()
+                        except OSError as exc:
+                            logger.warning("Could not remove tile %s: %s", tp.name, exc)
                     gc.collect()
-                    log_memory(f"after consolidating timestep {i}/{n_steps} (A{ydoy})")
+                    log_memory(
+                        f"after consolidating timestep {step_num}/{n_steps} (A{ydoy})"
+                    )
+                    return tmp_path
+
+                # Pipeline: prefetch upcoming timesteps while consolidating
+                # the current one. Download is I/O-bound (network),
+                # consolidation is CPU-bound (mosaic + reproject).
+                # Overlapping them hides download latency.  Memory
+                # impact is negligible — downloads write to disk, not RAM.
+                _PREFETCH_AHEAD = 2
+                from collections import deque
+
+                with ThreadPoolExecutor(max_workers=_PREFETCH_AHEAD) as prefetch:
+                    # Seed the prefetch queue with the first batch(es)
+                    futures: deque = deque()
+                    for j in range(min(_PREFETCH_AHEAD, n_steps)):
+                        pf_ydoy = sorted_ydoys[j]
+                        pf_batch = ts_groups[pf_ydoy]
+                        logger.info(
+                            "Prefetching timestep %d/%d (A%s): %d granules",
+                            j + 1,
+                            n_steps,
+                            pf_ydoy,
+                            len(pf_batch),
+                        )
+                        futures.append(
+                            prefetch.submit(_download_timestep, pf_ydoy, pf_batch)
+                        )
+
+                    for i, ydoy in enumerate(sorted_ydoys, 1):
+                        batch = ts_groups[ydoy]
+
+                        # Wait for the next prefetched result
+                        _pf_ydoy, _pf_downloaded = futures.popleft().result()
+                        tile_paths = _validate_download(
+                            _pf_ydoy, _pf_downloaded, len(batch)
+                        )
+
+                        log_memory(
+                            f"after downloading timestep {i}/{n_steps} (A{ydoy})"
+                        )
+
+                        # Submit next prefetch to keep the queue full
+                        next_idx = i - 1 + _PREFETCH_AHEAD
+                        if next_idx < n_steps:
+                            pf_ydoy = sorted_ydoys[next_idx]
+                            pf_batch = ts_groups[pf_ydoy]
+                            logger.info(
+                                "Prefetching timestep %d/%d (A%s): %d granules",
+                                next_idx + 1,
+                                n_steps,
+                                pf_ydoy,
+                                len(pf_batch),
+                            )
+                            futures.append(
+                                prefetch.submit(_download_timestep, pf_ydoy, pf_batch)
+                            )
+
+                        # Consolidate current timestep (CPU-bound)
+                        tmp_path = _consolidate_and_cleanup(tile_paths, ydoy, i)
+                        tmp_paths.append(tmp_path)
 
                 # Finalize: lazy-concat temp files into consolidated NetCDF
                 out_path = output_dir / f"{source_key}_{year}_consolidated.nc"
@@ -474,37 +547,46 @@ def fetch_mod16a2(workdir: Path, period: str) -> dict:
                         logger.debug("Cleaned up temp file after failure: %s", p.name)
                 raise
 
-    # Re-consolidate any years that were already downloaded but not yet
-    # consolidated in this run (e.g. prior download, no consolidated file)
+    # Re-consolidate any years with leftover HDF files from prior runs
+    # (e.g. interrupted run that downloaded but didn't consolidate).
+    # New runs delete HDF tiles after consolidation, so this only
+    # applies to data from older pipeline versions.
     all_hdf_files = sorted(output_dir.glob("*.hdf"))
-    years_on_disk = sorted({_year_from_path(p) for p in all_hdf_files})
-    for year in years_on_disk:
-        if str(year) not in consolidated_ncs:
-            logger.info("Re-consolidating %s year %d", source_key, year)
-            result = consolidate_mod16a2(
-                output_dir, source_key, variables, year, bbox_t
-            )
-            consolidated_ncs[str(year)] = result["consolidated_nc"]
+    if all_hdf_files:
+        years_on_disk = sorted({_year_from_path(p) for p in all_hdf_files})
+        for year in years_on_disk:
+            if str(year) not in consolidated_ncs:
+                logger.info(
+                    "Re-consolidating %s year %d from leftover HDF",
+                    source_key,
+                    year,
+                )
+                result = consolidate_mod16a2(
+                    output_dir, source_key, variables, year, bbox_t
+                )
+                consolidated_ncs[str(year)] = result["consolidated_nc"]
 
-    # Build file inventory from all .hdf files on disk
+    # Build file inventory from consolidated NetCDFs (HDF tiles are
+    # deleted after consolidation to save disk space).
     existing_timestamps = _existing_file_timestamps(workdir, source_key)
     now_utc = datetime.now(timezone.utc).isoformat()
 
     files = []
-    for p in all_hdf_files:
-        yr = _year_from_path(p)
+    for yr_str, nc_path in sorted(consolidated_ncs.items()):
+        nc = Path(nc_path)
         files.append(
             {
-                "path": str(p),
-                "year": yr,
-                "size_bytes": p.stat().st_size,
-                "downloaded_utc": existing_timestamps.get(yr, now_utc),
+                "path": str(nc),
+                "year": int(yr_str),
+                "size_bytes": nc.stat().st_size if nc.exists() else 0,
+                "downloaded_utc": existing_timestamps.get(int(yr_str), now_utc),
             }
         )
 
-    # Compute effective period from actual files on disk
-    if years_on_disk:
-        effective_period = f"{years_on_disk[0]}/{years_on_disk[-1]}"
+    # Compute effective period from consolidated years
+    if consolidated_ncs:
+        years_consolidated = sorted(int(y) for y in consolidated_ncs)
+        effective_period = f"{years_consolidated[0]}/{years_consolidated[-1]}"
     else:
         effective_period = period
 
@@ -627,7 +709,7 @@ def fetch_mod10c1(workdir: Path, period: str) -> dict:
     Parameters
     ----------
     workdir : Path
-        Workspace directory. Reads ``fabric.json`` for bbox,
+        Project directory. Reads ``fabric.json`` for bbox,
         writes files to the datastore under ``mod10c1_v061/``.
     period : str
         Temporal range as ``"YYYY/YYYY"`` (start/end years inclusive).
@@ -637,7 +719,7 @@ def fetch_mod10c1(workdir: Path, period: str) -> dict:
     dict
         Provenance record for ``manifest.json``.
     """
-    ws = _load_workspace(workdir)
+    ws = _load_project(workdir)
     source_key = _MOD10C1_SOURCE_KEY
     meta = _catalog.source(source_key)
     short_name = meta["access"]["short_name"]

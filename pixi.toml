@@ -44,19 +44,19 @@ default = { solve-group = "default" }
 dev = { features = ["dev"], solve-group = "default" }
 
 [tasks]
-# Initialise a workspace.
-# Usage: pixi run init -- --workdir /data/nhf-runs/my-run
-init = { cmd = "nhf-targets init", description = "Create a new workspace skeleton" }
+# Initialise a project.
+# Usage: pixi run init -- --project-dir /data/nhf-runs/my-run
+init = { cmd = "nhf-targets init", description = "Create a new project skeleton" }
 
-# Validate a workspace (run after editing config.yml).
-# Usage: pixi run validate -- --workdir /data/nhf-runs/my-run
-validate = { cmd = "nhf-targets validate", description = "Validate workspace config and fabric" }
+# Validate a project (run after editing config.yml).
+# Usage: pixi run validate -- --project-dir /data/nhf-runs/my-run
+validate = { cmd = "nhf-targets validate", description = "Validate project config and fabric" }
 
-# Run the full pipeline against a workspace.
-# Usage: pixi run run -- --workdir /data/nhf-runs/my-run
+# Run the full pipeline against a project.
+# Usage: pixi run run -- --project-dir /data/nhf-runs/my-run
 run = { cmd = "nhf-targets run", description = "Run the full target pipeline" }
 
-# Run individual targets — pass --workdir as extra arg.
+# Run individual targets — pass --project-dir as extra arg.
 run-runoff = { cmd = "nhf-targets run --target runoff" }
 run-aet    = { cmd = "nhf-targets run --target aet" }
 run-rch    = { cmd = "nhf-targets run --target recharge" }
@@ -64,10 +64,10 @@ run-som    = { cmd = "nhf-targets run --target soil_moisture" }
 run-sca    = { cmd = "nhf-targets run --target snow_covered_area" }
 
 # Fetch source data
-fetch-merra2 = { cmd = "nhf-targets fetch merra2", description = "Download MERRA-2 data into a run workspace" }
-fetch-nldas-mosaic = { cmd = "nhf-targets fetch nldas-mosaic", description = "Download NLDAS-2 MOSAIC data into a run workspace" }
-fetch-nldas-noah = { cmd = "nhf-targets fetch nldas-noah", description = "Download NLDAS-2 NOAH data into a run workspace" }
-fetch-ncep-ncar = { cmd = "nhf-targets fetch ncep-ncar", description = "Download NCEP/NCAR Reanalysis data into a run workspace" }
+fetch-merra2 = { cmd = "nhf-targets fetch merra2", description = "Download MERRA-2 data into a project datastore" }
+fetch-nldas-mosaic = { cmd = "nhf-targets fetch nldas-mosaic", description = "Download NLDAS-2 MOSAIC data into a project datastore" }
+fetch-nldas-noah = { cmd = "nhf-targets fetch nldas-noah", description = "Download NLDAS-2 NOAH data into a project datastore" }
+fetch-ncep-ncar = { cmd = "nhf-targets fetch ncep-ncar", description = "Download NCEP/NCAR Reanalysis data into a project datastore" }
 fetch-watergap22d = { cmd = "nhf-targets fetch watergap22d", description = "Download WaterGAP 2.2d groundwater recharge from PANGAEA" }
 fetch-reitz2017 = { cmd = "nhf-targets fetch reitz2017", description = "Download Reitz 2017 recharge estimates from ScienceBase" }
 fetch-mod16a2 = { cmd = "nhf-targets fetch mod16a2", description = "Download MOD16A2 v061 AET data via earthaccess" }

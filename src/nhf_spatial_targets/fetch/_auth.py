@@ -22,7 +22,7 @@ def earthdata_login(workdir: Path) -> earthaccess.Auth:
     Parameters
     ----------
     workdir : Path
-        Workspace directory containing ``.credentials.yml``.
+        Project directory containing ``.credentials.yml``.
 
     Returns
     -------

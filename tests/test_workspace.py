@@ -1,4 +1,4 @@
-"""Tests for nhf_spatial_targets.workspace."""
+"""Tests for nhf_spatial_targets.workspace (Project dataclass)."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import pytest
 import yaml
 
 from nhf_spatial_targets import workspace
-from nhf_spatial_targets.workspace import Workspace, load, make_dir
+from nhf_spatial_targets.workspace import Project, load, make_dir
 
 
 def _write_config(
@@ -83,14 +83,14 @@ def test_make_dir_no_mode_on_windows(
 # --- load tests ---
 
 
-def test_load_returns_workspace(tmp_path: Path) -> None:
+def test_load_returns_project(tmp_path: Path) -> None:
     datastore = tmp_path / "store"
     datastore.mkdir()
     _write_config(tmp_path, datastore)
     _write_fabric_json(tmp_path)
 
     ws = load(tmp_path)
-    assert isinstance(ws, Workspace)
+    assert isinstance(ws, Project)
     assert ws.workdir == tmp_path
     assert ws.datastore == datastore
     assert ws.fabric["id"] == "gfv11"
@@ -109,10 +109,10 @@ def test_load_fails_without_fabric_json(tmp_path: Path) -> None:
         load(tmp_path)
 
 
-# --- Workspace accessor tests ---
+# --- Project accessor tests ---
 
 
-def test_workspace_raw_dir(tmp_path: Path) -> None:
+def test_project_raw_dir(tmp_path: Path) -> None:
     datastore = tmp_path / "store"
     datastore.mkdir()
     _write_config(tmp_path, datastore)
@@ -121,7 +121,7 @@ def test_workspace_raw_dir(tmp_path: Path) -> None:
     assert ws.raw_dir("ssebop") == datastore / "ssebop"
 
 
-def test_workspace_aggregated_dir(tmp_path: Path) -> None:
+def test_project_aggregated_dir(tmp_path: Path) -> None:
     datastore = tmp_path / "store"
     datastore.mkdir()
     _write_config(tmp_path, datastore)
@@ -130,7 +130,7 @@ def test_workspace_aggregated_dir(tmp_path: Path) -> None:
     assert ws.aggregated_dir() == tmp_path / "data" / "aggregated"
 
 
-def test_workspace_targets_dir(tmp_path: Path) -> None:
+def test_project_targets_dir(tmp_path: Path) -> None:
     datastore = tmp_path / "store"
     datastore.mkdir()
     _write_config(tmp_path, datastore)
@@ -139,7 +139,7 @@ def test_workspace_targets_dir(tmp_path: Path) -> None:
     assert ws.targets_dir() == tmp_path / "targets"
 
 
-def test_workspace_manifest_path(tmp_path: Path) -> None:
+def test_project_manifest_path(tmp_path: Path) -> None:
     datastore = tmp_path / "store"
     datastore.mkdir()
     _write_config(tmp_path, datastore)
@@ -148,7 +148,7 @@ def test_workspace_manifest_path(tmp_path: Path) -> None:
     assert ws.manifest_path == tmp_path / "manifest.json"
 
 
-def test_workspace_credentials_path(tmp_path: Path) -> None:
+def test_project_credentials_path(tmp_path: Path) -> None:
     datastore = tmp_path / "store"
     datastore.mkdir()
     _write_config(tmp_path, datastore)
@@ -157,7 +157,7 @@ def test_workspace_credentials_path(tmp_path: Path) -> None:
     assert ws.credentials_path == tmp_path / ".credentials.yml"
 
 
-def test_workspace_dir_mode_parsed_as_octal(tmp_path: Path) -> None:
+def test_project_dir_mode_parsed_as_octal(tmp_path: Path) -> None:
     datastore = tmp_path / "store"
     datastore.mkdir()
     _write_config(tmp_path, datastore, dir_mode="2775")

@@ -1,4 +1,4 @@
-"""Logic for 'nhf-targets init' — create a workspace skeleton."""
+"""Logic for 'nhf-targets init' — create a project skeleton."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ from pathlib import Path
 import yaml
 
 _CONFIG_TEMPLATE = """\
-# nhf-spatial-targets workspace configuration
-# Edit this file, then run: nhf-targets validate --workdir <this-dir>
+# nhf-spatial-targets project configuration
+# Edit this file, then run: nhf-targets validate --project-dir <this-dir>
 
 # ---------------------------------------------------------------------------
 # Fabric
@@ -126,8 +126,8 @@ _CREDENTIALS_TEMPLATE = {
 # ---------------------------------------------------------------------------
 
 
-def init_workspace(workdir: Path) -> Path:
-    """Create a new workspace skeleton under *workdir*.
+def init_project(workdir: Path) -> Path:
+    """Create a new project skeleton under *workdir*.
 
     Parameters
     ----------
@@ -136,14 +136,14 @@ def init_workspace(workdir: Path) -> Path:
 
     Returns
     -------
-    Path to the newly created workspace directory (resolved).
+    Path to the newly created project directory (resolved).
     """
     workdir = workdir.resolve()
 
     if workdir.exists():
         raise FileExistsError(
-            f"Workspace already exists: {workdir}\n"
-            "Choose a different --workdir path, or remove the existing directory."
+            f"Project already exists: {workdir}\n"
+            "Choose a different --project-dir path, or remove the existing directory."
         )
 
     # Directory skeleton
@@ -156,7 +156,7 @@ def init_workspace(workdir: Path) -> Path:
 
     # Credentials template
     (workdir / ".credentials.yml").write_text(
-        "# nhf-spatial-targets workspace credentials\n"
+        "# nhf-spatial-targets project credentials\n"
         "# Fill in before running 'nhf-targets validate'.\n"
         "# This file is gitignored — do not commit it.\n\n"
         + yaml.dump(_CREDENTIALS_TEMPLATE, default_flow_style=False, sort_keys=False)

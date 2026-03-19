@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 import nhf_spatial_targets.catalog as _catalog
 from nhf_spatial_targets.fetch._period import parse_period, years_in_period
-from nhf_spatial_targets.workspace import load as _load_workspace
+from nhf_spatial_targets.workspace import load as _load_project
 
 logger = logging.getLogger(__name__)
 _SOURCE_KEY = "ncep_ncar"
@@ -36,7 +36,7 @@ def consolidate_ncep_ncar(source_dir: Path, variables: list[str]) -> dict:
 
 def _manifest_ncep_ncar_files(workdir: Path) -> list[dict]:
     """Read manifest.json and return the ncep_ncar file records list."""
-    ws = _load_workspace(workdir)
+    ws = _load_project(workdir)
     manifest_path = ws.manifest_path
     if not manifest_path.exists():
         return []
@@ -88,7 +88,7 @@ def fetch_ncep_ncar(workdir: Path, period: str) -> dict:
     Parameters
     ----------
     workdir : Path
-        Workspace directory. Reads ``fabric.json`` for bbox (stored in
+        Project directory. Reads ``fabric.json`` for bbox (stored in
         provenance only — no spatial subsetting). Writes files to
         the datastore under ``ncep_ncar/``.
     period : str
@@ -99,7 +99,7 @@ def fetch_ncep_ncar(workdir: Path, period: str) -> dict:
     dict
         Provenance record for ``manifest.json``.
     """
-    ws = _load_workspace(workdir)
+    ws = _load_project(workdir)
     meta = _catalog.source(_SOURCE_KEY)
 
     if meta.get("status") == "superseded":
@@ -231,7 +231,7 @@ def _update_manifest(
     consolidation: dict,
 ) -> None:
     """Merge NCEP/NCAR provenance into manifest.json."""
-    ws = _load_workspace(workdir)
+    ws = _load_project(workdir)
     manifest_path = ws.manifest_path
     if manifest_path.exists():
         try:

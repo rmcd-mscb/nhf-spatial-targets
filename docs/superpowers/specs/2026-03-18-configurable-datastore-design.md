@@ -277,3 +277,16 @@ Download logic, consolidation, and manifest tracking stay the same.
 - New `config.yml` structure (datastore, dir_mode, merged pipeline config)
 - Updated repository layout (workspace.py, no data/ placeholder)
 - Updated data provenance section (datastore vs workspace separation)
+
+---
+
+## Post-Implementation Note (2026-03-19)
+
+**Naming clarification:** The "workspace" concept implemented here is more accurately a **project** directory. The key distinction:
+
+- **Project** (fabric-specific): config, fabric metadata, aggregated outputs, targets, weights, logs. Created by `init`, tied to one fabric.
+- **Datastore** (shared, fabric-independent): raw/consolidated source data under `<source_key>/` directories. Reusable across projects pointing to different fabrics.
+
+Multiple projects can share one datastore. If data has already been fetched for one project, another project pointing to the same datastore will find and reuse it. The datastore path must be explicitly set in `config.yml` and should be a separate directory from the project.
+
+Issue #38 tracks renaming `--workdir` → `--project-dir` throughout the CLI and codebase.
