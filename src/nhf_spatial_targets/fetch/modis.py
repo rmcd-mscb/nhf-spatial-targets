@@ -25,7 +25,7 @@ from nhf_spatial_targets.fetch.consolidate import (
     consolidate_mod16a2_timestep,
     log_memory,
 )
-from nhf_spatial_targets.workspace import load as _load_workspace
+from nhf_spatial_targets.workspace import load as _load_project
 
 logger = logging.getLogger(__name__)
 
@@ -195,7 +195,7 @@ def _manifest_source_files(workdir: Path, source_key: str) -> list[dict]:
     Parameters
     ----------
     workdir : Path
-        Workspace directory.
+        Project directory.
     source_key : str
         The source key to look up (e.g. ``"mod16a2_v061"``).
 
@@ -204,7 +204,7 @@ def _manifest_source_files(workdir: Path, source_key: str) -> list[dict]:
     list[dict]
         List of file record dicts, or empty list if not present.
     """
-    ws = _load_workspace(workdir)
+    ws = _load_project(workdir)
     manifest_path = ws.manifest_path
     if not manifest_path.exists():
         return []
@@ -261,7 +261,7 @@ def _update_manifest(
     consolidated_ncs: dict[str, str],
 ) -> None:
     """Merge MODIS provenance into ``manifest.json`` with atomic write."""
-    ws = _load_workspace(workdir)
+    ws = _load_project(workdir)
     manifest_path = ws.manifest_path
     if manifest_path.exists():
         try:
@@ -321,7 +321,7 @@ def fetch_mod16a2(workdir: Path, period: str) -> dict:
     Parameters
     ----------
     workdir : Path
-        Workspace directory. Reads ``fabric.json`` for bbox,
+        Project directory. Reads ``fabric.json`` for bbox,
         writes files to the datastore under ``mod16a2_v061/``.
     period : str
         Temporal range as ``"YYYY/YYYY"`` (start/end years inclusive).
@@ -331,7 +331,7 @@ def fetch_mod16a2(workdir: Path, period: str) -> dict:
     dict
         Provenance record for ``manifest.json``.
     """
-    ws = _load_workspace(workdir)
+    ws = _load_project(workdir)
     source_key = _MOD16A2_SOURCE_KEY
     meta = _catalog.source(source_key)
     short_name = meta["access"]["short_name"]
@@ -471,58 +471,59 @@ def fetch_mod16a2(workdir: Path, period: str) -> dict:
                     )
                     return tmp_path
 
-                # Pipeline: prefetch next timestep while consolidating current.
-                # Download is I/O-bound (network), consolidation is CPU-bound
-                # (mosaic + reproject). Overlapping them hides download latency.
-                # Memory impact is negligible — downloads write to disk, not RAM.
-                with ThreadPoolExecutor(max_workers=1) as prefetch:
-                    prefetch_future = None
+                # Pipeline: prefetch upcoming timesteps while consolidating
+                # the current one. Download is I/O-bound (network),
+                # consolidation is CPU-bound (mosaic + reproject).
+                # Overlapping them hides download latency.  Memory
+                # impact is negligible — downloads write to disk, not RAM.
+                _PREFETCH_AHEAD = 2
+                from collections import deque
+
+                with ThreadPoolExecutor(max_workers=_PREFETCH_AHEAD) as prefetch:
+                    # Seed the prefetch queue with the first batch(es)
+                    futures: deque = deque()
+                    for j in range(min(_PREFETCH_AHEAD, n_steps)):
+                        pf_ydoy = sorted_ydoys[j]
+                        pf_batch = ts_groups[pf_ydoy]
+                        logger.info(
+                            "Prefetching timestep %d/%d (A%s): %d granules",
+                            j + 1,
+                            n_steps,
+                            pf_ydoy,
+                            len(pf_batch),
+                        )
+                        futures.append(
+                            prefetch.submit(_download_timestep, pf_ydoy, pf_batch)
+                        )
 
                     for i, ydoy in enumerate(sorted_ydoys, 1):
                         batch = ts_groups[ydoy]
 
-                        # Get tiles: from prefetch future or direct download
-                        if prefetch_future is not None:
-                            _pf_ydoy, _pf_downloaded = prefetch_future.result()
-                            tile_paths = _validate_download(
-                                _pf_ydoy, _pf_downloaded, len(batch)
-                            )
-                        else:
-                            logger.info(
-                                "Downloading timestep %d/%d (A%s): %d granules",
-                                i,
-                                n_steps,
-                                ydoy,
-                                len(batch),
-                            )
-                            downloaded = earthaccess.download(
-                                batch, local_path=str(output_dir)
-                            )
-                            tile_paths = _validate_download(
-                                ydoy, downloaded, len(batch)
-                            )
+                        # Wait for the next prefetched result
+                        _pf_ydoy, _pf_downloaded = futures.popleft().result()
+                        tile_paths = _validate_download(
+                            _pf_ydoy, _pf_downloaded, len(batch)
+                        )
 
                         log_memory(
                             f"after downloading timestep {i}/{n_steps} (A{ydoy})"
                         )
 
-                        # Start prefetching next timestep (I/O) while we
-                        # consolidate this one (CPU)
-                        if i < n_steps:
-                            next_ydoy = sorted_ydoys[i]
-                            next_batch = ts_groups[next_ydoy]
+                        # Submit next prefetch to keep the queue full
+                        next_idx = i - 1 + _PREFETCH_AHEAD
+                        if next_idx < n_steps:
+                            pf_ydoy = sorted_ydoys[next_idx]
+                            pf_batch = ts_groups[pf_ydoy]
                             logger.info(
                                 "Prefetching timestep %d/%d (A%s): %d granules",
-                                i + 1,
+                                next_idx + 1,
                                 n_steps,
-                                next_ydoy,
-                                len(next_batch),
+                                pf_ydoy,
+                                len(pf_batch),
                             )
-                            prefetch_future = prefetch.submit(
-                                _download_timestep, next_ydoy, next_batch
+                            futures.append(
+                                prefetch.submit(_download_timestep, pf_ydoy, pf_batch)
                             )
-                        else:
-                            prefetch_future = None
 
                         # Consolidate current timestep (CPU-bound)
                         tmp_path = _consolidate_and_cleanup(tile_paths, ydoy, i)
@@ -708,7 +709,7 @@ def fetch_mod10c1(workdir: Path, period: str) -> dict:
     Parameters
     ----------
     workdir : Path
-        Workspace directory. Reads ``fabric.json`` for bbox,
+        Project directory. Reads ``fabric.json`` for bbox,
         writes files to the datastore under ``mod10c1_v061/``.
     period : str
         Temporal range as ``"YYYY/YYYY"`` (start/end years inclusive).
@@ -718,7 +719,7 @@ def fetch_mod10c1(workdir: Path, period: str) -> dict:
     dict
         Provenance record for ``manifest.json``.
     """
-    ws = _load_workspace(workdir)
+    ws = _load_project(workdir)
     source_key = _MOD10C1_SOURCE_KEY
     meta = _catalog.source(source_key)
     short_name = meta["access"]["short_name"]

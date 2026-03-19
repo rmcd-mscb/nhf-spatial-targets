@@ -411,7 +411,7 @@ def test_cli_nonexistent_run_dir(tmp_path: Path):
             [
                 "fetch",
                 "reitz2017",
-                "--workdir",
+                "--project-dir",
                 str(tmp_path / "nope"),
                 "--period",
                 "2005/2006",

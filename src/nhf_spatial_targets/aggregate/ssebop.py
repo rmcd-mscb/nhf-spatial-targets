@@ -17,7 +17,7 @@ from gdptools.helpers import get_stac_collection
 
 from nhf_spatial_targets import catalog
 from nhf_spatial_targets.aggregate.batching import spatial_batch
-from nhf_spatial_targets.workspace import load as _load_workspace
+from nhf_spatial_targets.workspace import load as _load_project
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ def aggregate_ssebop(
     period : str
         Temporal range as 'YYYY/YYYY'.
     workdir : str | Path
-        Workspace directory.
+        Project directory.
     batch_size : int
         Target number of HRUs per spatial batch.
 
@@ -118,7 +118,7 @@ def aggregate_ssebop(
     """
     workdir = Path(workdir)
     fabric_path = Path(fabric_path)
-    ws = _load_workspace(workdir)
+    ws = _load_project(workdir)
 
     # 1. Load source metadata and STAC collection
     meta = catalog.source(_SOURCE_KEY)

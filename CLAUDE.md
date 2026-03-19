@@ -8,18 +8,18 @@ Build curated calibration target datasets for the USGS National Hydrologic Model
 **All commands run via pixi (not pip/conda/python directly):**
 
 ```bash
-# Create a workspace
-pixi run init -- --workdir /data/nhf-runs/my-run
+# Create a project
+pixi run init -- --project-dir /data/nhf-runs/my-run
 
 # Edit config.yml to set fabric path, datastore, and credentials
-# Then validate the workspace
-pixi run validate -- --workdir /data/nhf-runs/my-run
+# Then validate the project
+pixi run validate -- --project-dir /data/nhf-runs/my-run
 
-# Run the full pipeline against a workspace
-pixi run run -- --workdir /data/nhf-runs/my-run
+# Run the full pipeline against a project
+pixi run run -- --project-dir /data/nhf-runs/my-run
 
 # Run a single target
-pixi run run-aet -- --workdir /data/nhf-runs/my-run
+pixi run run-aet -- --project-dir /data/nhf-runs/my-run
 
 # Catalog inspection
 pixi run catalog-sources
@@ -54,9 +54,9 @@ config/            # pipeline.yml reference configuration
 src/nhf_spatial_targets/
   catalog.py       # Python API for catalog/ YAML files
   cli.py           # Cyclopts CLI: nhf-targets init | validate | run | fetch | catalog
-  workspace.py     # Workspace path resolution, Workspace dataclass, make_dir()
+  workspace.py     # Project path resolution, Project dataclass, make_dir()
   validate.py      # Preflight checks (fabric, datastore, credentials, catalog)
-  init_run.py      # Workspace skeleton creation
+  init_run.py      # Project skeleton creation
   fetch/           # per-source download modules (one file per source)
   aggregate/       # gdptools area-weighted aggregation
   normalize/       # normalization and range-bound methods
@@ -109,12 +109,12 @@ The pipeline separates **projects** (fabric-specific) from the **datastore** (sh
 ```
 
 **Workflow:**
-1. `nhf-targets init --workdir <project-dir>` creates a project skeleton with `config.yml` template
+1. `nhf-targets init --project-dir <project-dir>` creates a project skeleton with `config.yml` template
 2. User edits `config.yml` to set `fabric.path`, `fabric.id_col`, `datastore` path, and credentials
-3. `nhf-targets validate --workdir <project-dir>` runs preflight checks and writes `fabric.json`
-4. `nhf-targets fetch <source> --workdir <project-dir>` downloads to the shared datastore
-5. `nhf-targets agg ssebop --workdir <project-dir>` aggregates remote data to fabric
-6. `nhf-targets run --workdir <project-dir>` builds calibration targets
+3. `nhf-targets validate --project-dir <project-dir>` runs preflight checks and writes `fabric.json`
+4. `nhf-targets fetch <source> --project-dir <project-dir>` downloads to the shared datastore
+5. `nhf-targets agg ssebop --project-dir <project-dir>` aggregates remote data to fabric
+6. `nhf-targets run --project-dir <project-dir>` builds calibration targets
 
 **Key paths:**
 - `<project>/config.yml` — project configuration (fabric, datastore, targets, dir_mode)
@@ -131,7 +131,6 @@ The pipeline separates **projects** (fabric-specific) from the **datastore** (sh
 - The datastore path must be explicitly set in `config.yml` — it should not be the same as the project directory
 - `dir_mode` in config.yml sets Unix directory permissions (e.g., "2775" for setgid + group-writable); ignored on Windows
 - Never delete a project directory — it is the audit trail
-- Issue #38 tracks renaming `--workdir` to `--project-dir` in the CLI
 
 ## Known Gaps (do not implement until resolved)
 

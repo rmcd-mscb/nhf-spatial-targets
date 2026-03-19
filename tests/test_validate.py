@@ -1,4 +1,4 @@
-"""Tests for nhf_spatial_targets.validate — preflight workspace checks."""
+"""Tests for nhf_spatial_targets.validate — preflight project checks."""
 
 from __future__ import annotations
 

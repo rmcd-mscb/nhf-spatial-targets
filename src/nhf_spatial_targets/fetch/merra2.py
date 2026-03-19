@@ -15,7 +15,7 @@ import nhf_spatial_targets.catalog as _catalog
 from nhf_spatial_targets.fetch._auth import earthdata_login
 from nhf_spatial_targets.fetch._period import months_in_period, parse_period
 from nhf_spatial_targets.fetch.consolidate import consolidate_merra2
-from nhf_spatial_targets.workspace import load as _load_workspace
+from nhf_spatial_targets.workspace import load as _load_project
 
 _SOURCE_KEY = "merra2"
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ def _granule_year_month(granule: object) -> str | None:
 
 def _manifest_merra2_files(workdir: Path) -> list[dict]:
     """Read manifest.json and return the merra2 file records list."""
-    ws = _load_workspace(workdir)
+    ws = _load_project(workdir)
     manifest_path = ws.manifest_path
     if not manifest_path.exists():
         return []
@@ -83,7 +83,7 @@ def fetch_merra2(workdir: Path, period: str) -> dict:
     Parameters
     ----------
     workdir : Path
-        Workspace directory. Reads ``fabric.json`` for bbox,
+        Project directory. Reads ``fabric.json`` for bbox,
         writes files to the datastore under ``merra2/``.
     period : str
         Temporal range as ``"YYYY/YYYY"`` (start/end years inclusive).
@@ -93,7 +93,7 @@ def fetch_merra2(workdir: Path, period: str) -> dict:
     dict
         Provenance record for ``manifest.json``.
     """
-    ws = _load_workspace(workdir)
+    ws = _load_project(workdir)
     meta = _catalog.source(_SOURCE_KEY)
     short_name = meta["access"]["short_name"]
 
@@ -232,7 +232,7 @@ def _update_manifest(
     consolidation: dict,
 ) -> None:
     """Merge MERRA-2 provenance into manifest.json."""
-    ws = _load_workspace(workdir)
+    ws = _load_project(workdir)
     manifest_path = ws.manifest_path
     if manifest_path.exists():
         try:

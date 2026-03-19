@@ -1,4 +1,4 @@
-"""Workspace path resolution and directory helpers."""
+"""Project path resolution and directory helpers."""
 
 from __future__ import annotations
 
@@ -22,8 +22,8 @@ def make_dir(path: Path, *, dir_mode: int | None = None) -> Path:
 
 
 @dataclass(frozen=True)
-class Workspace:
-    """Resolved workspace with validated paths."""
+class Project:
+    """Resolved project with validated paths."""
 
     workdir: Path
     datastore: Path
@@ -54,13 +54,13 @@ class Workspace:
         return self.workdir / ".credentials.yml"
 
 
-def load(workdir: Path) -> Workspace:
-    """Load a validated workspace from config.yml + fabric.json."""
+def load(workdir: Path) -> Project:
+    """Load a validated project from config.yml + fabric.json."""
     config_path = workdir / "config.yml"
     if not config_path.exists():
         raise FileNotFoundError(
             f"config.yml not found in {workdir}. "
-            f"Run 'nhf-targets init --workdir {workdir}' first."
+            f"Run 'nhf-targets init --project-dir {workdir}' first."
         )
     try:
         config = yaml.safe_load(config_path.read_text())
@@ -82,7 +82,7 @@ def load(workdir: Path) -> Workspace:
     if not fabric_path.exists():
         raise FileNotFoundError(
             f"fabric.json not found in {workdir}. "
-            f"Run 'nhf-targets validate --workdir {workdir}' first."
+            f"Run 'nhf-targets validate --project-dir {workdir}' first."
         )
     fabric = json.loads(fabric_path.read_text())
 
@@ -98,7 +98,7 @@ def load(workdir: Path) -> Workspace:
     else:
         dir_mode = None
 
-    return Workspace(
+    return Project(
         workdir=workdir,
         datastore=Path(config["datastore"]),
         config=config,

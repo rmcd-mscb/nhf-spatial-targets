@@ -1,4 +1,4 @@
-"""Preflight validation for an nhf-spatial-targets workspace."""
+"""Preflight validation for an nhf-spatial-targets project."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ _SOURCE_KEYS: list[str] = [
 
 
 def validate_workspace(workdir: Path) -> None:
-    """Run preflight checks on a workspace directory, failing fast on errors.
+    """Run preflight checks on a project directory, failing fast on errors.
 
     On success, writes ``fabric.json`` and ``manifest.json`` into *workdir*.
     """
@@ -77,7 +77,7 @@ def _check_config(workdir: Path) -> dict:
     if not config_path.exists():
         raise FileNotFoundError(
             f"config.yml not found in {workdir}. "
-            f"Run 'nhf-targets init --workdir {workdir}' first."
+            f"Run 'nhf-targets init --project-dir {workdir}' first."
         )
     try:
         config = yaml.safe_load(config_path.read_text())

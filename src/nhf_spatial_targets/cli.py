@@ -20,7 +20,7 @@ app = App(
     help="nhf-spatial-targets: build NHM calibration target datasets.",
     version=_pkg_version("nhf-spatial-targets"),
 )
-fetch_app = App(name="fetch", help="Download source datasets into a run workspace.")
+fetch_app = App(name="fetch", help="Download source datasets into a project datastore.")
 agg_app = App(name="agg", help="Aggregate source datasets to HRU fabric polygons.")
 catalog_app = App(name="catalog", help="Inspect the data source catalog.")
 app.command(fetch_app)
@@ -43,8 +43,8 @@ def run(
     workdir: Annotated[
         Path,
         Parameter(
-            name=["--workdir", "-w"],
-            help="Workspace created by 'nhf-targets init'.",
+            name=["--project-dir", "-d"],
+            help="Project created by 'nhf-targets init'.",
         ),
     ],
     target: Annotated[
@@ -57,7 +57,7 @@ def run(
 ):
     """Run the calibration target pipeline."""
     if not workdir.exists():
-        print(f"Error: Workspace not found: {workdir}", file=sys.stderr)
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
         sys.exit(2)
     if not (workdir / "fabric.json").exists():
         print(
@@ -131,17 +131,17 @@ def init(
     workdir: Annotated[
         Path,
         Parameter(
-            name=["--workdir", "-w"],
-            help="Directory to create as the new workspace.",
+            name=["--project-dir", "-d"],
+            help="Directory to create as the new project.",
         ),
     ],
 ):
-    """Initialise a new workspace with a config template.
+    """Initialise a new project with a config template.
 
     Creates a directory skeleton with config.yml and .credentials.yml.
-    Edit those files, then run 'nhf-targets validate --workdir <dir>'.
+    Edit those files, then run 'nhf-targets validate --project-dir <dir>'.
     """
-    from nhf_spatial_targets.init_run import init_workspace
+    from nhf_spatial_targets.init_run import init_project
     from rich.console import Console
     from rich.panel import Panel
     from rich.text import Text
@@ -149,18 +149,18 @@ def init(
     console = Console()
 
     try:
-        result = init_workspace(workdir)
+        result = init_project(workdir)
     except FileExistsError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
     msg = Text()
-    msg.append("Workspace created:\n", style="bold green")
+    msg.append("Project created:\n", style="bold green")
     msg.append(f"  {result}\n\n")
     msg.append("Next steps:\n", style="bold")
     msg.append(f"  1. Edit   {result / 'config.yml'}\n")
     msg.append(f"  2. Fill   {result / '.credentials.yml'}\n")
-    msg.append(f"  3. Run    nhf-targets validate --workdir {result}\n")
+    msg.append(f"  3. Run    nhf-targets validate --project-dir {result}\n")
     console.print(Panel(msg, title="nhf-targets init", border_style="green"))
 
 
@@ -169,14 +169,14 @@ def validate(
     workdir: Annotated[
         Path,
         Parameter(
-            name=["--workdir", "-w"],
-            help="Workspace directory to validate.",
+            name=["--project-dir", "-d"],
+            help="Project directory to validate.",
         ),
     ],
 ):
-    """Validate a workspace: check config, fabric, credentials, and catalog.
+    """Validate a project: check config, fabric, credentials, and catalog.
 
-    On success, writes fabric.json and manifest.json into the workspace.
+    On success, writes fabric.json and manifest.json into the project.
     """
     from rich.console import Console
 
@@ -185,7 +185,7 @@ def validate(
     console = Console()
 
     if not workdir.exists():
-        print(f"Error: Workspace not found: {workdir}", file=sys.stderr)
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
         sys.exit(2)
 
     try:
@@ -201,9 +201,7 @@ def validate(
         )
         sys.exit(1)
 
-    console.print(
-        f"[bold green]Workspace validated successfully:[/bold green] {workdir}"
-    )
+    console.print(f"[bold green]Project validated successfully:[/bold green] {workdir}")
 
 
 @fetch_app.command(name="all")
@@ -211,8 +209,8 @@ def fetch_all_cmd(
     workdir: Annotated[
         Path,
         Parameter(
-            name=["--workdir", "-w"],
-            help="Workspace created by 'nhf-targets init'.",
+            name=["--project-dir"],
+            help="Project created by 'nhf-targets init'.",
         ),
     ],
     period: Annotated[
@@ -220,7 +218,7 @@ def fetch_all_cmd(
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
     ],
 ):
-    """Download all source datasets into the workspace datastore.
+    """Download all source datasets into the project datastore.
 
     Iterates through every registered fetch module in sequence.
     Stops on the first failure.
@@ -228,7 +226,7 @@ def fetch_all_cmd(
     from rich.console import Console
 
     if not workdir.exists():
-        print(f"Error: Workspace not found: {workdir}", file=sys.stderr)
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
         sys.exit(2)
 
     console = Console()
@@ -304,8 +302,8 @@ def fetch_merra2_cmd(
     workdir: Annotated[
         Path,
         Parameter(
-            name=["--workdir", "-w"],
-            help="Workspace created by 'nhf-targets init'.",
+            name=["--project-dir"],
+            help="Project created by 'nhf-targets init'.",
         ),
     ],
     period: Annotated[
@@ -325,7 +323,7 @@ def fetch_merra2_cmd(
     from nhf_spatial_targets.fetch.merra2 import fetch_merra2
 
     if not workdir.exists():
-        print(f"Error: Workspace not found: {workdir}", file=sys.stderr)
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
         sys.exit(2)
 
     console = Console()
@@ -353,8 +351,8 @@ def fetch_nldas_mosaic_cmd(
     workdir: Annotated[
         Path,
         Parameter(
-            name=["--workdir", "-w"],
-            help="Workspace created by 'nhf-targets init'.",
+            name=["--project-dir"],
+            help="Project created by 'nhf-targets init'.",
         ),
     ],
     period: Annotated[
@@ -370,7 +368,7 @@ def fetch_nldas_mosaic_cmd(
     from nhf_spatial_targets.fetch.nldas import fetch_nldas_mosaic
 
     if not workdir.exists():
-        print(f"Error: Workspace not found: {workdir}", file=sys.stderr)
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
         sys.exit(2)
 
     console = Console()
@@ -398,8 +396,8 @@ def fetch_nldas_noah_cmd(
     workdir: Annotated[
         Path,
         Parameter(
-            name=["--workdir", "-w"],
-            help="Workspace created by 'nhf-targets init'.",
+            name=["--project-dir"],
+            help="Project created by 'nhf-targets init'.",
         ),
     ],
     period: Annotated[
@@ -415,7 +413,7 @@ def fetch_nldas_noah_cmd(
     from nhf_spatial_targets.fetch.nldas import fetch_nldas_noah
 
     if not workdir.exists():
-        print(f"Error: Workspace not found: {workdir}", file=sys.stderr)
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
         sys.exit(2)
 
     console = Console()
@@ -443,8 +441,8 @@ def fetch_ncep_ncar_cmd(
     workdir: Annotated[
         Path,
         Parameter(
-            name=["--workdir", "-w"],
-            help="Workspace created by 'nhf-targets init'.",
+            name=["--project-dir"],
+            help="Project created by 'nhf-targets init'.",
         ),
     ],
     period: Annotated[
@@ -460,7 +458,7 @@ def fetch_ncep_ncar_cmd(
     from nhf_spatial_targets.fetch.ncep_ncar import fetch_ncep_ncar
 
     if not workdir.exists():
-        print(f"Error: Workspace not found: {workdir}", file=sys.stderr)
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
         sys.exit(2)
 
     console = Console()
@@ -488,8 +486,8 @@ def fetch_mod16a2_cmd(
     workdir: Annotated[
         Path,
         Parameter(
-            name=["--workdir", "-w"],
-            help="Workspace created by 'nhf-targets init'.",
+            name=["--project-dir"],
+            help="Project created by 'nhf-targets init'.",
         ),
     ],
     period: Annotated[
@@ -505,7 +503,7 @@ def fetch_mod16a2_cmd(
     from nhf_spatial_targets.fetch.modis import fetch_mod16a2
 
     if not workdir.exists():
-        print(f"Error: Workspace not found: {workdir}", file=sys.stderr)
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
         sys.exit(2)
 
     console = Console()
@@ -533,8 +531,8 @@ def fetch_mod10c1_cmd(
     workdir: Annotated[
         Path,
         Parameter(
-            name=["--workdir", "-w"],
-            help="Workspace created by 'nhf-targets init'.",
+            name=["--project-dir"],
+            help="Project created by 'nhf-targets init'.",
         ),
     ],
     period: Annotated[
@@ -550,7 +548,7 @@ def fetch_mod10c1_cmd(
     from nhf_spatial_targets.fetch.modis import fetch_mod10c1
 
     if not workdir.exists():
-        print(f"Error: Workspace not found: {workdir}", file=sys.stderr)
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
         sys.exit(2)
 
     console = Console()
@@ -578,8 +576,8 @@ def fetch_watergap22d_cmd(
     workdir: Annotated[
         Path,
         Parameter(
-            name=["--workdir", "-w"],
-            help="Workspace created by 'nhf-targets init'.",
+            name=["--project-dir"],
+            help="Project created by 'nhf-targets init'.",
         ),
     ],
     period: Annotated[
@@ -595,7 +593,7 @@ def fetch_watergap22d_cmd(
     from nhf_spatial_targets.fetch.pangaea import fetch_watergap22d
 
     if not workdir.exists():
-        print(f"Error: Workspace not found: {workdir}", file=sys.stderr)
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
         sys.exit(2)
 
     console = Console()
@@ -623,8 +621,8 @@ def fetch_reitz2017_cmd(
     workdir: Annotated[
         Path,
         Parameter(
-            name=["--workdir", "-w"],
-            help="Workspace created by 'nhf-targets init'.",
+            name=["--project-dir"],
+            help="Project created by 'nhf-targets init'.",
         ),
     ],
     period: Annotated[
@@ -640,7 +638,7 @@ def fetch_reitz2017_cmd(
     from nhf_spatial_targets.fetch.reitz2017 import fetch_reitz2017
 
     if not workdir.exists():
-        print(f"Error: Workspace not found: {workdir}", file=sys.stderr)
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
         sys.exit(2)
 
     console = Console()
@@ -668,8 +666,8 @@ def agg_ssebop_cmd(
     workdir: Annotated[
         Path,
         Parameter(
-            name=["--workdir", "-w"],
-            help="Workspace created by 'nhf-targets init'.",
+            name=["--project-dir"],
+            help="Project created by 'nhf-targets init'.",
         ),
     ],
     period: Annotated[
@@ -691,7 +689,7 @@ def agg_ssebop_cmd(
     from nhf_spatial_targets.aggregate.ssebop import aggregate_ssebop
 
     if not workdir.exists():
-        print(f"Error: Workspace not found: {workdir}", file=sys.stderr)
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
         sys.exit(2)
     if not (workdir / "fabric.json").exists():
         print(
@@ -701,7 +699,7 @@ def agg_ssebop_cmd(
         )
         sys.exit(2)
 
-    # Read fabric path and id_col from workspace config
+    # Read fabric path and id_col from project config
     try:
         cfg = yaml.safe_load((workdir / "config.yml").read_text())
     except yaml.YAMLError as exc:
