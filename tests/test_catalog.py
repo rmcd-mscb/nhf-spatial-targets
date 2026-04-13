@@ -48,3 +48,28 @@ def test_nhm_mwbm_removed():
     )
     aet = catalog.variable("aet")
     assert "nhm_mwbm" not in aet["sources"]
+
+
+def test_era5_land_source_present():
+    from nhf_spatial_targets import catalog
+
+    s = catalog.source("era5_land")
+    assert s["access"]["type"] == "copernicus_cds"
+    assert s["access"]["dataset"] == "reanalysis-era5-land"
+    var_names = [v["name"] for v in s["variables"]]
+    assert var_names == ["ro", "sro", "ssro"]
+    assert s["time_step"] == "hourly (aggregated to daily and monthly)"
+    assert s["status"] == "current"
+
+
+def test_gldas_source_present():
+    from nhf_spatial_targets import catalog
+
+    s = catalog.source("gldas_noah_v21_monthly")
+    assert s["access"]["short_name"] == "GLDAS_NOAH025_M"
+    assert s["access"]["version"] == "2.1"
+    var_names = [v["name"] for v in s["variables"]]
+    assert "Qs_acc" in var_names
+    assert "Qsb_acc" in var_names
+    assert "runoff_total" in var_names  # derived
+    assert s["status"] == "current"

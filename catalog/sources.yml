@@ -9,6 +9,95 @@ sources:
   # RUNOFF
   # ---------------------------------------------------------------------------
 
+  era5_land:
+    name: ECMWF ERA5-Land Reanalysis
+    description: >
+      ECMWF ERA5-Land hourly reanalysis. Total runoff (ro), surface runoff
+      (sro), and sub-surface runoff (ssro) downloaded for CONUS plus
+      contributing watersheds (Canada/Mexico). Used as a source for the
+      runoff calibration target (ro) and the recharge calibration target
+      (ssro, as drainage proxy).
+    citations:
+      - "Muñoz-Sabater, J., and others, 2021, doi:10.5194/essd-13-4349-2021"
+    access:
+      type: copernicus_cds
+      dataset: reanalysis-era5-land
+      url: https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land
+      bbox_nwse: [53.0, -125.0, 24.7, -66.0]
+      bbox_notes: >
+        Encompasses CONUS contributing watersheds (Canada/Mexico) with
+        ~10 km buffer, snapped to the 0.1° ERA5-Land grid.
+      notes: >
+        Access via cdsapi (Copernicus CDS account required). Hourly
+        accumulated fields reset at 00 UTC. Pipeline aggregates
+        hourly→daily (via .diff('time') + resample sum) and daily→monthly.
+        Both daily and monthly consolidated NCs are stored in the datastore.
+    variables:
+      - name: ro
+        long_name: total runoff
+        cf_units: "m"
+        cell_methods: "time: sum"
+        notes: Used for runoff target.
+      - name: sro
+        long_name: surface runoff
+        cf_units: "m"
+        cell_methods: "time: sum"
+        notes: Stored for future use.
+      - name: ssro
+        long_name: sub-surface runoff
+        cf_units: "m"
+        cell_methods: "time: sum"
+        notes: Used as recharge proxy in recharge target.
+    time_step: hourly (aggregated to daily and monthly)
+    period: "1979/present"
+    spatial_extent: CONUS+contributing-watersheds
+    spatial_resolution: 0.1 degree
+    units: m of water equivalent
+    license: Copernicus license (free, attribution)
+    status: current
+
+  gldas_noah_v21_monthly:
+    name: GLDAS-2.1 NOAH Monthly Land Surface Runoff
+    description: >
+      Global Land Data Assimilation System version 2.1, NOAH land
+      surface model, monthly product. Storm surface runoff (Qs_acc)
+      and baseflow-groundwater runoff (Qsb_acc) summed at consolidation
+      time to derived total runoff (runoff_total). Used as second source
+      for the runoff calibration target.
+    citations:
+      - "Rodell, M., and others, 2004, doi:10.1175/BAMS-85-3-381"
+    access:
+      type: nasa_gesdisc
+      short_name: GLDAS_NOAH025_M
+      version: "2.1"
+      url: https://disc.gsfc.nasa.gov/datasets/GLDAS_NOAH025_M_2.1/summary
+      bbox_nwse: [53.0, -125.0, 24.7, -66.0]
+      notes: >
+        Access via earthaccess (NASA Earthdata login required). Granules
+        are global (~few MB monthly); downloaded full and clipped to bbox
+        at consolidation time, mirroring the merra2 pattern.
+    variables:
+      - name: Qs_acc
+        long_name: storm surface runoff
+        cf_units: "kg m-2"
+        cell_methods: "time: sum"
+      - name: Qsb_acc
+        long_name: baseflow-groundwater runoff
+        cf_units: "kg m-2"
+        cell_methods: "time: sum"
+      - name: runoff_total
+        long_name: total runoff (Qs_acc + Qsb_acc, derived)
+        cf_units: "kg m-2"
+        cell_methods: "time: sum"
+        derived: true
+    time_step: monthly
+    period: "2000/present"
+    spatial_extent: global (clipped to CONUS+contributing-watersheds)
+    spatial_resolution: 0.25 degree
+    units: kg m-2 (equivalent to mm over the month)
+    license: public domain (NASA)
+    status: current
+
   # ---------------------------------------------------------------------------
   # ACTUAL EVAPOTRANSPIRATION
   # ---------------------------------------------------------------------------
