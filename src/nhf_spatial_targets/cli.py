@@ -211,10 +211,17 @@ def materialize_credentials_cmd(
         sys.exit(1)
 
     try:
-        creds = yaml.safe_load(cred_path.read_text()) or {}
+        raw = yaml.safe_load(cred_path.read_text())
     except yaml.YAMLError as exc:
-        print(f"Error: Cannot parse .credentials.yml: {exc}", file=sys.stderr)
+        print(f"Error: Cannot parse {cred_path}: {exc}", file=sys.stderr)
         sys.exit(1)
+    if raw is None:
+        print(
+            f"Error: {cred_path} is empty — did you save your edits?",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    creds = raw if isinstance(raw, dict) else {}
 
     table = Table(title="Credential materialisation", show_header=True)
     table.add_column("Section", style="bold")
@@ -228,22 +235,26 @@ def materialize_credentials_cmd(
         cds_path = materialize_cdsapirc(creds)
         table.add_row("cds", str(cds_path), "[green]written[/green]")
     except ValueError as exc:
+        msg = f"{cred_path}: {exc}"
         table.add_row("cds", "~/.cdsapirc", f"[yellow]skipped[/yellow]: {exc}")
-        errors.append(("user", str(exc)))
+        errors.append(("user", msg))
     except OSError as exc:
+        msg = f"{cred_path}: {exc}"
         table.add_row("cds", "~/.cdsapirc", f"[red]error[/red]: {exc}")
-        errors.append(("system", str(exc)))
+        errors.append(("system", msg))
 
     # --- NASA Earthdata ---
     try:
         netrc_path = materialize_netrc_earthdata(creds)
         table.add_row("nasa_earthdata", str(netrc_path), "[green]written[/green]")
     except ValueError as exc:
+        msg = f"{cred_path}: {exc}"
         table.add_row("nasa_earthdata", "~/.netrc", f"[yellow]skipped[/yellow]: {exc}")
-        errors.append(("user", str(exc)))
+        errors.append(("user", msg))
     except OSError as exc:
+        msg = f"{cred_path}: {exc}"
         table.add_row("nasa_earthdata", "~/.netrc", f"[red]error[/red]: {exc}")
-        errors.append(("system", str(exc)))
+        errors.append(("system", msg))
 
     console.print(table)
 
