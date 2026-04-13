@@ -133,6 +133,11 @@ def fetch_gldas(workdir: Path, period: str) -> dict:
             "earthaccess.download() returned no files. "
             "Check network connectivity and Earthdata credentials."
         )
+    if len(downloaded) < len(results):
+        raise RuntimeError(
+            f"Partial GLDAS download: got {len(downloaded)}/{len(results)} granules. "
+            f"Re-run to retry, or inspect earthaccess logs."
+        )
 
     with xr.open_mfdataset(sorted(downloaded), combine="by_coords") as raw_ds:
         ds = raw_ds[["Qs_acc", "Qsb_acc"]].load()

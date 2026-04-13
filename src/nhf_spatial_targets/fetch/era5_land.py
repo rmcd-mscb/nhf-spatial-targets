@@ -149,7 +149,13 @@ def download_year_variable(
     }
     client = _cds_client()
     logger.info("Submitting CDS request for %s %d → %s", variable, year, output_path)
-    client.retrieve("reanalysis-era5-land", request, str(output_path))
+    tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+    try:
+        client.retrieve("reanalysis-era5-land", request, str(tmp_path))
+        tmp_path.rename(output_path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
     return output_path
 
 

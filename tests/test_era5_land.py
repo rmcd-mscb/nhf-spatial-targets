@@ -146,14 +146,23 @@ def test_daily_to_monthly_sum():
 def test_download_year_calls_cds_client(tmp_path, monkeypatch):
     from nhf_spatial_targets.fetch.era5_land import download_year_variable
 
+    out = tmp_path / "era5_land_ro_2020.nc"
+    expected_tmp = str(out) + ".tmp"
+
+    def fake_retrieve(dataset, request, path):
+        # Simulate CDS writing to the tmp path (not the final path)
+        assert path == expected_tmp, (
+            f"CDS retrieve should write to tmp path {expected_tmp!r}, got {path!r}"
+        )
+        Path(path).write_bytes(b"fake_nc_data")
+
     fake_client = MagicMock()
-    fake_client.retrieve = MagicMock()
+    fake_client.retrieve = MagicMock(side_effect=fake_retrieve)
     monkeypatch.setattr(
         "nhf_spatial_targets.fetch.era5_land._cds_client", lambda: fake_client
     )
 
-    out = tmp_path / "era5_land_ro_2020.nc"
-    download_year_variable(year=2020, variable="ro", output_path=out)
+    result = download_year_variable(year=2020, variable="ro", output_path=out)
 
     fake_client.retrieve.assert_called_once()
     args, kwargs = fake_client.retrieve.call_args
@@ -164,7 +173,37 @@ def test_download_year_calls_cds_client(tmp_path, monkeypatch):
     assert request["area"] == [53.0, -125.0, 24.7, -66.0]
     assert request["format"] == "netcdf"
     assert "month" in request and len(request["month"]) == 12
-    assert args[2] == str(out)
+    # The retrieve is passed the .tmp path; final output_path exists after rename
+    assert out.exists(), "Final output file should exist after atomic rename"
+    assert not Path(expected_tmp).exists(), "Tmp file should be gone after rename"
+    assert result == out
+
+
+def test_download_year_atomic_cleanup_on_failure(tmp_path, monkeypatch):
+    """If CDS retrieve raises, the .tmp file is cleaned up and output_path is absent."""
+    from nhf_spatial_targets.fetch.era5_land import download_year_variable
+
+    out = tmp_path / "era5_land_ro_2020.nc"
+    tmp_path_expected = Path(str(out) + ".tmp")
+
+    def fake_retrieve_fail(dataset, request, path):
+        # Write partial data to tmp, then raise
+        Path(path).write_bytes(b"partial")
+        raise RuntimeError("CDS server error")
+
+    fake_client = MagicMock()
+    fake_client.retrieve = MagicMock(side_effect=fake_retrieve_fail)
+    monkeypatch.setattr(
+        "nhf_spatial_targets.fetch.era5_land._cds_client", lambda: fake_client
+    )
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="CDS server error"):
+        download_year_variable(year=2020, variable="ro", output_path=out)
+
+    assert not out.exists(), "output_path must not exist after a failed download"
+    assert not tmp_path_expected.exists(), ".tmp file must be cleaned up on failure"
 
 
 def test_download_year_skips_existing(tmp_path, monkeypatch):
