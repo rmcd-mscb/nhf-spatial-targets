@@ -51,17 +51,17 @@ targets:
   runoff:
     enabled: true
     sources:
-      - nhm_mwbm
+      - era5_land
+      - gldas_noah_v21_monthly
     time_step: monthly
-    period: "1982-01-01/2010-12-31"
+    period: "2000-01-01/2010-12-31"
     prms_variable: basin_cfs
-    range_method: mwbm_uncertainty
+    range_method: multi_source_minmax
     output_file: runoff_targets.nc
 
   aet:
     enabled: true
     sources:
-      - nhm_mwbm
       - mod16a2_v061
       - ssebop
     time_step: monthly

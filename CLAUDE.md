@@ -137,8 +137,8 @@ The pipeline separates **projects** (fabric-specific) from the **datastore** (sh
 See `catalog/sources.yml` `status:` and `notes:` fields for per-source gaps.
 
 **Resolved:**
-- MWBM ScienceBase item ID — confirmed: `55fc3f98e4b05d6c4e5029a1`, doi:10.5066/F7VD6WJQ
 - Reitz 2017 ScienceBase item ID — confirmed: `56c49126e4b0946c65219231`, doi:10.5066/F7PN93P0
+- Runoff source replacement — NHM-MWBM removed; replaced by ERA5-Land (CDS) + GLDAS-2.1 NOAH monthly. ERA5-Land ssro also added as third recharge source. Closes issue #41.
 - Recharge normalization window — confirmed **2000-2009** from TM 6-B10 body text
 - MOD16A2 / MOD10C1 v006 → v061: both decommissioned; use v061 in all new runs
 - MERRA-2 variable — use `GWETTOP` (0-0.05m, dimensionless); product M2TMNXLND
