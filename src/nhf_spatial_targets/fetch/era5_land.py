@@ -9,6 +9,7 @@ to the shared datastore.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import pandas as pd
 import xarray as xr
@@ -72,3 +73,64 @@ def daily_to_monthly(da: xr.DataArray) -> xr.DataArray:
     monthly = da.resample(time="1ME").sum()
     monthly.attrs = dict(da.attrs)
     return monthly
+
+
+# Map short variable name to the CDS request name
+_VARIABLE_REQUEST_NAME = {
+    "ro": "runoff",
+    "sro": "surface_runoff",
+    "ssro": "sub_surface_runoff",
+}
+
+
+def _cds_client():
+    """Construct a cdsapi.Client. Separated for test injection."""
+    import cdsapi
+
+    return cdsapi.Client()
+
+
+def download_year_variable(
+    year: int,
+    variable: str,
+    output_path: Path,
+) -> Path:
+    """Download one year of one ERA5-Land variable to ``output_path``.
+
+    Idempotent: if ``output_path`` already exists, returns immediately.
+    Submits a single CDS request covering all 12 months × all hours of
+    the given year, clipped to ``BBOX_NWSE``.
+
+    Parameters
+    ----------
+    year : int
+    variable : {"ro", "sro", "ssro"}
+    output_path : Path
+        Target NetCDF file. Parent directory is created if missing.
+
+    Returns
+    -------
+    Path
+        ``output_path`` (for caller convenience).
+    """
+    if variable not in _VARIABLE_REQUEST_NAME:
+        raise ValueError(f"Unknown ERA5-Land variable: {variable!r}")
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        logger.info("Skipping existing ERA5-Land file: %s", output_path)
+        return output_path
+
+    request = {
+        "variable": _VARIABLE_REQUEST_NAME[variable],
+        "year": str(year),
+        "month": [f"{m:02d}" for m in range(1, 13)],
+        "day": [f"{d:02d}" for d in range(1, 32)],
+        "time": [f"{h:02d}:00" for h in range(24)],
+        "area": BBOX_NWSE,
+        "format": "netcdf",
+    }
+    client = _cds_client()
+    logger.info("Submitting CDS request for %s %d → %s", variable, year, output_path)
+    client.retrieve("reanalysis-era5-land", request, str(output_path))
+    return output_path

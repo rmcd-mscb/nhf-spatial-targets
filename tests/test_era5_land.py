@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -62,3 +64,40 @@ def test_daily_to_monthly_sum():
     np.testing.assert_allclose(monthly.isel(time=0).values, 0.031, rtol=1e-6)
     np.testing.assert_allclose(monthly.isel(time=1).values, 0.029, rtol=1e-6)
     assert monthly.attrs["units"] == "m"
+
+
+def test_download_year_calls_cds_client(tmp_path, monkeypatch):
+    from nhf_spatial_targets.fetch.era5_land import download_year_variable
+
+    fake_client = MagicMock()
+    fake_client.retrieve = MagicMock()
+    monkeypatch.setattr(
+        "nhf_spatial_targets.fetch.era5_land._cds_client", lambda: fake_client
+    )
+
+    out = tmp_path / "era5_land_ro_2020.nc"
+    download_year_variable(year=2020, variable="ro", output_path=out)
+
+    fake_client.retrieve.assert_called_once()
+    args, kwargs = fake_client.retrieve.call_args
+    assert args[0] == "reanalysis-era5-land"
+    request = args[1]
+    assert request["variable"] == "runoff"
+    assert request["year"] == "2020"
+    assert request["area"] == [53.0, -125.0, 24.7, -66.0]
+    assert request["format"] == "netcdf"
+    assert "month" in request and len(request["month"]) == 12
+    assert args[2] == str(out)
+
+
+def test_download_year_skips_existing(tmp_path, monkeypatch):
+    from nhf_spatial_targets.fetch.era5_land import download_year_variable
+
+    fake_client = MagicMock()
+    monkeypatch.setattr(
+        "nhf_spatial_targets.fetch.era5_land._cds_client", lambda: fake_client
+    )
+    out = tmp_path / "era5_land_ro_2020.nc"
+    out.write_bytes(b"existing")
+    download_year_variable(year=2020, variable="ro", output_path=out)
+    fake_client.retrieve.assert_not_called()
