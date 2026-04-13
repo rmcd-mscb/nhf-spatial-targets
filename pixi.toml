@@ -49,6 +49,10 @@ dev = { features = ["dev"], solve-group = "default" }
 # Usage: pixi run init -- --project-dir /data/nhf-runs/my-run
 init = { cmd = "nhf-targets init", description = "Create a new project skeleton" }
 
+# Materialise credentials from .credentials.yml into ~/.cdsapirc and ~/.netrc.
+# Usage: pixi run materialize-creds -- --project-dir /data/nhf-runs/my-run
+materialize-creds = { cmd = "nhf-targets materialize-credentials", description = "Write ~/.cdsapirc and ~/.netrc from .credentials.yml" }
+
 # Validate a project (run after editing config.yml).
 # Usage: pixi run validate -- --project-dir /data/nhf-runs/my-run
 validate = { cmd = "nhf-targets validate", description = "Validate project config and fabric" }

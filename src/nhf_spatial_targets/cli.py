@@ -168,6 +168,91 @@ def init(
     console.print(Panel(msg, title="nhf-targets init", border_style="green"))
 
 
+@app.command(name="materialize-credentials")
+def materialize_credentials_cmd(
+    workdir: Annotated[
+        Path,
+        Parameter(
+            name=["--project-dir", "-d"],
+            help="Project directory containing .credentials.yml.",
+        ),
+    ],
+):
+    """Copy credentials from .credentials.yml into ~/.cdsapirc and ~/.netrc.
+
+    Reads the 'cds' and 'nasa_earthdata' sections from the project's
+    .credentials.yml and writes the corresponding dotfiles consumed by
+    cdsapi and earthaccess at runtime.
+
+    Both files are written atomically and set to mode 0600.  Run this once
+    after filling in .credentials.yml; re-run any time credentials change.
+    """
+    import yaml
+    from rich.console import Console
+    from rich.table import Table
+
+    from nhf_spatial_targets.credentials import (
+        materialize_cdsapirc,
+        materialize_netrc_earthdata,
+    )
+
+    console = Console()
+
+    cred_path = workdir / ".credentials.yml"
+    if not workdir.exists():
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
+        sys.exit(2)
+    if not cred_path.exists():
+        print(
+            f"Error: .credentials.yml not found in {workdir}. "
+            "Run 'nhf-targets init --project-dir <dir>' to create a template.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    try:
+        creds = yaml.safe_load(cred_path.read_text()) or {}
+    except yaml.YAMLError as exc:
+        print(f"Error: Cannot parse .credentials.yml: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    table = Table(title="Credential materialisation", show_header=True)
+    table.add_column("Section", style="bold")
+    table.add_column("Target file")
+    table.add_column("Status")
+
+    errors: list[str] = []
+
+    # --- CDS ---
+    try:
+        cds_path = materialize_cdsapirc(creds)
+        table.add_row("cds", str(cds_path), "[green]written[/green]")
+    except ValueError as exc:
+        table.add_row("cds", "~/.cdsapirc", f"[yellow]skipped[/yellow]: {exc}")
+        errors.append(str(exc))
+
+    # --- NASA Earthdata ---
+    try:
+        netrc_path = materialize_netrc_earthdata(creds)
+        table.add_row("nasa_earthdata", str(netrc_path), "[green]written[/green]")
+    except ValueError as exc:
+        table.add_row("nasa_earthdata", "~/.netrc", f"[yellow]skipped[/yellow]: {exc}")
+        errors.append(str(exc))
+
+    console.print(table)
+
+    if errors:
+        console.print(
+            "\n[yellow]One or more sections were skipped due to missing or "
+            "incomplete credentials.  Fill in .credentials.yml and re-run.[/yellow]"
+        )
+        sys.exit(1)
+
+    console.print(
+        "\n[bold green]All credentials materialised successfully.[/bold green]"
+    )
+
+
 @app.command
 def validate(
     workdir: Annotated[
