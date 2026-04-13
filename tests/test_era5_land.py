@@ -143,18 +143,92 @@ def test_daily_to_monthly_sum():
     assert monthly.attrs["units"] == "m"
 
 
+def test_download_month_variable_calls_cds_client(tmp_path, monkeypatch):
+    """download_month_variable submits a single-month CDS request."""
+    from nhf_spatial_targets.fetch.era5_land import download_month_variable
+
+    out = tmp_path / "era5_land_ro_2020_03.nc"
+
+    def fake_retrieve(dataset, request, path):
+        Path(path).write_bytes(b"fake_nc_data")
+
+    fake_client = MagicMock()
+    fake_client.retrieve = MagicMock(side_effect=fake_retrieve)
+    monkeypatch.setattr(
+        "nhf_spatial_targets.fetch.era5_land._cds_client", lambda: fake_client
+    )
+
+    result = download_month_variable(year=2020, month=3, variable="ro", output_path=out)
+
+    fake_client.retrieve.assert_called_once()
+    args, _ = fake_client.retrieve.call_args
+    assert args[0] == "reanalysis-era5-land"
+    request = args[1]
+    assert request["variable"] == "runoff"
+    assert request["year"] == "2020"
+    assert request["month"] == "03"
+    assert request["area"] == [53.0, -125.0, 24.7, -66.0]
+    assert request["format"] == "netcdf"
+    assert len(request["day"]) == 31
+    assert len(request["time"]) == 24
+    assert out.exists()
+    assert not Path(str(out) + ".tmp").exists()
+    assert result == out
+
+
+def test_download_month_variable_skips_existing(tmp_path, monkeypatch):
+    from nhf_spatial_targets.fetch.era5_land import download_month_variable
+
+    fake_client = MagicMock()
+    monkeypatch.setattr(
+        "nhf_spatial_targets.fetch.era5_land._cds_client", lambda: fake_client
+    )
+    out = tmp_path / "era5_land_ro_2020_03.nc"
+    out.write_bytes(b"existing")
+    download_month_variable(year=2020, month=3, variable="ro", output_path=out)
+    fake_client.retrieve.assert_not_called()
+
+
+def test_download_month_variable_atomic_cleanup_on_failure(tmp_path, monkeypatch):
+    """If CDS retrieve raises, the .tmp file is cleaned up."""
+    from nhf_spatial_targets.fetch.era5_land import download_month_variable
+
+    out = tmp_path / "era5_land_ro_2020_03.nc"
+
+    def fake_retrieve_fail(dataset, request, path):
+        Path(path).write_bytes(b"partial")
+        raise RuntimeError("CDS server error")
+
+    fake_client = MagicMock()
+    fake_client.retrieve = MagicMock(side_effect=fake_retrieve_fail)
+    monkeypatch.setattr(
+        "nhf_spatial_targets.fetch.era5_land._cds_client", lambda: fake_client
+    )
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="CDS server error"):
+        download_month_variable(year=2020, month=3, variable="ro", output_path=out)
+
+    assert not out.exists()
+    assert not Path(str(out) + ".tmp").exists()
+
+
 def test_download_year_calls_cds_client(tmp_path, monkeypatch):
+    """download_year_variable submits 12 single-month CDS requests."""
     from nhf_spatial_targets.fetch.era5_land import download_year_variable
 
     out = tmp_path / "era5_land_ro_2020.nc"
-    expected_tmp = str(out) + ".tmp"
 
     def fake_retrieve(dataset, request, path):
-        # Simulate CDS writing to the tmp path (not the final path)
-        assert path == expected_tmp, (
-            f"CDS retrieve should write to tmp path {expected_tmp!r}, got {path!r}"
+        # Write a minimal valid NetCDF so the concatenation step succeeds.
+        month = int(request["month"])
+        times = pd.date_range(f"2020-{month:02d}-01", periods=1, freq="1h")
+        ds = xr.Dataset(
+            {"ro": (("time", "latitude", "longitude"), np.zeros((1, 1, 1)))},
+            coords={"time": times, "latitude": [40.0], "longitude": [-100.0]},
         )
-        Path(path).write_bytes(b"fake_nc_data")
+        ds.to_netcdf(path)
 
     fake_client = MagicMock()
     fake_client.retrieve = MagicMock(side_effect=fake_retrieve)
@@ -164,30 +238,28 @@ def test_download_year_calls_cds_client(tmp_path, monkeypatch):
 
     result = download_year_variable(year=2020, variable="ro", output_path=out)
 
-    fake_client.retrieve.assert_called_once()
-    args, kwargs = fake_client.retrieve.call_args
-    assert args[0] == "reanalysis-era5-land"
-    request = args[1]
-    assert request["variable"] == "runoff"
-    assert request["year"] == "2020"
-    assert request["area"] == [53.0, -125.0, 24.7, -66.0]
-    assert request["format"] == "netcdf"
-    assert "month" in request and len(request["month"]) == 12
-    # The retrieve is passed the .tmp path; final output_path exists after rename
-    assert out.exists(), "Final output file should exist after atomic rename"
-    assert not Path(expected_tmp).exists(), "Tmp file should be gone after rename"
+    assert fake_client.retrieve.call_count == 12
+    for i, (args, _) in enumerate(fake_client.retrieve.call_args_list, start=1):
+        assert args[0] == "reanalysis-era5-land"
+        request = args[1]
+        assert request["variable"] == "runoff"
+        assert request["year"] == "2020"
+        assert request["month"] == f"{i:02d}"
+        assert request["area"] == [53.0, -125.0, 24.7, -66.0]
+        assert request["format"] == "netcdf"
+    assert out.exists(), "Year file should exist after all monthly chunks are assembled"
+    assert not Path(str(out) + ".tmp").exists()
     assert result == out
 
 
 def test_download_year_atomic_cleanup_on_failure(tmp_path, monkeypatch):
-    """If CDS retrieve raises, the .tmp file is cleaned up and output_path is absent."""
+    """If a monthly CDS download fails, the .tmp is cleaned up and year file absent."""
     from nhf_spatial_targets.fetch.era5_land import download_year_variable
 
     out = tmp_path / "era5_land_ro_2020.nc"
-    tmp_path_expected = Path(str(out) + ".tmp")
+    chunk_01_tmp = tmp_path / "era5_land_ro_2020_01.nc.tmp"
 
     def fake_retrieve_fail(dataset, request, path):
-        # Write partial data to tmp, then raise
         Path(path).write_bytes(b"partial")
         raise RuntimeError("CDS server error")
 
@@ -202,8 +274,8 @@ def test_download_year_atomic_cleanup_on_failure(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="CDS server error"):
         download_year_variable(year=2020, variable="ro", output_path=out)
 
-    assert not out.exists(), "output_path must not exist after a failed download"
-    assert not tmp_path_expected.exists(), ".tmp file must be cleaned up on failure"
+    assert not out.exists(), "Year file must not exist after a failed monthly download"
+    assert not chunk_01_tmp.exists(), ".tmp for the failed month must be cleaned up"
 
 
 def test_download_year_skips_existing(tmp_path, monkeypatch):

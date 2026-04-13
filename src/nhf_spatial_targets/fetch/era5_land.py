@@ -107,20 +107,26 @@ def _cds_client():
     return cdsapi.Client()
 
 
-def download_year_variable(
+def download_month_variable(
     year: int,
+    month: int,
     variable: str,
     output_path: Path,
 ) -> Path:
-    """Download one year of one ERA5-Land variable to ``output_path``.
+    """Download one month of one ERA5-Land variable to ``output_path``.
 
     Idempotent: if ``output_path`` already exists, returns immediately.
-    Submits a single CDS request covering all 12 months × all hours of
-    the given year, clipped to ``BBOX_NWSE``.
+    Submits a single CDS request covering all days × all hours of the
+    given year-month, clipped to ``BBOX_NWSE``.
+
+    Monthly requests (~480 MB for the CONUS bbox) stay comfortably within
+    the CDS per-request cost limit. Called by ``download_year_variable``.
 
     Parameters
     ----------
     year : int
+    month : int
+        Calendar month (1–12).
     variable : {"ro", "sro", "ssro"}
     output_path : Path
         Target NetCDF file. Parent directory is created if missing.
@@ -141,14 +147,20 @@ def download_year_variable(
     request = {
         "variable": _VARIABLE_REQUEST_NAME[variable],
         "year": str(year),
-        "month": [f"{m:02d}" for m in range(1, 13)],
+        "month": f"{month:02d}",
         "day": [f"{d:02d}" for d in range(1, 32)],
         "time": [f"{h:02d}:00" for h in range(24)],
         "area": BBOX_NWSE,
         "format": "netcdf",
     }
     client = _cds_client()
-    logger.info("Submitting CDS request for %s %d → %s", variable, year, output_path)
+    logger.info(
+        "Submitting CDS request for %s %d-%02d → %s",
+        variable,
+        year,
+        month,
+        output_path,
+    )
     tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
     try:
         client.retrieve("reanalysis-era5-land", request, str(tmp_path))
@@ -156,6 +168,79 @@ def download_year_variable(
     except BaseException:
         tmp_path.unlink(missing_ok=True)
         raise
+    return output_path
+
+
+def download_year_variable(
+    year: int,
+    variable: str,
+    output_path: Path,
+) -> Path:
+    """Download one year of one ERA5-Land variable to ``output_path``.
+
+    Splits the annual download into 12 monthly CDS requests to stay within
+    the CDS per-request cost/size limit (~480 MB/month vs ~5.8 GB/year for
+    the CONUS bbox at hourly resolution). Monthly chunk files are written
+    alongside ``output_path`` as::
+
+        era5_land_{variable}_{year}_{month:02d}.nc
+
+    and kept on disk for re-run idempotency. Once all 12 chunks are present
+    they are concatenated along the time axis into ``output_path``.
+
+    Idempotent at two levels:
+    - If ``output_path`` (year file) exists and is not older than any monthly
+      chunk, the function returns immediately without any CDS calls.
+    - If an individual monthly chunk already exists, that month's CDS request
+      is skipped.
+
+    Parameters
+    ----------
+    year : int
+    variable : {"ro", "sro", "ssro"}
+    output_path : Path
+        Target per-year NetCDF file. Parent directory is created if missing.
+
+    Returns
+    -------
+    Path
+        ``output_path`` (for caller convenience).
+    """
+    if variable not in _VARIABLE_REQUEST_NAME:
+        raise ValueError(f"Unknown ERA5-Land variable: {variable!r}")
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Monthly chunk paths live in the same directory as the year file.
+    stem = output_path.stem  # e.g. "era5_land_ro_2020"
+    chunk_paths = [
+        output_path.parent / f"{stem}_{month:02d}.nc" for month in range(1, 13)
+    ]
+
+    # Fast path: year file exists and is not older than any present chunk.
+    if output_path.exists():
+        year_mtime = output_path.stat().st_mtime
+        chunk_mtimes = [p.stat().st_mtime for p in chunk_paths if p.exists()]
+        if not chunk_mtimes or max(chunk_mtimes) <= year_mtime:
+            logger.info("Skipping up-to-date ERA5-Land year file: %s", output_path)
+            return output_path
+
+    # Download any missing monthly chunks.
+    for month, chunk_path in enumerate(chunk_paths, start=1):
+        download_month_variable(year, month, variable, chunk_path)
+
+    # Concatenate all 12 monthly chunks into the year file.
+    logger.info("Concatenating monthly chunks into year file: %s", output_path)
+    with xr.open_mfdataset(chunk_paths, combine="by_coords") as ds:
+        year_ds = ds.load()
+    tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+    try:
+        year_ds.to_netcdf(tmp_path, format="NETCDF4")
+        tmp_path.rename(output_path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    logger.info("Wrote year file: %s", output_path)
     return output_path
 
 
