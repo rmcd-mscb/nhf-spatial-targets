@@ -168,6 +168,125 @@ def init(
     console.print(Panel(msg, title="nhf-targets init", border_style="green"))
 
 
+@app.command(name="materialize-credentials")
+def materialize_credentials_cmd(
+    workdir: Annotated[
+        Path,
+        Parameter(
+            name=["--project-dir", "-d"],
+            help="Project directory containing .credentials.yml.",
+        ),
+    ],
+):
+    """Copy credentials from .credentials.yml into ~/.cdsapirc and ~/.netrc.
+
+    Reads the 'cds' and 'nasa_earthdata' sections from the project's
+    .credentials.yml and writes the corresponding dotfiles consumed by
+    cdsapi and earthaccess at runtime.
+
+    Both files are written atomically and set to mode 0600.  Run this command
+    after editing or rotating .credentials.yml.
+
+    Each section (cds, nasa_earthdata) is processed independently — one
+    section failing does not prevent the other from being written.  The
+    command exits non-zero if any section fails.
+
+    Exit codes:
+      0 — all sections written successfully
+      1 — incomplete credentials (ValueError) — user action required
+      2 — project directory not found
+      3 — write failure (OSError) — system action required
+    """
+    from rich.console import Console
+    from rich.table import Table
+
+    from nhf_spatial_targets.credentials import (
+        materialize_cdsapirc,
+        materialize_netrc_earthdata,
+    )
+
+    console = Console()
+
+    cred_path = workdir / ".credentials.yml"
+    if not workdir.exists():
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
+        sys.exit(2)
+    if not cred_path.exists():
+        print(
+            f"Error: .credentials.yml not found in {workdir}. "
+            "Run 'nhf-targets init --project-dir <dir>' to create a template.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    try:
+        raw = yaml.safe_load(cred_path.read_text())
+    except yaml.YAMLError as exc:
+        print(f"Error: Cannot parse {cred_path}: {exc}", file=sys.stderr)
+        sys.exit(1)
+    if raw is None:
+        print(
+            f"Error: {cred_path} is empty — did you save your edits?",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    creds = raw if isinstance(raw, dict) else {}
+
+    table = Table(title="Credential materialisation", show_header=True)
+    table.add_column("Section", style="bold")
+    table.add_column("Target file")
+    table.add_column("Status")
+
+    errors: list[str] = []
+
+    # --- CDS ---
+    try:
+        cds_path = materialize_cdsapirc(creds)
+        table.add_row("cds", str(cds_path), "[green]written[/green]")
+    except ValueError as exc:
+        msg = f"{cred_path}: {exc}"
+        table.add_row("cds", "~/.cdsapirc", f"[yellow]skipped[/yellow]: {exc}")
+        errors.append(("user", msg))
+    except OSError as exc:
+        msg = f"{cred_path}: {exc}"
+        table.add_row("cds", "~/.cdsapirc", f"[red]error[/red]: {exc}")
+        errors.append(("system", msg))
+
+    # --- NASA Earthdata ---
+    try:
+        netrc_path = materialize_netrc_earthdata(creds)
+        table.add_row("nasa_earthdata", str(netrc_path), "[green]written[/green]")
+    except ValueError as exc:
+        msg = f"{cred_path}: {exc}"
+        table.add_row("nasa_earthdata", "~/.netrc", f"[yellow]skipped[/yellow]: {exc}")
+        errors.append(("user", msg))
+    except OSError as exc:
+        msg = f"{cred_path}: {exc}"
+        table.add_row("nasa_earthdata", "~/.netrc", f"[red]error[/red]: {exc}")
+        errors.append(("system", msg))
+
+    console.print(table)
+
+    if errors:
+        has_system_error = any(kind == "system" for kind, _ in errors)
+        has_user_error = any(kind == "user" for kind, _ in errors)
+        if has_user_error:
+            console.print(
+                "\n[yellow]One or more sections were skipped due to missing or "
+                "incomplete credentials.  Fill in .credentials.yml and re-run.[/yellow]"
+            )
+        if has_system_error:
+            console.print(
+                "\n[red]One or more sections failed due to a system error "
+                "(e.g. filesystem permissions).  See the table above for details.[/red]"
+            )
+        sys.exit(3 if has_system_error else 1)
+
+    console.print(
+        "\n[bold green]All credentials materialised successfully.[/bold green]"
+    )
+
+
 @app.command
 def validate(
     workdir: Annotated[

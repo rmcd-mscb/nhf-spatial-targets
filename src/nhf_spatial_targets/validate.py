@@ -58,6 +58,10 @@ def validate_credentials(path: Path, required: list[str]) -> None:
         if name == "nasa_earthdata":
             if not section.get("username") or not section.get("password"):
                 raise ValueError(
+                    f"Ensure the 'nasa_earthdata' section of {path} is populated, "
+                    "then run:\n"
+                    f"    nhf-targets materialize-credentials "
+                    f"--project-dir {path.parent}\n\n"
                     f"Earthdata credentials incomplete — "
                     f"nasa_earthdata.username and nasa_earthdata.password "
                     f"must be non-empty in {path.name}"
@@ -65,6 +69,10 @@ def validate_credentials(path: Path, required: list[str]) -> None:
         elif name == "cds":
             if not section.get("url") or not section.get("key"):
                 raise ValueError(
+                    f"Ensure the 'cds' section of {path} is populated, "
+                    "then run:\n"
+                    f"    nhf-targets materialize-credentials "
+                    f"--project-dir {path.parent}\n\n"
                     f"cds credentials incomplete — "
                     f"cds.url and cds.key must be non-empty in {path.name}"
                 )
@@ -185,10 +193,13 @@ def _check_cdsapirc(_home: Path | None = None) -> None:
     if not cdsapirc.exists():
         raise ValueError(
             "CDS credentials are required but ~/.cdsapirc was not found. "
-            "Create ~/.cdsapirc with your Copernicus CDS URL and API key:\n\n"
+            "Fill in the 'cds' section of .credentials.yml and run:\n\n"
+            "  nhf-targets materialize-credentials --project-dir <project-dir>\n\n"
+            "This will write ~/.cdsapirc automatically.  Alternatively, create "
+            "it manually:\n\n"
             "  url: https://cds.climate.copernicus.eu/api\n"
             "  key: <your-api-key>\n\n"
-            "You can obtain an API key from https://cds.climate.copernicus.eu "
+            "Obtain an API key from https://cds.climate.copernicus.eu "
             "after registering and accepting the Terms of Use."
         )
 
@@ -211,20 +222,21 @@ def _check_netrc_earthdata(_home: Path | None = None) -> None:
     if not netrc_path.exists():
         raise ValueError(
             "NASA Earthdata credentials are required but ~/.netrc was not found. "
-            "Create ~/.netrc with:\n\n"
-            "  machine urs.earthdata.nasa.gov\n"
-            "  login <your-username>\n"
-            "  password <your-password>\n\n"
+            "Fill in the 'nasa_earthdata' section of .credentials.yml and run:\n\n"
+            "  nhf-targets materialize-credentials --project-dir <project-dir>\n\n"
+            "This will write ~/.netrc automatically.  Alternatively, create it "
+            "manually:\n\n"
+            "  machine urs.earthdata.nasa.gov login <user> password <password>\n\n"
             "Register at https://urs.earthdata.nasa.gov to obtain credentials."
         )
     content = netrc_path.read_text()
     if "urs.earthdata.nasa.gov" not in content:
         raise ValueError(
             "~/.netrc exists but does not contain an entry for "
-            "urs.earthdata.nasa.gov. Add:\n\n"
-            "  machine urs.earthdata.nasa.gov\n"
-            "  login <your-username>\n"
-            "  password <your-password>\n\n"
+            "urs.earthdata.nasa.gov. Fill in .credentials.yml and run:\n\n"
+            "  nhf-targets materialize-credentials --project-dir <project-dir>\n\n"
+            "Or add the entry manually:\n\n"
+            "  machine urs.earthdata.nasa.gov login <user> password <password>\n\n"
             "See https://urs.earthdata.nasa.gov for registration."
         )
 
