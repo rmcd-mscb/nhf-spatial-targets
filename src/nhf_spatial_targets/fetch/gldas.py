@@ -53,6 +53,8 @@ def clip_to_bbox(ds: xr.Dataset, bbox_nwse: list[float]) -> xr.Dataset:
 
     Supports both ``lat``/``lon`` and ``latitude``/``longitude`` coordinate
     names, and handles both ascending and descending latitude ordering.
+    If the longitude coordinate is 0–360 (detected by max > 180), it is
+    converted to -180–180 before slicing.
 
     Parameters
     ----------
@@ -65,17 +67,52 @@ def clip_to_bbox(ds: xr.Dataset, bbox_nwse: list[float]) -> xr.Dataset:
     -------
     xr.Dataset
         Subset of *ds* clipped to the bounding box.
+
+    Raises
+    ------
+    ValueError
+        If the dataset has neither ``lat``/``lon`` nor
+        ``latitude``/``longitude`` coordinate names, or if the clipped
+        result is empty (e.g. due to a longitude-convention mismatch).
     """
     n, w, s, e = bbox_nwse
-    lat_name = "lat" if "lat" in ds.coords else "latitude"
-    lon_name = "lon" if "lon" in ds.coords else "longitude"
+
+    if "lat" in ds.coords and "lon" in ds.coords:
+        lat_name, lon_name = "lat", "lon"
+    elif "latitude" in ds.coords and "longitude" in ds.coords:
+        lat_name, lon_name = "latitude", "longitude"
+    else:
+        raise ValueError(
+            f"Dataset must have lat/lon or latitude/longitude coordinates; "
+            f"got {list(ds.coords)}"
+        )
+
+    # Convert 0-360 longitude to -180-180 if necessary
+    if float(ds[lon_name].max()) > 180:
+        lon_vals = ds[lon_name].values.copy()
+        lon_vals = (lon_vals + 180) % 360 - 180
+        ds = ds.assign_coords({lon_name: lon_vals}).sortby(lon_name)
+
     lat = ds[lat_name]
     # sel with slice requires the slice direction to match the coord order
     if float(lat[0]) < float(lat[-1]):
         lat_slice = slice(s, n)
     else:
         lat_slice = slice(n, s)
-    return ds.sel({lat_name: lat_slice, lon_name: slice(w, e)})
+    clipped = ds.sel({lat_name: lat_slice, lon_name: slice(w, e)})
+
+    if clipped.sizes[lat_name] == 0 or clipped.sizes[lon_name] == 0:
+        lat_range = (float(ds[lat_name].min()), float(ds[lat_name].max()))
+        lon_range = (float(ds[lon_name].min()), float(ds[lon_name].max()))
+        raise ValueError(
+            f"Clipping produced an empty dataset. "
+            f"Input {lat_name} range: {lat_range}, {lon_name} range: {lon_range}. "
+            f"Requested bbox: N={n}, W={w}, S={s}, E={e}. "
+            f"Check that the dataset and bbox use the same longitude convention "
+            f"(-180/180 vs 0/360)."
+        )
+
+    return clipped
 
 
 def fetch_gldas(workdir: Path, period: str) -> dict:

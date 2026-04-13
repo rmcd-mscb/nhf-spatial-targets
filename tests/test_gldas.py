@@ -50,6 +50,94 @@ def test_clip_to_bbox_reduces_extent():
     assert clipped.lon.size < ds.lon.size
 
 
+def _global_grid_descending(value_qs=2.0, value_qsb=3.0):
+    """Grid with latitude in descending order (89.875 down to -89.875)."""
+    lat = np.arange(89.875, -90.0, -0.25)
+    lon = np.arange(-179.875, 180.0, 0.25)
+    times = pd.date_range("2020-01-01", periods=2, freq="1MS")
+    shape = (len(times), len(lat), len(lon))
+    return xr.Dataset(
+        {
+            "Qs_acc": (("time", "lat", "lon"), np.full(shape, value_qs)),
+            "Qsb_acc": (("time", "lat", "lon"), np.full(shape, value_qsb)),
+        },
+        coords={"time": times, "lat": lat, "lon": lon},
+    )
+
+
+def _global_grid_latlon_names(value_qs=2.0, value_qsb=3.0):
+    """Grid using 'latitude'/'longitude' coord names."""
+    lat = np.arange(-89.875, 90.0, 0.25)
+    lon = np.arange(-179.875, 180.0, 0.25)
+    times = pd.date_range("2020-01-01", periods=2, freq="1MS")
+    shape = (len(times), len(lat), len(lon))
+    return xr.Dataset(
+        {
+            "Qs_acc": (("time", "latitude", "longitude"), np.full(shape, value_qs)),
+            "Qsb_acc": (("time", "latitude", "longitude"), np.full(shape, value_qsb)),
+        },
+        coords={"time": times, "latitude": lat, "longitude": lon},
+    )
+
+
+def _global_grid_360(value_qs=2.0, value_qsb=3.0):
+    """Grid with 0-360 longitude convention."""
+    lat = np.arange(-89.875, 90.0, 0.25)
+    lon = np.arange(0.125, 360.0, 0.25)
+    times = pd.date_range("2020-01-01", periods=2, freq="1MS")
+    shape = (len(times), len(lat), len(lon))
+    return xr.Dataset(
+        {
+            "Qs_acc": (("time", "lat", "lon"), np.full(shape, value_qs)),
+            "Qsb_acc": (("time", "lat", "lon"), np.full(shape, value_qsb)),
+        },
+        coords={"time": times, "lat": lat, "lon": lon},
+    )
+
+
+def test_clip_to_bbox_descending_lat():
+    """clip_to_bbox handles descending latitude ordering."""
+    ds = _global_grid_descending()
+    clipped = clip_to_bbox(ds, BBOX_NWSE)
+    assert clipped.lat.min() >= 24.7 - 0.25
+    assert clipped.lat.max() <= 53.0 + 0.25
+    assert clipped.lat.size < ds.lat.size
+
+
+def test_clip_to_bbox_latitude_longitude_names():
+    """clip_to_bbox handles 'latitude'/'longitude' coordinate names."""
+    ds = _global_grid_latlon_names()
+    clipped = clip_to_bbox(ds, BBOX_NWSE)
+    assert clipped.latitude.min() >= 24.7 - 0.25
+    assert clipped.latitude.max() <= 53.0 + 0.25
+    assert clipped.longitude.min() >= -125.0 - 0.25
+    assert clipped.longitude.max() <= -66.0 + 0.25
+
+
+def test_clip_to_bbox_unknown_coord_names_raises():
+    """clip_to_bbox raises ValueError when neither lat/lon naming found."""
+    lat = np.arange(-89.875, 90.0, 0.25)
+    lon = np.arange(-179.875, 180.0, 0.25)
+    times = pd.date_range("2020-01-01", periods=1, freq="1MS")
+    shape = (len(times), len(lat), len(lon))
+    ds = xr.Dataset(
+        {"Qs_acc": (("time", "y", "x"), np.zeros(shape))},
+        coords={"time": times, "y": lat, "x": lon},
+    )
+    with pytest.raises(ValueError, match="lat/lon or latitude/longitude"):
+        clip_to_bbox(ds, BBOX_NWSE)
+
+
+def test_clip_to_bbox_360_lon_converted():
+    """clip_to_bbox converts 0-360 longitude to -180-180 before slicing."""
+    ds = _global_grid_360()
+    # Without conversion this would produce an empty result or raise
+    clipped = clip_to_bbox(ds, BBOX_NWSE)
+    assert clipped.lon.min() >= -125.0 - 0.25
+    assert clipped.lon.max() <= -66.0 + 0.25
+    assert clipped.lon.size > 0
+
+
 def test_partial_download_raises(tmp_path, monkeypatch):
     """fetch_gldas must raise if earthaccess returns fewer files than granules found."""
     import earthaccess
