@@ -19,7 +19,7 @@ variables:
       sources per HRU and time step.
     prms_reference: "TM 6-B7 (Markstrom et al. 2015)"
     time_step: monthly
-    period: "2000/2023"
+    period: "2000/present"
     units: cfs
     sources:
       - era5_land

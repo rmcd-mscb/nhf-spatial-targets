@@ -29,9 +29,12 @@ sources:
         ~10 km buffer, snapped to the 0.1° ERA5-Land grid.
       notes: >
         Access via cdsapi (Copernicus CDS account required). Hourly
-        accumulated fields reset at 00 UTC. Pipeline aggregates
-        hourly→daily (via .diff('time') + resample sum) and daily→monthly.
-        Both daily and monthly consolidated NCs are stored in the datastore.
+        accumulated fields reset at 00 UTC; the midnight-reset is handled by
+        substituting the raw accumulated value where the diff is negative, then
+        shifting timestamps back 1 h before resampling. Pipeline aggregates
+        hourly→daily and daily→monthly. Both consolidated NCs are stored in
+        the datastore; the daily NC is re-aggregated if any hourly input is
+        newer (mtime comparison).
     variables:
       - name: ro
         long_name: total runoff
