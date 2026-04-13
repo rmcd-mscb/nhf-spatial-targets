@@ -123,7 +123,11 @@ def _dispatch(
     else:
         output_path = pipeline_cfg["output"]["dir"]
 
-    builders[name](target_cfg, fabric_path, output_path)
+    if name == "runoff":
+        # run.build does not use fabric_path (HRU area comes from config)
+        builders[name](target_cfg, output_path)
+    else:
+        builders[name](target_cfg, fabric_path, output_path)
 
 
 @app.command
