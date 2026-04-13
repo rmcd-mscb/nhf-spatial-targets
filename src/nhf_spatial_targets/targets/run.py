@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import xarray as xr
 
@@ -58,12 +59,52 @@ def multi_source_runoff_bounds(
 def build(config: dict, fabric_path: str, output_path: str) -> None:
     """Build runoff target dataset.
 
-    Reads HRU-aggregated monthly runoff for ERA5-Land (`ro`) and GLDAS
-    (`runoff_total`), harmonizes units to cfs, computes per-HRU
-    per-month min/max bounds, writes a CF-compliant NetCDF with
-    `lower_bound` and `upper_bound` variables (dims: hru, time).
+    Reads HRU-aggregated monthly runoff for ERA5-Land (``ro``) and GLDAS
+    (``runoff_total``), harmonizes units to cfs, computes per-HRU per-month
+    min/max bounds, and writes a CF-compliant NetCDF atomically (via ``.tmp``
+    rename) with ``lower_bound`` and ``upper_bound`` variables, dims
+    ``(time, hru)``.
+
+    Aggregated input convention: ``<aggregated_dir>/<source_key>/<var>.nc``
+
+    config keys:
+      aggregated_dir : str | Path
+          Directory containing per-source per-variable aggregated NCs at
+          ``<aggregated_dir>/<source_key>/<var>.nc``.
+      hru_area_m2 : xr.DataArray
+          Per-HRU area in m², dims=('hru',), coord aligned with the
+          aggregated outputs.
     """
-    raise NotImplementedError(
-        "Builder wiring depends on aggregate/ output paths; "
-        "implement once aggregate output schema is finalized."
+    agg_dir = Path(config["aggregated_dir"])
+    hru_area = config["hru_area_m2"]
+
+    with xr.open_dataset(agg_dir / "era5_land" / "ro.nc") as ds:
+        era5 = ds["ro"].load()
+    with xr.open_dataset(agg_dir / "gldas_noah_v21_monthly" / "runoff_total.nc") as ds:
+        gldas = ds["runoff_total"].load()
+
+    era5_cfs = mm_per_month_to_cfs(era5_to_mm_per_month(era5), hru_area)
+    gldas_cfs = mm_per_month_to_cfs(gldas_to_mm_per_month(gldas), hru_area)
+
+    lower, upper = multi_source_runoff_bounds([era5_cfs, gldas_cfs])
+    lower.name = "lower_bound"
+    upper.name = "upper_bound"
+    out_ds = xr.Dataset(
+        {"lower_bound": lower, "upper_bound": upper},
+        attrs={
+            "title": "NHM runoff calibration target (ERA5-Land + GLDAS-2.1)",
+            "Conventions": "CF-1.6",
+            "cell_methods": "time: sum",
+            "units": "cfs",
+        },
     )
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = output_path.with_suffix(".nc.tmp")
+    try:
+        out_ds.to_netcdf(tmp, format="NETCDF4")
+        tmp.rename(output_path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    logger.info("Wrote runoff target: %s", output_path)
