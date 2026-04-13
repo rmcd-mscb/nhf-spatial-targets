@@ -75,6 +75,7 @@ targets:
     sources:
       - reitz2017
       - watergap22d
+      - era5_land
     time_step: annual
     period: "2000-01-01/2009-12-31"
     prms_variable: recharge
@@ -117,6 +118,11 @@ _CREDENTIALS_TEMPLATE = {
         "_comment": "NASA Earthdata login — https://urs.earthdata.nasa.gov",
         "username": "",
         "password": "",
+    },
+    "cds": {
+        "_comment": "Copernicus CDS API — https://cds.climate.copernicus.eu",
+        "url": "https://cds.climate.copernicus.eu/api",
+        "key": "<uid>:<key>",
     },
 }
 

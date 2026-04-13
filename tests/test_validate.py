@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import geopandas as gpd
@@ -12,6 +13,7 @@ from shapely.geometry import box
 
 from nhf_spatial_targets.validate import (
     _SOURCE_KEYS,
+    _import_cdsapi,
     validate_credentials,
     validate_workspace,
 )
@@ -193,6 +195,13 @@ def test_validate_credentials_with_cds(tmp_path: Path) -> None:
         )
     )
     validate_credentials(creds, required=["nasa_earthdata", "cds"])  # no raise
+
+
+def test_validate_credentials_with_cds_requires_cdsapi(monkeypatch) -> None:
+    """If cds creds are required but cdsapi is not installed, _import_cdsapi raises."""
+    monkeypatch.setitem(sys.modules, "cdsapi", None)
+    with pytest.raises(ValueError, match="cdsapi"):
+        _import_cdsapi()
 
 
 # ---------------------------------------------------------------------------

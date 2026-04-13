@@ -12,8 +12,10 @@ import yaml
 from nhf_spatial_targets import __version__
 from nhf_spatial_targets.workspace import make_dir
 
-# The eight source keys whose raw-data subdirectories are created.
+# The source keys whose raw-data subdirectories are created.
 _SOURCE_KEYS: list[str] = [
+    "era5_land",
+    "gldas_noah_v21_monthly",
     "merra2",
     "nldas_mosaic",
     "nldas_noah",
@@ -154,6 +156,17 @@ def _check_id_column(gdf: object, id_col: str) -> None:
         )
 
 
+def _import_cdsapi() -> None:
+    """Attempt to import cdsapi; raise ValueError if not installed."""
+    try:
+        import cdsapi  # noqa: F401
+    except ImportError as exc:
+        raise ValueError(
+            "cdsapi is required for Copernicus CDS sources but is not installed. "
+            "Install it with: pip install cdsapi"
+        ) from exc
+
+
 def _check_credentials(workdir: Path) -> None:
     cred_path = workdir / ".credentials.yml"
 
@@ -167,6 +180,7 @@ def _check_credentials(workdir: Path) -> None:
     )
     if needs_cds:
         required.append("cds")
+        _import_cdsapi()
 
     validate_credentials(cred_path, required=required)
 

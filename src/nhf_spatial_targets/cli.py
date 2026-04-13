@@ -634,7 +634,7 @@ def fetch_era5_land_cmd(
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
     ] = "1979/2024",
 ):
-    """Download ERA5-Land monthly soil moisture and runoff data via CDS API."""
+    """Download ERA5-Land hourly runoff (ro, sro, ssro) via CDS API and consolidate to daily/monthly NetCDFs."""
     import json as json_mod
 
     from rich.console import Console
