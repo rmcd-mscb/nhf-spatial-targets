@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from nhf_spatial_targets.credentials import (
+    _remove_earthdata_blocks,
     materialize_cdsapirc,
     materialize_netrc_earthdata,
 )
@@ -202,3 +203,181 @@ def test_materialize_netrc_idempotent(tmp_path):
 
     content = (tmp_path / ".netrc").read_text()
     assert content.count("urs.earthdata.nasa.gov") == 1
+
+
+# ---------------------------------------------------------------------------
+# _remove_earthdata_blocks — line-based parser edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_materialize_netrc_preserves_macdef(tmp_path):
+    """macdef block body must survive materialize unchanged."""
+    existing = (
+        "macdef init\ncd /foo\nls\n\nmachine other.example.com login a password b\n"
+    )
+    netrc = tmp_path / ".netrc"
+    netrc.write_text(existing)
+
+    materialize_netrc_earthdata(VALID_CREDS, home=tmp_path)
+
+    content = netrc.read_text()
+    assert "macdef init" in content
+    assert "cd /foo" in content
+    assert "ls" in content
+    assert "other.example.com" in content
+    assert "urs.earthdata.nasa.gov" in content
+
+
+def test_materialize_netrc_preserves_default_block(tmp_path):
+    """default entry must survive materialize unchanged."""
+    existing = "default login anonymous password guest\n"
+    netrc = tmp_path / ".netrc"
+    netrc.write_text(existing)
+
+    materialize_netrc_earthdata(VALID_CREDS, home=tmp_path)
+
+    content = netrc.read_text()
+    assert "default login anonymous password guest" in content
+    assert "urs.earthdata.nasa.gov" in content
+
+
+def test_materialize_netrc_preserves_comments(tmp_path):
+    """Comment lines must survive materialize unchanged."""
+    existing = "# this is a comment\nmachine a.com login b password c\n"
+    netrc = tmp_path / ".netrc"
+    netrc.write_text(existing)
+
+    materialize_netrc_earthdata(VALID_CREDS, home=tmp_path)
+
+    content = netrc.read_text()
+    assert "# this is a comment" in content
+    assert "machine a.com" in content
+    assert "urs.earthdata.nasa.gov" in content
+
+
+def test_materialize_netrc_handles_multiple_earthdata_blocks(tmp_path):
+    """Two pre-existing earthdata blocks must be collapsed to exactly one."""
+    existing = (
+        "machine urs.earthdata.nasa.gov login old1 password old1\n"
+        "machine other.com login x password y\n"
+        "machine urs.earthdata.nasa.gov login old2 password old2\n"
+    )
+    netrc = tmp_path / ".netrc"
+    netrc.write_text(existing)
+
+    materialize_netrc_earthdata(VALID_CREDS, home=tmp_path)
+
+    content = netrc.read_text()
+    assert content.count("urs.earthdata.nasa.gov") == 1
+    assert "old1" not in content
+    assert "old2" not in content
+    assert "myuser" in content
+    assert "other.com" in content
+
+
+def test_materialize_netrc_preserves_multiline_machine_entry(tmp_path):
+    """Multi-line machine block (login/password on separate lines) is kept."""
+    existing = "machine foo.com\n  login x\n  password y\n"
+    netrc = tmp_path / ".netrc"
+    netrc.write_text(existing)
+
+    materialize_netrc_earthdata(VALID_CREDS, home=tmp_path)
+
+    content = netrc.read_text()
+    assert "machine foo.com" in content
+    assert "  login x" in content
+    assert "  password y" in content
+    assert "urs.earthdata.nasa.gov" in content
+
+
+def test_materialize_netrc_preserves_blank_lines(tmp_path):
+    """Blank lines between entries must be kept."""
+    existing = "machine a.com login x password y\n\nmachine b.com login p password q\n"
+    netrc = tmp_path / ".netrc"
+    netrc.write_text(existing)
+
+    materialize_netrc_earthdata(VALID_CREDS, home=tmp_path)
+
+    content = netrc.read_text()
+    # Both machines survive
+    assert "machine a.com" in content
+    assert "machine b.com" in content
+    # There is at least one blank line preserved
+    assert "\n\n" in content
+
+
+# ---------------------------------------------------------------------------
+# _remove_earthdata_blocks — unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_remove_earthdata_blocks_empty():
+    assert _remove_earthdata_blocks([]) == []
+
+
+def test_remove_earthdata_blocks_no_earthdata():
+    lines = ["machine foo.com login x password y\n"]
+    assert _remove_earthdata_blocks(lines) == lines
+
+
+def test_remove_earthdata_blocks_only_earthdata():
+    lines = ["machine urs.earthdata.nasa.gov login u password p\n"]
+    assert _remove_earthdata_blocks(lines) == []
+
+
+def test_remove_earthdata_blocks_keeps_other_machines():
+    lines = [
+        "machine urs.earthdata.nasa.gov login u password p\n",
+        "machine other.com login a password b\n",
+    ]
+    result = _remove_earthdata_blocks(lines)
+    assert result == ["machine other.com login a password b\n"]
+
+
+def test_remove_earthdata_blocks_keeps_macdef_after_earthdata():
+    lines = [
+        "machine urs.earthdata.nasa.gov login u password p\n",
+        "macdef init\n",
+        "ls\n",
+        "\n",
+    ]
+    result = _remove_earthdata_blocks(lines)
+    assert result == ["macdef init\n", "ls\n", "\n"]
+
+
+def test_remove_earthdata_blocks_skips_continuation_lines():
+    lines = [
+        "machine urs.earthdata.nasa.gov\n",
+        "  login u\n",
+        "  password p\n",
+        "machine other.com login a password b\n",
+    ]
+    result = _remove_earthdata_blocks(lines)
+    assert result == ["machine other.com login a password b\n"]
+
+
+# ---------------------------------------------------------------------------
+# materialize_netrc_earthdata — backup tests
+# ---------------------------------------------------------------------------
+
+
+def test_materialize_netrc_creates_backup(tmp_path):
+    """Existing ~/.netrc must be backed up to ~/.netrc.bak with mode 0600."""
+    original_content = "machine pre-existing.com login old password old\n"
+    netrc = tmp_path / ".netrc"
+    netrc.write_text(original_content)
+
+    materialize_netrc_earthdata(VALID_CREDS, home=tmp_path)
+
+    bak = tmp_path / ".netrc.bak"
+    assert bak.exists(), "~/.netrc.bak should be created"
+    assert bak.read_text() == original_content, "backup must contain original content"
+    assert _file_mode(bak) == 0o600, "backup must be mode 0600"
+
+
+def test_materialize_netrc_no_backup_when_absent(tmp_path):
+    """No backup file should be created when ~/.netrc does not exist."""
+    materialize_netrc_earthdata(VALID_CREDS, home=tmp_path)
+
+    bak = tmp_path / ".netrc.bak"
+    assert not bak.exists(), "No backup when original file absent"

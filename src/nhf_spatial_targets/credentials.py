@@ -3,15 +3,27 @@
 Copies credential sections from ``.credentials.yml`` into the dotfiles
 read by ``cdsapi`` (``~/.cdsapirc``) and ``earthaccess`` (``~/.netrc``).
 Both writes are atomic (tmp + rename) and the resulting files are mode 0600.
+
+The netrc helper uses a **line-based** approach to preserve all existing
+content verbatim — macdef blocks (and their blank-line terminators),
+``default`` entries, ``#`` comments, and other machine entries are kept
+byte-for-byte in their original order.
+
+.. note::
+    Concurrent external edits to ``~/.netrc`` between the read and the
+    atomic replace will be overwritten silently.
 """
 
 from __future__ import annotations
 
+import logging
 import os
+import shutil
 import stat
 import tempfile
 from pathlib import Path
 
+_logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -65,8 +77,13 @@ def materialize_netrc_earthdata(creds: dict, home: Path | None = None) -> Path:
 
     - If ``~/.netrc`` does not exist it is created with just the earthdata
       entry.
-    - If an ``urs.earthdata.nasa.gov`` entry already exists it is replaced
-      in place; all other machine entries are preserved verbatim.
+    - If one or more ``urs.earthdata.nasa.gov`` entries already exist they
+      are all removed and a single updated entry is appended at the end.
+    - All other content — machine entries, macdef blocks (including their
+      blank-line terminators), ``default`` blocks, ``#`` comments, and blank
+      lines — is preserved **line-for-line** in its original order.
+    - A backup of the pre-existing ``~/.netrc`` is written to ``~/.netrc.bak``
+      (mode 0600) before any changes are made.
     - The file is written atomically (tmp in the same directory + rename)
       and set to mode 0600.
 
@@ -103,17 +120,28 @@ def materialize_netrc_earthdata(creds: dict, home: Path | None = None) -> Path:
 
     target = _home_dir(home) / ".netrc"
 
+    # Back up the existing file before modifying it
+    if target.exists():
+        bak = target.parent / ".netrc.bak"
+        shutil.copy2(str(target), str(bak))
+        os.chmod(bak, 0o600)
+        _logger.debug("Backed up existing ~/.netrc to %s", bak)
+
     # Build the new earthdata line (single-line format is widely supported)
     earthdata_line = (
-        f"machine urs.earthdata.nasa.gov login {username} password {password}"
+        f"machine urs.earthdata.nasa.gov login {username} password {password}\n"
     )
 
-    # Parse existing file, excluding any previous earthdata entry
-    existing_blocks = _parse_netrc_excluding(target, "urs.earthdata.nasa.gov")
+    # Read existing file as lines, removing any previous earthdata blocks
+    if target.exists():
+        existing_lines = target.read_text().splitlines(keepends=True)
+    else:
+        existing_lines = []
 
-    # Append the new entry
-    all_lines = existing_blocks + [earthdata_line]
-    content = "\n".join(all_lines) + "\n"
+    kept_lines = _remove_earthdata_blocks(existing_lines)
+
+    # Append the new entry at the end
+    content = "".join(kept_lines) + earthdata_line
 
     _atomic_write(target, content, mode=0o600)
     return target
@@ -129,7 +157,13 @@ def _home_dir(home: Path | None) -> Path:
 
 
 def _atomic_write(target: Path, content: str, mode: int) -> None:
-    """Write *content* to *target* atomically; set file permissions to *mode*."""
+    """Write *content* to *target* atomically; set file permissions to *mode*.
+
+    After the rename, the final file mode is verified.  If the filesystem
+    silently ignores ``chmod`` and the resulting mode differs from *mode*,
+    an ``OSError`` is raised rather than leaving credentials potentially
+    world-readable.
+    """
     target.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=".tmp_")
     try:
@@ -147,57 +181,64 @@ def _atomic_write(target: Path, content: str, mode: int) -> None:
             pass
         raise
 
+    # Post-condition: verify the mode was applied.  Some filesystems (FAT,
+    # CIFS mounts) silently ignore chmod; refuse to continue in that case.
+    actual_mode = stat.S_IMODE(target.stat().st_mode)
+    if actual_mode != mode:
+        raise OSError(
+            f"File mode mismatch after write: expected {oct(mode)} but got "
+            f"{oct(actual_mode)} for {target}.  The filesystem may not support "
+            "POSIX permissions.  Refusing to leave credentials potentially "
+            "world-readable."
+        )
 
-def _parse_netrc_excluding(netrc_path: Path, exclude_machine: str) -> list[str]:
-    """Return lines from *netrc_path* that do not belong to *exclude_machine*.
 
-    Uses simple line-based parsing.  Each ``machine`` keyword starts a new
-    block; the block ends at the next ``machine`` keyword (or EOF).  Blocks
-    whose machine name matches *exclude_machine* are dropped.  Blocks for
-    other machines are returned as single-line entries (normalised) to avoid
-    accumulating blank lines on repeated materialise calls.
+def _remove_earthdata_blocks(lines: list[str]) -> list[str]:
+    """Return lines with all 'machine urs.earthdata.nasa.gov' blocks removed.
 
-    If *netrc_path* does not exist an empty list is returned.
+    Preserves all other content verbatim, including macdef bodies, default
+    blocks, comments, and blank lines.
+
+    A ``machine urs.earthdata.nasa.gov`` block starts at the line whose
+    first non-whitespace token is ``machine`` followed by
+    ``urs.earthdata.nasa.gov``.  The block extends through subsequent
+    continuation lines (lines that do not start a new top-level keyword)
+    until one of the following is encountered:
+
+    - Another ``machine <name>`` line
+    - A ``default`` line
+    - A ``macdef <name>`` line (the macdef body through the next blank line
+      is **not** considered part of the earthdata block)
+    - End of file
     """
-    if not netrc_path.exists():
-        return []
+    _EARTHDATA_HOST = "urs.earthdata.nasa.gov"
 
-    raw = netrc_path.read_text()
-    tokens = raw.split()
+    result: list[str] = []
+    skip = False
 
-    # Reconstruct machine blocks from the token stream
-    blocks: list[dict] = []
-    i = 0
-    while i < len(tokens):
-        if tokens[i] == "machine":
-            if i + 1 >= len(tokens):
-                break
-            machine = tokens[i + 1]
-            attrs: dict[str, str] = {}
-            i += 2
-            while i < len(tokens) and tokens[i] != "machine":
-                key = tokens[i]
-                if i + 1 < len(tokens) and tokens[i + 1] != "machine":
-                    attrs[key] = tokens[i + 1]
-                    i += 2
-                else:
-                    i += 1
-            blocks.append({"machine": machine, "attrs": attrs})
+    for line in lines:
+        stripped = line.strip()
+        tokens = stripped.split()
+
+        # Detect top-level keyword lines
+        is_machine = len(tokens) >= 2 and tokens[0] == "machine"
+        is_default = len(tokens) >= 1 and tokens[0] == "default"
+        is_macdef = len(tokens) >= 2 and tokens[0] == "macdef"
+
+        if is_machine:
+            if tokens[1] == _EARTHDATA_HOST:
+                # Start of an earthdata block — skip it
+                skip = True
+            else:
+                # A different machine block — keep it
+                skip = False
+                result.append(line)
+        elif is_default or is_macdef:
+            # Top-level default/macdef — always keep; end any earthdata skip
+            skip = False
+            result.append(line)
         else:
-            i += 1
+            if not skip:
+                result.append(line)
 
-    lines: list[str] = []
-    for block in blocks:
-        if block["machine"] == exclude_machine:
-            continue
-        parts = [f"machine {block['machine']}"]
-        for k, v in block["attrs"].items():
-            parts.append(f"{k} {v}")
-        lines.append(" ".join(parts))
-
-    return lines
-
-
-def _file_mode(path: Path) -> int:
-    """Return the permission bits of *path* as an integer (e.g. 0o600)."""
-    return stat.S_IMODE(path.stat().st_mode)
+    return result
