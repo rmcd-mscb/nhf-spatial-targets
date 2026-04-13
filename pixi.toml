@@ -21,6 +21,7 @@ rich = ">=13.0"
 tqdm = ">=4.60"
 libgdal-hdf4 = ">=3.12.2,<4"
 pangaeapy = ">=1.1.0,<2"
+cdsapi = "*"
 # gdptools: spatial aggregation (install from PyPI if not on conda-forge)
 # sciencebasepy: ScienceBase access
 # earthaccess: NASA EDL access for MODIS, MERRA-2, NLDAS

@@ -10,7 +10,11 @@ import pytest
 import yaml
 from shapely.geometry import box
 
-from nhf_spatial_targets.validate import _SOURCE_KEYS, validate_workspace
+from nhf_spatial_targets.validate import (
+    _SOURCE_KEYS,
+    validate_credentials,
+    validate_workspace,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -57,11 +61,17 @@ def _write_credentials(
     workdir: Path,
     earthdata_user: str = "user",
     earthdata_pass: str = "pass",
+    cds_url: str = "https://cds.climate.copernicus.eu/api",
+    cds_key: str = "uid:testkey",
 ) -> Path:
-    creds = {
+    creds: dict = {
         "nasa_earthdata": {
             "username": earthdata_user,
             "password": earthdata_pass,
+        },
+        "cds": {
+            "url": cds_url,
+            "key": cds_key,
         },
     }
     path = workdir / ".credentials.yml"
@@ -158,6 +168,29 @@ def test_validate_empty_earthdata_creds(tmp_path, minimal_fabric):
     _write_credentials(tmp_path, earthdata_user="", earthdata_pass="")
     with pytest.raises(ValueError, match="Earthdata"):
         validate_workspace(tmp_path)
+
+
+def test_validate_credentials_missing_cds(tmp_path: Path) -> None:
+    creds = tmp_path / ".credentials.yml"
+    creds.write_text(yaml.safe_dump({"earthdata": {"username": "u", "password": "p"}}))
+    with pytest.raises(ValueError, match="cds"):
+        validate_credentials(creds, required=["earthdata", "cds"])
+
+
+def test_validate_credentials_with_cds(tmp_path: Path) -> None:
+    creds = tmp_path / ".credentials.yml"
+    creds.write_text(
+        yaml.safe_dump(
+            {
+                "earthdata": {"username": "u", "password": "p"},
+                "cds": {
+                    "url": "https://cds.climate.copernicus.eu/api",
+                    "key": "uid:abc",
+                },
+            }
+        )
+    )
+    validate_credentials(creds, required=["earthdata", "cds"])  # no raise
 
 
 # ---------------------------------------------------------------------------

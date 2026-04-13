@@ -26,8 +26,48 @@ _SOURCE_KEYS: list[str] = [
 
 
 # ---------------------------------------------------------------------------
-# Public entry point
+# Public entry points
 # ---------------------------------------------------------------------------
+
+
+def validate_credentials(path: Path, required: list[str]) -> None:
+    """Validate that *path* contains all *required* credential sections.
+
+    Supported section names:
+
+    - ``"earthdata"`` — requires non-empty ``username`` and ``password``
+    - ``"cds"`` — requires non-empty ``url`` and ``key``
+
+    Raises ``ValueError`` naming the missing or incomplete section.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(
+            f".credentials.yml not found: {path}. "
+            "Create it with the required credentials before validating."
+        )
+    try:
+        creds = yaml.safe_load(path.read_text()) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Cannot parse {path}: {exc}") from exc
+
+    for name in required:
+        section = creds.get(name, {}) or {}
+        if name == "earthdata":
+            if not section.get("username") or not section.get("password"):
+                raise ValueError(
+                    f"earthdata credentials incomplete — "
+                    f"earthdata.username and earthdata.password "
+                    f"must be non-empty in {path.name}"
+                )
+        elif name == "cds":
+            if not section.get("url") or not section.get("key"):
+                raise ValueError(
+                    f"cds credentials incomplete — "
+                    f"cds.url and cds.key must be non-empty in {path.name}"
+                )
+        else:
+            raise ValueError(f"Unknown credential section: '{name}'")
 
 
 def validate_workspace(workdir: Path) -> None:
@@ -135,6 +175,22 @@ def _check_credentials(workdir: Path) -> None:
             "nasa_earthdata.username and nasa_earthdata.password "
             "must be non-empty in .credentials.yml"
         )
+
+    # Check CDS credentials if any catalog source requires Copernicus CDS access
+    from nhf_spatial_targets.catalog import sources as catalog_sources
+
+    needs_cds = any(
+        (src.get("access") or {}).get("type") == "copernicus_cds"
+        for src in catalog_sources().values()
+    )
+    if needs_cds:
+        cds = creds.get("cds", {}) or {}
+        if not cds.get("url") or not cds.get("key"):
+            raise ValueError(
+                "cds credentials incomplete — "
+                "cds.url and cds.key must be non-empty in .credentials.yml "
+                "(required because catalog sources use Copernicus CDS access)"
+            )
 
 
 def _ensure_datastore(datastore: Path, dir_mode: int | None) -> None:
