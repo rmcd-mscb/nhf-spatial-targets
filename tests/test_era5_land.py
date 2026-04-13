@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from nhf_spatial_targets.fetch.era5_land import hourly_to_daily
+from nhf_spatial_targets.fetch.era5_land import daily_to_monthly, hourly_to_daily
 
 
 def _make_hourly(start: str, hours: int, value_per_hour: float = 1.0) -> xr.DataArray:
@@ -44,3 +44,21 @@ def test_hourly_to_daily_preserves_units_attr():
     da.attrs["units"] = "m"
     daily = hourly_to_daily(da)
     assert daily.attrs["units"] == "m"
+
+
+def test_daily_to_monthly_sum():
+    times = pd.date_range("2020-01-01", periods=60, freq="1D")
+    vals = np.full((60, 1, 1), 0.001)
+    da = xr.DataArray(
+        vals,
+        dims=("time", "latitude", "longitude"),
+        coords={"time": times, "latitude": [40.0], "longitude": [-100.0]},
+        name="ro",
+        attrs={"units": "m"},
+    )
+    monthly = daily_to_monthly(da)
+    # January (31 days) and February 2020 (29 days, leap year)
+    assert monthly.sizes["time"] == 2
+    np.testing.assert_allclose(monthly.isel(time=0).values, 0.031, rtol=1e-6)
+    np.testing.assert_allclose(monthly.isel(time=1).values, 0.029, rtol=1e-6)
+    assert monthly.attrs["units"] == "m"

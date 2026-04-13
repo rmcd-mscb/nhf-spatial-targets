@@ -60,3 +60,15 @@ def hourly_to_daily(da: xr.DataArray) -> xr.DataArray:
     daily = incr.resample(time="1D").sum()
     daily.attrs = dict(da.attrs)
     return daily
+
+
+def daily_to_monthly(da: xr.DataArray) -> xr.DataArray:
+    """Sum daily totals to monthly totals.
+
+    Uses month-end frequency ('1ME') so the time coordinate marks the
+    last day of each month — consistent with other monthly products in
+    this codebase. Original attrs are preserved.
+    """
+    monthly = da.resample(time="1ME").sum()
+    monthly.attrs = dict(da.attrs)
+    return monthly
