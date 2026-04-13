@@ -184,8 +184,18 @@ def materialize_credentials_cmd(
     .credentials.yml and writes the corresponding dotfiles consumed by
     cdsapi and earthaccess at runtime.
 
-    Both files are written atomically and set to mode 0600.  Run this once
-    after filling in .credentials.yml; re-run any time credentials change.
+    Both files are written atomically and set to mode 0600.  Run this command
+    after editing or rotating .credentials.yml.
+
+    Each section (cds, nasa_earthdata) is processed independently — one
+    section failing does not prevent the other from being written.  The
+    command exits non-zero if any section fails.
+
+    Exit codes:
+      0 — all sections written successfully
+      1 — incomplete credentials (ValueError) — user action required
+      2 — project directory not found
+      3 — write failure (OSError) — system action required
     """
     import yaml
     from rich.console import Console
