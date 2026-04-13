@@ -19,6 +19,7 @@ import pandas as pd
 import xarray as xr
 
 import nhf_spatial_targets.catalog as _catalog
+from nhf_spatial_targets import __version__
 from nhf_spatial_targets.fetch._period import years_in_period
 from nhf_spatial_targets.fetch.consolidate import apply_cf_metadata
 from nhf_spatial_targets.workspace import load as _load_project
@@ -192,21 +193,36 @@ def consolidate_year(
     daily_dir.mkdir(parents=True, exist_ok=True)
     monthly_dir.mkdir(parents=True, exist_ok=True)
 
-    daily_arrays: dict[str, xr.DataArray] = {}
-    for var in VARIABLES:
-        path = Path(hourly_dir) / f"era5_land_{var}_{year}.nc"
-        if not path.exists():
-            raise FileNotFoundError(f"Missing hourly file: {path}")
-        ds = xr.open_dataset(path)
-        da = ds[var].load()
-        ds.close()
-        daily_arrays[var] = hourly_to_daily(da)
-
-    daily_ds = xr.Dataset(daily_arrays)
-    daily_ds = apply_cf_metadata(daily_ds, _SOURCE_KEY, "daily")
     daily_path = daily_dir / f"era5_land_daily_{year}.nc"
-    _atomic_to_netcdf(daily_ds, daily_path)
-    logger.info("Wrote daily NC: %s", daily_path)
+
+    # Idempotency guard: skip hourly→daily aggregation if the daily NC exists.
+    if daily_path.exists():
+        logger.info("Daily NC already exists, skipping aggregation: %s", daily_path)
+    else:
+        daily_arrays: dict[str, xr.DataArray] = {}
+        for var in VARIABLES:
+            path = Path(hourly_dir) / f"era5_land_{var}_{year}.nc"
+            if not path.exists():
+                raise FileNotFoundError(f"Missing hourly file: {path}")
+            ds = xr.open_dataset(path)
+            da = ds[var].load()
+            ds.close()
+            daily_arrays[var] = hourly_to_daily(da)
+
+        daily_ds = xr.Dataset(daily_arrays)
+        daily_ds = apply_cf_metadata(daily_ds, _SOURCE_KEY, "daily")
+        daily_ds.attrs.update(
+            {
+                "title": f"ERA5-Land daily runoff (CONUS+ buffered) {year}",
+                "institution": "ECMWF",
+                "source": "reanalysis-era5-land",
+                "references": "doi:10.5194/essd-13-4349-2021",
+                "frequency": "day",
+                "history": f"Consolidated by nhf-spatial-targets v{__version__}",
+            }
+        )
+        _atomic_to_netcdf(daily_ds, daily_path)
+        logger.info("Wrote daily NC: %s", daily_path)
 
     # Monthly: rebuild from the (possibly multi-year) collection of daily files
     daily_files = sorted(daily_dir.glob("era5_land_daily_*.nc"))
@@ -218,6 +234,18 @@ def consolidate_year(
     monthly_ds = apply_cf_metadata(monthly_ds, _SOURCE_KEY, "monthly")
     start_year = pd.Timestamp(monthly_ds.time.min().values).year
     end_year = pd.Timestamp(monthly_ds.time.max().values).year
+    monthly_ds.attrs.update(
+        {
+            "title": (
+                f"ERA5-Land monthly runoff (CONUS+ buffered) {start_year}–{end_year}"
+            ),
+            "institution": "ECMWF",
+            "source": "reanalysis-era5-land",
+            "references": "doi:10.5194/essd-13-4349-2021",
+            "frequency": "month",
+            "history": f"Consolidated by nhf-spatial-targets v{__version__}",
+        }
+    )
     monthly_path = monthly_dir / f"era5_land_monthly_{start_year}_{end_year}.nc"
     # Remove any stale monthly file with a different year range
     for stale in monthly_dir.glob("era5_land_monthly_*.nc"):

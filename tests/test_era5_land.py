@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -145,3 +146,124 @@ def test_consolidate_year_writes_daily_and_updates_monthly(tmp_path, monkeypatch
         daily.close()
 
     assert monthly_path.exists()
+
+
+def _write_hourly_ncs(hourly_dir: Path, year: int) -> None:
+    """Write synthetic hourly NCs for all three ERA5-Land runoff variables."""
+
+    times = pd.date_range(f"{year}-01-01", f"{year}-01-03 23:00", freq="1h")
+    for var in ("ro", "sro", "ssro"):
+        vals = np.tile(
+            np.arange(24, dtype=float).reshape(24, 1, 1) * 0.001,
+            (len(times) // 24, 1, 1),
+        )
+        ds = xr.Dataset(
+            {var: (("time", "latitude", "longitude"), vals)},
+            coords={
+                "time": times[: vals.shape[0]],
+                "latitude": [40.0],
+                "longitude": [-100.0],
+            },
+        )
+        ds[var].attrs["units"] = "m"
+        ds.to_netcdf(hourly_dir / f"era5_land_{var}_{year}.nc")
+
+
+def test_consolidate_year_writes_global_attrs(tmp_path):
+    """Daily and monthly NCs include source-level global attrs."""
+    from nhf_spatial_targets.fetch.era5_land import consolidate_year
+
+    hourly_dir = tmp_path / "hourly"
+    daily_dir = tmp_path / "daily"
+    monthly_dir = tmp_path / "monthly"
+    hourly_dir.mkdir()
+
+    _write_hourly_ncs(hourly_dir, 2020)
+
+    daily_path, monthly_path = consolidate_year(
+        year=2020,
+        hourly_dir=hourly_dir,
+        daily_dir=daily_dir,
+        monthly_dir=monthly_dir,
+    )
+
+    daily = xr.open_dataset(daily_path)
+    try:
+        assert "title" in daily.attrs, "daily NC missing 'title' global attr"
+        assert "institution" in daily.attrs, (
+            "daily NC missing 'institution' global attr"
+        )
+        assert "references" in daily.attrs, "daily NC missing 'references' global attr"
+        assert "frequency" in daily.attrs, "daily NC missing 'frequency' global attr"
+        assert daily.attrs["institution"] == "ECMWF"
+        assert "doi:10.5194/essd-13-4349-2021" in daily.attrs["references"]
+        assert daily.attrs["frequency"] == "day"
+        assert "source" in daily.attrs
+        assert daily.attrs["source"] == "reanalysis-era5-land"
+    finally:
+        daily.close()
+
+    monthly = xr.open_dataset(monthly_path)
+    try:
+        assert "title" in monthly.attrs, "monthly NC missing 'title' global attr"
+        assert "institution" in monthly.attrs, (
+            "monthly NC missing 'institution' global attr"
+        )
+        assert "references" in monthly.attrs, (
+            "monthly NC missing 'references' global attr"
+        )
+        assert "frequency" in monthly.attrs, (
+            "monthly NC missing 'frequency' global attr"
+        )
+        assert monthly.attrs["institution"] == "ECMWF"
+        assert "doi:10.5194/essd-13-4349-2021" in monthly.attrs["references"]
+        assert monthly.attrs["frequency"] == "month"
+        assert "source" in monthly.attrs
+        assert monthly.attrs["source"] == "reanalysis-era5-land"
+    finally:
+        monthly.close()
+
+
+def test_consolidate_year_is_idempotent(tmp_path, monkeypatch):
+    """Re-running consolidate_year on a year whose daily NC already exists is a no-op."""
+    from unittest.mock import patch
+
+    from nhf_spatial_targets.fetch.era5_land import consolidate_year
+
+    hourly_dir = tmp_path / "hourly"
+    daily_dir = tmp_path / "daily"
+    monthly_dir = tmp_path / "monthly"
+    hourly_dir.mkdir()
+
+    _write_hourly_ncs(hourly_dir, 2020)
+
+    # First call: produces the daily NC
+    daily_path, monthly_path = consolidate_year(
+        year=2020,
+        hourly_dir=hourly_dir,
+        daily_dir=daily_dir,
+        monthly_dir=monthly_dir,
+    )
+    assert daily_path.exists()
+
+    # Record the mtime of the daily file so we can confirm it wasn't rewritten
+    mtime_before = daily_path.stat().st_mtime
+
+    # Empty the hourly dir to simulate post-cleanup state
+    for f in hourly_dir.iterdir():
+        f.unlink()
+
+    # Spy on hourly_to_daily to confirm it is NOT called on the second run
+    with patch("nhf_spatial_targets.fetch.era5_land.hourly_to_daily") as mock_h2d:
+        daily_path2, monthly_path2 = consolidate_year(
+            year=2020,
+            hourly_dir=hourly_dir,
+            daily_dir=daily_dir,
+            monthly_dir=monthly_dir,
+        )
+
+    mock_h2d.assert_not_called()
+    assert daily_path2 == daily_path
+    assert daily_path2.exists()
+    # Daily file was NOT rewritten (mtime unchanged)
+    assert daily_path2.stat().st_mtime == mtime_before
