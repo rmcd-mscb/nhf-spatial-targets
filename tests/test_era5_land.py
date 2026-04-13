@@ -32,6 +32,82 @@ def _make_hourly(start: str, hours: int, value_per_hour: float = 1.0) -> xr.Data
     return da
 
 
+def _make_era5_midnight_reset(
+    n_days: int = 2, value_per_hour: float = 1.0
+) -> xr.DataArray:
+    """Synthetic ERA5-Land accumulation with true midnight resets.
+
+    ERA5-Land convention:
+    - At 01:00 through 23:00 of day D: value = hours_since_midnight * per_hour
+    - At 00:00 of day D+1: value = 24 * per_hour  (full-day-D accumulation;
+      reset happens AFTER this timestamp)
+    - At 01:00 of day D+1: value = 1 * per_hour   (new day, accumulation restarts)
+
+    This means the raw .diff() at the 00->01 UTC boundary is negative, which
+    is the sign that triggers the xr.where rescue branch in hourly_to_daily().
+    """
+    # Build timestamps from day 1 00:00 through day n_days 00:00 (inclusive of
+    # the last "full-day" accumulation value)
+    start = pd.Timestamp("2020-01-01 00:00")
+    # We need n_days * 24 + 1 timestamps: hours 0..24 for day1, then 1..24 for day2, etc.
+    # Simplest: build 25*n_days steps and let the accumulation logic fill them
+    hours = n_days * 24 + 1
+    times = pd.date_range(start, periods=hours, freq="1h")
+    vals = np.zeros(hours)
+    for i, t in enumerate(times):
+        h = t.hour
+        # At 00:00: value = 24 (full-day accumulation from prior day, not yet reset)
+        # But only for timestamps after the very first 00:00
+        if h == 0 and i > 0:
+            vals[i] = 24.0 * value_per_hour
+        else:
+            vals[i] = h * value_per_hour
+    da = xr.DataArray(
+        vals.reshape(-1, 1, 1),
+        dims=("time", "latitude", "longitude"),
+        coords={"time": times, "latitude": [40.0], "longitude": [-100.0]},
+        name="ro",
+        attrs={"units": "m"},
+    )
+    return da
+
+
+def test_midnight_reset_branch_is_exercised():
+    """Verify xr.where substitution is triggered at midnight resets.
+
+    Build a 2-day synthetic array where the 00 UTC value is the full prior-day
+    accumulation (not yet reset). Confirm:
+    1. The raw diff IS negative at the 00 UTC reset (the rescue branch fires).
+    2. Each complete day sums to 24 * per_hour.
+    """
+    per_hour = 0.001  # 1 mm per step
+    da = _make_era5_midnight_reset(n_days=2, value_per_hour=per_hour)
+
+    # Confirm the raw diff is negative at the 00 UTC reset boundary (day2 00:00).
+    # That is the hour where val goes from 23*per_hour (day1 23:00) up to
+    # 24*per_hour (day2 00:00) — wait, that's positive. But from 24*per_hour
+    # (day2 00:00) to 1*per_hour (day2 01:00), the diff IS negative.
+    raw_diff = da.diff("time", label="upper")
+    # Find the step where we go from 24 to 1 (day2 01:00)
+    negative_mask = (raw_diff < 0).values.squeeze()
+    assert negative_mask.any(), (
+        "Expected at least one negative diff (midnight reset) but found none. "
+        "The xr.where rescue branch would never be triggered."
+    )
+
+    daily = hourly_to_daily(da)
+
+    # Each complete day should equal 24 * per_hour
+    expected = 24.0 * per_hour
+    for i in range(min(daily.sizes["time"], 2)):
+        np.testing.assert_allclose(
+            daily.isel(time=i).values,
+            expected,
+            rtol=1e-6,
+            err_msg=f"Day {i} daily sum incorrect; midnight-reset logic may be broken",
+        )
+
+
 def test_hourly_to_daily_full_24h():
     # 48 hours starting 2020-01-01 00:00 → two full days of accumulation
     da = _make_hourly("2020-01-01 00:00", hours=49, value_per_hour=0.001)

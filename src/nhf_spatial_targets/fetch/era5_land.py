@@ -36,17 +36,21 @@ VARIABLES = ("ro", "sro", "ssro")
 def hourly_to_daily(da: xr.DataArray) -> xr.DataArray:
     """Aggregate ERA5-Land hourly accumulated runoff to daily totals.
 
-    ERA5-Land accumulated fields (ro, sro, ssro) reset at 00 UTC each day
-    and represent meters of water equivalent accumulated since 00 UTC.
-    Daily total = sum of hourly increments computed via .diff('time'),
-    then resampled to daily sums. The diff approach is robust to the
-    midnight-reset boundary and to missing hours within a day.
+    ERA5-Land accumulated fields (ro, sro, ssro) represent meters of water
+    equivalent accumulated since 00 UTC of the current day, and reset to 0
+    at the start of each new day. The conversion proceeds in four steps:
 
-    The first hourly step of each day, after the 00 UTC reset, equals the
-    accumulation over the 23->00 hour of the prior day. We discard the
-    pre-first-midnight increment (which is meaningless without a prior
-    23 UTC value) by requiring the result to come from `.diff` with
-    matching valid timestamps.
+    1. Compute hourly increments via ``.diff(time, label="upper")``.
+       Each diff value is the accumulation during the preceding hour.
+    2. At the 00 UTC reset, the diff is negative (the accumulation jumps from
+       the previous day's total back toward 0). Where the diff is negative,
+       substitute the raw accumulated value at that timestamp — which equals
+       the 23→00 UTC increment because accumulation restarted at 0 at 00 UTC.
+    3. Shift all timestamps back 1 hour so that the 00 UTC increment
+       (representing the 23→00 accumulation) is credited to the prior day
+       rather than the new day.
+    4. Resample to daily sums, which correctly accumulates all hourly
+       increments within each calendar day.
 
     Parameters
     ----------
@@ -79,6 +83,9 @@ def daily_to_monthly(da: xr.DataArray) -> xr.DataArray:
     Uses month-end frequency ('1ME') so the time coordinate marks the
     last day of each month — consistent with other monthly products in
     this codebase. Original attrs are preserved.
+
+    Note: called by ``consolidate_year``, which also deletes any stale
+    monthly NCs whose filenames fall outside the updated year range.
     """
     monthly = da.resample(time="1ME").sum()
     monthly.attrs = dict(da.attrs)
@@ -172,6 +179,10 @@ def consolidate_year(
     aggregates each variable hourly→daily, merges into a single daily
     dataset, applies CF metadata, and writes atomically. Then aggregates
     all available daily files into a rolling monthly NC.
+
+    **Destructive side effect:** any existing monthly NC in ``monthly_dir``
+    whose filename year range differs from the updated range is deleted
+    before the new monthly NC is written.
 
     Parameters
     ----------
