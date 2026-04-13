@@ -205,11 +205,65 @@ def test_validate_credentials_with_cds_requires_cdsapi(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Preflight system-credential file checks
+# ---------------------------------------------------------------------------
+
+
+def test_check_cdsapirc_missing_raises(tmp_path):
+    """_check_cdsapirc raises ValueError when ~/.cdsapirc does not exist."""
+    from nhf_spatial_targets.validate import _check_cdsapirc
+
+    assert not (tmp_path / ".cdsapirc").exists()
+    with pytest.raises(ValueError, match="cdsapirc"):
+        _check_cdsapirc(_home=tmp_path)
+
+
+def test_check_cdsapirc_present_no_raise(tmp_path):
+    """_check_cdsapirc does not raise when ~/.cdsapirc exists."""
+    from nhf_spatial_targets.validate import _check_cdsapirc
+
+    (tmp_path / ".cdsapirc").write_text(
+        "url: https://cds.climate.copernicus.eu/api\nkey: abc\n"
+    )
+    _check_cdsapirc(_home=tmp_path)  # must not raise
+
+
+def test_check_netrc_missing_raises(tmp_path):
+    """_check_netrc_earthdata raises ValueError when ~/.netrc is absent."""
+    from nhf_spatial_targets.validate import _check_netrc_earthdata
+
+    assert not (tmp_path / ".netrc").exists()
+    with pytest.raises(ValueError, match="netrc"):
+        _check_netrc_earthdata(_home=tmp_path)
+
+
+def test_check_netrc_no_earthdata_entry_raises(tmp_path):
+    """_check_netrc_earthdata raises ValueError when the earthdata host is absent."""
+    from nhf_spatial_targets.validate import _check_netrc_earthdata
+
+    (tmp_path / ".netrc").write_text(
+        "machine other.example.com\nlogin user\npassword pass\n"
+    )
+    with pytest.raises(ValueError, match="urs.earthdata.nasa.gov"):
+        _check_netrc_earthdata(_home=tmp_path)
+
+
+def test_check_netrc_present_with_earthdata_no_raise(tmp_path):
+    """_check_netrc_earthdata does not raise when the earthdata entry exists."""
+    from nhf_spatial_targets.validate import _check_netrc_earthdata
+
+    (tmp_path / ".netrc").write_text(
+        "machine urs.earthdata.nasa.gov\nlogin user\npassword pass\n"
+    )
+    _check_netrc_earthdata(_home=tmp_path)  # must not raise
+
+
+# ---------------------------------------------------------------------------
 # Output files: fabric.json, manifest.json
 # ---------------------------------------------------------------------------
 
 
-def test_validate_writes_fabric_json(tmp_path, minimal_fabric):
+def test_validate_writes_fabric_json(tmp_path, minimal_fabric, no_system_cred_checks):
     _full_setup(tmp_path, minimal_fabric)
     validate_workspace(tmp_path)
 
@@ -225,7 +279,7 @@ def test_validate_writes_fabric_json(tmp_path, minimal_fabric):
     assert fabric["bbox_buffered"]["maxy"] > fabric["bbox"]["maxy"]
 
 
-def test_validate_writes_manifest_json(tmp_path, minimal_fabric):
+def test_validate_writes_manifest_json(tmp_path, minimal_fabric, no_system_cred_checks):
     _full_setup(tmp_path, minimal_fabric)
     validate_workspace(tmp_path)
 
@@ -244,7 +298,7 @@ def test_validate_writes_manifest_json(tmp_path, minimal_fabric):
 # ---------------------------------------------------------------------------
 
 
-def test_validate_creates_datastore(tmp_path, minimal_fabric):
+def test_validate_creates_datastore(tmp_path, minimal_fabric, no_system_cred_checks):
     ds = tmp_path / "new_datastore"
     _write_config(
         tmp_path,
@@ -259,7 +313,9 @@ def test_validate_creates_datastore(tmp_path, minimal_fabric):
     assert ds.is_dir()
 
 
-def test_validate_creates_source_subdirs(tmp_path, minimal_fabric):
+def test_validate_creates_source_subdirs(
+    tmp_path, minimal_fabric, no_system_cred_checks
+):
     ds = tmp_path / "datastore"
     _write_config(
         tmp_path,

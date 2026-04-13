@@ -167,22 +167,95 @@ def _import_cdsapi() -> None:
         ) from exc
 
 
+def _check_cdsapirc(_home: Path | None = None) -> None:
+    """Check that ~/.cdsapirc exists so cdsapi can authenticate.
+
+    Raises ``ValueError`` with a clear remediation message if the file is
+    missing.  Does not validate the content — cdsapi itself will error at
+    request time with a more specific message if the key is wrong.
+
+    Parameters
+    ----------
+    _home : Path | None
+        Override the home directory (used in tests). Defaults to
+        ``Path.home()``.
+    """
+    home = _home if _home is not None else Path.home()
+    cdsapirc = home / ".cdsapirc"
+    if not cdsapirc.exists():
+        raise ValueError(
+            "CDS credentials are required but ~/.cdsapirc was not found. "
+            "Create ~/.cdsapirc with your Copernicus CDS URL and API key:\n\n"
+            "  url: https://cds.climate.copernicus.eu/api\n"
+            "  key: <your-api-key>\n\n"
+            "You can obtain an API key from https://cds.climate.copernicus.eu "
+            "after registering and accepting the Terms of Use."
+        )
+
+
+def _check_netrc_earthdata(_home: Path | None = None) -> None:
+    """Check that ~/.netrc has an entry for urs.earthdata.nasa.gov.
+
+    Raises ``ValueError`` with a clear remediation message if the entry is
+    absent.  Does not validate the credentials — earthaccess will produce its
+    own error at download time if they are incorrect.
+
+    Parameters
+    ----------
+    _home : Path | None
+        Override the home directory (used in tests). Defaults to
+        ``Path.home()``.
+    """
+    home = _home if _home is not None else Path.home()
+    netrc_path = home / ".netrc"
+    if not netrc_path.exists():
+        raise ValueError(
+            "NASA Earthdata credentials are required but ~/.netrc was not found. "
+            "Create ~/.netrc with:\n\n"
+            "  machine urs.earthdata.nasa.gov\n"
+            "  login <your-username>\n"
+            "  password <your-password>\n\n"
+            "Register at https://urs.earthdata.nasa.gov to obtain credentials."
+        )
+    content = netrc_path.read_text()
+    if "urs.earthdata.nasa.gov" not in content:
+        raise ValueError(
+            "~/.netrc exists but does not contain an entry for "
+            "urs.earthdata.nasa.gov. Add:\n\n"
+            "  machine urs.earthdata.nasa.gov\n"
+            "  login <your-username>\n"
+            "  password <your-password>\n\n"
+            "See https://urs.earthdata.nasa.gov for registration."
+        )
+
+
 def _check_credentials(workdir: Path) -> None:
     cred_path = workdir / ".credentials.yml"
 
     # Build the required list: always need nasa_earthdata; add cds if catalog requires it
     from nhf_spatial_targets.catalog import sources as catalog_sources
 
+    srcs = catalog_sources()
     required: list[str] = ["nasa_earthdata"]
     needs_cds = any(
         (src.get("access") or {}).get("type") == "copernicus_cds"
-        for src in catalog_sources().values()
+        for src in srcs.values()
+    )
+    needs_earthdata = any(
+        (src.get("access") or {}).get("type") in ("nasa_gesdisc", "nasa_earthdata")
+        for src in srcs.values()
     )
     if needs_cds:
         required.append("cds")
         _import_cdsapi()
 
     validate_credentials(cred_path, required=required)
+
+    # Preflight: check that system credential files exist so tools can authenticate.
+    if needs_cds:
+        _check_cdsapirc()
+    if needs_earthdata or "nasa_earthdata" in required:
+        _check_netrc_earthdata()
 
 
 def _ensure_datastore(datastore: Path, dir_mode: int | None) -> None:
