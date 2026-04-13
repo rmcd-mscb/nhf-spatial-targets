@@ -1,6 +1,6 @@
-"""Build AET calibration targets from MWBM, MOD16A2, and SSEBop."""
+"""Build AET calibration targets from MOD16A2 and SSEBop."""
 
-# Sources:  nhm_mwbm, mod16a2 (or v061), ssebop
+# Sources:  mod16a2_v061, ssebop
 # Method:   multi_source_minmax
 # Variable: hru_actet
 # Timestep: monthly

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import geopandas as gpd
@@ -10,7 +11,12 @@ import pytest
 import yaml
 from shapely.geometry import box
 
-from nhf_spatial_targets.validate import _SOURCE_KEYS, validate_workspace
+from nhf_spatial_targets.validate import (
+    _SOURCE_KEYS,
+    _import_cdsapi,
+    validate_credentials,
+    validate_workspace,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -57,11 +63,17 @@ def _write_credentials(
     workdir: Path,
     earthdata_user: str = "user",
     earthdata_pass: str = "pass",
+    cds_url: str = "https://cds.climate.copernicus.eu/api",
+    cds_key: str = "uid:testkey",
 ) -> Path:
-    creds = {
+    creds: dict = {
         "nasa_earthdata": {
             "username": earthdata_user,
             "password": earthdata_pass,
+        },
+        "cds": {
+            "url": cds_url,
+            "key": cds_key,
         },
     }
     path = workdir / ".credentials.yml"
@@ -160,12 +172,98 @@ def test_validate_empty_earthdata_creds(tmp_path, minimal_fabric):
         validate_workspace(tmp_path)
 
 
+def test_validate_credentials_missing_cds(tmp_path: Path) -> None:
+    creds = tmp_path / ".credentials.yml"
+    creds.write_text(
+        yaml.safe_dump({"nasa_earthdata": {"username": "u", "password": "p"}})
+    )
+    with pytest.raises(ValueError, match="cds"):
+        validate_credentials(creds, required=["nasa_earthdata", "cds"])
+
+
+def test_validate_credentials_with_cds(tmp_path: Path) -> None:
+    creds = tmp_path / ".credentials.yml"
+    creds.write_text(
+        yaml.safe_dump(
+            {
+                "nasa_earthdata": {"username": "u", "password": "p"},
+                "cds": {
+                    "url": "https://cds.climate.copernicus.eu/api",
+                    "key": "uid:abc",
+                },
+            }
+        )
+    )
+    validate_credentials(creds, required=["nasa_earthdata", "cds"])  # no raise
+
+
+def test_validate_credentials_with_cds_requires_cdsapi(monkeypatch) -> None:
+    """If cds creds are required but cdsapi is not installed, _import_cdsapi raises."""
+    monkeypatch.setitem(sys.modules, "cdsapi", None)
+    with pytest.raises(ValueError, match="cdsapi"):
+        _import_cdsapi()
+
+
+# ---------------------------------------------------------------------------
+# Preflight system-credential file checks
+# ---------------------------------------------------------------------------
+
+
+def test_check_cdsapirc_missing_raises(tmp_path):
+    """_check_cdsapirc raises ValueError when ~/.cdsapirc does not exist."""
+    from nhf_spatial_targets.validate import _check_cdsapirc
+
+    assert not (tmp_path / ".cdsapirc").exists()
+    with pytest.raises(ValueError, match="cdsapirc"):
+        _check_cdsapirc(_home=tmp_path)
+
+
+def test_check_cdsapirc_present_no_raise(tmp_path):
+    """_check_cdsapirc does not raise when ~/.cdsapirc exists."""
+    from nhf_spatial_targets.validate import _check_cdsapirc
+
+    (tmp_path / ".cdsapirc").write_text(
+        "url: https://cds.climate.copernicus.eu/api\nkey: abc\n"
+    )
+    _check_cdsapirc(_home=tmp_path)  # must not raise
+
+
+def test_check_netrc_missing_raises(tmp_path):
+    """_check_netrc_earthdata raises ValueError when ~/.netrc is absent."""
+    from nhf_spatial_targets.validate import _check_netrc_earthdata
+
+    assert not (tmp_path / ".netrc").exists()
+    with pytest.raises(ValueError, match="netrc"):
+        _check_netrc_earthdata(_home=tmp_path)
+
+
+def test_check_netrc_no_earthdata_entry_raises(tmp_path):
+    """_check_netrc_earthdata raises ValueError when the earthdata host is absent."""
+    from nhf_spatial_targets.validate import _check_netrc_earthdata
+
+    (tmp_path / ".netrc").write_text(
+        "machine other.example.com\nlogin user\npassword pass\n"
+    )
+    with pytest.raises(ValueError, match="urs.earthdata.nasa.gov"):
+        _check_netrc_earthdata(_home=tmp_path)
+
+
+def test_check_netrc_present_with_earthdata_no_raise(tmp_path):
+    """_check_netrc_earthdata does not raise when the earthdata entry exists."""
+    from nhf_spatial_targets.validate import _check_netrc_earthdata
+
+    (tmp_path / ".netrc").write_text(
+        "machine urs.earthdata.nasa.gov\nlogin user\npassword pass\n"
+    )
+    _check_netrc_earthdata(_home=tmp_path)  # must not raise
+
+
 # ---------------------------------------------------------------------------
 # Output files: fabric.json, manifest.json
 # ---------------------------------------------------------------------------
 
 
-def test_validate_writes_fabric_json(tmp_path, minimal_fabric):
+def test_validate_writes_fabric_json(tmp_path, minimal_fabric, no_system_cred_checks):
     _full_setup(tmp_path, minimal_fabric)
     validate_workspace(tmp_path)
 
@@ -181,7 +279,7 @@ def test_validate_writes_fabric_json(tmp_path, minimal_fabric):
     assert fabric["bbox_buffered"]["maxy"] > fabric["bbox"]["maxy"]
 
 
-def test_validate_writes_manifest_json(tmp_path, minimal_fabric):
+def test_validate_writes_manifest_json(tmp_path, minimal_fabric, no_system_cred_checks):
     _full_setup(tmp_path, minimal_fabric)
     validate_workspace(tmp_path)
 
@@ -200,7 +298,7 @@ def test_validate_writes_manifest_json(tmp_path, minimal_fabric):
 # ---------------------------------------------------------------------------
 
 
-def test_validate_creates_datastore(tmp_path, minimal_fabric):
+def test_validate_creates_datastore(tmp_path, minimal_fabric, no_system_cred_checks):
     ds = tmp_path / "new_datastore"
     _write_config(
         tmp_path,
@@ -215,7 +313,9 @@ def test_validate_creates_datastore(tmp_path, minimal_fabric):
     assert ds.is_dir()
 
 
-def test_validate_creates_source_subdirs(tmp_path, minimal_fabric):
+def test_validate_creates_source_subdirs(
+    tmp_path, minimal_fabric, no_system_cred_checks
+):
     ds = tmp_path / "datastore"
     _write_config(
         tmp_path,

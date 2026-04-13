@@ -123,7 +123,11 @@ def _dispatch(
     else:
         output_path = pipeline_cfg["output"]["dir"]
 
-    builders[name](target_cfg, fabric_path, output_path)
+    if name == "runoff":
+        # run.build does not use fabric_path (HRU area comes from config)
+        builders[name](target_cfg, output_path)
+    else:
+        builders[name](target_cfg, fabric_path, output_path)
 
 
 @app.command
@@ -234,6 +238,8 @@ def fetch_all_cmd(
     # Import all fetch functions
     import nhf_spatial_targets.catalog as _catalog
     from nhf_spatial_targets.fetch._period import clamp_period
+    from nhf_spatial_targets.fetch.era5_land import fetch_era5_land
+    from nhf_spatial_targets.fetch.gldas import fetch_gldas
     from nhf_spatial_targets.fetch.merra2 import fetch_merra2
     from nhf_spatial_targets.fetch.modis import fetch_mod10c1, fetch_mod16a2
     from nhf_spatial_targets.fetch.ncep_ncar import fetch_ncep_ncar
@@ -243,6 +249,8 @@ def fetch_all_cmd(
 
     # (display name, catalog source key, fetch function)
     sources = [
+        ("era5-land", "era5_land", fetch_era5_land),
+        ("gldas", "gldas_noah_v21_monthly", fetch_gldas),
         ("merra2", "merra2", fetch_merra2),
         ("nldas-mosaic", "nldas_mosaic", fetch_nldas_mosaic),
         ("nldas-noah", "nldas_noah", fetch_nldas_noah),
@@ -613,6 +621,96 @@ def fetch_watergap22d_cmd(
         sys.exit(1)
 
     console.print("[green]WaterGAP 2.2d: downloaded to datastore[/green]")
+    console.print(json_mod.dumps(result, indent=2))
+
+
+@fetch_app.command(name="era5-land")
+def fetch_era5_land_cmd(
+    workdir: Annotated[
+        Path,
+        Parameter(
+            name=["--project-dir"],
+            help="Project created by 'nhf-targets init'.",
+        ),
+    ],
+    period: Annotated[
+        str,
+        Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
+    ] = "1979/2024",
+):
+    """Download ERA5-Land hourly runoff (ro, sro, ssro) via CDS API and consolidate to daily/monthly NetCDFs."""
+    import json as json_mod
+
+    from rich.console import Console
+
+    from nhf_spatial_targets.fetch.era5_land import fetch_era5_land
+
+    if not workdir.exists():
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
+        sys.exit(2)
+
+    console = Console()
+    console.print(f"[bold]Fetching ERA5-Land for period {period}...[/bold]")
+
+    try:
+        result = fetch_era5_land(workdir=workdir, period=period)
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        _logger.exception("Unexpected error during ERA5-Land fetch")
+        print(
+            f"Unexpected error ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    console.print("[green]ERA5-Land: downloaded to datastore[/green]")
+    console.print(json_mod.dumps(result, indent=2))
+
+
+@fetch_app.command(name="gldas")
+def fetch_gldas_cmd(
+    workdir: Annotated[
+        Path,
+        Parameter(
+            name=["--project-dir"],
+            help="Project created by 'nhf-targets init'.",
+        ),
+    ],
+    period: Annotated[
+        str,
+        Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
+    ] = "2000/2023",
+):
+    """Download GLDAS-2 monthly runoff data via NASA earthaccess."""
+    import json as json_mod
+
+    from rich.console import Console
+
+    from nhf_spatial_targets.fetch.gldas import fetch_gldas
+
+    if not workdir.exists():
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
+        sys.exit(2)
+
+    console = Console()
+    console.print(f"[bold]Fetching GLDAS for period {period}...[/bold]")
+
+    try:
+        result = fetch_gldas(workdir=workdir, period=period)
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        _logger.exception("Unexpected error during GLDAS fetch")
+        print(
+            f"Unexpected error ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    console.print("[green]GLDAS: downloaded to datastore[/green]")
     console.print(json_mod.dumps(result, indent=2))
 
 

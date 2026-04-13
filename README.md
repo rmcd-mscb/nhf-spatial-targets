@@ -8,7 +8,7 @@ Builds the five baseline calibration targets documented in [Hay and others (2022
 
 | Target | PRMS Variable | Sources | Method | Time Step |
 |---|---|---|---|---|
-| Runoff | `basin_cfs` | NHM-MWBM | MWBM uncertainty | Monthly |
+| Runoff | `basin_cfs` | ERA5-Land (`ro`) + GLDAS-2.1 NOAH (`Qs_acc + Qsb_acc`) | Multi-source min/max | Monthly |
 | AET | `hru_actet` | MWBM + MOD16A2 v061 + SSEBop | Multi-source min/max | Monthly |
 | Recharge | `recharge` | Reitz 2017 + WaterGAP 2.2d | Normalized min/max | Annual |
 | Soil Moisture | `soil_rechr` | MERRA-2 + NCEP/NCAR + NLDAS-MOSAIC + NLDAS-NOAH | Normalized min/max | Monthly + Annual |
@@ -252,7 +252,7 @@ Pixi supports **linux-64**, **osx-arm64**, and **win-64** (see `pixi.toml`).
 | Spatial batching for large fabrics | Done |
 | Visualization notebooks (all sources + SSEBop agg) | Done |
 | `fetch all` command (sequential, all 8 sources) | Done |
-| MWBM fetch (ScienceBase) | Not started |
+| ERA5-Land + GLDAS-2.1 NOAH runoff fetch | Not started |
 | Generic gdptools aggregation module | Not started |
 | Normalization and range-bound methods | Not started |
 | Target builders (runoff, AET, recharge, soil moisture, SCA) | Not started |
@@ -262,8 +262,8 @@ Pixi supports **linux-64**, **osx-arm64**, and **win-64** (see `pixi.toml`).
 See `catalog/sources.yml` `status:` and `notes:` fields for per-source details.
 
 **Resolved:**
-- MWBM ScienceBase item ID — confirmed: `55fc3f98e4b05d6c4e5029a1`
 - Reitz 2017 ScienceBase item ID — confirmed: `56c49126e4b0946c65219231`
+- Runoff source replacement — NHM-MWBM removed; replaced by ERA5-Land (CDS) + GLDAS-2.1 NOAH monthly. ERA5-Land ssro also added as third recharge source. Closes issue #41.
 - Recharge normalization window — confirmed 2000-2009 from TM 6-B10 body text
 - MOD16A2 / MOD10C1 v006 &rarr; v061: both decommissioned; use v061 in new runs
 - MERRA-2 variable — use `GWETTOP` (0-0.05m, dimensionless); product M2TMNXLND
@@ -280,6 +280,5 @@ See `catalog/sources.yml` `status:` and `notes:` fields for per-source details.
 ## References
 
 - Hay, L.E., and others, 2022, USGS TM 6-B10
-- Bock, A.R., and others, 2016/2018 — NHM-MWBM
 - Reitz, M., and others, 2017 — Recharge estimates
 - Xia, Y., and others, 2012 — NLDAS-2

@@ -8,33 +8,97 @@ sources:
   # ---------------------------------------------------------------------------
   # RUNOFF
   # ---------------------------------------------------------------------------
-  nhm_mwbm:
-    name: NHM Monthly Water Balance Model (MWBM)
+
+  era5_land:
+    name: ECMWF ERA5-Land Reanalysis
     description: >
-      Monthly runoff and uncertainty bounds for CONUS HRUs from the USGS
-      National Hydrologic Model application of the Monthly Water Balance Model.
-      Uncertainty bounds from Bock et al. (2018) stochastic post-processing
-      framework applied at 1,575 streamgages and 109,951 HRUs.
+      ECMWF ERA5-Land hourly reanalysis. Total runoff (ro), surface runoff
+      (sro), and sub-surface runoff (ssro) downloaded for CONUS plus
+      contributing watersheds (Canada/Mexico). Used as a source for the
+      runoff calibration target (ro) and the recharge calibration target
+      (ssro, as drainage proxy).
     citations:
-      - "Bock, A.R., Hay, L.E., Markstrom, S.L., and Atkinson, R.D., 2016, doi:10.5066/F7VD6WJQ"
-      - "Bock, A.R., Farmer, W.H., and Hay, L.E., 2018, doi:10.1016/j.advwatres.2018.10.005"
-      - "Bock, A.R., Hay, L.E., Markstrom, S.L., Emmerich, C., and Talbert, M., 2016, doi:10.5194/hess-20-2861-2016"
+      - "Muñoz-Sabater, J., and others, 2021, doi:10.5194/essd-13-4349-2021"
     access:
-      type: sciencebase
-      item_id: "55fc3f98e4b05d6c4e5029a1"
-      doi: "10.5066/F7VD6WJQ"
-      url: https://www.sciencebase.gov/catalog/item/55fc3f98e4b05d6c4e5029a1
+      type: copernicus_cds
+      dataset: reanalysis-era5-land
+      url: https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land
+      bbox_nwse: [53.0, -125.0, 24.7, -66.0]
+      bbox_notes: >
+        Encompasses CONUS contributing watersheds (Canada/Mexico) with
+        ~10 km buffer, snapped to the 0.1° ERA5-Land grid.
       notes: >
-        Main MWBM data release (ver. 4.0). Variables include AET, PET, runoff,
-        streamflow, soil moisture, SWE; 109,951 HRUs, 1950-2099. The uncertainty
-        child item (Bock et al. 2018) is nested under this same parent item.
+        Access via cdsapi (Copernicus CDS account required). Hourly
+        accumulated fields reset at 00 UTC; the midnight-reset is handled by
+        substituting the raw accumulated value where the diff is negative, then
+        shifting timestamps back 1 h before resampling. Pipeline aggregates
+        hourly→daily and daily→monthly. Both consolidated NCs are stored in
+        the datastore; the daily NC is re-aggregated if any hourly input is
+        newer (mtime comparison).
     variables:
-      - basin_cfs
+      - name: ro
+        long_name: total runoff
+        cf_units: "m"
+        cell_methods: "time: sum"
+        notes: Used for runoff target.
+      - name: sro
+        long_name: surface runoff
+        cf_units: "m"
+        cell_methods: "time: sum"
+        notes: Stored for future use.
+      - name: ssro
+        long_name: sub-surface runoff
+        cf_units: "m"
+        cell_methods: "time: sum"
+        notes: Used as recharge proxy in recharge target.
+    time_step: hourly (aggregated to daily and monthly)
+    period: "1979/present"
+    spatial_extent: CONUS+contributing-watersheds
+    spatial_resolution: 0.1 degree
+    units: m of water equivalent
+    license: Copernicus license (free, attribution)
+    status: current
+
+  gldas_noah_v21_monthly:
+    name: GLDAS-2.1 NOAH Monthly Land Surface Runoff
+    description: >
+      Global Land Data Assimilation System version 2.1, NOAH land
+      surface model, monthly product. Storm surface runoff (Qs_acc)
+      and baseflow-groundwater runoff (Qsb_acc) summed at consolidation
+      time to derived total runoff (runoff_total). Used as second source
+      for the runoff calibration target.
+    citations:
+      - "Rodell, M., and others, 2004, doi:10.1175/BAMS-85-3-381"
+    access:
+      type: nasa_gesdisc
+      short_name: GLDAS_NOAH025_M
+      version: "2.1"
+      url: https://disc.gsfc.nasa.gov/datasets/GLDAS_NOAH025_M_2.1/summary
+      bbox_nwse: [53.0, -125.0, 24.7, -66.0]
+      notes: >
+        Access via earthaccess (NASA Earthdata login required). Granules
+        are global (~few MB monthly); downloaded full and clipped to bbox
+        at consolidation time, mirroring the merra2 pattern.
+    variables:
+      - name: Qs_acc
+        long_name: storm surface runoff
+        cf_units: "kg m-2"
+        cell_methods: "time: sum"
+      - name: Qsb_acc
+        long_name: baseflow-groundwater runoff
+        cf_units: "kg m-2"
+        cell_methods: "time: sum"
+      - name: runoff_total
+        long_name: total runoff (Qs_acc + Qsb_acc, derived)
+        cf_units: "kg m-2"
+        cell_methods: "time: sum"
+        derived: true
     time_step: monthly
-    period: "1982/2010"
-    spatial_extent: CONUS
-    spatial_resolution: HRU (109,951 NHM HRUs)
-    units: cfs
+    period: "2000/present"
+    spatial_extent: global (clipped to CONUS+contributing-watersheds)
+    spatial_resolution: 0.25 degree
+    units: kg m-2 (equivalent to mm over the month)
+    license: public domain (NASA)
     status: current
 
   # ---------------------------------------------------------------------------

@@ -51,17 +51,17 @@ targets:
   runoff:
     enabled: true
     sources:
-      - nhm_mwbm
+      - era5_land
+      - gldas_noah_v21_monthly
     time_step: monthly
-    period: "1982-01-01/2010-12-31"
+    period: "2000-01-01/2010-12-31"
     prms_variable: basin_cfs
-    range_method: mwbm_uncertainty
+    range_method: multi_source_minmax
     output_file: runoff_targets.nc
 
   aet:
     enabled: true
     sources:
-      - nhm_mwbm
       - mod16a2_v061
       - ssebop
     time_step: monthly
@@ -75,6 +75,7 @@ targets:
     sources:
       - reitz2017
       - watergap22d
+      - era5_land
     time_step: annual
     period: "2000-01-01/2009-12-31"
     prms_variable: recharge
@@ -117,6 +118,11 @@ _CREDENTIALS_TEMPLATE = {
         "_comment": "NASA Earthdata login — https://urs.earthdata.nasa.gov",
         "username": "",
         "password": "",
+    },
+    "cds": {
+        "_comment": "Copernicus CDS API — https://cds.climate.copernicus.eu",
+        "url": "https://cds.climate.copernicus.eu/api",
+        "key": "<uid>:<key>",
     },
 }
 
