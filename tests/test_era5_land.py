@@ -101,3 +101,47 @@ def test_download_year_skips_existing(tmp_path, monkeypatch):
     out.write_bytes(b"existing")
     download_year_variable(year=2020, variable="ro", output_path=out)
     fake_client.retrieve.assert_not_called()
+
+
+def test_consolidate_year_writes_daily_and_updates_monthly(tmp_path, monkeypatch):
+    """Given pre-existing hourly NCs, consolidation produces daily and monthly NCs."""
+    from nhf_spatial_targets.fetch.era5_land import consolidate_year
+
+    hourly_dir = tmp_path / "hourly"
+    daily_dir = tmp_path / "daily"
+    monthly_dir = tmp_path / "monthly"
+    hourly_dir.mkdir()
+
+    times = pd.date_range("2020-01-01", "2020-01-03 23:00", freq="1h")
+    for var in ("ro", "sro", "ssro"):
+        vals = np.tile(
+            np.arange(24, dtype=float).reshape(24, 1, 1) * 0.001,
+            (len(times) // 24, 1, 1),
+        )
+        ds = xr.Dataset(
+            {var: (("time", "latitude", "longitude"), vals)},
+            coords={
+                "time": times[: vals.shape[0]],
+                "latitude": [40.0],
+                "longitude": [-100.0],
+            },
+        )
+        ds[var].attrs["units"] = "m"
+        ds.to_netcdf(hourly_dir / f"era5_land_{var}_2020.nc")
+
+    daily_path, monthly_path = consolidate_year(
+        year=2020,
+        hourly_dir=hourly_dir,
+        daily_dir=daily_dir,
+        monthly_dir=monthly_dir,
+    )
+
+    assert daily_path.exists()
+    daily = xr.open_dataset(daily_path)
+    try:
+        assert {"ro", "sro", "ssro"}.issubset(set(daily.data_vars))
+        assert daily.sizes["time"] >= 2
+    finally:
+        daily.close()
+
+    assert monthly_path.exists()

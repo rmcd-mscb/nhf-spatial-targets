@@ -8,11 +8,20 @@ to the shared datastore.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 import xarray as xr
+
+import nhf_spatial_targets.catalog as _catalog
+from nhf_spatial_targets.fetch._period import years_in_period
+from nhf_spatial_targets.fetch.consolidate import apply_cf_metadata
+from nhf_spatial_targets.workspace import load as _load_project
 
 logger = logging.getLogger(__name__)
 
@@ -134,3 +143,194 @@ def download_year_variable(
     logger.info("Submitting CDS request for %s %d → %s", variable, year, output_path)
     client.retrieve("reanalysis-era5-land", request, str(output_path))
     return output_path
+
+
+_SOURCE_KEY = "era5_land"
+
+
+def _atomic_to_netcdf(ds: xr.Dataset, path: Path) -> None:
+    """Write *ds* to *path* atomically via a temporary file."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        ds.to_netcdf(tmp, format="NETCDF4")
+        tmp.rename(path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def consolidate_year(
+    year: int,
+    hourly_dir: Path,
+    daily_dir: Path,
+    monthly_dir: Path,
+) -> tuple[Path, Path]:
+    """Build daily and monthly consolidated NCs for one year.
+
+    Reads ``era5_land_{ro,sro,ssro}_{year}.nc`` from ``hourly_dir``,
+    aggregates each variable hourly→daily, merges into a single daily
+    dataset, applies CF metadata, and writes atomically. Then aggregates
+    all available daily files into a rolling monthly NC.
+
+    Parameters
+    ----------
+    year : int
+    hourly_dir : Path
+        Directory containing per-variable hourly NCs.
+    daily_dir : Path
+        Directory to write the daily consolidated NC.
+    monthly_dir : Path
+        Directory to write (or overwrite) the monthly consolidated NC.
+
+    Returns
+    -------
+    tuple[Path, Path]
+        ``(daily_path, monthly_path)``
+    """
+    daily_dir = Path(daily_dir)
+    monthly_dir = Path(monthly_dir)
+    daily_dir.mkdir(parents=True, exist_ok=True)
+    monthly_dir.mkdir(parents=True, exist_ok=True)
+
+    daily_arrays: dict[str, xr.DataArray] = {}
+    for var in VARIABLES:
+        path = Path(hourly_dir) / f"era5_land_{var}_{year}.nc"
+        if not path.exists():
+            raise FileNotFoundError(f"Missing hourly file: {path}")
+        ds = xr.open_dataset(path)
+        da = ds[var].load()
+        ds.close()
+        daily_arrays[var] = hourly_to_daily(da)
+
+    daily_ds = xr.Dataset(daily_arrays)
+    daily_ds = apply_cf_metadata(daily_ds, _SOURCE_KEY, "daily")
+    daily_path = daily_dir / f"era5_land_daily_{year}.nc"
+    _atomic_to_netcdf(daily_ds, daily_path)
+    logger.info("Wrote daily NC: %s", daily_path)
+
+    # Monthly: rebuild from the (possibly multi-year) collection of daily files
+    daily_files = sorted(daily_dir.glob("era5_land_daily_*.nc"))
+    with xr.open_mfdataset(daily_files, combine="by_coords") as ds_all:
+        monthly_arrays: dict[str, xr.DataArray] = {}
+        for var in VARIABLES:
+            monthly_arrays[var] = daily_to_monthly(ds_all[var].load())
+    monthly_ds = xr.Dataset(monthly_arrays)
+    monthly_ds = apply_cf_metadata(monthly_ds, _SOURCE_KEY, "monthly")
+    start_year = pd.Timestamp(monthly_ds.time.min().values).year
+    end_year = pd.Timestamp(monthly_ds.time.max().values).year
+    monthly_path = monthly_dir / f"era5_land_monthly_{start_year}_{end_year}.nc"
+    # Remove any stale monthly file with a different year range
+    for stale in monthly_dir.glob("era5_land_monthly_*.nc"):
+        if stale != monthly_path:
+            stale.unlink()
+    _atomic_to_netcdf(monthly_ds, monthly_path)
+    logger.info("Wrote monthly NC: %s", monthly_path)
+
+    return daily_path, monthly_path
+
+
+def fetch_era5_land(workdir: Path, period: str) -> dict:
+    """Download ERA5-Land hourly runoff and produce daily/monthly NCs.
+
+    Loops over years in ``period``, downloading per-year per-variable
+    hourly NCs from CDS into the project's datastore, then consolidating
+    each year into the daily file and rebuilding the rolling monthly
+    file. Idempotent on already-downloaded years.
+
+    Parameters
+    ----------
+    workdir : Path
+        Project directory containing ``config.yml`` and ``fabric.json``.
+    period : str
+        Temporal range as ``"YYYY/YYYY"``.
+
+    Returns
+    -------
+    dict
+        Provenance record for the caller.
+    """
+    ws = _load_project(workdir)
+    meta = _catalog.source(_SOURCE_KEY)
+
+    raw_root = ws.raw_dir(_SOURCE_KEY)
+    hourly_dir = raw_root / "hourly"
+    daily_dir = raw_root / "daily"
+    monthly_dir = raw_root / "monthly"
+
+    now_utc = datetime.now(timezone.utc).isoformat()
+    files: list[dict] = []
+
+    for year in years_in_period(period):
+        for var in VARIABLES:
+            out = hourly_dir / f"era5_land_{var}_{year}.nc"
+            download_year_variable(year, var, out)
+        daily_path, monthly_path = consolidate_year(
+            year, hourly_dir, daily_dir, monthly_dir
+        )
+        files.append(
+            {
+                "year": year,
+                "daily_path": str(daily_path),
+                "monthly_path": str(monthly_path),
+                "consolidated_utc": now_utc,
+            }
+        )
+
+    bbox = ws.fabric["bbox_buffered"]
+    license_str = meta.get("license", "Copernicus license")
+    _update_manifest(workdir, period, bbox, meta, license_str, files)
+
+    return {
+        "source_key": _SOURCE_KEY,
+        "access_url": meta["access"]["url"],
+        "license": license_str,
+        "variables": [v["name"] for v in meta["variables"]],
+        "period": period,
+        "bbox": bbox,
+        "download_timestamp": now_utc,
+        "files": files,
+    }
+
+
+def _update_manifest(
+    workdir: Path,
+    period: str,
+    bbox: dict,
+    meta: dict,
+    license_str: str,
+    files: list[dict],
+) -> None:
+    """Merge ERA5-Land provenance into manifest.json (atomic write)."""
+    ws = _load_project(workdir)
+    manifest_path = ws.manifest_path
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"manifest.json in {workdir} is corrupt and cannot be "
+                f"parsed. You may need to delete it and re-run the fetch "
+                f"step. Original error: {exc}"
+            ) from exc
+    else:
+        manifest = {"sources": {}, "steps": []}
+
+    manifest.setdefault("sources", {})[_SOURCE_KEY] = {
+        "source_key": _SOURCE_KEY,
+        "access_url": meta["access"]["url"],
+        "license": license_str,
+        "period": period,
+        "bbox": bbox,
+        "variables": [v["name"] for v in meta["variables"]],
+        "files": files,
+    }
+
+    fd, tmp = tempfile.mkstemp(dir=manifest_path.parent, suffix=".json.tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(manifest, f, indent=2)
+        Path(tmp).replace(manifest_path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+    logger.info("Updated manifest.json with ERA5-Land provenance")
