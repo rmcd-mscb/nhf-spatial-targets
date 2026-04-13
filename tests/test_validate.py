@@ -172,9 +172,11 @@ def test_validate_empty_earthdata_creds(tmp_path, minimal_fabric):
 
 def test_validate_credentials_missing_cds(tmp_path: Path) -> None:
     creds = tmp_path / ".credentials.yml"
-    creds.write_text(yaml.safe_dump({"earthdata": {"username": "u", "password": "p"}}))
+    creds.write_text(
+        yaml.safe_dump({"nasa_earthdata": {"username": "u", "password": "p"}})
+    )
     with pytest.raises(ValueError, match="cds"):
-        validate_credentials(creds, required=["earthdata", "cds"])
+        validate_credentials(creds, required=["nasa_earthdata", "cds"])
 
 
 def test_validate_credentials_with_cds(tmp_path: Path) -> None:
@@ -182,7 +184,7 @@ def test_validate_credentials_with_cds(tmp_path: Path) -> None:
     creds.write_text(
         yaml.safe_dump(
             {
-                "earthdata": {"username": "u", "password": "p"},
+                "nasa_earthdata": {"username": "u", "password": "p"},
                 "cds": {
                     "url": "https://cds.climate.copernicus.eu/api",
                     "key": "uid:abc",
@@ -190,7 +192,7 @@ def test_validate_credentials_with_cds(tmp_path: Path) -> None:
             }
         )
     )
-    validate_credentials(creds, required=["earthdata", "cds"])  # no raise
+    validate_credentials(creds, required=["nasa_earthdata", "cds"])  # no raise
 
 
 # ---------------------------------------------------------------------------
