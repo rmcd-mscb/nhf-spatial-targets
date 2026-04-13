@@ -83,11 +83,11 @@ The pipeline separates **projects** (fabric-specific) from the **datastore** (sh
 |---|---|---|
 | 1 | `nhf-targets init --project-dir <dir>` | Creates project skeleton with `config.yml` and `.credentials.yml` templates |
 | 2 | *(manual)* | Edit `config.yml` to set fabric path, datastore, and target settings; fill in `.credentials.yml` with NASA Earthdata and CDS credentials |
-| 2.5 | `nhf-targets materialize-credentials --project-dir <dir>` | Copies credentials from `.credentials.yml` into `~/.cdsapirc` and `~/.netrc` (run once after editing `.credentials.yml`) |
-| 3 | `nhf-targets validate --project-dir <dir>` | Verifies config, fabric, credentials; writes `fabric.json` and `manifest.json` |
-| 4 | `nhf-targets fetch <source> --project-dir <dir> --period YYYY/YYYY` | Downloads source granules into `<datastore>/<source_key>/` |
-| 5 | `nhf-targets agg <source> --project-dir <dir> --period YYYY/YYYY` | Aggregates remote data to HRU fabric |
-| 6 | `nhf-targets run --project-dir <dir>` | Builds calibration targets from fetched/aggregated data |
+| 3 | `nhf-targets materialize-credentials --project-dir <dir>` | Copies credentials from `.credentials.yml` into `~/.cdsapirc` and `~/.netrc` (run after editing or rotating `.credentials.yml`) |
+| 4 | `nhf-targets validate --project-dir <dir>` | Verifies config, fabric, credentials; writes `fabric.json` and `manifest.json` |
+| 5 | `nhf-targets fetch <source> --project-dir <dir> --period YYYY/YYYY` | Downloads source granules into `<datastore>/<source_key>/` |
+| 6 | `nhf-targets agg <source> --project-dir <dir> --period YYYY/YYYY` | Aggregates remote data to HRU fabric |
+| 7 | `nhf-targets run --project-dir <dir>` | Builds calibration targets from fetched/aggregated data |
 
 **Key paths:**
 

@@ -58,6 +58,10 @@ def validate_credentials(path: Path, required: list[str]) -> None:
         if name == "nasa_earthdata":
             if not section.get("username") or not section.get("password"):
                 raise ValueError(
+                    f"Ensure the 'nasa_earthdata' section of {path} is populated, "
+                    "then run:\n"
+                    f"    nhf-targets materialize-credentials "
+                    f"--project-dir {path.parent}\n\n"
                     f"Earthdata credentials incomplete — "
                     f"nasa_earthdata.username and nasa_earthdata.password "
                     f"must be non-empty in {path.name}"
@@ -65,6 +69,10 @@ def validate_credentials(path: Path, required: list[str]) -> None:
         elif name == "cds":
             if not section.get("url") or not section.get("key"):
                 raise ValueError(
+                    f"Ensure the 'cds' section of {path} is populated, "
+                    "then run:\n"
+                    f"    nhf-targets materialize-credentials "
+                    f"--project-dir {path.parent}\n\n"
                     f"cds credentials incomplete — "
                     f"cds.url and cds.key must be non-empty in {path.name}"
                 )

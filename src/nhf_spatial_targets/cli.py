@@ -197,7 +197,6 @@ def materialize_credentials_cmd(
       2 — project directory not found
       3 — write failure (OSError) — system action required
     """
-    import yaml
     from rich.console import Console
     from rich.table import Table
 
