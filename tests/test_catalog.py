@@ -73,3 +73,19 @@ def test_gldas_source_present():
     assert "Qsb_acc" in var_names
     assert "runoff_total" in var_names  # derived
     assert s["status"] == "current"
+
+
+def test_runoff_uses_era5_and_gldas():
+    from nhf_spatial_targets import catalog
+
+    v = catalog.variable("runoff")
+    assert v["sources"] == ["era5_land", "gldas_noah_v21_monthly"]
+    assert v["range_method"] == "multi_source_minmax"
+
+
+def test_recharge_includes_era5_land():
+    from nhf_spatial_targets import catalog
+
+    v = catalog.variable("recharge")
+    assert "era5_land" in v["sources"]
+    assert v["range_method"] == "normalized_minmax"
