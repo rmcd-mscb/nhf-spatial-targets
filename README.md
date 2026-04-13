@@ -117,6 +117,57 @@ Each `fetch` command downloads source granules and consolidates them into a sing
 
 All fetch commands support **incremental download** — periods already recorded in `manifest.json` are skipped.
 
+### Datastore Storage Estimates
+
+Rough per-source estimates for the reference pipeline period (2000–2010 for most sources; see `config/pipeline.yml`). ERA5-Land dominates because raw per-year hourly files are retained for idempotent re-runs.
+
+| Source | Period fetched | Files kept on disk | Estimated size |
+|---|---|---|---|
+| ERA5-Land | 2000–2010 (11 yr) | 3 vars × 11 yr hourly CONUS NCs + consolidated daily + monthly | **30–60 GB** |
+| MERRA-2 | 1982–2010 (29 yr) | 348 monthly global `.nc4` files + consolidated | **3–5 GB** |
+| NLDAS-2 MOSAIC | 1982–2010 (29 yr) | 348 monthly CONUS `.nc4` files + consolidated | **1–3 GB** |
+| NLDAS-2 NOAH | 1982–2010 (29 yr) | 348 monthly CONUS `.nc4` files + consolidated | **1–3 GB** |
+| NCEP/NCAR | 1982–2010 (29 yr) | Daily annual files deleted after monthly aggregation | **< 1 GB** |
+| MOD16A2 v061 | 2000–2010 (11 yr) | HDF tiles deleted; 11 yearly consolidated NCs at 500m CONUS | **10–20 GB** |
+| MOD10C1 v061 | 2000–2010 (11 yr) | Daily files deleted; 11 yearly consolidated NCs at 0.05° | **2–5 GB** |
+| GLDAS-2.1 NOAH | 2000–2010 (11 yr) | ~132 monthly global granules + consolidated | **1–2 GB** |
+| Reitz 2017 | 2000–2013 (14 yr) | 28 zip files + consolidated NC | **2–4 GB** |
+| WaterGAP 2.2d | 1901–2016 (full) | Single global NC4 | **< 1 GB** |
+| **Total** | | | **~50–100 GB** |
+
+These are order-of-magnitude estimates. Actual sizes depend on CDS compression, exact MODIS tile counts for the CONUS bbox, and how far back the pipeline period extends. Sizes scale roughly linearly with the number of years fetched.
+
+### Running Fetches on SLURM
+
+A SLURM array job script [`fetch_all.slurm`](fetch_all.slurm) is provided to run all 10 fetch tasks as independent jobs (one per array index), allowing them to run concurrently on a cluster:
+
+```bash
+# From the repo root
+mkdir -p logs
+# Edit PROJECT_DIR inside fetch_all.slurm, then:
+sbatch fetch_all.slurm
+
+# Rerun a single source (e.g. index 2 = MERRA-2):
+sbatch --array=2 fetch_all.slurm
+```
+
+Array index → source mapping:
+
+| Index | Source |
+|---|---|
+| 0 | ERA5-Land |
+| 1 | GLDAS-2.1 NOAH |
+| 2 | MERRA-2 |
+| 3 | NLDAS-2 MOSAIC |
+| 4 | NLDAS-2 NOAH |
+| 5 | NCEP/NCAR |
+| 6 | WaterGAP 2.2d |
+| 7 | Reitz 2017 |
+| 8 | MOD16A2 v061 |
+| 9 | MOD10C1 v061 |
+
+All fetch routines are network I/O-bound (sequential downloads); the script allocates 1 CPU and 16 GB RAM per task.
+
 ## Aggregation
 
 Sources that are accessed remotely (e.g. via STAC) are aggregated directly to the HRU fabric without local download:
