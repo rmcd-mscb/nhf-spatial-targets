@@ -65,6 +65,8 @@ run-som    = { cmd = "nhf-targets run --target soil_moisture" }
 run-sca    = { cmd = "nhf-targets run --target snow_covered_area" }
 
 # Fetch source data
+fetch-era5-land = { cmd = "nhf-targets fetch era5-land", description = "Download ERA5-Land data into a project datastore" }
+fetch-gldas = { cmd = "nhf-targets fetch gldas", description = "Download GLDAS-2 runoff data into a project datastore" }
 fetch-merra2 = { cmd = "nhf-targets fetch merra2", description = "Download MERRA-2 data into a project datastore" }
 fetch-nldas-mosaic = { cmd = "nhf-targets fetch nldas-mosaic", description = "Download NLDAS-2 MOSAIC data into a project datastore" }
 fetch-nldas-noah = { cmd = "nhf-targets fetch nldas-noah", description = "Download NLDAS-2 NOAH data into a project datastore" }
