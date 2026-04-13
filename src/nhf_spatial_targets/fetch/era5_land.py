@@ -212,13 +212,37 @@ def consolidate_year(
 
     daily_path = daily_dir / f"era5_land_daily_{year}.nc"
 
-    # Idempotency guard: skip hourly→daily aggregation if the daily NC exists.
+    # Idempotency guard: skip hourly→daily aggregation if the daily NC is
+    # up-to-date.  "Up-to-date" means the daily NC exists AND either:
+    #   (a) no hourly input files are present (daily NC is authoritative), or
+    #   (b) the daily NC mtime >= the maximum mtime of existing hourly files.
+    # If any hourly file is newer than the daily NC, we re-aggregate so that
+    # upstream changes to the raw downloads are picked up automatically.
+    hourly_paths = [
+        Path(hourly_dir) / f"era5_land_{var}_{year}.nc" for var in VARIABLES
+    ]
+    _skip_aggregation = False
     if daily_path.exists():
-        logger.info("Daily NC already exists, skipping aggregation: %s", daily_path)
+        daily_mtime = daily_path.stat().st_mtime
+        hourly_mtimes = [p.stat().st_mtime for p in hourly_paths if p.exists()]
+        if not hourly_mtimes or max(hourly_mtimes) <= daily_mtime:
+            logger.info(
+                "Daily NC is up-to-date (no newer hourly inputs), "
+                "skipping aggregation: %s",
+                daily_path,
+            )
+            _skip_aggregation = True
+        else:
+            logger.info(
+                "Hourly inputs are newer than daily NC; re-aggregating: %s",
+                daily_path,
+            )
+
+    if _skip_aggregation:
+        pass
     else:
         daily_arrays: dict[str, xr.DataArray] = {}
-        for var in VARIABLES:
-            path = Path(hourly_dir) / f"era5_land_{var}_{year}.nc"
+        for var, path in zip(VARIABLES, hourly_paths):
             if not path.exists():
                 raise FileNotFoundError(f"Missing hourly file: {path}")
             ds = xr.open_dataset(path)

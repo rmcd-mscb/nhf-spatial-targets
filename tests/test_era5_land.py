@@ -382,3 +382,56 @@ def test_consolidate_year_is_idempotent(tmp_path, monkeypatch):
     assert daily_path2.exists()
     # Daily file was NOT rewritten (mtime unchanged)
     assert daily_path2.stat().st_mtime == mtime_before
+
+
+def test_consolidate_year_reaggregates_when_hourly_is_newer(tmp_path):
+    """If a hourly NC is touched after the daily NC, re-aggregation happens."""
+    import time
+    from unittest.mock import patch
+
+    from nhf_spatial_targets.fetch.era5_land import consolidate_year
+
+    hourly_dir = tmp_path / "hourly"
+    daily_dir = tmp_path / "daily"
+    monthly_dir = tmp_path / "monthly"
+    hourly_dir.mkdir()
+
+    _write_hourly_ncs(hourly_dir, 2020)
+
+    # First pass: produce the daily NC
+    daily_path, _ = consolidate_year(
+        year=2020,
+        hourly_dir=hourly_dir,
+        daily_dir=daily_dir,
+        monthly_dir=monthly_dir,
+    )
+    assert daily_path.exists()
+
+    # Force the daily NC to appear older by back-dating it 2 seconds
+    old_mtime = daily_path.stat().st_mtime - 2.0
+    import os
+
+    os.utime(daily_path, (old_mtime, old_mtime))
+
+    # Now touch one of the hourly files so it is newer than the daily NC
+    hourly_ro = hourly_dir / "era5_land_ro_2020.nc"
+    current = time.time()
+    os.utime(hourly_ro, (current, current))
+
+    # Second pass: should re-aggregate because the hourly file is newer
+    with patch(
+        "nhf_spatial_targets.fetch.era5_land.hourly_to_daily",
+        wraps=__import__(
+            "nhf_spatial_targets.fetch.era5_land", fromlist=["hourly_to_daily"]
+        ).hourly_to_daily,
+    ) as mock_h2d:
+        consolidate_year(
+            year=2020,
+            hourly_dir=hourly_dir,
+            daily_dir=daily_dir,
+            monthly_dir=monthly_dir,
+        )
+
+    assert mock_h2d.called, (
+        "hourly_to_daily should be called when a hourly NC is newer than the daily NC"
+    )
