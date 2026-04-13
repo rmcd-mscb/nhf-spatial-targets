@@ -8,34 +8,6 @@ sources:
   # ---------------------------------------------------------------------------
   # RUNOFF
   # ---------------------------------------------------------------------------
-  nhm_mwbm:
-    name: NHM Monthly Water Balance Model (MWBM)
-    description: >
-      Monthly runoff and uncertainty bounds for CONUS HRUs from the USGS
-      National Hydrologic Model application of the Monthly Water Balance Model.
-      Uncertainty bounds from Bock et al. (2018) stochastic post-processing
-      framework applied at 1,575 streamgages and 109,951 HRUs.
-    citations:
-      - "Bock, A.R., Hay, L.E., Markstrom, S.L., and Atkinson, R.D., 2016, doi:10.5066/F7VD6WJQ"
-      - "Bock, A.R., Farmer, W.H., and Hay, L.E., 2018, doi:10.1016/j.advwatres.2018.10.005"
-      - "Bock, A.R., Hay, L.E., Markstrom, S.L., Emmerich, C., and Talbert, M., 2016, doi:10.5194/hess-20-2861-2016"
-    access:
-      type: sciencebase
-      item_id: "55fc3f98e4b05d6c4e5029a1"
-      doi: "10.5066/F7VD6WJQ"
-      url: https://www.sciencebase.gov/catalog/item/55fc3f98e4b05d6c4e5029a1
-      notes: >
-        Main MWBM data release (ver. 4.0). Variables include AET, PET, runoff,
-        streamflow, soil moisture, SWE; 109,951 HRUs, 1950-2099. The uncertainty
-        child item (Bock et al. 2018) is nested under this same parent item.
-    variables:
-      - basin_cfs
-    time_step: monthly
-    period: "1982/2010"
-    spatial_extent: CONUS
-    spatial_resolution: HRU (109,951 NHM HRUs)
-    units: cfs
-    status: current
 
   # ---------------------------------------------------------------------------
   # ACTUAL EVAPOTRANSPIRATION

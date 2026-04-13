@@ -7,7 +7,7 @@ from nhf_spatial_targets.catalog import sources, variables, source, variable
 def test_sources_loads():
     s = sources()
     assert isinstance(s, dict)
-    assert "nhm_mwbm" in s
+    assert "ssebop" in s
 
 
 def test_variables_loads():
@@ -17,8 +17,8 @@ def test_variables_loads():
 
 
 def test_source_lookup():
-    s = source("nhm_mwbm")
-    assert s["time_step"] == "monthly"
+    s = source("ssebop")
+    assert s["status"] == "current"
 
 
 def test_variable_lookup():
@@ -36,3 +36,15 @@ def test_ssebop_source_is_usgs_gdp_stac():
 def test_source_missing():
     with pytest.raises(KeyError):
         source("not_a_real_source")
+
+
+def test_nhm_mwbm_removed():
+    """nhm_mwbm has been replaced by ERA5-Land + GLDAS."""
+    from nhf_spatial_targets import catalog
+
+    sources = catalog.sources()
+    assert "nhm_mwbm" not in sources, (
+        "nhm_mwbm should be removed; replaced by era5_land + gldas_noah_v21_monthly"
+    )
+    aet = catalog.variable("aet")
+    assert "nhm_mwbm" not in aet["sources"]
