@@ -246,7 +246,7 @@ def fetch_all_cmd(
     # (display name, catalog source key, fetch function)
     sources = [
         ("era5-land", "era5_land", fetch_era5_land),
-        ("gldas", "gldas", fetch_gldas),
+        ("gldas", "gldas_noah_v21_monthly", fetch_gldas),
         ("merra2", "merra2", fetch_merra2),
         ("nldas-mosaic", "nldas_mosaic", fetch_nldas_mosaic),
         ("nldas-noah", "nldas_noah", fetch_nldas_noah),
