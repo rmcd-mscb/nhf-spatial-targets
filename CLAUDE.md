@@ -53,7 +53,8 @@ catalog/           # YAML data source registry and variable definitions
 config/            # pipeline.yml reference configuration
 src/nhf_spatial_targets/
   catalog.py       # Python API for catalog/ YAML files
-  cli.py           # Cyclopts CLI: nhf-targets init | validate | run | fetch | catalog
+  cli.py           # Cyclopts CLI: nhf-targets init | materialize-credentials | validate | run | fetch | catalog
+  credentials.py   # materialize_cdsapirc / materialize_netrc_earthdata helpers
   workspace.py     # Project path resolution, Project dataclass, make_dir()
   validate.py      # Preflight checks (fabric, datastore, credentials, catalog)
   init_run.py      # Project skeleton creation
@@ -110,7 +111,8 @@ The pipeline separates **projects** (fabric-specific) from the **datastore** (sh
 
 **Workflow:**
 1. `nhf-targets init --project-dir <project-dir>` creates a project skeleton with `config.yml` template
-2. User edits `config.yml` to set `fabric.path`, `fabric.id_col`, `datastore` path, and credentials
+2. User edits `config.yml` to set `fabric.path`, `fabric.id_col`, `datastore` path, and credentials; fills in `.credentials.yml` with NASA Earthdata and CDS credentials
+2.5. `nhf-targets materialize-credentials --project-dir <project-dir>` copies credentials from `.credentials.yml` into `~/.cdsapirc` and `~/.netrc` (run once after editing `.credentials.yml`)
 3. `nhf-targets validate --project-dir <project-dir>` runs preflight checks and writes `fabric.json`
 4. `nhf-targets fetch <source> --project-dir <project-dir>` downloads to the shared datastore
 5. `nhf-targets agg ssebop --project-dir <project-dir>` aggregates remote data to fabric

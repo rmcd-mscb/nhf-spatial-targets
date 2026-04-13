@@ -77,12 +77,13 @@ The pipeline separates **projects** (fabric-specific) from the **datastore** (sh
   └── weights/                     #   weight caches (fabric × source grid)
 ```
 
-**Workflow:** `init` &rarr; edit config &rarr; `validate` &rarr; `fetch` &rarr; `run`
+**Workflow:** `init` &rarr; edit config &rarr; `materialize-credentials` &rarr; `validate` &rarr; `fetch` &rarr; `run`
 
 | Step | Command | What it does |
 |---|---|---|
 | 1 | `nhf-targets init --project-dir <dir>` | Creates project skeleton with `config.yml` and `.credentials.yml` templates |
-| 2 | *(manual)* | Edit `config.yml` to set fabric path, datastore, and target settings |
+| 2 | *(manual)* | Edit `config.yml` to set fabric path, datastore, and target settings; fill in `.credentials.yml` with NASA Earthdata and CDS credentials |
+| 2.5 | `nhf-targets materialize-credentials --project-dir <dir>` | Copies credentials from `.credentials.yml` into `~/.cdsapirc` and `~/.netrc` (run once after editing `.credentials.yml`) |
 | 3 | `nhf-targets validate --project-dir <dir>` | Verifies config, fabric, credentials; writes `fabric.json` and `manifest.json` |
 | 4 | `nhf-targets fetch <source> --project-dir <dir> --period YYYY/YYYY` | Downloads source granules into `<datastore>/<source_key>/` |
 | 5 | `nhf-targets agg <source> --project-dir <dir> --period YYYY/YYYY` | Aggregates remote data to HRU fabric |
