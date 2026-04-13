@@ -381,3 +381,21 @@ def test_materialize_netrc_no_backup_when_absent(tmp_path):
 
     bak = tmp_path / ".netrc.bak"
     assert not bak.exists(), "No backup when original file absent"
+
+
+# ---------------------------------------------------------------------------
+# _atomic_write — mode verification
+# ---------------------------------------------------------------------------
+
+
+def test_atomic_write_raises_when_mode_silently_ignored(tmp_path, monkeypatch):
+    """_atomic_write must raise OSError if the written file has wrong mode."""
+    import nhf_spatial_targets.credentials as _creds_mod
+
+    # Monkeypatch stat.S_IMODE in the credentials module to always return 0o644
+    # regardless of what chmod set — simulating a filesystem that ignores chmod.
+    monkeypatch.setattr(_creds_mod.stat, "S_IMODE", lambda mode: 0o644)
+
+    target = tmp_path / "secret"
+    with pytest.raises(OSError, match="mode mismatch"):
+        _creds_mod._atomic_write(target, "content", mode=0o600)

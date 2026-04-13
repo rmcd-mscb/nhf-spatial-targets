@@ -229,7 +229,10 @@ def materialize_credentials_cmd(
         table.add_row("cds", str(cds_path), "[green]written[/green]")
     except ValueError as exc:
         table.add_row("cds", "~/.cdsapirc", f"[yellow]skipped[/yellow]: {exc}")
-        errors.append(str(exc))
+        errors.append(("user", str(exc)))
+    except OSError as exc:
+        table.add_row("cds", "~/.cdsapirc", f"[red]error[/red]: {exc}")
+        errors.append(("system", str(exc)))
 
     # --- NASA Earthdata ---
     try:
@@ -237,16 +240,27 @@ def materialize_credentials_cmd(
         table.add_row("nasa_earthdata", str(netrc_path), "[green]written[/green]")
     except ValueError as exc:
         table.add_row("nasa_earthdata", "~/.netrc", f"[yellow]skipped[/yellow]: {exc}")
-        errors.append(str(exc))
+        errors.append(("user", str(exc)))
+    except OSError as exc:
+        table.add_row("nasa_earthdata", "~/.netrc", f"[red]error[/red]: {exc}")
+        errors.append(("system", str(exc)))
 
     console.print(table)
 
     if errors:
-        console.print(
-            "\n[yellow]One or more sections were skipped due to missing or "
-            "incomplete credentials.  Fill in .credentials.yml and re-run.[/yellow]"
-        )
-        sys.exit(1)
+        has_system_error = any(kind == "system" for kind, _ in errors)
+        has_user_error = any(kind == "user" for kind, _ in errors)
+        if has_user_error:
+            console.print(
+                "\n[yellow]One or more sections were skipped due to missing or "
+                "incomplete credentials.  Fill in .credentials.yml and re-run.[/yellow]"
+            )
+        if has_system_error:
+            console.print(
+                "\n[red]One or more sections failed due to a system error "
+                "(e.g. filesystem permissions).  See the table above for details.[/red]"
+            )
+        sys.exit(3 if has_system_error else 1)
 
     console.print(
         "\n[bold green]All credentials materialised successfully.[/bold green]"
