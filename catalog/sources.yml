@@ -34,7 +34,9 @@ sources:
         shifting timestamps back 1 h before resampling. Pipeline aggregates
         hourly→daily and daily→monthly. Both consolidated NCs are stored in
         the datastore; the daily NC is re-aggregated if any hourly input is
-        newer (mtime comparison).
+        newer (mtime comparison). Annual downloads are split into 12 monthly
+        CDS requests to stay under the CDS per-request cost limit; monthly
+        chunk files are retained on disk for idempotent re-runs.
     variables:
       - name: ro
         long_name: total runoff

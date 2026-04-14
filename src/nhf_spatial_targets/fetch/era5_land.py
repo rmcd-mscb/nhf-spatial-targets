@@ -406,6 +406,7 @@ def consolidate_year(
     # Remove any stale monthly file with a different year range
     for stale in monthly_dir.glob("era5_land_monthly_*.nc"):
         if stale != monthly_path:
+            logger.info("Removing stale monthly NC: %s", stale)
             stale.unlink()
     _atomic_to_netcdf(monthly_ds, monthly_path)
     logger.info("Wrote monthly NC: %s", monthly_path)
