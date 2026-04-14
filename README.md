@@ -265,6 +265,80 @@ Array index → source mapping:
 
 All fetch routines are network I/O-bound (sequential downloads); the script allocates 1 CPU and 128 GB RAM per task with a 24-hour wall-clock limit. The 128 GB figure is driven by ERA5-Land hourly CONUS concatenation (each year's 12 monthly chunks are combined into a per-year NC via `xr.open_mfdataset`); other tasks use far less. Override `PROJECT_DIR` and `REPO_DIR` via environment before submission (e.g. `export PROJECT_DIR=/path/to/project; sbatch fetch_all.slurm`). SLURM directives (`--account`, `--partition`, `--chdir`) at the top of `fetch_all.slurm` may need to be adjusted for your cluster.
 
+### Running Aggregation: PC vs HPC
+
+#### On a PC / workstation
+
+Run aggregators individually or all at once:
+
+```bash
+# One source at a time
+pixi run agg-era5-land -- --project-dir /data/gfv11-targets
+pixi run agg-mod10c1   -- --project-dir /data/gfv11-targets
+
+# All nine tier-1/2 sources sequentially
+pixi run agg-all -- --project-dir /data/gfv11-targets
+
+# SSEBop (remote STAC, takes a period)
+pixi run agg-ssebop -- --project-dir /data/gfv11-targets --period 2000/2023
+```
+
+Each aggregator writes one NetCDF per source to `$PROJECT_DIR/data/aggregated/` and caches per-batch weights under `$PROJECT_DIR/weights/`.
+
+#### On HPC (SLURM)
+
+Two scripts at the repo root:
+
+- [`agg_all.slurm`](agg_all.slurm) — 9-element array for local-NC aggregators
+- [`agg_ssebop.slurm`](agg_ssebop.slurm) — single job for SSEBop (remote STAC)
+
+**Prerequisites:**
+
+1. Datastore hydrated (see fetch section above)
+2. `pixi run validate -- --project-dir <dir>` completed (writes `fabric.json`)
+3. `PROJECT_DIR` set via environment or edited inside the scripts
+
+```bash
+# From the repo root:
+mkdir -p logs
+export PROJECT_DIR=/path/to/gfv11-targets
+
+# All 9 local-NC sources (may run in parallel on the cluster):
+sbatch agg_all.slurm
+
+# Rerun a single source by index (e.g. MOD10C1 at 8):
+sbatch --array=8 agg_all.slurm
+
+# Bump memory for a MODIS rerun that OOMed:
+sbatch --array=7-8 --mem=256G agg_all.slurm
+
+# SSEBop (remote STAC, separate script):
+sbatch agg_ssebop.slurm
+
+# Monitor:
+squeue -u $USER
+
+# Inspect logs (format: logs/agg_<arrayindex>_<jobid>.out/err):
+tail -f logs/agg_8_*.out   # MOD10C1 live log
+cat  logs/agg_7_*.err      # MOD16A2 error output
+```
+
+Array index → source mapping for `agg_all.slurm`:
+
+| Index | Source | Notes |
+|---|---|---|
+| 0 | ERA5-Land | 0.1° monthly, runoff (ro, sro, ssro) |
+| 1 | GLDAS-2.1 NOAH | 0.25° monthly, runoff (Qs + Qsb) |
+| 2 | MERRA-2 | ~0.5° monthly, soil wetness |
+| 3 | NCEP/NCAR | ~1.9° monthly, soil moisture |
+| 4 | NLDAS-2 MOSAIC | 0.125° monthly, soil moisture (3 layers) |
+| 5 | NLDAS-2 NOAH | 0.125° monthly, soil moisture (4 layers) |
+| 6 | WaterGAP 2.2d | 0.5° monthly, diffuse recharge |
+| 7 | MOD16A2 v061 | 500m 8-day AET (sinusoidal) — memory-heavy |
+| 8 | MOD10C1 v061 | 0.05° daily SCA (CI-masked) — memory-heavy |
+
+All nine jobs are CPU/memory-bound; the script allocates 1 CPU and 128 GB RAM per task with a 24-hour wall-clock limit. The 128 GB figure is sized for MOD10C1's daily 2000-present stack after the aggregator's in-memory `.load()`. Override `BATCH_SIZE` (default 10000 HRUs/batch, tuned for 128 GB) with `BATCH_SIZE=2500 sbatch agg_all.slurm` if a source OOMs. SLURM directives (`--account`, `--partition`) at the top of each script may need adjustment for non-Hovenweep clusters.
+
 ## Aggregation
 
 Sources that are accessed remotely (e.g. via STAC) are aggregated directly to the HRU fabric without local download:
