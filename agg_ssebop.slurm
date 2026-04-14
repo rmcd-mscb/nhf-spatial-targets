@@ -19,7 +19,8 @@
 #     $PROJECT_DIR/fabric.json
 #
 # Usage:
-#   mkdir -p logs
+#   mkdir -p logs                         # required — SLURM refuses to start
+#                                         # with no log output if logs/ is missing
 #   export PROJECT_DIR=/path/to/your/project
 #   sbatch agg_ssebop.slurm
 #
@@ -36,11 +37,12 @@ PROJECT_DIR="${PROJECT_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv
 PERIOD="${PERIOD:-2000/2023}"
 BATCH_SIZE="${BATCH_SIZE:-10000}"
 
-cd "$REPO_DIR"
+cd "$REPO_DIR" || { echo "ERROR: REPO_DIR=$REPO_DIR not found" >&2; exit 1; }
 
 echo "=== agg-ssebop  period=$PERIOD  batch_size=$BATCH_SIZE ==="
-echo "=== Start: $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
-echo "=== Host:  $(hostname) ==="
+echo "=== Project: $PROJECT_DIR ==="
+echo "=== Start:   $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+echo "=== Host:    $(hostname) ==="
 
 pixi run agg-ssebop -- \
     --project-dir "$PROJECT_DIR" \

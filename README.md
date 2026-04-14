@@ -303,7 +303,7 @@ Two scripts at the repo root:
 mkdir -p logs
 export PROJECT_DIR=/path/to/gfv11-targets
 
-# All 9 local-NC sources in parallel:
+# All 9 local-NC sources (may run in parallel on the cluster):
 sbatch agg_all.slurm
 
 # Rerun a single source by index (e.g. MOD10C1 at 8):
@@ -337,7 +337,7 @@ Array index → source mapping for `agg_all.slurm`:
 | 7 | MOD16A2 v061 | 500m 8-day AET (sinusoidal) — memory-heavy |
 | 8 | MOD10C1 v061 | 0.05° daily SCA (CI-masked) — memory-heavy |
 
-All nine jobs are CPU/memory-bound (not network I/O); the script allocates 1 CPU and 128 GB RAM per task with a 24-hour wall-clock limit. The 128 GB figure is sized for MOD10C1's daily 2000-present stack after the aggregator's in-memory `.load()`. Override `BATCH_SIZE` (default 10000 HRUs/batch, tuned for 128 GB) with `BATCH_SIZE=2500 sbatch agg_all.slurm` if a source OOMs. SLURM directives (`--account`, `--partition`) at the top of each script may need adjustment for non-Hovenweep clusters.
+All nine jobs are CPU/memory-bound; the script allocates 1 CPU and 128 GB RAM per task with a 24-hour wall-clock limit. The 128 GB figure is sized for MOD10C1's daily 2000-present stack after the aggregator's in-memory `.load()`. Override `BATCH_SIZE` (default 10000 HRUs/batch, tuned for 128 GB) with `BATCH_SIZE=2500 sbatch agg_all.slurm` if a source OOMs. SLURM directives (`--account`, `--partition`) at the top of each script may need adjustment for non-Hovenweep clusters.
 
 ## Aggregation
 
