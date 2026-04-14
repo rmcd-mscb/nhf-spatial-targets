@@ -830,3 +830,67 @@ def test_apply_cf_metadata_raises_when_time_missing():
     )
     with pytest.raises(ValueError, match="no 'time' or 'valid_time' dim"):
         apply_cf_metadata(ds, "era5_land", "daily")
+
+
+def test_time_bnds_roundtrip_no_warning(tmp_path):
+    """Monthly datasets written by apply_cf_metadata decode time_bnds correctly.
+
+    Guards the CF-1.6 §7.1 inheritance contract:
+    - time.encoding carries the units/calendar reference
+    - time_bnds is written as raw int64 days-since-epoch (no duplicate attrs)
+    - on read-back, xarray correctly decodes time_bnds to datetime64 via
+      the parent time coord
+    - no SerializationWarning is emitted during write
+    """
+    import warnings
+
+    import numpy as np
+    import pandas as pd
+    import xarray as xr
+
+    from nhf_spatial_targets.fetch.consolidate import apply_cf_metadata
+
+    times = pd.date_range("2020-01-01", periods=3, freq="1MS")
+    ds = xr.Dataset(
+        {"foo": (("time", "lat", "lon"), np.zeros((3, 2, 2)))},
+        coords={"time": times, "lat": [0.0, 1.0], "lon": [0.0, 1.0]},
+    )
+    ds = apply_cf_metadata(ds, "era5_land", "monthly")
+
+    out = tmp_path / "roundtrip.nc"
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        ds.to_netcdf(out)
+
+    # No time-related SerializationWarning — any such warning indicates the
+    # units pinning has regressed.
+    time_warnings = [
+        w
+        for w in caught
+        if "time" in str(w.message).lower() and "bounds" in str(w.message).lower()
+    ]
+    assert not time_warnings, f"Unexpected time/bounds warnings: {time_warnings}"
+
+    # Read back with full CF decoding; time_bnds should be datetime64.
+    decoded = xr.open_dataset(out)
+    try:
+        assert decoded.time_bnds.dtype == np.dtype("datetime64[ns]")
+        assert decoded.time.attrs["bounds"] == "time_bnds"
+        # Bounds must bracket their time value.
+        t0 = decoded.time.values[0]
+        lo, hi = decoded.time_bnds.values[0]
+        assert lo <= t0 < hi
+    finally:
+        decoded.close()
+
+    # Raw on-disk: time has explicit units; time_bnds has raw ints with no
+    # units attr (xarray strips it per CF inheritance). Pin this behavior.
+    raw = xr.open_dataset(out, decode_times=False)
+    try:
+        assert raw.time.attrs.get("units") == "days since 1970-01-01"
+        assert raw.time.attrs.get("calendar") == "standard"
+        assert raw.time_bnds.dtype.kind == "i"
+        # Bounds variable itself has no units attr per CF-1.6 §7.1 inheritance.
+        assert "units" not in raw.time_bnds.attrs
+    finally:
+        raw.close()

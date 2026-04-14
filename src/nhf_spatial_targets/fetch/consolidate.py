@@ -296,9 +296,14 @@ def apply_cf_metadata(
             {"standard_name": "time", "long_name": "time", "axis": "T"}
         )
         # Pin the time encoding so that the time coordinate and any
-        # time_bnds variable are written with the same units reference
-        # (CF-1.6 §7.1 requires them to match).  Use setdefault so that
-        # any source-specific encoding already present is not overwritten.
+        # associated time_bnds variable are serialized with the same units
+        # reference. Per CF-1.6 §7.1, bounds variables inherit units and
+        # calendar from the parent coordinate — xarray writes the bounds
+        # as raw integers and does NOT duplicate units/calendar attrs on
+        # disk. Pinning time.encoding is therefore sufficient (and
+        # necessary — without it, xarray emits a SerializationWarning that
+        # the two may not match). Use setdefault so source-specific
+        # encoding is preserved when present.
         ds["time"].encoding.setdefault("units", "days since 1970-01-01")
         ds["time"].encoding.setdefault("calendar", "standard")
 
@@ -330,11 +335,14 @@ def apply_cf_metadata(
                 )
             bounds_list.append([(m_start - epoch).days, (m_end - epoch).days])
 
+        # time_bnds stores raw days-since-epoch integers; no units/calendar
+        # attrs are set because xarray strips them on write (CF-1.6 §7.1
+        # inheritance from the parent time coordinate). time.encoding above
+        # pins the reference for both variables.
         nv = np.array([0, 1])
         ds["time_bnds"] = xr.DataArray(
             np.array(bounds_list, dtype="<i8"),
             dims=["time", "nv"],
-            attrs={"units": "days since 1970-01-01", "calendar": "standard"},
         )
         if "nv" not in ds.coords:
             ds = ds.assign_coords(nv=nv)
@@ -399,12 +407,14 @@ def _fix_time_merra2(ds: xr.Dataset) -> xr.Dataset:
         }
     )
 
+    # time_bnds stores raw days-since-epoch integers; no units/calendar
+    # attrs are set because xarray strips them on write (CF-1.6 §7.1
+    # inheritance from the parent time coordinate).
     bnds_arr = np.array(bounds_list, dtype="<i8")
     nv = np.array([0, 1])
     ds["time_bnds"] = xr.DataArray(
         bnds_arr,
         dims=["time", "nv"],
-        attrs={"units": "days since 1970-01-01", "calendar": "standard"},
     )
     ds = ds.assign_coords(nv=nv)
 
