@@ -894,3 +894,38 @@ def test_time_bnds_roundtrip_no_warning(tmp_path):
         assert "units" not in raw.time_bnds.attrs
     finally:
         raw.close()
+
+
+def test_resolve_license_returns_catalog_value_when_present():
+    """When the catalog provides a license, it's returned verbatim."""
+    from nhf_spatial_targets.fetch.consolidate import resolve_license
+
+    meta = {"license": "public domain (NASA)"}
+    assert resolve_license(meta, "some_source") == "public domain (NASA)"
+
+
+def test_resolve_license_falls_back_with_warning_when_missing(caplog):
+    """Missing license → UNKNOWN sentinel + WARNING log mentioning the source."""
+    import logging
+
+    from nhf_spatial_targets.fetch.consolidate import resolve_license
+
+    with caplog.at_level(logging.WARNING):
+        result = resolve_license({}, "test_source")
+    assert result == "UNKNOWN — see catalog/sources.yml"
+    assert any(
+        "test_source" in rec.message and "license" in rec.message
+        for rec in caplog.records
+    )
+
+
+def test_resolve_license_falls_back_when_empty_string(caplog):
+    """An explicit empty string triggers the fallback too."""
+    import logging
+
+    from nhf_spatial_targets.fetch.consolidate import resolve_license
+
+    with caplog.at_level(logging.WARNING):
+        result = resolve_license({"license": ""}, "test_source")
+    assert result == "UNKNOWN — see catalog/sources.yml"
+    assert len(caplog.records) >= 1

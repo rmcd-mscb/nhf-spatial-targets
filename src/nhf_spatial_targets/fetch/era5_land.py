@@ -22,7 +22,7 @@ import xarray as xr
 import nhf_spatial_targets.catalog as _catalog
 from nhf_spatial_targets import __version__
 from nhf_spatial_targets.fetch._period import years_in_period
-from nhf_spatial_targets.fetch.consolidate import apply_cf_metadata
+from nhf_spatial_targets.fetch.consolidate import apply_cf_metadata, resolve_license
 from nhf_spatial_targets.workspace import load as _load_project
 
 logger = logging.getLogger(__name__)
@@ -458,7 +458,7 @@ def fetch_era5_land(workdir: Path, period: str) -> dict:
     files: list[dict] = []
 
     bbox = ws.fabric["bbox_buffered"]
-    license_str = meta.get("license", "Copernicus license")
+    license_str = resolve_license(meta, _SOURCE_KEY)
 
     try:
         for year in years_in_period(period):

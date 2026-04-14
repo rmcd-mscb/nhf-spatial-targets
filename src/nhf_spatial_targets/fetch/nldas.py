@@ -14,6 +14,7 @@ import earthaccess
 import nhf_spatial_targets.catalog as _catalog
 from nhf_spatial_targets.fetch._auth import earthdata_login
 from nhf_spatial_targets.fetch._period import months_in_period, parse_period
+from nhf_spatial_targets.fetch.consolidate import resolve_license
 from nhf_spatial_targets.workspace import load as _load_project
 
 logger = logging.getLogger(__name__)
@@ -302,7 +303,7 @@ def _update_manifest(
         {
             "source_key": source_key,
             "access_url": meta["access"]["url"],
-            "license": meta.get("license") or "UNKNOWN — see catalog/sources.yml",
+            "license": resolve_license(meta, source_key),
             "period": period,
             "bbox": bbox,
             "variables": [v["name"] for v in meta["variables"]],

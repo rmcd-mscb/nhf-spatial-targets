@@ -24,6 +24,7 @@ from nhf_spatial_targets.fetch.consolidate import (
     consolidate_mod16a2_finalize,
     consolidate_mod16a2_timestep,
     log_memory,
+    resolve_license,
 )
 from nhf_spatial_targets.workspace import load as _load_project
 
@@ -300,7 +301,7 @@ def _update_manifest(
         {
             "source_key": source_key,
             "access_url": meta["access"]["url"],
-            "license": meta.get("license") or "UNKNOWN — see catalog/sources.yml",
+            "license": resolve_license(meta, source_key),
             "period": period,
             "bbox": bbox,
             "variables": [_variable_name(v) for v in meta["variables"]],

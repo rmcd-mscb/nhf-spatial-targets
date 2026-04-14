@@ -17,6 +17,7 @@ from tqdm import tqdm
 
 import nhf_spatial_targets.catalog as _catalog
 from nhf_spatial_targets.fetch._period import parse_period, years_in_period
+from nhf_spatial_targets.fetch.consolidate import resolve_license
 from nhf_spatial_targets.workspace import load as _load_project
 
 logger = logging.getLogger(__name__)
@@ -253,7 +254,7 @@ def _update_manifest(
         {
             "source_key": _SOURCE_KEY,
             "access_url": meta["access"]["url"],
-            "license": meta.get("license") or "UNKNOWN — see catalog/sources.yml",
+            "license": resolve_license(meta, _SOURCE_KEY),
             "period": period,
             "bbox": bbox,
             "variables": [v["name"] for v in meta["variables"]],

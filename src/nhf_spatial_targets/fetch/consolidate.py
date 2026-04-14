@@ -19,6 +19,28 @@ from nhf_spatial_targets import __version__
 
 logger = logging.getLogger(__name__)
 
+_LICENSE_UNKNOWN = "UNKNOWN — see catalog/sources.yml"
+
+
+def resolve_license(meta: dict, source_key: str) -> str:
+    """Return the license string for a manifest entry.
+
+    If the catalog ``license`` field is missing or empty, log a WARNING
+    and return ``_LICENSE_UNKNOWN``. The fallback is explicit in the
+    manifest so operators auditing provenance can distinguish "no
+    license info captured" from "no license applies".
+    """
+    lic = meta.get("license")
+    if not lic:
+        logger.warning(
+            "Catalog source %r has missing/empty 'license' field; "
+            "writing %r into manifest. Please fix catalog/sources.yml.",
+            source_key,
+            _LICENSE_UNKNOWN,
+        )
+        return _LICENSE_UNKNOWN
+    return lic
+
 
 def log_memory(label: str) -> None:
     """Log current RSS (Linux /proc) or peak RSS (resource module fallback).
