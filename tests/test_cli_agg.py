@@ -41,8 +41,11 @@ def test_agg_subcommand_dispatches(subcommand, target_fn, tmp_path, monkeypatch)
         with pytest.raises(SystemExit):
             app(["agg", subcommand, "--project-dir", str(tmp_path)])
     mock_agg.assert_called_once()
-    _args, kwargs = mock_agg.call_args
-    assert kwargs.get("id_col", "nhm_id") == "nhm_id"
+    kwargs = mock_agg.call_args.kwargs
+    assert kwargs["fabric_path"] == str(tmp_path / "fabric.gpkg")
+    assert kwargs["id_col"] == "nhm_id"
+    assert kwargs["workdir"] == tmp_path
+    assert kwargs["batch_size"] == 500
 
 
 def test_agg_all_runs_every_source(tmp_path):

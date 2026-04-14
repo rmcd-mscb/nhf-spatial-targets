@@ -51,3 +51,37 @@ def test_valid_mask_is_zero_one_float(raw_mod10c1):
     vm = out["valid_mask"].isel(time=0).values
     np.testing.assert_array_equal(vm, np.array([[1.0, 0.0], [0.0, 1.0]]))
     assert out["valid_mask"].dtype.kind == "f"
+
+
+def test_build_masked_source_strict_threshold_at_0_70():
+    """CI exactly at 0.70 must fail the filter (strict >, not >=)."""
+    times = pd.date_range("2000-01-01", periods=1, freq="D")
+    snow = np.array([[[50.0]]])
+    qa = np.array([[[70.0]]])  # exactly 70% -> ci == 0.70 -> fail
+    ds = xr.Dataset(
+        {
+            "Day_CMG_Snow_Cover": (["time", "lat", "lon"], snow),
+            "Snow_Spatial_QA": (["time", "lat", "lon"], qa),
+        },
+        coords={"time": times, "lat": [0.25], "lon": [0.5]},
+    )
+    out = build_masked_source(ds)
+    assert np.isnan(out["sca"].isel(time=0).values[0, 0])
+    assert out["valid_mask"].isel(time=0).values[0, 0] == 0.0
+
+
+def test_build_masked_source_day_with_all_low_ci_yields_all_nan_sca():
+    """If every cell fails the CI filter, sca is entirely NaN and valid_mask is 0."""
+    times = pd.date_range("2000-01-01", periods=1, freq="D")
+    snow = np.ones((1, 2, 2)) * 80.0
+    qa = np.ones((1, 2, 2)) * 50.0  # CI=0.5 everywhere, all fail
+    ds = xr.Dataset(
+        {
+            "Day_CMG_Snow_Cover": (["time", "lat", "lon"], snow),
+            "Snow_Spatial_QA": (["time", "lat", "lon"], qa),
+        },
+        coords={"time": times, "lat": [0.25, 0.75], "lon": [0.5, 1.5]},
+    )
+    out = build_masked_source(ds)
+    assert np.isnan(out["sca"].values).all()
+    np.testing.assert_array_equal(out["valid_mask"].values, np.zeros((1, 2, 2)))

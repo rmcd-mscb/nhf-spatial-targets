@@ -302,3 +302,153 @@ def test_source_adapter_coerces_list_to_tuple():
         source_key="merra2", output_name="m.nc", variables=["GWETTOP"]
     )
     assert isinstance(adapter.variables, tuple)
+
+
+def test_aggregate_source_raises_when_variable_missing(tmp_path, tiny_fabric):
+    """Adapter declaring a variable absent from the source NC must raise early."""
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import aggregate_source
+
+    datastore = tmp_path / "datastore"
+    (datastore / "merra2").mkdir(parents=True)
+    times = pd.date_range("2000-01-01", periods=2, freq="MS")
+    # NC only has "GWETTOP"; adapter will ask for "BOGUS_VAR" too.
+    xr.Dataset(
+        {"GWETTOP": (["time", "lat", "lon"], np.ones((2, 2, 2)))},
+        coords={"time": times, "lat": [0.25, 0.75], "lon": [0.5, 1.5]},
+    ).to_netcdf(datastore / "merra2" / "merra2.nc")
+
+    (tmp_path / "config.yml").write_text(
+        yaml.dump(
+            {
+                "fabric": {"path": str(tiny_fabric), "id_col": "hru_id"},
+                "datastore": str(datastore),
+            }
+        )
+    )
+    (tmp_path / "fabric.json").write_text(json.dumps({"sha256": "f00"}))
+    (tmp_path / "manifest.json").write_text(json.dumps({"sources": {}, "steps": []}))
+
+    adapter = SourceAdapter(
+        source_key="merra2",
+        output_name="merra2_agg.nc",
+        variables=["GWETTOP", "BOGUS_VAR"],
+    )
+    with pytest.raises(ValueError, match="BOGUS_VAR"):
+        aggregate_source(
+            adapter,
+            fabric_path=tiny_fabric,
+            id_col="hru_id",
+            workdir=tmp_path,
+        )
+
+
+def test_default_open_hook_raises_on_multiple_ncs(tmp_path):
+    """Multiple NCs in the datastore for a source is a user-facing error."""
+    from nhf_spatial_targets.aggregate._driver import _default_open_hook
+
+    src_dir = tmp_path / "datastore" / "merra2"
+    src_dir.mkdir(parents=True)
+    times = pd.date_range("2000-01-01", periods=1, freq="MS")
+    for name in ("a.nc", "b.nc"):
+        xr.Dataset({"x": (["time"], [1.0])}, coords={"time": times}).to_netcdf(
+            src_dir / name
+        )
+
+    # Fake project that points raw_dir at our two-NC directory.
+    class _FakeProject:
+        def raw_dir(self, key):
+            return src_dir
+
+    with pytest.raises(ValueError, match="Multiple"):
+        _default_open_hook(_FakeProject(), "merra2")
+
+
+def test_compute_or_load_weights_writes_cache_on_miss(tmp_path, tiny_fabric):
+    """First call computes weights via WeightGen; second call loads from cache."""
+    from nhf_spatial_targets.aggregate._driver import compute_or_load_weights
+
+    (tmp_path / "weights").mkdir()
+    batch_gdf = gpd.read_file(tiny_fabric)
+    times = pd.date_range("2000-01-01", periods=2, freq="MS")
+    source_ds = xr.Dataset(
+        {"a": (["time", "lat", "lon"], np.ones((2, 2, 2)))},
+        coords={"time": times, "lat": [0.25, 0.75], "lon": [0.5, 1.5]},
+    )
+    fake = _fake_weights()
+
+    with (
+        patch("nhf_spatial_targets.aggregate._driver.WeightGen") as mock_wg,
+        patch("nhf_spatial_targets.aggregate._driver.UserCatData"),
+    ):
+        inst = MagicMock()
+        inst.calculate_weights.return_value = fake
+        mock_wg.return_value = inst
+        weights = compute_or_load_weights(
+            batch_gdf=batch_gdf,
+            source_ds=source_ds,
+            source_var="a",
+            source_crs="EPSG:4326",
+            x_coord="lon",
+            y_coord="lat",
+            time_coord="time",
+            id_col="hru_id",
+            source_key="toy",
+            batch_id=0,
+            workdir=tmp_path,
+        )
+    assert mock_wg.called
+    cache_path = tmp_path / "weights" / "toy_batch0.csv"
+    assert cache_path.exists()
+    pd.testing.assert_frame_equal(weights, fake)
+
+
+def test_compute_or_load_weights_uses_cache_on_hit(tmp_path, tiny_fabric):
+    """Preexisting cache CSV must be loaded without invoking WeightGen."""
+    from nhf_spatial_targets.aggregate._driver import compute_or_load_weights
+
+    (tmp_path / "weights").mkdir()
+    batch_gdf = gpd.read_file(tiny_fabric)
+    source_ds = xr.Dataset(
+        {"a": (["time", "lat", "lon"], np.ones((1, 2, 2)))},
+        coords={
+            "time": pd.date_range("2000-01-01", periods=1, freq="MS"),
+            "lat": [0.25, 0.75],
+            "lon": [0.5, 1.5],
+        },
+    )
+    cached = _fake_weights()
+    cache_path = tmp_path / "weights" / "toy_batch0.csv"
+    cached.to_csv(cache_path, index=False)
+
+    with patch("nhf_spatial_targets.aggregate._driver.WeightGen") as mock_wg:
+        weights = compute_or_load_weights(
+            batch_gdf=batch_gdf,
+            source_ds=source_ds,
+            source_var="a",
+            source_crs="EPSG:4326",
+            x_coord="lon",
+            y_coord="lat",
+            time_coord="time",
+            id_col="hru_id",
+            source_key="toy",
+            batch_id=0,
+            workdir=tmp_path,
+        )
+    assert not mock_wg.called
+    pd.testing.assert_frame_equal(weights, cached)
+
+
+def test_update_manifest_raises_on_corrupt_json(project):
+    from nhf_spatial_targets.aggregate._driver import update_manifest
+
+    (project.workdir / "manifest.json").write_text("{not json")
+    with pytest.raises(ValueError, match="corrupt"):
+        update_manifest(
+            project=project,
+            source_key="foo",
+            access={"type": "local"},
+            period="2000/2001",
+            output_file="foo_agg.nc",
+            weight_files=[],
+        )
