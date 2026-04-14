@@ -82,16 +82,23 @@ def build_masked_source(ds: xr.Dataset) -> xr.Dataset:
 
 def _open(project) -> xr.Dataset:
     raw_dir = project.raw_dir(_SOURCE_KEY)
-    ncs = sorted(Path(raw_dir).glob("*.nc"))
+    ncs = sorted(Path(raw_dir).glob("*_consolidated.nc"))
     if not ncs:
         raise FileNotFoundError(
-            f"No MOD10C1 NC found in {raw_dir}. Run 'nhf-targets fetch mod10c1' first."
+            f"No consolidated MOD10C1 NC found in {raw_dir}. "
+            f"Run 'nhf-targets fetch mod10c1' first."
         )
-    ds = xr.open_dataset(ncs[0])
+    datasets = [xr.open_dataset(p) for p in ncs]
     try:
-        loaded = ds.load()
+        if len(datasets) == 1:
+            loaded = datasets[0].load()
+        else:
+            combined = xr.concat(datasets, dim="time")
+            combined = combined.sortby("time")
+            loaded = combined.load()
     finally:
-        ds.close()
+        for d in datasets:
+            d.close()
     return loaded
 
 

@@ -195,7 +195,7 @@ def test_aggregate_source_writes_multi_var_nc_and_manifest(tmp_path, tiny_fabric
     datastore = tmp_path / "datastore"
     (datastore / "merra2").mkdir(parents=True)
     # write a placeholder consolidated NC so default open_hook has something
-    src_nc = datastore / "merra2" / "merra2.nc"
+    src_nc = datastore / "merra2" / "merra2_consolidated.nc"
     times = pd.date_range("2000-01-01", periods=2, freq="MS")
     xr.Dataset(
         {
@@ -351,7 +351,7 @@ def test_aggregate_source_raises_when_variable_missing(tmp_path, tiny_fabric):
     xr.Dataset(
         {"GWETTOP": (["time", "lat", "lon"], np.ones((2, 2, 2)))},
         coords={"time": times, "lat": [0.25, 0.75], "lon": [0.5, 1.5]},
-    ).to_netcdf(datastore / "merra2" / "merra2.nc")
+    ).to_netcdf(datastore / "merra2" / "merra2_consolidated.nc")
 
     (tmp_path / "config.yml").write_text(
         yaml.dump(
@@ -378,18 +378,20 @@ def test_aggregate_source_raises_when_variable_missing(tmp_path, tiny_fabric):
         )
 
 
-def test_default_open_hook_raises_on_multiple_ncs(tmp_path):
-    """Multiple NCs in the datastore for a source is a user-facing error."""
+def test_default_open_hook_single_consolidated_nc(tmp_path):
+    """Single *_consolidated.nc file is opened and returned with time coord."""
     from nhf_spatial_targets.aggregate._adapter import SourceAdapter
     from nhf_spatial_targets.aggregate._driver import _default_open_hook
 
     src_dir = tmp_path / "datastore" / "merra2"
     src_dir.mkdir(parents=True)
-    times = pd.date_range("2000-01-01", periods=1, freq="MS")
-    for name in ("a.nc", "b.nc"):
-        xr.Dataset({"x": (["time"], [1.0])}, coords={"time": times}).to_netcdf(
-            src_dir / name
-        )
+    times = pd.date_range("2000-01-01", periods=2, freq="MS")
+    xr.Dataset(
+        {"GWETTOP": (["time", "lat", "lon"], np.ones((2, 2, 2)))},
+        coords={"time": times, "lat": [0.25, 0.75], "lon": [0.5, 1.5]},
+    ).to_netcdf(src_dir / "merra2_consolidated.nc")
+    # Non-consolidated file should be ignored
+    (src_dir / "stale.nc").write_bytes(b"not a real nc")
 
     class _FakeProject:
         def raw_dir(self, key):
@@ -400,7 +402,112 @@ def test_default_open_hook_raises_on_multiple_ncs(tmp_path):
         output_name="merra2_agg.nc",
         variables=["GWETTOP"],
     )
-    with pytest.raises(ValueError, match="Multiple"):
+    result = _default_open_hook(_FakeProject(), adapter)
+    assert "time" in result.coords
+    assert len(result["time"]) == 2
+
+
+def test_default_open_hook_concatenates_multiple_consolidated_ncs(tmp_path):
+    """Multiple *_consolidated.nc files (one per year) are concatenated on time."""
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import _default_open_hook
+
+    src_dir = tmp_path / "datastore" / "merra2"
+    src_dir.mkdir(parents=True)
+    for year, t0 in ((2000, "2000-01-01"), (2001, "2001-01-01")):
+        times = pd.date_range(t0, periods=2, freq="MS")
+        xr.Dataset(
+            {"GWETTOP": (["time", "lat", "lon"], np.ones((2, 2, 2)))},
+            coords={"time": times, "lat": [0.25, 0.75], "lon": [0.5, 1.5]},
+        ).to_netcdf(src_dir / f"merra2_{year}_consolidated.nc")
+
+    class _FakeProject:
+        def raw_dir(self, key):
+            return src_dir
+
+    adapter = SourceAdapter(
+        source_key="merra2",
+        output_name="merra2_agg.nc",
+        variables=["GWETTOP"],
+    )
+    result = _default_open_hook(_FakeProject(), adapter)
+    assert "time" in result.coords
+    assert len(result["time"]) == 4
+    assert result["time"].values[0] < result["time"].values[-1]
+
+
+def test_default_open_hook_single_non_consolidated_nc(tmp_path):
+    """Single *.nc with no _consolidated suffix is opened directly (watergap22d pattern)."""
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import _default_open_hook
+
+    src_dir = tmp_path / "datastore" / "watergap22d"
+    src_dir.mkdir(parents=True)
+    times = pd.date_range("1901-01-01", periods=3, freq="MS")
+    xr.Dataset(
+        {"qrdif": (["time", "lat", "lon"], np.ones((3, 2, 2)))},
+        coords={"time": times, "lat": [0.25, 0.75], "lon": [0.5, 1.5]},
+    ).to_netcdf(src_dir / "watergap22d_qrdif_cf.nc")
+
+    class _FakeProject:
+        def raw_dir(self, key):
+            return src_dir
+
+    adapter = SourceAdapter(
+        source_key="watergap22d",
+        output_name="watergap22d_agg.nc",
+        variables=["qrdif"],
+    )
+    result = _default_open_hook(_FakeProject(), adapter)
+    assert "time" in result.coords
+    assert len(result["time"]) == 3
+
+
+def test_default_open_hook_raises_when_multiple_ncs_none_consolidated(tmp_path):
+    """FileNotFoundError when multiple NCs exist but none match *_consolidated.nc."""
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import _default_open_hook
+
+    src_dir = tmp_path / "datastore" / "merra2"
+    src_dir.mkdir(parents=True)
+    times = pd.date_range("2000-01-01", periods=1, freq="MS")
+    for name in ("raw_2000.nc", "raw_2001.nc"):
+        xr.Dataset(
+            {"GWETTOP": (["time", "lat", "lon"], np.ones((1, 2, 2)))},
+            coords={"time": times, "lat": [0.25, 0.75], "lon": [0.5, 1.5]},
+        ).to_netcdf(src_dir / name)
+
+    class _FakeProject:
+        def raw_dir(self, key):
+            return src_dir
+
+    adapter = SourceAdapter(
+        source_key="merra2",
+        output_name="merra2_agg.nc",
+        variables=["GWETTOP"],
+    )
+    with pytest.raises(FileNotFoundError, match="consolidated"):
+        _default_open_hook(_FakeProject(), adapter)
+
+
+def test_default_open_hook_raises_when_no_nc_at_all(tmp_path):
+    """FileNotFoundError when the raw directory is empty."""
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import _default_open_hook
+
+    src_dir = tmp_path / "datastore" / "merra2"
+    src_dir.mkdir(parents=True)
+
+    class _FakeProject:
+        def raw_dir(self, key):
+            return src_dir
+
+    adapter = SourceAdapter(
+        source_key="merra2",
+        output_name="merra2_agg.nc",
+        variables=["GWETTOP"],
+    )
+    with pytest.raises(FileNotFoundError):
         _default_open_hook(_FakeProject(), adapter)
 
 

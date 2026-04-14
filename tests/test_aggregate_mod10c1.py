@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from nhf_spatial_targets.aggregate.mod10c1 import build_masked_source
+from nhf_spatial_targets.aggregate.mod10c1 import _open, build_masked_source
 
 
 @pytest.fixture()
@@ -126,3 +126,74 @@ def test_log_low_valid_coverage_silent_below_threshold(caplog):
     ):
         _log_low_valid_coverage(combined)
     assert not any("zero valid-area" in rec.message for rec in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# _open: consolidated NC selection
+# ---------------------------------------------------------------------------
+
+
+def _make_consolidated_nc(path, times):
+    """Write a minimal consolidated MOD10C1 NC with a time coordinate."""
+    snow = np.ones((len(times), 2, 2)) * 50.0
+    qa = np.ones((len(times), 2, 2)) * 80.0
+    ds = xr.Dataset(
+        {
+            "Day_CMG_Snow_Cover": (["time", "lat", "lon"], snow),
+            "Snow_Spatial_QA": (["time", "lat", "lon"], qa),
+        },
+        coords={"time": times, "lat": [0.25, 0.75], "lon": [0.5, 1.5]},
+    )
+    ds.to_netcdf(path)
+
+
+def test_open_loads_single_consolidated_nc(tmp_path):
+    """`_open` returns a Dataset with a 'time' coordinate from one consolidated file."""
+    raw_dir = tmp_path / "mod10c1_v061"
+    raw_dir.mkdir()
+    times = pd.date_range("2000-03-01", periods=3, freq="D")
+    _make_consolidated_nc(raw_dir / "mod10c1_v061_2000_consolidated.nc", times)
+    # Also put a .conus.nc file in the dir to confirm it is ignored
+    (raw_dir / "MOD10C1.A2000061.061.conus.nc").write_bytes(b"not a real nc")
+
+    class _FakeProject:
+        def raw_dir(self, key):
+            return raw_dir
+
+    result = _open(_FakeProject())
+    assert "time" in result.coords
+    assert len(result["time"]) == 3
+
+
+def test_open_concatenates_multiple_consolidated_ncs(tmp_path):
+    """`_open` merges multi-year consolidated files into one Dataset along time."""
+    raw_dir = tmp_path / "mod10c1_v061"
+    raw_dir.mkdir()
+    times_2000 = pd.date_range("2000-01-01", periods=2, freq="D")
+    times_2001 = pd.date_range("2001-01-01", periods=2, freq="D")
+    _make_consolidated_nc(raw_dir / "mod10c1_v061_2000_consolidated.nc", times_2000)
+    _make_consolidated_nc(raw_dir / "mod10c1_v061_2001_consolidated.nc", times_2001)
+
+    class _FakeProject:
+        def raw_dir(self, key):
+            return raw_dir
+
+    result = _open(_FakeProject())
+    assert "time" in result.coords
+    assert len(result["time"]) == 4
+    # Verify time is sorted (2000 before 2001)
+    assert result["time"].values[0] < result["time"].values[-1]
+
+
+def test_open_raises_when_no_consolidated_nc_found(tmp_path):
+    """`_open` raises FileNotFoundError when only .conus.nc files exist."""
+    raw_dir = tmp_path / "mod10c1_v061"
+    raw_dir.mkdir()
+    (raw_dir / "MOD10C1.A2000061.061.conus.nc").write_bytes(b"not a real nc")
+
+    class _FakeProject:
+        def raw_dir(self, key):
+            return raw_dir
+
+    with pytest.raises(FileNotFoundError, match="consolidated"):
+        _open(_FakeProject())

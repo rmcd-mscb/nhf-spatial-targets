@@ -278,32 +278,49 @@ def aggregate_variables_for_batch(
 
 
 def _default_open_hook(project: Project, adapter: SourceAdapter) -> xr.Dataset:
-    """Open the single consolidated NC in ``project.raw_dir(adapter.source_key)``.
+    """Open the consolidated NC(s) in ``project.raw_dir(adapter.source_key)``.
 
-    Raises ``FileNotFoundError`` when the datastore has no NCs and
-    ``ValueError`` when it has more than one (ambiguous — the consolidated
-    contract is a single NC per source).
+    Strategy:
+
+    1. Glob all ``*.nc`` files in the raw directory.
+    2. If exactly one is found, open it directly (single-file sources such as
+       merra2, watergap22d, ncep_ncar).
+    3. If multiple are found, narrow to ``*_consolidated.nc`` files (per-year
+       sources such as mod16a2) and concatenate along ``time``.  This avoids
+       accidentally picking up raw per-timestep files that share the directory.
+
+    Raises ``FileNotFoundError`` when no NCs are present, or when the
+    multi-file path finds no ``*_consolidated.nc`` matches.
     """
     raw_dir = project.raw_dir(adapter.source_key)
-    ncs = sorted(raw_dir.glob("*.nc"))
-    if not ncs:
+    all_ncs = sorted(raw_dir.glob("*.nc"))
+    if not all_ncs:
         raise FileNotFoundError(
             f"No consolidated NC found in {raw_dir}. "
             f"Run 'nhf-targets fetch {adapter.source_key}' first."
         )
-    if len(ncs) > 1:
-        names = ", ".join(nc.name for nc in ncs)
-        raise ValueError(
-            f"Multiple consolidated NCs found in {raw_dir}: [{names}]. "
-            "The consolidated-source contract expects exactly one NC per source. "
-            "Check the datastore for duplicate or stale files and remove all but "
-            "the correct consolidated file."
-        )
-    ds = xr.open_dataset(ncs[0])
+    if len(all_ncs) == 1:
+        ncs = all_ncs
+    else:
+        ncs = sorted(raw_dir.glob("*_consolidated.nc"))
+        if not ncs:
+            raise FileNotFoundError(
+                f"Multiple NCs found in {raw_dir} but none match "
+                f"'*_consolidated.nc'. Run "
+                f"'nhf-targets fetch {adapter.source_key}' to produce "
+                f"consolidated files."
+            )
+    datasets = [xr.open_dataset(p) for p in ncs]
     try:
-        loaded = ds.load()
+        if len(datasets) == 1:
+            loaded = datasets[0].load()
+        else:
+            combined = xr.concat(datasets, dim="time")
+            combined = combined.sortby("time")
+            loaded = combined.load()
     finally:
-        ds.close()
+        for d in datasets:
+            d.close()
     return loaded
 
 
