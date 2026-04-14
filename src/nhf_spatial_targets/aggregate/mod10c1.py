@@ -75,8 +75,17 @@ def aggregate_mod10c1(
 ) -> xr.Dataset:
     """Aggregate MOD10C1 v061 daily SCA to HRU polygons with CI masking.
 
-    Writes three variables to ``data/aggregated/mod10c1_agg.nc``:
-    ``sca``, ``ci``, and ``valid_area_fraction``.
+    Applies the CI > 0.70 filter at source grid cells (cells below threshold
+    become NaN in ``sca``). Writes three variables to
+    ``data/aggregated/mod10c1_agg.nc``:
+
+    - ``sca``: CI-masked fractional snow cover (NaN where CI <= 0.70).
+    - ``ci``:  raw confidence interval as a fraction (no masking).
+    - ``valid_area_fraction``: per-HRU fraction of grid-cell area that
+      passed the CI filter on each day.
+
+    Logs a warning if more than 10% of (HRU, time) cells end up with zero
+    valid area.
     """
     workdir = Path(workdir)
     project = load_project(workdir)

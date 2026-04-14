@@ -20,7 +20,6 @@ ADAPTER = SourceAdapter(
 def aggregate_merra2(
     fabric_path: Path, id_col: str, workdir: Path, batch_size: int = 500
 ) -> xr.Dataset:
-    """Aggregate MERRA-2 monthly soil wetness to HRU polygons."""
     return aggregate_source(
         ADAPTER,
         fabric_path,

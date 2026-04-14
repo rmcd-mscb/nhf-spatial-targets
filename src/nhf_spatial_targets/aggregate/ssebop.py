@@ -165,7 +165,6 @@ def aggregate_ssebop(
     access_with_doi = {**access}
     if meta.get("doi"):
         access_with_doi["doi"] = meta["doi"]
-    time_period = _parse_period(period)
     update_manifest(
         project=ws,
         source_key=_SOURCE_KEY,

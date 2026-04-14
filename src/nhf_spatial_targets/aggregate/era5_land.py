@@ -14,8 +14,9 @@ from nhf_spatial_targets.workspace import Project
 def _open_monthly(project: Project) -> xr.Dataset:
     """Open the monthly consolidated ERA5-Land NC in the datastore.
 
-    The ERA5-Land fetch stores both a daily and monthly NC; pick the monthly
-    one by filename token.
+    The ERA5-Land fetch stores both a daily and a monthly NC; this helper
+    selects the monthly one by globbing for the literal ``monthly`` token
+    in the filename (``*monthly*.nc``).
     """
     raw_dir = project.raw_dir("era5_land")
     monthly_ncs = sorted(Path(raw_dir).glob("*monthly*.nc"))
@@ -43,7 +44,6 @@ ADAPTER = SourceAdapter(
 def aggregate_era5_land(
     fabric_path: Path, id_col: str, workdir: Path, batch_size: int = 500
 ) -> xr.Dataset:
-    """Aggregate ERA5-Land monthly runoff (ro, sro, ssro) to HRU polygons."""
     return aggregate_source(
         ADAPTER,
         fabric_path,

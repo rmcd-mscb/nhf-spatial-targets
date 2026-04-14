@@ -46,7 +46,6 @@ ADAPTER = SourceAdapter(
 def aggregate_gldas(
     fabric_path: Path, id_col: str, workdir: Path, batch_size: int = 500
 ) -> xr.Dataset:
-    """Aggregate GLDAS-2.1 NOAH monthly runoff variables to HRU polygons."""
     return aggregate_source(
         ADAPTER,
         fabric_path,

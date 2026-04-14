@@ -73,9 +73,9 @@ def test_source_adapter_defaults():
     from nhf_spatial_targets.aggregate._adapter import SourceAdapter
 
     adapter = SourceAdapter(
-        source_key="foo",
-        output_name="foo_agg.nc",
-        variables=["a", "b"],
+        source_key="merra2",
+        output_name="merra2_agg.nc",
+        variables=["GWETTOP", "GWETROOT"],
     )
     assert adapter.source_crs == "EPSG:4326"
     assert adapter.x_coord == "lon"
@@ -93,9 +93,9 @@ def test_source_adapter_open_hook_invocable(project):
         return xr.Dataset({"a": (("time",), [1.0])}, coords={"time": [0]})
 
     adapter = SourceAdapter(
-        source_key="foo",
-        output_name="foo_agg.nc",
-        variables=["a"],
+        source_key="merra2",
+        output_name="merra2_agg.nc",
+        variables=["GWETTOP"],
         open_hook=_open,
     )
     ds = adapter.open_hook(project)
@@ -193,9 +193,9 @@ def test_aggregate_source_writes_multi_var_nc_and_manifest(tmp_path, tiny_fabric
 
     # --- minimal project ---
     datastore = tmp_path / "datastore"
-    (datastore / "foo").mkdir(parents=True)
+    (datastore / "merra2").mkdir(parents=True)
     # write a placeholder consolidated NC so default open_hook has something
-    src_nc = datastore / "foo" / "foo.nc"
+    src_nc = datastore / "merra2" / "merra2.nc"
     times = pd.date_range("2000-01-01", periods=2, freq="MS")
     xr.Dataset(
         {
@@ -219,8 +219,8 @@ def test_aggregate_source_writes_multi_var_nc_and_manifest(tmp_path, tiny_fabric
     (tmp_path / "weights").mkdir()
 
     adapter = SourceAdapter(
-        source_key="foo",
-        output_name="foo_agg.nc",
+        source_key="merra2",
+        output_name="merra2_agg.nc",
         variables=["a", "b"],
     )
 
@@ -257,8 +257,48 @@ def test_aggregate_source_writes_multi_var_nc_and_manifest(tmp_path, tiny_fabric
         )
 
     assert set(out.data_vars) == {"a", "b"}
-    output_nc = tmp_path / "data" / "aggregated" / "foo_agg.nc"
+    output_nc = tmp_path / "data" / "aggregated" / "merra2_agg.nc"
     assert output_nc.exists()
     manifest = json.loads((tmp_path / "manifest.json").read_text())
-    assert "foo" in manifest["sources"]
-    assert manifest["sources"]["foo"]["output_file"] == ("data/aggregated/foo_agg.nc")
+    assert "merra2" in manifest["sources"]
+    assert manifest["sources"]["merra2"]["output_file"] == (
+        "data/aggregated/merra2_agg.nc"
+    )
+
+
+def test_source_adapter_rejects_empty_variables():
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+
+    with pytest.raises(ValueError, match="non-empty"):
+        SourceAdapter(source_key="merra2", output_name="m.nc", variables=[])
+
+
+def test_source_adapter_rejects_path_in_output_name():
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+
+    with pytest.raises(ValueError, match="bare filename"):
+        SourceAdapter(
+            source_key="merra2",
+            output_name="subdir/foo.nc",
+            variables=["GWETTOP"],
+        )
+
+
+def test_source_adapter_rejects_unknown_source_key():
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+
+    with pytest.raises(ValueError, match="catalog"):
+        SourceAdapter(
+            source_key="not_a_real_source",
+            output_name="foo.nc",
+            variables=["x"],
+        )
+
+
+def test_source_adapter_coerces_list_to_tuple():
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+
+    adapter = SourceAdapter(
+        source_key="merra2", output_name="m.nc", variables=["GWETTOP"]
+    )
+    assert isinstance(adapter.variables, tuple)

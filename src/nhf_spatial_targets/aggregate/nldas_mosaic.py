@@ -20,7 +20,6 @@ ADAPTER = SourceAdapter(
 def aggregate_nldas_mosaic(
     fabric_path: Path, id_col: str, workdir: Path, batch_size: int = 500
 ) -> xr.Dataset:
-    """Aggregate NLDAS-2 MOSAIC monthly soil moisture to HRU polygons."""
     return aggregate_source(
         ADAPTER,
         fabric_path,

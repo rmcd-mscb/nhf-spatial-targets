@@ -30,8 +30,8 @@ def aggregate_mod16a2(
 ) -> xr.Dataset:
     """Aggregate MOD16A2 v061 8-day AET to HRU polygons.
 
-    gdptools reprojects the declared sinusoidal source onto EPSG:5070 for
-    area-weighted intersection.
+    gdptools reprojects the declared sinusoidal source onto the driver's
+    equal-area weight CRS for area-weighted intersection.
     """
     return aggregate_source(
         ADAPTER,

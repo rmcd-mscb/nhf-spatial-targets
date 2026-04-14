@@ -64,8 +64,8 @@ def update_manifest(
         "weight_files": list(weight_files),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
-    # Carry a few optional access identifiers through for provenance parity
-    # with ssebop.py's existing behaviour.
+    # Forward optional catalog access keys so downstream provenance consumers
+    # see DOI, collection_id, short_name, and version when catalogued.
     for extra_key in ("collection_id", "short_name", "version", "doi"):
         if extra_key in access:
             entry[extra_key] = access[extra_key]
@@ -111,22 +111,7 @@ def load_and_batch_fabric(fabric_path: Path, batch_size: int = 500) -> gpd.GeoDa
 
 
 def weight_cache_path(workdir: Path, source_key: str, batch_id: int) -> Path:
-    """Return the per-batch weight CSV path.
-
-    Parameters
-    ----------
-    workdir : Path
-        Project working directory.
-    source_key : str
-        Data source identifier (e.g., 'ssebop', 'merra2').
-    batch_id : int
-        Batch number.
-
-    Returns
-    -------
-    Path
-        Path to the weight cache CSV for this batch.
-    """
+    """Return the per-batch weight CSV path."""
     return Path(workdir) / "weights" / f"{source_key}_batch{batch_id}.csv"
 
 

@@ -20,7 +20,6 @@ ADAPTER = SourceAdapter(
 def aggregate_watergap22d(
     fabric_path: Path, id_col: str, workdir: Path, batch_size: int = 500
 ) -> xr.Dataset:
-    """Aggregate WaterGAP 2.2d monthly diffuse groundwater recharge to HRUs."""
     return aggregate_source(
         ADAPTER,
         fabric_path,
