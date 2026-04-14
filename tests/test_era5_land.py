@@ -908,3 +908,80 @@ def test_update_manifest_refreshes_monthly_path_on_prior_entries(tmp_path):
     entry = json.loads((wd / "manifest.json").read_text())["sources"]["era5_land"]
     # Both the prior 1979 entry AND the new 1980 entry point to the new path.
     assert all(f["monthly_path"] == new_monthly for f in entry["files"])
+
+
+def test_fetch_era5_land_writes_partial_manifest_on_failure(tmp_path, monkeypatch):
+    """If a later year raises, the manifest records only the completed years.
+
+    Guards the try/finally pattern in fetch_era5_land that persists
+    partial-run state so operators can distinguish "completed" from
+    "needs re-run" years after a SLURM crash.
+    """
+    import json
+
+    import yaml
+
+    from nhf_spatial_targets.fetch import era5_land
+    from nhf_spatial_targets.fetch.era5_land import fetch_era5_land
+
+    wd = tmp_path / "run"
+    wd.mkdir()
+    (wd / "config.yml").write_text(
+        yaml.dump(
+            {
+                "fabric": {"path": "", "id_col": "nhm_id"},
+                "datastore": str(wd / "datastore"),
+                "dir_mode": "2775",
+            }
+        )
+    )
+    (wd / "fabric.json").write_text(
+        json.dumps(
+            {
+                "hru_count": 3,
+                "id_col": "nhm_id",
+                "bbox_buffered": {
+                    "minx": -125.0,
+                    "miny": 24.7,
+                    "maxx": -66.0,
+                    "maxy": 53.0,
+                },
+            }
+        )
+    )
+    (wd / "manifest.json").write_text(json.dumps({"sources": {}, "steps": []}))
+
+    def fake_download(year, variable, output_path):
+        pass
+
+    def fake_consolidate(year, hourly_dir, daily_dir, monthly_dir):
+        if year == 1981:
+            raise RuntimeError("simulated failure at year 1981")
+        daily_dir.mkdir(parents=True, exist_ok=True)
+        monthly_dir.mkdir(parents=True, exist_ok=True)
+        daily = daily_dir / f"era5_land_daily_{year}.nc"
+        monthly = monthly_dir / f"era5_land_monthly_{year}_{year}.nc"
+        daily.write_bytes(b"fake")
+        monthly.write_bytes(b"fake")
+        return daily, monthly
+
+    monkeypatch.setattr(era5_land, "download_year_variable", fake_download)
+    monkeypatch.setattr(era5_land, "consolidate_year", fake_consolidate)
+
+    with pytest.raises(RuntimeError, match="simulated failure"):
+        fetch_era5_land(workdir=wd, period="1979/1982")
+
+    # Manifest should contain 1979 and 1980 (completed); not 1981 or 1982.
+    manifest = json.loads((wd / "manifest.json").read_text())
+    years = sorted(f["year"] for f in manifest["sources"]["era5_land"]["files"])
+    assert years == [1979, 1980]
+
+
+def test_variable_name_raises_on_unexpected_type():
+    """_variable_name raises TypeError naming the bad entry."""
+    from nhf_spatial_targets.fetch.modis import _variable_name
+
+    with pytest.raises(TypeError, match="Unexpected variable entry type"):
+        _variable_name(42)
+    with pytest.raises(TypeError, match="Unexpected variable entry type"):
+        _variable_name(["list_not_allowed"])

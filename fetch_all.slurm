@@ -14,7 +14,7 @@
 # Submits one SLURM job per source dataset (10 total).
 # Each job downloads independently; they can run concurrently.
 #
-# Usage (the repo dir and project dir are required overrides):
+# Usage (REPO_DIR and PROJECT_DIR are overridable via environment):
 #   mkdir -p logs
 #   export REPO_DIR=/path/to/nhf-spatial-targets
 #   export PROJECT_DIR=/path/to/your/project

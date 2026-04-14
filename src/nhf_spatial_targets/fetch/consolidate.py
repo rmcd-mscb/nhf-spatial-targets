@@ -319,13 +319,15 @@ def apply_cf_metadata(
         )
         # Pin the time encoding so that the time coordinate and any
         # associated time_bnds variable are serialized with the same units
-        # reference. Per CF-1.6 §7.1, bounds variables inherit units and
-        # calendar from the parent coordinate — xarray writes the bounds
-        # as raw integers and does NOT duplicate units/calendar attrs on
-        # disk. Pinning time.encoding is therefore sufficient (and
-        # necessary — without it, xarray emits a SerializationWarning that
-        # the two may not match). Use setdefault so source-specific
-        # encoding is preserved when present.
+        # reference. CF-1.6 §7.1 recommends that bounds variables inherit
+        # units/calendar from the parent coordinate rather than carry
+        # their own; xarray implements this by stripping duplicate
+        # units/calendar attrs from bounds variables on write. Pinning
+        # time.encoding is therefore sufficient to establish the shared
+        # reference (and also silences a SerializationWarning emitted
+        # when the parent has no units encoding but a bounds variable
+        # is present). Use setdefault so source-specific encoding is
+        # preserved when present.
         ds["time"].encoding.setdefault("units", "days since 1970-01-01")
         ds["time"].encoding.setdefault("calendar", "standard")
 
