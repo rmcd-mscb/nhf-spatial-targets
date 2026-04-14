@@ -234,13 +234,25 @@ def download_year_variable(
         output_path.parent / f"{stem}_{month:02d}.nc" for month in range(1, 13)
     ]
 
-    # Fast path: year file exists and is not older than any present chunk.
+    # Fast path: year file exists, all 12 chunks present, and no chunk newer.
+    # Requiring all 12 chunks on disk guards against the case where the year
+    # file was written from a partial set (e.g. 6/12) and later chunks arrive
+    # with an older mtime (rsync -a, restore-from-backup) that would otherwise
+    # bypass the mtime check.
     if output_path.exists():
-        year_mtime = output_path.stat().st_mtime
-        chunk_mtimes = [p.stat().st_mtime for p in chunk_paths if p.exists()]
-        if not chunk_mtimes or max(chunk_mtimes) <= year_mtime:
-            logger.info("Skipping up-to-date ERA5-Land year file: %s", output_path)
-            return output_path
+        existing_chunks = [p for p in chunk_paths if p.exists()]
+        if len(existing_chunks) == 12:
+            year_mtime = output_path.stat().st_mtime
+            chunk_mtimes = [p.stat().st_mtime for p in existing_chunks]
+            if max(chunk_mtimes) <= year_mtime:
+                logger.info("Skipping up-to-date ERA5-Land year file: %s", output_path)
+                return output_path
+        else:
+            logger.info(
+                "Rebuilding %s: year file exists but only %d/12 chunks on disk",
+                output_path,
+                len(existing_chunks),
+            )
 
     # Download any missing monthly chunks.
     for month, chunk_path in enumerate(chunk_paths, start=1):

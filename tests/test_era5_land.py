@@ -316,6 +316,7 @@ def test_download_year_atomic_cleanup_on_failure(tmp_path, monkeypatch):
 
 
 def test_download_year_skips_existing(tmp_path, monkeypatch):
+    """Fast path: year file + all 12 chunks present, no newer chunks → skip."""
     from nhf_spatial_targets.fetch.era5_land import download_year_variable
 
     fake_client = MagicMock()
@@ -323,9 +324,58 @@ def test_download_year_skips_existing(tmp_path, monkeypatch):
         "nhf_spatial_targets.fetch.era5_land._cds_client", lambda: fake_client
     )
     out = tmp_path / "era5_land_ro_2020.nc"
+    # Pre-stage all 12 monthly chunks older than the year file.
+    for month in range(1, 13):
+        chunk = tmp_path / f"era5_land_ro_2020_{month:02d}.nc"
+        chunk.write_bytes(b"chunk")
     out.write_bytes(b"existing")
     download_year_variable(year=2020, variable="ro", output_path=out)
     fake_client.retrieve.assert_not_called()
+
+
+def test_download_year_rebuilds_when_chunks_incomplete(tmp_path, monkeypatch):
+    """If year file exists but fewer than 12 chunks on disk, rebuild.
+
+    Guards against the case where the year file was written from a
+    partial set of chunks and later chunks arrive with an older mtime
+    (e.g. rsync -a, restore-from-backup) that would otherwise bypass
+    the mtime check.
+    """
+    from nhf_spatial_targets.fetch.era5_land import download_year_variable
+
+    fake_client = MagicMock()
+
+    def fake_retrieve(dataset, request, target_path):
+        # Minimal valid NC so open_mfdataset can read back during concat.
+        import numpy as np
+        import pandas as pd
+        import xarray as xr
+
+        month = int(request["month"])
+        times = pd.date_range(f"2020-{month:02d}-01", periods=1, freq="h")
+        da = xr.DataArray(
+            np.zeros((1, 1, 1)),
+            dims=("time", "latitude", "longitude"),
+            coords={"time": times, "latitude": [40.0], "longitude": [-100.0]},
+            name="ro",
+        )
+        da.to_dataset().to_netcdf(target_path)
+
+    fake_client.retrieve.side_effect = fake_retrieve
+    monkeypatch.setattr(
+        "nhf_spatial_targets.fetch.era5_land._cds_client", lambda: fake_client
+    )
+    out = tmp_path / "era5_land_ro_2020.nc"
+    # Pre-stage only 6 chunks; year file pretends to be up to date but isn't.
+    for month in range(1, 7):
+        chunk = tmp_path / f"era5_land_ro_2020_{month:02d}.nc"
+        fake_retrieve(None, {"month": f"{month:02d}"}, chunk)
+    out.write_bytes(b"partial")
+    download_year_variable(year=2020, variable="ro", output_path=out)
+    # Exactly the 6 missing months should have been fetched from CDS.
+    assert fake_client.retrieve.call_count == 6
+    # Final year file exists.
+    assert out.exists()
 
 
 def test_consolidate_year_writes_daily_and_updates_monthly(tmp_path, monkeypatch):
