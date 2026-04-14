@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pandas as pd
+import pytest
 import xarray as xr
 
 from nhf_spatial_targets.fetch.era5_land import daily_to_monthly, hourly_to_daily
@@ -143,17 +144,13 @@ def test_daily_to_monthly_sum():
     assert monthly.attrs["units"] == "m"
 
 
-def test_download_year_calls_cds_client(tmp_path, monkeypatch):
-    from nhf_spatial_targets.fetch.era5_land import download_year_variable
+def test_download_month_variable_calls_cds_client(tmp_path, monkeypatch):
+    """download_month_variable submits a single-month CDS request."""
+    from nhf_spatial_targets.fetch.era5_land import download_month_variable
 
-    out = tmp_path / "era5_land_ro_2020.nc"
-    expected_tmp = str(out) + ".tmp"
+    out = tmp_path / "era5_land_ro_2020_03.nc"
 
     def fake_retrieve(dataset, request, path):
-        # Simulate CDS writing to the tmp path (not the final path)
-        assert path == expected_tmp, (
-            f"CDS retrieve should write to tmp path {expected_tmp!r}, got {path!r}"
-        )
         Path(path).write_bytes(b"fake_nc_data")
 
     fake_client = MagicMock()
@@ -162,32 +159,80 @@ def test_download_year_calls_cds_client(tmp_path, monkeypatch):
         "nhf_spatial_targets.fetch.era5_land._cds_client", lambda: fake_client
     )
 
-    result = download_year_variable(year=2020, variable="ro", output_path=out)
+    result = download_month_variable(year=2020, month=3, variable="ro", output_path=out)
 
     fake_client.retrieve.assert_called_once()
-    args, kwargs = fake_client.retrieve.call_args
+    args, _ = fake_client.retrieve.call_args
     assert args[0] == "reanalysis-era5-land"
     request = args[1]
     assert request["variable"] == "runoff"
     assert request["year"] == "2020"
+    assert request["month"] == "03"
     assert request["area"] == [53.0, -125.0, 24.7, -66.0]
     assert request["format"] == "netcdf"
-    assert "month" in request and len(request["month"]) == 12
-    # The retrieve is passed the .tmp path; final output_path exists after rename
-    assert out.exists(), "Final output file should exist after atomic rename"
-    assert not Path(expected_tmp).exists(), "Tmp file should be gone after rename"
+    assert len(request["day"]) == 31
+    assert len(request["time"]) == 24
+    assert out.exists()
+    assert not Path(str(out) + ".tmp").exists()
     assert result == out
 
 
-def test_download_year_atomic_cleanup_on_failure(tmp_path, monkeypatch):
-    """If CDS retrieve raises, the .tmp file is cleaned up and output_path is absent."""
-    from nhf_spatial_targets.fetch.era5_land import download_year_variable
+def test_download_month_variable_extracts_zip(tmp_path, monkeypatch):
+    """download_month_variable extracts the .nc from a CDS zip response."""
+    import io
+    import zipfile
 
-    out = tmp_path / "era5_land_ro_2020.nc"
-    tmp_path_expected = Path(str(out) + ".tmp")
+    from nhf_spatial_targets.fetch.era5_land import download_month_variable
+
+    out = tmp_path / "era5_land_ro_2020_03.nc"
+    nc_content = b"fake_nc_data_inside_zip"
+
+    def fake_retrieve(dataset, request, path):
+        # Simulate CDS API returning a zip-wrapped NetCDF.
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("data.nc", nc_content)
+        Path(path).write_bytes(buf.getvalue())
+
+    fake_client = MagicMock()
+    fake_client.retrieve = MagicMock(side_effect=fake_retrieve)
+    monkeypatch.setattr(
+        "nhf_spatial_targets.fetch.era5_land._cds_client", lambda: fake_client
+    )
+
+    result = download_month_variable(year=2020, month=3, variable="ro", output_path=out)
+
+    assert result == out
+    assert out.exists()
+    assert out.read_bytes() == nc_content
+    # Confirm the output file is not a zip.
+    assert not zipfile.is_zipfile(out)
+    # No .tmp file should remain.
+    assert not Path(str(out) + ".tmp").exists()
+    # Extracted intermediate file should not remain.
+    assert not (tmp_path / "data.nc").exists()
+
+
+def test_download_month_variable_skips_existing(tmp_path, monkeypatch):
+    from nhf_spatial_targets.fetch.era5_land import download_month_variable
+
+    fake_client = MagicMock()
+    monkeypatch.setattr(
+        "nhf_spatial_targets.fetch.era5_land._cds_client", lambda: fake_client
+    )
+    out = tmp_path / "era5_land_ro_2020_03.nc"
+    out.write_bytes(b"existing")
+    download_month_variable(year=2020, month=3, variable="ro", output_path=out)
+    fake_client.retrieve.assert_not_called()
+
+
+def test_download_month_variable_atomic_cleanup_on_failure(tmp_path, monkeypatch):
+    """If CDS retrieve raises, the .tmp file is cleaned up."""
+    from nhf_spatial_targets.fetch.era5_land import download_month_variable
+
+    out = tmp_path / "era5_land_ro_2020_03.nc"
 
     def fake_retrieve_fail(dataset, request, path):
-        # Write partial data to tmp, then raise
         Path(path).write_bytes(b"partial")
         raise RuntimeError("CDS server error")
 
@@ -197,16 +242,77 @@ def test_download_year_atomic_cleanup_on_failure(tmp_path, monkeypatch):
         "nhf_spatial_targets.fetch.era5_land._cds_client", lambda: fake_client
     )
 
-    import pytest
+    with pytest.raises(RuntimeError, match="CDS server error"):
+        download_month_variable(year=2020, month=3, variable="ro", output_path=out)
+
+    assert not out.exists()
+    assert not Path(str(out) + ".tmp").exists()
+
+
+def test_download_year_calls_cds_client(tmp_path, monkeypatch):
+    """download_year_variable submits 12 single-month CDS requests."""
+    from nhf_spatial_targets.fetch.era5_land import download_year_variable
+
+    out = tmp_path / "era5_land_ro_2020.nc"
+
+    def fake_retrieve(dataset, request, path):
+        # Write a minimal valid NetCDF so the concatenation step succeeds.
+        month = int(request["month"])
+        times = pd.date_range(f"2020-{month:02d}-01", periods=1, freq="1h")
+        ds = xr.Dataset(
+            {"ro": (("time", "latitude", "longitude"), np.zeros((1, 1, 1)))},
+            coords={"time": times, "latitude": [40.0], "longitude": [-100.0]},
+        )
+        ds.to_netcdf(path)
+
+    fake_client = MagicMock()
+    fake_client.retrieve = MagicMock(side_effect=fake_retrieve)
+    monkeypatch.setattr(
+        "nhf_spatial_targets.fetch.era5_land._cds_client", lambda: fake_client
+    )
+
+    result = download_year_variable(year=2020, variable="ro", output_path=out)
+
+    assert fake_client.retrieve.call_count == 12
+    for i, (args, _) in enumerate(fake_client.retrieve.call_args_list, start=1):
+        assert args[0] == "reanalysis-era5-land"
+        request = args[1]
+        assert request["variable"] == "runoff"
+        assert request["year"] == "2020"
+        assert request["month"] == f"{i:02d}"
+        assert request["area"] == [53.0, -125.0, 24.7, -66.0]
+        assert request["format"] == "netcdf"
+    assert out.exists(), "Year file should exist after all monthly chunks are assembled"
+    assert not Path(str(out) + ".tmp").exists()
+    assert result == out
+
+
+def test_download_year_atomic_cleanup_on_failure(tmp_path, monkeypatch):
+    """If a monthly CDS download fails, the .tmp is cleaned up and year file absent."""
+    from nhf_spatial_targets.fetch.era5_land import download_year_variable
+
+    out = tmp_path / "era5_land_ro_2020.nc"
+    chunk_01_tmp = tmp_path / "era5_land_ro_2020_01.nc.tmp"
+
+    def fake_retrieve_fail(dataset, request, path):
+        Path(path).write_bytes(b"partial")
+        raise RuntimeError("CDS server error")
+
+    fake_client = MagicMock()
+    fake_client.retrieve = MagicMock(side_effect=fake_retrieve_fail)
+    monkeypatch.setattr(
+        "nhf_spatial_targets.fetch.era5_land._cds_client", lambda: fake_client
+    )
 
     with pytest.raises(RuntimeError, match="CDS server error"):
         download_year_variable(year=2020, variable="ro", output_path=out)
 
-    assert not out.exists(), "output_path must not exist after a failed download"
-    assert not tmp_path_expected.exists(), ".tmp file must be cleaned up on failure"
+    assert not out.exists(), "Year file must not exist after a failed monthly download"
+    assert not chunk_01_tmp.exists(), ".tmp for the failed month must be cleaned up"
 
 
 def test_download_year_skips_existing(tmp_path, monkeypatch):
+    """Fast path: year file + all 12 chunks present, no newer chunks → skip."""
     from nhf_spatial_targets.fetch.era5_land import download_year_variable
 
     fake_client = MagicMock()
@@ -214,9 +320,58 @@ def test_download_year_skips_existing(tmp_path, monkeypatch):
         "nhf_spatial_targets.fetch.era5_land._cds_client", lambda: fake_client
     )
     out = tmp_path / "era5_land_ro_2020.nc"
+    # Pre-stage all 12 monthly chunks older than the year file.
+    for month in range(1, 13):
+        chunk = tmp_path / f"era5_land_ro_2020_{month:02d}.nc"
+        chunk.write_bytes(b"chunk")
     out.write_bytes(b"existing")
     download_year_variable(year=2020, variable="ro", output_path=out)
     fake_client.retrieve.assert_not_called()
+
+
+def test_download_year_rebuilds_when_chunks_incomplete(tmp_path, monkeypatch):
+    """If year file exists but fewer than 12 chunks on disk, rebuild.
+
+    Guards against the case where the year file was written from a
+    partial set of chunks and later chunks arrive with an older mtime
+    (e.g. rsync -a, restore-from-backup) that would otherwise bypass
+    the mtime check.
+    """
+    from nhf_spatial_targets.fetch.era5_land import download_year_variable
+
+    fake_client = MagicMock()
+
+    def fake_retrieve(dataset, request, target_path):
+        # Minimal valid NC so open_mfdataset can read back during concat.
+        import numpy as np
+        import pandas as pd
+        import xarray as xr
+
+        month = int(request["month"])
+        times = pd.date_range(f"2020-{month:02d}-01", periods=1, freq="h")
+        da = xr.DataArray(
+            np.zeros((1, 1, 1)),
+            dims=("time", "latitude", "longitude"),
+            coords={"time": times, "latitude": [40.0], "longitude": [-100.0]},
+            name="ro",
+        )
+        da.to_dataset().to_netcdf(target_path)
+
+    fake_client.retrieve.side_effect = fake_retrieve
+    monkeypatch.setattr(
+        "nhf_spatial_targets.fetch.era5_land._cds_client", lambda: fake_client
+    )
+    out = tmp_path / "era5_land_ro_2020.nc"
+    # Pre-stage only 6 chunks; year file pretends to be up to date but isn't.
+    for month in range(1, 7):
+        chunk = tmp_path / f"era5_land_ro_2020_{month:02d}.nc"
+        fake_retrieve(None, {"month": f"{month:02d}"}, chunk)
+    out.write_bytes(b"partial")
+    download_year_variable(year=2020, variable="ro", output_path=out)
+    # Exactly the 6 missing months should have been fetched from CDS.
+    assert fake_client.retrieve.call_count == 6
+    # Final year file exists.
+    assert out.exists()
 
 
 def test_consolidate_year_writes_daily_and_updates_monthly(tmp_path, monkeypatch):
@@ -261,6 +416,51 @@ def test_consolidate_year_writes_daily_and_updates_monthly(tmp_path, monkeypatch
         daily.close()
 
     assert monthly_path.exists()
+
+
+def test_consolidate_year_valid_time_dim(tmp_path):
+    """consolidate_year normalises CDS API v2 'valid_time' → 'time' dimension."""
+    from nhf_spatial_targets.fetch.era5_land import consolidate_year
+
+    hourly_dir = tmp_path / "hourly"
+    daily_dir = tmp_path / "daily"
+    monthly_dir = tmp_path / "monthly"
+    hourly_dir.mkdir()
+
+    # Write hourly NCs using 'valid_time' (CDS API ≥0.7 output convention)
+    times = pd.date_range("2020-01-01", "2020-01-03 23:00", freq="1h")
+    for var in ("ro", "sro", "ssro"):
+        vals = np.tile(
+            np.arange(24, dtype=float).reshape(24, 1, 1) * 0.001,
+            (len(times) // 24, 1, 1),
+        )
+        ds = xr.Dataset(
+            {var: (("valid_time", "latitude", "longitude"), vals)},
+            coords={
+                "valid_time": times[: vals.shape[0]],
+                "latitude": [40.0],
+                "longitude": [-100.0],
+            },
+        )
+        ds[var].attrs["units"] = "m"
+        ds.to_netcdf(hourly_dir / f"era5_land_{var}_2020.nc")
+
+    # Should not raise "Dimensions {'time'} do not exist"
+    daily_path, monthly_path = consolidate_year(
+        year=2020,
+        hourly_dir=hourly_dir,
+        daily_dir=daily_dir,
+        monthly_dir=monthly_dir,
+    )
+
+    assert daily_path.exists()
+    with xr.open_dataset(daily_path) as ds:
+        assert "time" in ds.dims, "daily NC must have 'time' dimension"
+        assert {"ro", "sro", "ssro"}.issubset(set(ds.data_vars))
+
+    assert monthly_path.exists()
+    with xr.open_dataset(monthly_path) as ds:
+        assert "time" in ds.dims, "monthly NC must have 'time' dimension"
 
 
 def _write_hourly_ncs(hourly_dir: Path, year: int) -> None:
@@ -435,3 +635,353 @@ def test_consolidate_year_reaggregates_when_hourly_is_newer(tmp_path):
     assert mock_h2d.called, (
         "hourly_to_daily should be called when a hourly NC is newer than the daily NC"
     )
+
+
+# ---- Manifest merge --------------------------------------------------------
+
+
+def _minimal_workdir(tmp_path: Path) -> Path:
+    """Create a minimal project workdir for _update_manifest tests."""
+    import json
+
+    import yaml
+
+    wd = tmp_path / "run"
+    wd.mkdir()
+    config = {
+        "fabric": {"path": "", "id_col": "nhm_id"},
+        "datastore": str(wd / "datastore"),
+        "dir_mode": "2775",
+    }
+    (wd / "config.yml").write_text(yaml.dump(config))
+    (wd / "fabric.json").write_text(json.dumps({"hru_count": 3, "id_col": "nhm_id"}))
+    (wd / "manifest.json").write_text(json.dumps({"sources": {}, "steps": []}))
+    return wd
+
+
+def test_update_manifest_accumulates_years(tmp_path):
+    """Successive _update_manifest calls merge files rather than overwriting."""
+    import json
+
+    from nhf_spatial_targets.fetch.era5_land import _update_manifest
+
+    wd = _minimal_workdir(tmp_path)
+    meta = {
+        "access": {"url": "https://cds.climate.copernicus.eu"},
+        "variables": [{"name": "ro"}],
+    }
+    bbox = {"minx": -125.1, "miny": 23.9, "maxx": -65.9, "maxy": 50.1}
+    license_str = "Copernicus license"
+
+    files_1979 = [
+        {
+            "year": 1979,
+            "daily_path": "/ds/era5_land/daily/era5_land_daily_1979.nc",
+            "monthly_path": "/ds/era5_land/monthly/era5_land_monthly_1979_1979.nc",
+            "consolidated_utc": "2024-01-01T00:00:00+00:00",
+        }
+    ]
+    files_1980 = [
+        {
+            "year": 1980,
+            "daily_path": "/ds/era5_land/daily/era5_land_daily_1980.nc",
+            "monthly_path": "/ds/era5_land/monthly/era5_land_monthly_1979_1980.nc",
+            "consolidated_utc": "2024-01-02T00:00:00+00:00",
+        }
+    ]
+
+    # First run: fetch 1979
+    _update_manifest(wd, "1979/1979", bbox, meta, license_str, files_1979)
+    m1 = json.loads((wd / "manifest.json").read_text())
+    entry1 = m1["sources"]["era5_land"]
+    assert entry1["period"] == "1979/1979"
+    assert len(entry1["files"]) == 1
+    assert entry1["files"][0]["year"] == 1979
+
+    # Second run: fetch 1980 — should not overwrite 1979
+    _update_manifest(wd, "1980/1980", bbox, meta, license_str, files_1980)
+    m2 = json.loads((wd / "manifest.json").read_text())
+    entry2 = m2["sources"]["era5_land"]
+    assert entry2["period"] == "1979/1980"
+    assert len(entry2["files"]) == 2
+    years = [f["year"] for f in entry2["files"]]
+    assert years == [1979, 1980]
+
+
+def test_update_manifest_updates_existing_year(tmp_path):
+    """Re-running for the same year replaces that year's file record."""
+    import json
+
+    from nhf_spatial_targets.fetch.era5_land import _update_manifest
+
+    wd = _minimal_workdir(tmp_path)
+    meta = {
+        "access": {"url": "https://cds.climate.copernicus.eu"},
+        "variables": [{"name": "ro"}],
+    }
+    bbox = {"minx": -125.1, "miny": 23.9, "maxx": -65.9, "maxy": 50.1}
+    license_str = "Copernicus license"
+
+    files_v1 = [
+        {
+            "year": 1979,
+            "daily_path": "/ds/era5_land/daily/era5_land_daily_1979.nc",
+            "monthly_path": "/ds/era5_land/monthly/era5_land_monthly_1979_1979.nc",
+            "consolidated_utc": "2024-01-01T00:00:00+00:00",
+        }
+    ]
+    files_v2 = [
+        {
+            "year": 1979,
+            "daily_path": "/ds/era5_land/daily/era5_land_daily_1979.nc",
+            "monthly_path": "/ds/era5_land/monthly/era5_land_monthly_1979_1979.nc",
+            "consolidated_utc": "2024-06-01T00:00:00+00:00",  # updated timestamp
+        }
+    ]
+
+    _update_manifest(wd, "1979/1979", bbox, meta, license_str, files_v1)
+    _update_manifest(wd, "1979/1979", bbox, meta, license_str, files_v2)
+
+    m = json.loads((wd / "manifest.json").read_text())
+    entry = m["sources"]["era5_land"]
+    assert len(entry["files"]) == 1
+    assert entry["files"][0]["consolidated_utc"] == "2024-06-01T00:00:00+00:00"
+
+
+def test_update_manifest_handles_missing_year_key(tmp_path, caplog):
+    """Prior manifest entries missing 'year' are skipped with a warning."""
+    import json
+    import logging
+
+    from nhf_spatial_targets.fetch.era5_land import _update_manifest
+
+    wd = _minimal_workdir(tmp_path)
+    meta = {
+        "access": {"url": "https://cds.climate.copernicus.eu"},
+        "variables": [{"name": "ro"}],
+    }
+    bbox = {"minx": -125.0, "miny": 24.7, "maxx": -66.0, "maxy": 53.0}
+
+    # Seed a manifest with a malformed file entry (no "year" key)
+    manifest = {
+        "sources": {
+            "era5_land": {
+                "files": [
+                    {"daily_path": "/orphan.nc"},  # missing year
+                    {
+                        "year": 1979,
+                        "daily_path": "/ds/daily_1979.nc",
+                        "monthly_path": "/ds/monthly_1979_1979.nc",
+                    },
+                ]
+            }
+        }
+    }
+    (wd / "manifest.json").write_text(json.dumps(manifest))
+
+    files_new = [
+        {
+            "year": 1980,
+            "daily_path": "/ds/daily_1980.nc",
+            "monthly_path": "/ds/monthly_1979_1980.nc",
+            "consolidated_utc": "2024-01-01T00:00:00+00:00",
+        }
+    ]
+    with caplog.at_level(logging.WARNING):
+        _update_manifest(wd, "1980/1980", bbox, meta, "L", files_new)
+
+    assert any("missing 'year' key" in rec.message for rec in caplog.records)
+    result = json.loads((wd / "manifest.json").read_text())
+    years = sorted(f["year"] for f in result["sources"]["era5_land"]["files"])
+    assert years == [1979, 1980]
+
+
+def test_update_manifest_skips_bad_year_with_warning(tmp_path, caplog):
+    """Prior manifest entry with a non-numeric 'year' is skipped + warned.
+
+    Consistency with the sibling missing-'year' handler: corrupt prior
+    entries should not block recording of newly fetched years.
+    """
+    import json
+    import logging
+
+    from nhf_spatial_targets.fetch.era5_land import _update_manifest
+
+    wd = _minimal_workdir(tmp_path)
+    meta = {
+        "access": {"url": "https://cds.climate.copernicus.eu"},
+        "variables": [{"name": "ro"}],
+    }
+    bbox = {"minx": -125.0, "miny": 24.7, "maxx": -66.0, "maxy": 53.0}
+
+    manifest = {
+        "sources": {
+            "era5_land": {
+                "files": [
+                    {"year": "twenty", "daily_path": "/bad.nc"},
+                    {
+                        "year": 1979,
+                        "daily_path": "/good.nc",
+                        "monthly_path": "/m.nc",
+                    },
+                ]
+            }
+        }
+    }
+    (wd / "manifest.json").write_text(json.dumps(manifest))
+
+    with caplog.at_level(logging.WARNING):
+        _update_manifest(
+            wd,
+            "1980/1980",
+            bbox,
+            meta,
+            "L",
+            [
+                {
+                    "year": 1980,
+                    "daily_path": "/d.nc",
+                    "monthly_path": "/m.nc",
+                    "consolidated_utc": "2024-01-01",
+                }
+            ],
+        )
+
+    assert any(
+        "invalid year" in rec.message and "twenty" in rec.message
+        for rec in caplog.records
+    )
+    result = json.loads((wd / "manifest.json").read_text())
+    years = sorted(f["year"] for f in result["sources"]["era5_land"]["files"])
+    # Bad entry skipped; the good 1979 entry and new 1980 entry both kept.
+    assert years == [1979, 1980]
+
+
+def test_update_manifest_refreshes_monthly_path_on_prior_entries(tmp_path):
+    """After rolling rebuild, every merged entry points to the current monthly file."""
+    import json
+
+    from nhf_spatial_targets.fetch.era5_land import _update_manifest
+
+    wd = _minimal_workdir(tmp_path)
+    meta = {
+        "access": {"url": "https://cds.climate.copernicus.eu"},
+        "variables": [{"name": "ro"}],
+    }
+    bbox = {"minx": -125.0, "miny": 24.7, "maxx": -66.0, "maxy": 53.0}
+
+    # First run: year 1979, monthly path reflects 1979-only range.
+    _update_manifest(
+        wd,
+        "1979/1979",
+        bbox,
+        meta,
+        "L",
+        [
+            {
+                "year": 1979,
+                "daily_path": "/ds/daily_1979.nc",
+                "monthly_path": "/ds/monthly_1979_1979.nc",
+                "consolidated_utc": "2024-01-01T00:00:00+00:00",
+            }
+        ],
+    )
+
+    # Second run: year 1980, rolling rebuild produces a new monthly path.
+    new_monthly = "/ds/monthly_1979_1980.nc"
+    _update_manifest(
+        wd,
+        "1980/1980",
+        bbox,
+        meta,
+        "L",
+        [
+            {
+                "year": 1980,
+                "daily_path": "/ds/daily_1980.nc",
+                "monthly_path": new_monthly,
+                "consolidated_utc": "2024-01-02T00:00:00+00:00",
+            }
+        ],
+    )
+
+    entry = json.loads((wd / "manifest.json").read_text())["sources"]["era5_land"]
+    # Both the prior 1979 entry AND the new 1980 entry point to the new path.
+    assert all(f["monthly_path"] == new_monthly for f in entry["files"])
+
+
+def test_fetch_era5_land_writes_partial_manifest_on_failure(tmp_path, monkeypatch):
+    """If a later year raises, the manifest records only the completed years.
+
+    Guards the try/finally pattern in fetch_era5_land that persists
+    partial-run state so operators can distinguish "completed" from
+    "needs re-run" years after a SLURM crash.
+    """
+    import json
+
+    import yaml
+
+    from nhf_spatial_targets.fetch import era5_land
+    from nhf_spatial_targets.fetch.era5_land import fetch_era5_land
+
+    wd = tmp_path / "run"
+    wd.mkdir()
+    (wd / "config.yml").write_text(
+        yaml.dump(
+            {
+                "fabric": {"path": "", "id_col": "nhm_id"},
+                "datastore": str(wd / "datastore"),
+                "dir_mode": "2775",
+            }
+        )
+    )
+    (wd / "fabric.json").write_text(
+        json.dumps(
+            {
+                "hru_count": 3,
+                "id_col": "nhm_id",
+                "bbox_buffered": {
+                    "minx": -125.0,
+                    "miny": 24.7,
+                    "maxx": -66.0,
+                    "maxy": 53.0,
+                },
+            }
+        )
+    )
+    (wd / "manifest.json").write_text(json.dumps({"sources": {}, "steps": []}))
+
+    def fake_download(year, variable, output_path):
+        pass
+
+    def fake_consolidate(year, hourly_dir, daily_dir, monthly_dir):
+        if year == 1981:
+            raise RuntimeError("simulated failure at year 1981")
+        daily_dir.mkdir(parents=True, exist_ok=True)
+        monthly_dir.mkdir(parents=True, exist_ok=True)
+        daily = daily_dir / f"era5_land_daily_{year}.nc"
+        monthly = monthly_dir / f"era5_land_monthly_{year}_{year}.nc"
+        daily.write_bytes(b"fake")
+        monthly.write_bytes(b"fake")
+        return daily, monthly
+
+    monkeypatch.setattr(era5_land, "download_year_variable", fake_download)
+    monkeypatch.setattr(era5_land, "consolidate_year", fake_consolidate)
+
+    with pytest.raises(RuntimeError, match="simulated failure"):
+        fetch_era5_land(workdir=wd, period="1979/1982")
+
+    # Manifest should contain 1979 and 1980 (completed); not 1981 or 1982.
+    manifest = json.loads((wd / "manifest.json").read_text())
+    years = sorted(f["year"] for f in manifest["sources"]["era5_land"]["files"])
+    assert years == [1979, 1980]
+
+
+def test_variable_name_raises_on_unexpected_type():
+    """_variable_name raises TypeError naming the bad entry."""
+    from nhf_spatial_targets.fetch.modis import _variable_name
+
+    with pytest.raises(TypeError, match="Unexpected variable entry type"):
+        _variable_name(42)
+    with pytest.raises(TypeError, match="Unexpected variable entry type"):
+        _variable_name(["list_not_allowed"])

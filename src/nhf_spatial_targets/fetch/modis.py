@@ -24,6 +24,7 @@ from nhf_spatial_targets.fetch.consolidate import (
     consolidate_mod16a2_finalize,
     consolidate_mod16a2_timestep,
     log_memory,
+    resolve_license,
 )
 from nhf_spatial_targets.workspace import load as _load_project
 
@@ -36,6 +37,23 @@ logger = logging.getLogger(__name__)
 #   MOD16A2GF.A2010001.h08v04.061.conus.nc
 _MODIS_YEAR_RE = re.compile(r"\.A(\d{4})\d{3}\.")
 _MODIS_YDOY_RE = re.compile(r"\.A(\d{7})\.")
+
+
+def _variable_name(v: dict | str) -> str:
+    """Extract a variable name from a catalog entry.
+
+    Catalog entries may be either a dict with a ``name`` key (canonical
+    form) or a bare string (legacy form). Raise on anything else so a
+    malformed catalog surfaces a clear error instead of writing the
+    raw object into the manifest.
+    """
+    if isinstance(v, dict):
+        return v["name"]
+    if isinstance(v, str):
+        return v
+    raise TypeError(
+        f"Unexpected variable entry type in MODIS catalog: {type(v).__name__} ({v!r})"
+    )
 
 
 def _granule_overlaps_bbox(
@@ -283,9 +301,10 @@ def _update_manifest(
         {
             "source_key": source_key,
             "access_url": meta["access"]["url"],
+            "license": resolve_license(meta, source_key),
             "period": period,
             "bbox": bbox,
-            "variables": meta["variables"],
+            "variables": [_variable_name(v) for v in meta["variables"]],
             "files": files,
             "consolidated_ncs": consolidated_ncs,
             "last_consolidated_utc": now_utc if consolidated_ncs else None,
@@ -335,7 +354,7 @@ def fetch_mod16a2(workdir: Path, period: str) -> dict:
     source_key = _MOD16A2_SOURCE_KEY
     meta = _catalog.source(source_key)
     short_name = meta["access"]["short_name"]
-    variables = [v["name"] if isinstance(v, dict) else v for v in meta["variables"]]
+    variables = [_variable_name(v) for v in meta["variables"]]
 
     _check_superseded(meta, source_key)
     earthdata_login(workdir)
@@ -818,7 +837,7 @@ def fetch_mod10c1(workdir: Path, period: str) -> dict:
         )
 
     # Per-year consolidation
-    variables = [v["name"] if isinstance(v, dict) else v for v in meta["variables"]]
+    variables = [_variable_name(v) for v in meta["variables"]]
     consolidated_ncs: dict[str, str] = {}
     years_on_disk = sorted({f["year"] for f in files})
     for year in years_on_disk:

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
 import urllib.error
 import urllib.request
 import warnings
@@ -15,6 +17,7 @@ from tqdm import tqdm
 
 import nhf_spatial_targets.catalog as _catalog
 from nhf_spatial_targets.fetch._period import parse_period, years_in_period
+from nhf_spatial_targets.fetch.consolidate import resolve_license
 from nhf_spatial_targets.workspace import load as _load_project
 
 logger = logging.getLogger(__name__)
@@ -251,6 +254,7 @@ def _update_manifest(
         {
             "source_key": _SOURCE_KEY,
             "access_url": meta["access"]["url"],
+            "license": resolve_license(meta, _SOURCE_KEY),
             "period": period,
             "bbox": bbox,
             "variables": [v["name"] for v in meta["variables"]],
@@ -261,12 +265,8 @@ def _update_manifest(
     )
     manifest["sources"][_SOURCE_KEY] = entry
 
-    import tempfile
-
     tmp_fd, tmp_path = tempfile.mkstemp(dir=manifest_path.parent, suffix=".json.tmp")
     try:
-        import os
-
         with os.fdopen(tmp_fd, "w") as f:
             json.dump(manifest, f, indent=2)
         Path(tmp_path).replace(manifest_path)

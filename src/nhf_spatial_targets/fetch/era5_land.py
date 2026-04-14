@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import tempfile
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -21,7 +22,7 @@ import xarray as xr
 import nhf_spatial_targets.catalog as _catalog
 from nhf_spatial_targets import __version__
 from nhf_spatial_targets.fetch._period import years_in_period
-from nhf_spatial_targets.fetch.consolidate import apply_cf_metadata
+from nhf_spatial_targets.fetch.consolidate import apply_cf_metadata, resolve_license
 from nhf_spatial_targets.workspace import load as _load_project
 
 logger = logging.getLogger(__name__)
@@ -107,20 +108,28 @@ def _cds_client():
     return cdsapi.Client()
 
 
-def download_year_variable(
+def download_month_variable(
     year: int,
+    month: int,
     variable: str,
     output_path: Path,
 ) -> Path:
-    """Download one year of one ERA5-Land variable to ``output_path``.
+    """Download one month of one ERA5-Land variable to ``output_path``.
 
     Idempotent: if ``output_path`` already exists, returns immediately.
-    Submits a single CDS request covering all 12 months × all hours of
-    the given year, clipped to ``BBOX_NWSE``.
+    Submits a single CDS request covering all days × all hours of the
+    given year-month, clipped to ``BBOX_NWSE``.
+
+    Monthly requests (~100 MB per variable-month for the CONUS+buffered
+    bbox) stay comfortably within the CDS per-request cost limit. Called
+    by ``download_year_variable``. See README "Datastore Storage
+    Estimates" for the authoritative per-period totals.
 
     Parameters
     ----------
     year : int
+    month : int
+        Calendar month (1–12).
     variable : {"ro", "sro", "ssro"}
     output_path : Path
         Target NetCDF file. Parent directory is created if missing.
@@ -141,21 +150,126 @@ def download_year_variable(
     request = {
         "variable": _VARIABLE_REQUEST_NAME[variable],
         "year": str(year),
-        "month": [f"{m:02d}" for m in range(1, 13)],
+        "month": f"{month:02d}",
         "day": [f"{d:02d}" for d in range(1, 32)],
         "time": [f"{h:02d}:00" for h in range(24)],
         "area": BBOX_NWSE,
         "format": "netcdf",
     }
     client = _cds_client()
-    logger.info("Submitting CDS request for %s %d → %s", variable, year, output_path)
+    logger.info(
+        "Submitting CDS request for %s %d-%02d → %s",
+        variable,
+        year,
+        month,
+        output_path,
+    )
     tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
     try:
         client.retrieve("reanalysis-era5-land", request, str(tmp_path))
+        # CDS API (cdsapi ≥0.7.7) wraps the NetCDF in a zip archive.
+        # Detect and extract the .nc member before renaming to output_path.
+        if zipfile.is_zipfile(tmp_path):
+            with zipfile.ZipFile(tmp_path) as zf:
+                nc_names = [n for n in zf.namelist() if n.endswith(".nc")]
+                if not nc_names:
+                    raise ValueError(
+                        f"No .nc file found in CDS zip: {list(zf.namelist())}"
+                    )
+                zf.extract(nc_names[0], path=tmp_path.parent)
+                extracted = tmp_path.parent / nc_names[0]
+                tmp_path.unlink()
+                extracted.rename(tmp_path)
         tmp_path.rename(output_path)
     except BaseException:
         tmp_path.unlink(missing_ok=True)
         raise
+    return output_path
+
+
+def download_year_variable(
+    year: int,
+    variable: str,
+    output_path: Path,
+) -> Path:
+    """Download one year of one ERA5-Land variable to ``output_path``.
+
+    Splits the annual download into 12 monthly CDS requests to stay within
+    the CDS per-request cost/size limit (~100 MB per variable-month, i.e.
+    ~1.2 GB per variable-year, for the CONUS+buffered bbox at hourly
+    resolution). Monthly chunk files are written alongside ``output_path``
+    as::
+
+        era5_land_{variable}_{year}_{month:02d}.nc
+
+    and kept on disk for re-run idempotency. Once all 12 chunks are present
+    they are concatenated along the time axis into ``output_path``.
+
+    Idempotent at two levels:
+    - If ``output_path`` (year file) exists and is not older than any monthly
+      chunk, the function returns immediately without any CDS calls.
+    - If an individual monthly chunk already exists, that month's CDS request
+      is skipped.
+
+    Parameters
+    ----------
+    year : int
+    variable : {"ro", "sro", "ssro"}
+    output_path : Path
+        Target per-year NetCDF file. Parent directory is created if missing.
+
+    Returns
+    -------
+    Path
+        ``output_path`` (for caller convenience).
+    """
+    if variable not in _VARIABLE_REQUEST_NAME:
+        raise ValueError(f"Unknown ERA5-Land variable: {variable!r}")
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Monthly chunk paths live in the same directory as the year file.
+    stem = output_path.stem  # e.g. "era5_land_ro_2020"
+    chunk_paths = [
+        output_path.parent / f"{stem}_{month:02d}.nc" for month in range(1, 13)
+    ]
+
+    # Fast path: year file exists, all 12 chunks present, and no chunk newer.
+    # Requiring all 12 chunks on disk guards against the case where the year
+    # file was written from a partial set (e.g. 6/12) and later chunks arrive
+    # with an older mtime (rsync -a, restore-from-backup) that would otherwise
+    # bypass the mtime check.
+    if output_path.exists():
+        existing_chunks = [p for p in chunk_paths if p.exists()]
+        if len(existing_chunks) == 12:
+            year_mtime = output_path.stat().st_mtime
+            chunk_mtimes = [p.stat().st_mtime for p in existing_chunks]
+            if max(chunk_mtimes) <= year_mtime:
+                logger.info("Skipping up-to-date ERA5-Land year file: %s", output_path)
+                return output_path
+        else:
+            logger.info(
+                "Rebuilding %s: year file exists but only %d/12 chunks on disk",
+                output_path,
+                len(existing_chunks),
+            )
+
+    # Download any missing monthly chunks.
+    for month, chunk_path in enumerate(chunk_paths, start=1):
+        download_month_variable(year, month, variable, chunk_path)
+
+    # Concatenate all 12 monthly chunks into the year file.
+    logger.info("Concatenating monthly chunks into year file: %s", output_path)
+    with xr.open_mfdataset(chunk_paths, combine="by_coords") as ds:
+        year_ds = ds.load()
+    tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+    try:
+        year_ds.to_netcdf(tmp_path, format="NETCDF4")
+        tmp_path.rename(output_path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    logger.info("Wrote year file: %s", output_path)
     return output_path
 
 
@@ -246,6 +360,19 @@ def consolidate_year(
             if not path.exists():
                 raise FileNotFoundError(f"Missing hourly file: {path}")
             ds = xr.open_dataset(path)
+            # CDS API ≥0.7 changed the time dimension from "time" to
+            # "valid_time"; normalize here so downstream code always sees
+            # a "time" dimension. apply_cf_metadata also renames
+            # valid_time→time, but hourly_to_daily (below) indexes the
+            # "time" dim directly, so we must rename before it runs.
+            if "valid_time" in ds.dims:
+                ds = ds.rename({"valid_time": "time"})
+            if "time" not in ds.dims:
+                raise ValueError(
+                    f"ERA5-Land hourly file {path} has no 'time' or "
+                    f"'valid_time' dim; got dims {list(ds.dims)}. "
+                    f"CDS schema may have changed."
+                )
             da = ds[var].load()
             ds.close()
             daily_arrays[var] = hourly_to_daily(da)
@@ -291,6 +418,7 @@ def consolidate_year(
     # Remove any stale monthly file with a different year range
     for stale in monthly_dir.glob("era5_land_monthly_*.nc"):
         if stale != monthly_path:
+            logger.info("Removing stale monthly NC: %s", stale)
             stale.unlink()
     _atomic_to_netcdf(monthly_ds, monthly_path)
     logger.info("Wrote monthly NC: %s", monthly_path)
@@ -329,25 +457,46 @@ def fetch_era5_land(workdir: Path, period: str) -> dict:
     now_utc = datetime.now(timezone.utc).isoformat()
     files: list[dict] = []
 
-    for year in years_in_period(period):
-        for var in VARIABLES:
-            out = hourly_dir / f"era5_land_{var}_{year}.nc"
-            download_year_variable(year, var, out)
-        daily_path, monthly_path = consolidate_year(
-            year, hourly_dir, daily_dir, monthly_dir
-        )
-        files.append(
-            {
-                "year": year,
-                "daily_path": str(daily_path),
-                "monthly_path": str(monthly_path),
-                "consolidated_utc": now_utc,
-            }
-        )
-
     bbox = ws.fabric["bbox_buffered"]
-    license_str = meta.get("license", "Copernicus license")
-    _update_manifest(workdir, period, bbox, meta, license_str, files)
+    license_str = resolve_license(meta, _SOURCE_KEY)
+
+    try:
+        for year in years_in_period(period):
+            for var in VARIABLES:
+                out = hourly_dir / f"era5_land_{var}_{year}.nc"
+                download_year_variable(year, var, out)
+            daily_path, monthly_path = consolidate_year(
+                year, hourly_dir, daily_dir, monthly_dir
+            )
+            files.append(
+                {
+                    "year": year,
+                    "daily_path": str(daily_path),
+                    "monthly_path": str(monthly_path),
+                    "consolidated_utc": now_utc,
+                }
+            )
+    except Exception:
+        logger.error(
+            "ERA5-Land fetch failed after completing %d year(s); "
+            "completed chunks preserved on disk, re-run to resume.",
+            len(files),
+            exc_info=True,
+        )
+        raise
+    finally:
+        # Persist partial-run provenance even if the loop raised above.
+        # Swallow any manifest-write exception so it does not mask the
+        # original fetch failure (which is the important signal).
+        if files:
+            try:
+                _update_manifest(workdir, period, bbox, meta, license_str, files)
+            except Exception:
+                logger.exception(
+                    "Failed to persist partial ERA5-Land manifest for "
+                    "%d year(s); manifest.json may be stale.",
+                    len(files),
+                )
 
     return {
         "source_key": _SOURCE_KEY,
@@ -384,15 +533,72 @@ def _update_manifest(
     else:
         manifest = {"sources": {}, "steps": []}
 
-    manifest.setdefault("sources", {})[_SOURCE_KEY] = {
-        "source_key": _SOURCE_KEY,
-        "access_url": meta["access"]["url"],
-        "license": license_str,
-        "period": period,
-        "bbox": bbox,
-        "variables": [v["name"] for v in meta["variables"]],
-        "files": files,
-    }
+    manifest.setdefault("sources", {})
+    entry = manifest["sources"].get(_SOURCE_KEY, {})
+
+    # Merge files by year so incremental runs accumulate records.
+    # Parse defensively: prior manifests may have been hand-edited or
+    # written by an older version with a different schema.
+    existing_by_year: dict[int, dict] = {}
+    for f in entry.get("files", []):
+        if "year" not in f:
+            logger.warning(
+                "Skipping malformed manifest entry in %s (missing 'year' key): %s",
+                manifest_path,
+                f,
+            )
+            continue
+        try:
+            existing_by_year[int(f["year"])] = f
+        except (TypeError, ValueError) as exc:
+            # Match the sibling "missing year" handler above: skip-and-warn
+            # rather than raise. A corrupt prior entry shouldn't block
+            # recording of newly fetched years (which is arguably more
+            # valuable than failing hard on old cruft).
+            logger.warning(
+                "Skipping manifest entry with invalid year %r in %s: %s",
+                f.get("year"),
+                manifest_path,
+                exc,
+            )
+            continue
+    for f in files:
+        existing_by_year[int(f["year"])] = f
+
+    # Refresh monthly_path on every merged entry — consolidate_year writes
+    # a single rolling monthly NC, so all year entries should point to the
+    # current filename (prior entries pointed at the now-deleted old name).
+    latest_monthly_path = files[-1]["monthly_path"] if files else None
+    if latest_monthly_path is not None:
+        refreshed = 0
+        for entry_file in existing_by_year.values():
+            if entry_file.get("monthly_path") != latest_monthly_path:
+                entry_file["monthly_path"] = latest_monthly_path
+                refreshed += 1
+        if refreshed > len(files):
+            logger.info(
+                "Refreshed monthly_path on %d prior manifest entries to %s",
+                refreshed - len(files),
+                latest_monthly_path,
+            )
+
+    merged_files = [existing_by_year[y] for y in sorted(existing_by_year)]
+
+    all_years = sorted(existing_by_year)
+    effective_period = f"{all_years[0]}/{all_years[-1]}" if all_years else period
+
+    entry.update(
+        {
+            "source_key": _SOURCE_KEY,
+            "access_url": meta["access"]["url"],
+            "license": license_str,
+            "period": effective_period,
+            "bbox": bbox,
+            "variables": [v["name"] for v in meta["variables"]],
+            "files": merged_files,
+        }
+    )
+    manifest["sources"][_SOURCE_KEY] = entry
 
     fd, tmp = tempfile.mkstemp(dir=manifest_path.parent, suffix=".json.tmp")
     try:

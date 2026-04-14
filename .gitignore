@@ -15,6 +15,7 @@ build/
 runs/
 data/
 outputs/
+logs/
 
 # credentials (never commit)
 .credentials.yml

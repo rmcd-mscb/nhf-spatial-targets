@@ -19,6 +19,28 @@ from nhf_spatial_targets import __version__
 
 logger = logging.getLogger(__name__)
 
+_LICENSE_UNKNOWN = "UNKNOWN — see catalog/sources.yml"
+
+
+def resolve_license(meta: dict, source_key: str) -> str:
+    """Return the license string for a manifest entry.
+
+    If the catalog ``license`` field is missing or empty, log a WARNING
+    and return ``_LICENSE_UNKNOWN``. The fallback is explicit in the
+    manifest so operators auditing provenance can distinguish "no
+    license info captured" from "no license applies".
+    """
+    lic = meta.get("license")
+    if not lic:
+        logger.warning(
+            "Catalog source %r has missing/empty 'license' field; "
+            "writing %r into manifest. Please fix catalog/sources.yml.",
+            source_key,
+            _LICENSE_UNKNOWN,
+        )
+        return _LICENSE_UNKNOWN
+    return lic
+
 
 def log_memory(label: str) -> None:
     """Log current RSS (Linux /proc) or peak RSS (resource module fallback).
@@ -174,9 +196,12 @@ def apply_cf_metadata(
             f"Invalid time_step {time_step!r}; expected one of {sorted(_VALID_TIME_STEPS)}"
         )
 
-    # 1. Normalize coordinates to lat/lon
+    # 1. Normalize coordinates to lat/lon and time dimension name.
+    # CDS API ≥0.7 renames the time dimension from "time" to "valid_time";
+    # normalise here so all downstream code sees a consistent "time" dim.
     rename_map: dict[str, str] = {}
     for old, new in [
+        ("valid_time", "time"),
         ("y", "lat"),
         ("x", "lon"),
         ("latitude", "lat"),
@@ -186,6 +211,16 @@ def apply_cf_metadata(
             rename_map[old] = new
     if rename_map:
         ds = ds.rename(rename_map)
+
+    # After the rename, a time-stepped dataset must have a 'time' dim.
+    # Raise clearly if neither 'time' nor 'valid_time' was present —
+    # otherwise downstream steps produce time-less output silently.
+    if "time" not in ds.dims:
+        raise ValueError(
+            f"apply_cf_metadata: source {source_key!r} with "
+            f"time_step={time_step!r} has no 'time' or 'valid_time' dim; "
+            f"got dims {list(ds.dims)}."
+        )
 
     # Ensure (time, lat, lon) dimension order; use ellipsis to pass through any
     # extra dims (e.g. "nv" from time_bnds).
@@ -282,6 +317,19 @@ def apply_cf_metadata(
         ds.time.attrs.update(
             {"standard_name": "time", "long_name": "time", "axis": "T"}
         )
+        # Pin the time encoding so that the time coordinate and any
+        # associated time_bnds variable are serialized with the same units
+        # reference. CF-1.6 §7.1 recommends that bounds variables inherit
+        # units/calendar from the parent coordinate rather than carry
+        # their own; xarray implements this by stripping duplicate
+        # units/calendar attrs from bounds variables on write. Pinning
+        # time.encoding is therefore sufficient to establish the shared
+        # reference (and also silences a SerializationWarning emitted
+        # when the parent has no units encoding but a bounds variable
+        # is present). Use setdefault so source-specific encoding is
+        # preserved when present.
+        ds["time"].encoding.setdefault("units", "days since 1970-01-01")
+        ds["time"].encoding.setdefault("calendar", "standard")
 
     # 7. Add time_bnds for monthly data
     if time_step == "monthly" and "time_bnds" not in ds:
@@ -311,11 +359,14 @@ def apply_cf_metadata(
                 )
             bounds_list.append([(m_start - epoch).days, (m_end - epoch).days])
 
+        # time_bnds stores raw days-since-epoch integers; no units/calendar
+        # attrs are set because xarray strips them on write (CF-1.6 §7.1
+        # inheritance from the parent time coordinate). time.encoding above
+        # pins the reference for both variables.
         nv = np.array([0, 1])
         ds["time_bnds"] = xr.DataArray(
             np.array(bounds_list, dtype="<i8"),
             dims=["time", "nv"],
-            attrs={"units": "days since 1970-01-01", "calendar": "standard"},
         )
         if "nv" not in ds.coords:
             ds = ds.assign_coords(nv=nv)
@@ -380,12 +431,14 @@ def _fix_time_merra2(ds: xr.Dataset) -> xr.Dataset:
         }
     )
 
+    # time_bnds stores raw days-since-epoch integers; no units/calendar
+    # attrs are set because xarray strips them on write (CF-1.6 §7.1
+    # inheritance from the parent time coordinate).
     bnds_arr = np.array(bounds_list, dtype="<i8")
     nv = np.array([0, 1])
     ds["time_bnds"] = xr.DataArray(
         bnds_arr,
         dims=["time", "nv"],
-        attrs={"units": "days since 1970-01-01", "calendar": "standard"},
     )
     ds = ds.assign_coords(nv=nv)
 

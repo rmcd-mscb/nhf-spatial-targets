@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import tempfile
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,7 +16,7 @@ import earthaccess
 import nhf_spatial_targets.catalog as _catalog
 from nhf_spatial_targets.fetch._auth import earthdata_login
 from nhf_spatial_targets.fetch._period import months_in_period, parse_period
-from nhf_spatial_targets.fetch.consolidate import consolidate_merra2
+from nhf_spatial_targets.fetch.consolidate import resolve_license, consolidate_merra2
 from nhf_spatial_targets.workspace import load as _load_project
 
 _SOURCE_KEY = "merra2"
@@ -247,11 +249,12 @@ def _update_manifest(
     if "sources" not in manifest:
         manifest["sources"] = {}
 
-    merra2 = manifest["sources"].get("merra2", {})
+    merra2 = manifest["sources"].get(_SOURCE_KEY, {})
     merra2.update(
         {
             "source_key": _SOURCE_KEY,
             "access_url": meta["access"]["url"],
+            "license": resolve_license(meta, _SOURCE_KEY),
             "period": period,
             "bbox": bbox,
             "variables": [v["name"] for v in meta["variables"]],
@@ -260,14 +263,10 @@ def _update_manifest(
             "last_consolidated_utc": consolidation["last_consolidated_utc"],
         }
     )
-    manifest["sources"]["merra2"] = merra2
-
-    import tempfile
+    manifest["sources"][_SOURCE_KEY] = merra2
 
     tmp_fd, tmp_path = tempfile.mkstemp(dir=manifest_path.parent, suffix=".json.tmp")
     try:
-        import os
-
         with os.fdopen(tmp_fd, "w") as f:
             json.dump(manifest, f, indent=2)
         Path(tmp_path).replace(manifest_path)
