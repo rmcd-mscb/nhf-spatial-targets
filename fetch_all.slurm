@@ -5,7 +5,7 @@
 #SBATCH --array=0-9
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=16G
+#SBATCH --mem=128G
 #SBATCH --time=24:00:00
 #SBATCH --chdir=/caldera/hovenweep/projects/usgs/water/impd/nhgf/nhf-spatial-targets
 #SBATCH --output=logs/fetch_%a_%A.out
