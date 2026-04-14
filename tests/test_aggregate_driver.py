@@ -61,3 +61,36 @@ def test_update_manifest_preserves_existing_sources(project):
     )
     manifest = json.loads(manifest_path.read_text())
     assert set(manifest["sources"].keys()) == {"foo", "bar"}
+
+
+def test_source_adapter_defaults():
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+
+    adapter = SourceAdapter(
+        source_key="foo",
+        output_name="foo_agg.nc",
+        variables=["a", "b"],
+    )
+    assert adapter.source_crs == "EPSG:4326"
+    assert adapter.x_coord == "lon"
+    assert adapter.y_coord == "lat"
+    assert adapter.time_coord == "time"
+    assert adapter.open_hook is None
+
+
+def test_source_adapter_open_hook_invocable(project):
+    import xarray as xr
+
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+
+    def _open(proj):
+        return xr.Dataset({"a": (("time",), [1.0])}, coords={"time": [0]})
+
+    adapter = SourceAdapter(
+        source_key="foo",
+        output_name="foo_agg.nc",
+        variables=["a"],
+        open_hook=_open,
+    )
+    ds = adapter.open_hook(project)
+    assert "a" in ds
