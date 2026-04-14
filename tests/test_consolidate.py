@@ -815,3 +815,18 @@ def test_write_netcdf_atomic_failure_no_partial(tmp_path):
 
     assert not out.exists()
     assert not list(tmp_path.glob("*.nc.tmp"))
+
+
+def test_apply_cf_metadata_raises_when_time_missing():
+    """apply_cf_metadata for a time-stepped product must have a time dim."""
+    import numpy as np
+    import xarray as xr
+    from nhf_spatial_targets.fetch.consolidate import apply_cf_metadata
+
+    # Dataset with lat/lon but no time (or valid_time) dim.
+    ds = xr.Dataset(
+        {"foo": (("lat", "lon"), np.zeros((2, 2)))},
+        coords={"lat": [0.0, 1.0], "lon": [0.0, 1.0]},
+    )
+    with pytest.raises(ValueError, match="no 'time' or 'valid_time' dim"):
+        apply_cf_metadata(ds, "era5_land", "daily")

@@ -190,6 +190,16 @@ def apply_cf_metadata(
     if rename_map:
         ds = ds.rename(rename_map)
 
+    # After the rename, a time-stepped dataset must have a 'time' dim.
+    # Raise clearly if neither 'time' nor 'valid_time' was present —
+    # otherwise downstream steps produce time-less output silently.
+    if "time" not in ds.dims:
+        raise ValueError(
+            f"apply_cf_metadata: source {source_key!r} with "
+            f"time_step={time_step!r} has no 'time' or 'valid_time' dim; "
+            f"got dims {list(ds.dims)}."
+        )
+
     # Ensure (time, lat, lon) dimension order; use ellipsis to pass through any
     # extra dims (e.g. "nv" from time_bnds).
     dim_order = [d for d in ("time", "lat", "lon") if d in ds.dims]

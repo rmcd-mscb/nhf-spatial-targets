@@ -350,9 +350,17 @@ def consolidate_year(
             ds = xr.open_dataset(path)
             # CDS API ≥0.7 changed the time dimension from "time" to
             # "valid_time"; normalize here so downstream code always sees
-            # a "time" dimension.
+            # a "time" dimension. apply_cf_metadata also renames
+            # valid_time→time, but hourly_to_daily (below) indexes the
+            # "time" dim directly, so we must rename before it runs.
             if "valid_time" in ds.dims:
                 ds = ds.rename({"valid_time": "time"})
+            if "time" not in ds.dims:
+                raise ValueError(
+                    f"ERA5-Land hourly file {path} has no 'time' or "
+                    f"'valid_time' dim; got dims {list(ds.dims)}. "
+                    f"CDS schema may have changed."
+                )
             da = ds[var].load()
             ds.close()
             daily_arrays[var] = hourly_to_daily(da)
