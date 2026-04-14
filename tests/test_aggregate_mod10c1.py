@@ -85,3 +85,44 @@ def test_build_masked_source_day_with_all_low_ci_yields_all_nan_sca():
     out = build_masked_source(ds)
     assert np.isnan(out["sca"].values).all()
     np.testing.assert_array_equal(out["valid_mask"].values, np.zeros((1, 2, 2)))
+
+
+def test_log_low_valid_coverage_warns_above_threshold(caplog):
+    import logging
+
+    from nhf_spatial_targets.aggregate.mod10c1 import _log_low_valid_coverage
+
+    times = pd.date_range("2000-01-01", periods=10, freq="D")
+    vaf_data = np.zeros((10, 10))
+    vaf_data[0, 0] = 1.0  # 1 nonzero, 99 zero, 0 NaN -> 99% zero
+    combined = xr.Dataset(
+        {"valid_area_fraction": (["time", "hru_id"], vaf_data)},
+        coords={"time": times, "hru_id": range(10)},
+    )
+    with caplog.at_level(
+        logging.WARNING, logger="nhf_spatial_targets.aggregate.mod10c1"
+    ):
+        _log_low_valid_coverage(combined)
+    assert any("zero valid-area" in rec.message for rec in caplog.records), [
+        rec.message for rec in caplog.records
+    ]
+
+
+def test_log_low_valid_coverage_silent_below_threshold(caplog):
+    import logging
+
+    from nhf_spatial_targets.aggregate.mod10c1 import _log_low_valid_coverage
+
+    times = pd.date_range("2000-01-01", periods=10, freq="D")
+    # 99 nonzero, 1 zero -> 1% zero, below 10% threshold
+    vaf_data = np.ones((10, 10)) * 0.8
+    vaf_data[0, 0] = 0.0
+    combined = xr.Dataset(
+        {"valid_area_fraction": (["time", "hru_id"], vaf_data)},
+        coords={"time": times, "hru_id": range(10)},
+    )
+    with caplog.at_level(
+        logging.WARNING, logger="nhf_spatial_targets.aggregate.mod10c1"
+    ):
+        _log_low_valid_coverage(combined)
+    assert not any("zero valid-area" in rec.message for rec in caplog.records)

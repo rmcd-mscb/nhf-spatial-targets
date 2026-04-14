@@ -295,6 +295,41 @@ def test_source_adapter_rejects_unknown_source_key():
         )
 
 
+def test_source_adapter_defaults_grid_variable_to_first():
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+
+    adapter = SourceAdapter(
+        source_key="merra2",
+        output_name="merra2_agg.nc",
+        variables=["GWETTOP", "GWETROOT"],
+    )
+    assert adapter.grid_variable == "GWETTOP"
+
+
+def test_source_adapter_explicit_grid_variable_must_be_in_variables():
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+
+    with pytest.raises(ValueError, match="grid_variable"):
+        SourceAdapter(
+            source_key="merra2",
+            output_name="merra2_agg.nc",
+            variables=["GWETTOP", "GWETROOT"],
+            grid_variable="BOGUS",
+        )
+
+
+def test_source_adapter_accepts_valid_grid_variable():
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+
+    adapter = SourceAdapter(
+        source_key="merra2",
+        output_name="merra2_agg.nc",
+        variables=["GWETTOP", "GWETROOT"],
+        grid_variable="GWETROOT",
+    )
+    assert adapter.grid_variable == "GWETROOT"
+
+
 def test_source_adapter_coerces_list_to_tuple():
     from nhf_spatial_targets.aggregate._adapter import SourceAdapter
 

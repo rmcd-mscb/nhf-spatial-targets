@@ -33,6 +33,7 @@ class SourceAdapter:
     y_coord: str = "lat"
     time_coord: str = "time"
     source_crs: str = "EPSG:4326"
+    grid_variable: str | None = None
     open_hook: Callable[[Project], xr.Dataset] | None = field(default=None)
 
     def __post_init__(self) -> None:
@@ -44,12 +45,30 @@ class SourceAdapter:
             raise ValueError(
                 f"SourceAdapter.output_name must be a bare filename, got {self.output_name!r}"
             )
-        # Defer import to avoid a module-load-time circular dependency.
-        from nhf_spatial_targets.catalog import source as catalog_source
-
+        # Named invariant: which declared variable is used to infer the source
+        # grid for WeightGen. Defaults to the first variable; drivers/tests that
+        # care about a specific one can override.
+        if self.grid_variable is None:
+            object.__setattr__(self, "grid_variable", self.variables[0])
+        elif self.grid_variable not in self.variables:
+            raise ValueError(
+                f"SourceAdapter.grid_variable {self.grid_variable!r} must be one of "
+                f"variables={self.variables}"
+            )
+        # Catalog-typo check. If the catalog is unavailable at construction
+        # time (e.g. test harness, repackaged install), defer the check until
+        # the driver runs. Do NOT swallow KeyError — that's the typo case we
+        # specifically want to surface.
         try:
-            catalog_source(self.source_key)
+            from nhf_spatial_targets.catalog import source as _catalog_source
+
+            _catalog_source(self.source_key)
         except KeyError as exc:
             raise ValueError(
-                f"SourceAdapter.source_key {self.source_key!r} not found in catalog"
+                f"SourceAdapter.source_key {self.source_key!r} not found in "
+                f"catalog/sources.yml"
             ) from exc
+        except Exception:
+            # Catalog file missing/unreadable/YAML broken — let the aggregator
+            # surface this at run time with richer context.
+            pass

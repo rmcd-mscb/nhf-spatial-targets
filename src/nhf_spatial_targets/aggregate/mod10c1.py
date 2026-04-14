@@ -21,6 +21,32 @@ logger = logging.getLogger(__name__)
 _SOURCE_KEY = "mod10c1_v061"
 _CI_THRESHOLD = 0.70  # TM 6-B10: keep cells where CI > 0.70
 _OUTPUT_NAME = "mod10c1_agg.nc"
+_LOW_COVERAGE_WARN_THRESHOLD = 0.10
+
+
+def _log_low_valid_coverage(combined: xr.Dataset) -> None:
+    """Emit a WARNING log line if too many (HRU, time) cells have zero valid area.
+
+    NaN cells are treated as "no data available" and excluded from both
+    numerator and denominator — the threshold compares zero-area cells
+    against cells with any finite valid-area fraction.
+    """
+    vaf = combined["valid_area_fraction"]
+    n_total = int(vaf.notnull().sum())
+    if n_total == 0:
+        return
+    n_zero = int(((vaf == 0) & vaf.notnull()).sum())
+    zero_frac = n_zero / n_total
+    if zero_frac > _LOW_COVERAGE_WARN_THRESHOLD:
+        logger.warning(
+            "mod10c1: %.1f%% of (HRU, time) cells had zero valid-area "
+            "after CI>%.2f filter (n=%d of %d finite). Downstream sca "
+            "values are NaN for these cells.",
+            zero_frac * 100,
+            _CI_THRESHOLD,
+            n_zero,
+            n_total,
+        )
 
 
 def build_masked_source(ds: xr.Dataset) -> xr.Dataset:
@@ -62,8 +88,10 @@ def _open(project) -> xr.Dataset:
             f"No MOD10C1 NC found in {raw_dir}. Run 'nhf-targets fetch mod10c1' first."
         )
     ds = xr.open_dataset(ncs[0])
-    loaded = ds.load()
-    ds.close()
+    try:
+        loaded = ds.load()
+    finally:
+        ds.close()
     return loaded
 
 
@@ -136,28 +164,20 @@ def aggregate_mod10c1(
         "ci_threshold": _CI_THRESHOLD,
     }
 
-    n_zero = int((combined["valid_area_fraction"] == 0).sum())
-    n_total = int(combined["valid_area_fraction"].size)
-    zero_frac = n_zero / n_total if n_total else 0.0
-    if zero_frac > 0.10:
-        logger.warning(
-            "mod10c1: %.1f%% of (HRU, time) cells had zero valid-area "
-            "after CI>%.2f filter (n=%d of %d). Downstream sca values are NaN "
-            "for these cells.",
-            zero_frac * 100,
-            _CI_THRESHOLD,
-            n_zero,
-            n_total,
-        )
+    _log_low_valid_coverage(combined)
 
     output_dir = project.aggregated_dir()
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / _OUTPUT_NAME
     combined.to_netcdf(output_path)
     logger.info("mod10c1: output written to %s", output_path)
+    # Load a detached in-memory copy so callers can use the return value safely
+    # after the on-disk handle is closed.
+    loaded = combined.load()
+    combined.close()
 
-    t0 = str(combined["time"].values[0])[:10]
-    t1 = str(combined["time"].values[-1])[:10]
+    t0 = str(loaded["time"].values[0])[:10]
+    t1 = str(loaded["time"].values[-1])[:10]
     update_manifest(
         project=project,
         source_key=_SOURCE_KEY,
@@ -169,4 +189,4 @@ def aggregate_mod10c1(
             for i in range(n_batches)
         ],
     )
-    return combined
+    return loaded

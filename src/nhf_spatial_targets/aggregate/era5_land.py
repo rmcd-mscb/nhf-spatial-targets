@@ -26,8 +26,10 @@ def _open_monthly(project: Project) -> xr.Dataset:
             "Run 'nhf-targets fetch era5-land' first."
         )
     ds = xr.open_dataset(monthly_ncs[0])
-    loaded = ds.load()
-    ds.close()
+    try:
+        loaded = ds.load()
+    finally:
+        ds.close()
     return loaded
 
 

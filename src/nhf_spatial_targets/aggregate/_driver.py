@@ -295,8 +295,10 @@ def _default_open_hook(project: Project, source_key: str) -> xr.Dataset:
             "the correct consolidated file."
         )
     ds = xr.open_dataset(ncs[0])
-    loaded = ds.load()
-    ds.close()
+    try:
+        loaded = ds.load()
+    finally:
+        ds.close()
     return loaded
 
 
@@ -361,7 +363,7 @@ def aggregate_source(
         weights = compute_or_load_weights(
             batch_gdf=batch_gdf,
             source_ds=source_ds,
-            source_var=adapter.variables[0],
+            source_var=adapter.grid_variable,
             source_crs=adapter.source_crs,
             x_coord=adapter.x_coord,
             y_coord=adapter.y_coord,
@@ -397,9 +399,13 @@ def aggregate_source(
     output_path = output_dir / adapter.output_name
     combined.to_netcdf(output_path)
     logger.info("%s: output written to %s", adapter.source_key, output_path)
+    # Load a detached in-memory copy so callers can use the return value safely
+    # after the on-disk handle is closed.
+    loaded = combined.load()
+    combined.close()
 
-    t0 = str(combined[adapter.time_coord].values[0])[:10]
-    t1 = str(combined[adapter.time_coord].values[-1])[:10]
+    t0 = str(loaded[adapter.time_coord].values[0])[:10]
+    t1 = str(loaded[adapter.time_coord].values[-1])[:10]
     update_manifest(
         project=project,
         source_key=adapter.source_key,
@@ -412,4 +418,4 @@ def aggregate_source(
         ],
     )
 
-    return combined
+    return loaded

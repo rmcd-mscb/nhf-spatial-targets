@@ -1028,7 +1028,7 @@ def _run_tier_agg(
             batch_size=batch_size,
         )
     except (ValueError, FileNotFoundError, RuntimeError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        print(f"Error ({type(exc).__name__}): {exc}", file=sys.stderr)
         sys.exit(1)
     except Exception as exc:
         _logger.exception("Unexpected error during %s aggregation", label)
