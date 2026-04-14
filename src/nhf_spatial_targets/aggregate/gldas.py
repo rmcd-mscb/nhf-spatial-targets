@@ -22,15 +22,17 @@ def _open(project: Project) -> xr.Dataset:
             f"No GLDAS NC found in {raw_dir}. Run 'nhf-targets fetch gldas' first."
         )
     ds = xr.open_dataset(ncs[0])
-    total = ds["Qs_acc"] + ds["Qsb_acc"]
+    loaded = ds.load()
+    ds.close()
+    total = loaded["Qs_acc"] + loaded["Qsb_acc"]
     total.attrs = {
         "long_name": "total runoff (Qs_acc + Qsb_acc, derived)",
         "units": "kg m-2",
         "cell_methods": "time: sum",
         "derived_from": "Qs_acc + Qsb_acc",
     }
-    ds["runoff_total"] = total
-    return ds
+    loaded["runoff_total"] = total
+    return loaded
 
 
 ADAPTER = SourceAdapter(

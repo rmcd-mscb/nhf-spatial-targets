@@ -61,7 +61,10 @@ def _open(project) -> xr.Dataset:
         raise FileNotFoundError(
             f"No MOD10C1 NC found in {raw_dir}. Run 'nhf-targets fetch mod10c1' first."
         )
-    return xr.open_dataset(ncs[0])
+    ds = xr.open_dataset(ncs[0])
+    loaded = ds.load()
+    ds.close()
+    return loaded
 
 
 def aggregate_mod10c1(
@@ -123,6 +126,20 @@ def aggregate_mod10c1(
         "units": "1",
         "ci_threshold": _CI_THRESHOLD,
     }
+
+    n_zero = int((combined["valid_area_fraction"] == 0).sum())
+    n_total = int(combined["valid_area_fraction"].size)
+    zero_frac = n_zero / n_total if n_total else 0.0
+    if zero_frac > 0.10:
+        logger.warning(
+            "mod10c1: %.1f%% of (HRU, time) cells had zero valid-area "
+            "after CI>%.2f filter (n=%d of %d). Downstream sca values are NaN "
+            "for these cells.",
+            zero_frac * 100,
+            _CI_THRESHOLD,
+            n_zero,
+            n_total,
+        )
 
     output_dir = project.aggregated_dir()
     output_dir.mkdir(parents=True, exist_ok=True)

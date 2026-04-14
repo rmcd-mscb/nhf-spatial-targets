@@ -212,7 +212,14 @@ def compute_or_load_weights(
     )
     weights = wg.calculate_weights()
     wp.parent.mkdir(parents=True, exist_ok=True)
-    weights.to_csv(wp, index=False)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=wp.parent, suffix=".csv.tmp")
+    try:
+        with os.fdopen(tmp_fd, "w") as f:
+            weights.to_csv(f, index=False)
+        Path(tmp_path).replace(wp)
+    except BaseException:
+        Path(tmp_path).unlink(missing_ok=True)
+        raise
     logger.info("Batch %d: weights saved to %s", batch_id, wp)
     return weights
 
@@ -295,12 +302,17 @@ def _default_open_hook(project: Project, source_key: str) -> xr.Dataset:
             f"Run 'nhf-targets fetch {source_key}' first."
         )
     if len(ncs) > 1:
-        logger.info(
-            "Multiple NCs in %s; opening first lexicographic: %s",
-            raw_dir,
-            ncs[0].name,
+        names = ", ".join(nc.name for nc in ncs)
+        raise ValueError(
+            f"Multiple consolidated NCs found in {raw_dir}: [{names}]. "
+            "The consolidated-source contract expects exactly one NC per source. "
+            "Check the datastore for duplicate or stale files and remove all but "
+            "the correct consolidated file."
         )
-    return xr.open_dataset(ncs[0])
+    ds = xr.open_dataset(ncs[0])
+    loaded = ds.load()
+    ds.close()
+    return loaded
 
 
 def aggregate_source(

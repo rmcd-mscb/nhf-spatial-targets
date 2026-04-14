@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import logging
 import sys
+from collections.abc import Callable
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from typing import Annotated
+
+import xarray as xr
 
 import yaml
 from cyclopts import App, Parameter
@@ -1147,7 +1150,7 @@ def agg_all_cmd(
         print(f"Error: Project not found: {workdir}", file=sys.stderr)
         sys.exit(2)
 
-    sources: list[tuple[str, callable]] = [
+    sources: list[tuple[str, Callable[..., xr.Dataset]]] = [
         ("era5-land", aggregate_era5_land),
         ("gldas", aggregate_gldas),
         ("merra2", aggregate_merra2),

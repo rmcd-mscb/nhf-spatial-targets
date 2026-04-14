@@ -24,7 +24,10 @@ def _open_monthly(project: Project) -> xr.Dataset:
             f"No monthly ERA5-Land NC found in {raw_dir}. "
             "Run 'nhf-targets fetch era5-land' first."
         )
-    return xr.open_dataset(monthly_ncs[0])
+    ds = xr.open_dataset(monthly_ncs[0])
+    loaded = ds.load()
+    ds.close()
+    return loaded
 
 
 ADAPTER = SourceAdapter(
