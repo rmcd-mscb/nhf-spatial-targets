@@ -174,9 +174,12 @@ def apply_cf_metadata(
             f"Invalid time_step {time_step!r}; expected one of {sorted(_VALID_TIME_STEPS)}"
         )
 
-    # 1. Normalize coordinates to lat/lon
+    # 1. Normalize coordinates to lat/lon and time dimension name.
+    # CDS API ≥0.7 renames the time dimension from "time" to "valid_time";
+    # normalise here so all downstream code sees a consistent "time" dim.
     rename_map: dict[str, str] = {}
     for old, new in [
+        ("valid_time", "time"),
         ("y", "lat"),
         ("x", "lon"),
         ("latitude", "lat"),
@@ -282,6 +285,12 @@ def apply_cf_metadata(
         ds.time.attrs.update(
             {"standard_name": "time", "long_name": "time", "axis": "T"}
         )
+        # Pin the time encoding so that the time coordinate and any
+        # time_bnds variable are written with the same units reference
+        # (CF-1.6 §7.1 requires them to match).  Use setdefault so that
+        # any source-specific encoding already present is not overwritten.
+        ds["time"].encoding.setdefault("units", "days since 1970-01-01")
+        ds["time"].encoding.setdefault("calendar", "standard")
 
     # 7. Add time_bnds for monthly data
     if time_step == "monthly" and "time_bnds" not in ds:
