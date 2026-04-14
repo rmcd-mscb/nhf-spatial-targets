@@ -75,9 +75,10 @@ src/nhf_spatial_targets/aggregate/
   mod10c1.py          # NEW (tier-2, CI masking + valid_area)
 ```
 
-Each module exposes `aggregate_<source>(fabric_path, id_col, period, workdir,
-batch_size)` with the same signature as `aggregate_ssebop`, so CLI dispatch is
-uniform.
+Each tier-1 and tier-2 module exposes
+`aggregate_<source>(fabric_path, id_col, workdir, batch_size)` (no period
+argument). `aggregate_ssebop` keeps its existing `period` parameter since
+it drives a remote Zarr query.
 
 ## Tier-1 contract
 
@@ -93,12 +94,12 @@ class SourceAdapter:
     y_coord: str = "lat"
     time_coord: str = "time"
     source_crs: str = "EPSG:4326"
-    open_hook: Callable[[Project, str], xr.Dataset] | None = None
+    open_hook: Callable[[Project], xr.Dataset] | None = None
 ```
 
-The `open_hook` receives the resolved `Project` and the period string, returns
-an `xr.Dataset` with CRS set and any derived variables materialised. Default
-behaviour (when hook is None): open the single consolidated NC under
+The `open_hook` receives the resolved `Project` and returns an `xr.Dataset`
+with CRS set and any derived variables materialised. Default behaviour (when
+hook is None): open the single consolidated NC under
 `project.raw_dir(source_key)`.
 
 ### Driver entry point
@@ -108,7 +109,6 @@ def aggregate_source(
     adapter: SourceAdapter,
     fabric_path: Path,
     id_col: str,
-    period: str,
     workdir: Path,
     batch_size: int = 500,
 ) -> xr.Dataset
@@ -117,7 +117,9 @@ def aggregate_source(
 Responsibilities (generalised from `ssebop.py`):
 
 1. Load project, open source via `adapter.open_hook`.
-2. Clip source to period; validate every `adapter.variables` name present.
+2. Validate every `adapter.variables` name present. **Do not clip time** —
+   aggregate the source's full available period. Period-of-interest clipping
+   is the responsibility of downstream target builders.
 3. Load fabric (GeoPackage/Parquet), run `spatial_batch(gdf, batch_size)`.
 4. Per batch: load or compute weights with `WeightGen` (weight_gen_crs=5070),
    cache at `weights/<source_key>_batch<id>.csv`; run `AggGen` with
@@ -131,7 +133,7 @@ Responsibilities (generalised from `ssebop.py`):
 ### Example adapter (GLDAS, illustrative)
 
 ```python
-def _open(project: Project, period: str) -> xr.Dataset:
+def _open(project: Project) -> xr.Dataset:
     nc = project.raw_dir("gldas_noah_v21_monthly") / "gldas_noah_v21_monthly.nc"
     ds = xr.open_dataset(nc)
     ds["runoff_total"] = ds["Qs_acc"] + ds["Qsb_acc"]
@@ -148,9 +150,9 @@ ADAPTER = SourceAdapter(
     open_hook=_open,
 )
 
-def aggregate_gldas(fabric_path, id_col, period, workdir, batch_size=500):
+def aggregate_gldas(fabric_path, id_col, workdir, batch_size=500):
     return aggregate_source(
-        ADAPTER, fabric_path, id_col, period, workdir, batch_size,
+        ADAPTER, fabric_path, id_col, workdir, batch_size,
     )
 ```
 
@@ -161,7 +163,9 @@ own `aggregate_<source>()` but import three helpers from `_driver.py`:
 
 - `load_and_batch_fabric(fabric_path, batch_size)` → batched GeoDataFrame
 - `compute_or_load_weights(batch_gdf, source_data, source_key, batch_id, workdir)`
-- `update_manifest(project, source_key, access, period, output_file, weight_files)`
+- `update_manifest(project, source_key, access, output_file, weight_files)`
+  (period derived from the aggregated dataset's time coord, recorded for
+  provenance)
 
 ### MOD16A2 (`mod16a2.py`)
 
@@ -196,21 +200,29 @@ Extend `agg_app` in `cli.py` with one subcommand per source, each structurally
 a copy of `agg_ssebop_cmd`:
 
 ```
-nhf-targets agg era5-land     --project-dir <dir> --period <YYYY/YYYY>
-nhf-targets agg gldas         ...
-nhf-targets agg merra2        ...
-nhf-targets agg ncep-ncar     ...
-nhf-targets agg nldas-mosaic  ...
-nhf-targets agg nldas-noah    ...
-nhf-targets agg watergap22d   ...
-nhf-targets agg mod16a2       ...
-nhf-targets agg mod10c1       ...
-nhf-targets agg all           --project-dir <dir> --period <YYYY/YYYY>
+nhf-targets agg era5-land     --project-dir <dir>
+nhf-targets agg gldas         --project-dir <dir>
+nhf-targets agg merra2        --project-dir <dir>
+nhf-targets agg ncep-ncar     --project-dir <dir>
+nhf-targets agg nldas-mosaic  --project-dir <dir>
+nhf-targets agg nldas-noah    --project-dir <dir>
+nhf-targets agg watergap22d   --project-dir <dir>
+nhf-targets agg mod16a2       --project-dir <dir>
+nhf-targets agg mod10c1       --project-dir <dir>
+nhf-targets agg all           --project-dir <dir>
 ```
 
-`agg all` mirrors `fetch all`: iterate registered sources, clamp period
-against catalog availability via `clamp_period`, run sequentially, stop on
-first failure. SSEBop included in `agg all`.
+No `--period` flag. Each aggregator processes the full temporal range
+present in the consolidated source NetCDF. Target builders apply the
+period-of-interest window downstream.
+
+Note: `agg ssebop` retains `--period` because SSEBop is a remote Zarr
+store (not a local consolidated NC) and the period controls what is
+pulled from the store. Its signature is unchanged by this work.
+
+`agg all` iterates registered sources and runs them sequentially,
+stopping on the first failure. SSEBop included in `agg all` (with its
+default/config-driven period).
 
 ## Testing
 
@@ -236,9 +248,12 @@ first failure. SSEBop included in `agg all`.
 ## Manifest helper extraction (minor refactor)
 
 Lift `_update_manifest` out of `src/nhf_spatial_targets/aggregate/ssebop.py`
-into `_driver.py` as `update_manifest(project, source_key, access, period,
-output_file, weight_files)`. Update `ssebop.py` to call the shared helper.
-Manifest schema stays exactly as it is today.
+into `_driver.py` as `update_manifest(project, source_key, access,
+output_file, weight_files, period)`. The `period` field is still written to
+the manifest for provenance but is now supplied by the caller — derived from
+the aggregated dataset's time coord for tier-1/tier-2, and from the CLI arg
+for SSEBop. Update `ssebop.py` to call the shared helper. Manifest schema
+stays exactly as it is today.
 
 ## Open questions / risks
 
@@ -248,11 +263,12 @@ Manifest schema stays exactly as it is today.
   be verified against the actual written NCs before finalising the adapter's
   `x_coord`/`y_coord`. Mitigation: tier-1 adapters inspect the consolidated
   NC on first implementation; values get pinned in the adapter.
-- **Period clipping for sources with shorter availability** (e.g.
-  `mod16a2_v061` starts 2000, `watergap22d` ends 2016). The driver relies on
-  xarray `.sel(time=slice(...))` to clip — source shorter than request
-  period yields a smaller window with no error. `agg all` uses
-  `clamp_period` to avoid asking for impossible ranges.
+- **Period handling.** Aggregators do not accept `--period`; each processes
+  the full temporal range present in the consolidated source NetCDF.
+  Period-of-interest clipping (e.g. the 2000-2009 recharge normalization
+  window, the AET 2000-2010 window) happens inside the target builders
+  when they read the aggregated NCs. This keeps aggregated outputs
+  reusable across targets with different period requirements.
 - **Weight-cache invalidation.** If the fabric changes (different
   `fabric.sha256`), cached weights become stale. Current `ssebop.py` does not
   invalidate on fabric change. Out of scope here — carried over as-is; could
@@ -268,4 +284,4 @@ Manifest schema stays exactly as it is today.
    family: runoff, soil moisture, recharge). Each comes with its own test
    file and CLI subcommand.
 4. Implement tier-2 modules (`mod16a2.py`, `mod10c1.py`) last.
-5. Finally, add `agg all` and wire period clamping.
+5. Finally, add `agg all` to iterate registered aggregators.
