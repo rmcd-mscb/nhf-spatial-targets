@@ -161,8 +161,8 @@ def test_aggregate_variables_for_batch_merges_variables(tiny_fabric):
     )
 
     with (
-        patch("gdptools.AggGen") as mock_agg,
-        patch("gdptools.UserCatData") as mock_ucd,
+        patch("nhf_spatial_targets.aggregate._driver.AggGen") as mock_agg,
+        patch("nhf_spatial_targets.aggregate._driver.UserCatData") as mock_ucd,
     ):
         mock_ucd.return_value = _fake_user_data()
         agg_instance = MagicMock()

@@ -12,16 +12,12 @@ from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 import xarray as xr
+from gdptools import AggGen, UserCatData, WeightGen
 
 from nhf_spatial_targets.aggregate.batching import spatial_batch
 from nhf_spatial_targets.workspace import Project
 
 logger = logging.getLogger(__name__)
-
-# Lazy imports for gdptools (exposed as module-level names for test patching)
-AggGen = None
-UserCatData = None
-WeightGen = None
 
 
 def update_manifest(
@@ -181,13 +177,6 @@ def compute_or_load_weights(
     pd.DataFrame
         Weight table with columns (at minimum) for grid indices and HRU ID.
     """
-    global UserCatData, WeightGen
-    from gdptools import UserCatData as _UserCatData
-    from gdptools import WeightGen as _WeightGen
-
-    UserCatData = _UserCatData
-    WeightGen = _WeightGen
-
     wp = weight_cache_path(workdir, source_key, batch_id)
     if wp.exists():
         logger.info("Batch %d: loading cached weights from %s", batch_id, wp)
@@ -265,13 +254,6 @@ def aggregate_variables_for_batch(
     xr.Dataset
         Merged Dataset with all ``variables`` aggregated to HRU dimensions.
     """
-    global AggGen, UserCatData
-    from gdptools import AggGen as _AggGen
-    from gdptools import UserCatData as _UserCatData
-
-    AggGen = _AggGen
-    UserCatData = _UserCatData
-
     per_var: list[xr.Dataset] = []
     for var in variables:
         user_data = UserCatData(
