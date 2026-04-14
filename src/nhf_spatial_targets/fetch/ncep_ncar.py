@@ -253,7 +253,7 @@ def _update_manifest(
         {
             "source_key": _SOURCE_KEY,
             "access_url": meta["access"]["url"],
-            "license": meta.get("license", ""),
+            "license": meta.get("license") or "UNKNOWN — see catalog/sources.yml",
             "period": period,
             "bbox": bbox,
             "variables": [v["name"] for v in meta["variables"]],
