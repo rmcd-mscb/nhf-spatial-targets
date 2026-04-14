@@ -14,8 +14,10 @@ import pandas as pd
 import xarray as xr
 from gdptools import AggGen, UserCatData, WeightGen
 
+from nhf_spatial_targets.aggregate._adapter import SourceAdapter
 from nhf_spatial_targets.aggregate.batching import spatial_batch
-from nhf_spatial_targets.workspace import Project
+from nhf_spatial_targets.catalog import source as catalog_source
+from nhf_spatial_targets.workspace import Project, load as load_project
 
 logger = logging.getLogger(__name__)
 
@@ -281,3 +283,136 @@ def aggregate_variables_for_batch(
         _gdf, ds = agg.calculate_agg()
         per_var.append(ds)
     return xr.merge(per_var)
+
+
+def _default_open_hook(project: Project, source_key: str) -> xr.Dataset:
+    """Open the single consolidated NC in ``project.raw_dir(source_key)``."""
+    raw_dir = project.raw_dir(source_key)
+    ncs = sorted(raw_dir.glob("*.nc"))
+    if not ncs:
+        raise FileNotFoundError(
+            f"No consolidated NC found in {raw_dir}. "
+            f"Run 'nhf-targets fetch {source_key}' first."
+        )
+    if len(ncs) > 1:
+        logger.info(
+            "Multiple NCs in %s; opening first lexicographic: %s",
+            raw_dir,
+            ncs[0].name,
+        )
+    return xr.open_dataset(ncs[0])
+
+
+def aggregate_source(
+    adapter: SourceAdapter,
+    fabric_path: Path,
+    id_col: str,
+    workdir: Path,
+    batch_size: int = 500,
+) -> xr.Dataset:
+    """Aggregate a tier-1 source to fabric HRU polygons.
+
+    Processes the full temporal range present in the consolidated source NC;
+    no period clipping is applied. Weights are cached per batch under
+    ``workdir/weights/<source_key>_batch<id>.csv``.
+
+    Parameters
+    ----------
+    adapter : SourceAdapter
+        Declarative description of the source (variables, open_hook, CRS, etc).
+    fabric_path : Path
+        Path to the HRU fabric file.
+    id_col : str
+        Name of the HRU identifier column in the fabric.
+    workdir : Path
+        Project working directory (contains config.yml, fabric.json, manifest.json).
+    batch_size : int
+        Target number of HRUs per spatial batch.
+
+    Returns
+    -------
+    xr.Dataset
+        Combined aggregated dataset with all HRUs and time steps.
+    """
+    workdir = Path(workdir)
+    project = load_project(workdir)
+    meta = catalog_source(adapter.source_key)
+
+    if adapter.open_hook is not None:
+        source_ds = adapter.open_hook(project)
+    else:
+        source_ds = _default_open_hook(project, adapter.source_key)
+
+    missing = [v for v in adapter.variables if v not in source_ds.data_vars]
+    if missing:
+        raise ValueError(
+            f"{adapter.source_key}: variables {missing} missing from source "
+            f"dataset (have {list(source_ds.data_vars)})"
+        )
+
+    batched = load_and_batch_fabric(fabric_path, batch_size=batch_size)
+    n_batches = int(batched["batch_id"].nunique())
+    logger.info(
+        "%s: fabric split into %d spatial batches",
+        adapter.source_key,
+        n_batches,
+    )
+
+    datasets: list[xr.Dataset] = []
+    for bid in sorted(batched["batch_id"].unique()):
+        batch_gdf = batched[batched["batch_id"] == bid].drop(columns=["batch_id"])
+        weights = compute_or_load_weights(
+            batch_gdf=batch_gdf,
+            source_ds=source_ds,
+            source_var=adapter.variables[0],
+            source_crs=adapter.source_crs,
+            x_coord=adapter.x_coord,
+            y_coord=adapter.y_coord,
+            time_coord=adapter.time_coord,
+            id_col=id_col,
+            source_key=adapter.source_key,
+            batch_id=int(bid),
+            workdir=workdir,
+        )
+        ds = aggregate_variables_for_batch(
+            batch_gdf=batch_gdf,
+            source_ds=source_ds,
+            variables=adapter.variables,
+            source_crs=adapter.source_crs,
+            x_coord=adapter.x_coord,
+            y_coord=adapter.y_coord,
+            time_coord=adapter.time_coord,
+            id_col=id_col,
+            weights=weights,
+        )
+        datasets.append(ds)
+
+    combined = xr.concat(datasets, dim=id_col)
+    logger.info(
+        "%s: combined dataset: %s time steps x %s HRUs",
+        adapter.source_key,
+        combined.sizes.get(adapter.time_coord, "?"),
+        combined.sizes.get(id_col, "?"),
+    )
+
+    output_dir = project.aggregated_dir()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / adapter.output_name
+    combined.to_netcdf(output_path)
+    logger.info("%s: output written to %s", adapter.source_key, output_path)
+
+    t0 = str(combined[adapter.time_coord].values[0])[:10]
+    t1 = str(combined[adapter.time_coord].values[-1])[:10]
+    update_manifest(
+        project=project,
+        source_key=adapter.source_key,
+        access=meta.get("access", {}),
+        period=f"{t0}/{t1}",
+        output_file=str(Path("data") / "aggregated" / adapter.output_name),
+        weight_files=[
+            str(Path("weights") / f"{adapter.source_key}_batch{i}.csv")
+            for i in range(n_batches)
+        ],
+    )
+
+    return combined

@@ -185,3 +185,80 @@ def test_aggregate_variables_for_batch_merges_variables(tiny_fabric):
         )
     assert set(result.data_vars) == {"a", "b"}
     assert result.sizes["hru_id"] == 4
+
+
+def test_aggregate_source_writes_multi_var_nc_and_manifest(tmp_path, tiny_fabric):
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import aggregate_source
+
+    # --- minimal project ---
+    datastore = tmp_path / "datastore"
+    (datastore / "foo").mkdir(parents=True)
+    # write a placeholder consolidated NC so default open_hook has something
+    src_nc = datastore / "foo" / "foo.nc"
+    times = pd.date_range("2000-01-01", periods=2, freq="MS")
+    xr.Dataset(
+        {
+            "a": (["time", "lat", "lon"], np.ones((2, 2, 2))),
+            "b": (["time", "lat", "lon"], np.ones((2, 2, 2)) * 2.0),
+        },
+        coords={"time": times, "lat": [0.25, 0.75], "lon": [0.5, 1.5]},
+    ).to_netcdf(src_nc)
+
+    (tmp_path / "config.yml").write_text(
+        yaml.dump(
+            {
+                "fabric": {"path": str(tiny_fabric), "id_col": "hru_id"},
+                "datastore": str(datastore),
+            }
+        )
+    )
+    (tmp_path / "fabric.json").write_text(json.dumps({"sha256": "f00"}))
+    (tmp_path / "manifest.json").write_text(json.dumps({"sources": {}, "steps": []}))
+    (tmp_path / "data" / "aggregated").mkdir(parents=True)
+    (tmp_path / "weights").mkdir()
+
+    adapter = SourceAdapter(
+        source_key="foo",
+        output_name="foo_agg.nc",
+        variables=["a", "b"],
+    )
+
+    # Patch catalog.source to supply access metadata for the manifest
+    fake_meta = {"access": {"type": "local_nc"}}
+
+    with (
+        patch(
+            "nhf_spatial_targets.aggregate._driver.catalog_source",
+            return_value=fake_meta,
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.compute_or_load_weights",
+            return_value=_fake_weights(),
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.aggregate_variables_for_batch"
+        ) as mock_agg_batch,
+    ):
+        times = pd.date_range("2000-01-01", periods=2, freq="MS")
+        mock_agg_batch.return_value = xr.Dataset(
+            {
+                "a": (["time", "hru_id"], np.ones((2, 4))),
+                "b": (["time", "hru_id"], np.ones((2, 4)) * 2.0),
+            },
+            coords={"time": times, "hru_id": [0, 1, 2, 3]},
+        )
+        out = aggregate_source(
+            adapter,
+            fabric_path=tiny_fabric,
+            id_col="hru_id",
+            workdir=tmp_path,
+            batch_size=500,
+        )
+
+    assert set(out.data_vars) == {"a", "b"}
+    output_nc = tmp_path / "data" / "aggregated" / "foo_agg.nc"
+    assert output_nc.exists()
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    assert "foo" in manifest["sources"]
+    assert manifest["sources"]["foo"]["output_file"] == ("data/aggregated/foo_agg.nc")
