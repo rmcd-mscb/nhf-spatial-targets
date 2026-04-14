@@ -72,3 +72,14 @@ class SourceAdapter:
             # Catalog file missing/unreadable/YAML broken — let the aggregator
             # surface this at run time with richer context.
             pass
+        # Validate source_crs parses cleanly so typos fail at construction time
+        # rather than deep inside gdptools.
+        try:
+            from pyproj import CRS as _CRS
+
+            _CRS.from_user_input(self.source_crs)
+        except Exception as exc:
+            raise ValueError(
+                f"SourceAdapter.source_crs {self.source_crs!r} is not a valid "
+                f"PROJ / EPSG input: {exc}"
+            ) from exc

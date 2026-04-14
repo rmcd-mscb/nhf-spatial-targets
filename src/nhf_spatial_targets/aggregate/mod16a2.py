@@ -9,7 +9,9 @@ import xarray as xr
 from nhf_spatial_targets.aggregate._adapter import SourceAdapter
 from nhf_spatial_targets.aggregate._driver import aggregate_source
 
-# MODIS sinusoidal PROJ4 string — Earth as a sphere of radius 6371007.181 m.
+# MODIS Land Tile gridding uses an authalic sphere (not WGS84 ellipsoid).
+# The +R parameter in the PROJ string encodes that sphere radius. See
+# the MODIS Land Products User Guide for the canonical parameter set.
 MODIS_SINUSOIDAL_PROJ = (
     "+proj=sinu +lon_0=0 +x_0=0 +y_0=0 +R=6371007.181 +units=m +no_defs"
 )

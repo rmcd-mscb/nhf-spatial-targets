@@ -380,6 +380,7 @@ def test_aggregate_source_raises_when_variable_missing(tmp_path, tiny_fabric):
 
 def test_default_open_hook_raises_on_multiple_ncs(tmp_path):
     """Multiple NCs in the datastore for a source is a user-facing error."""
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
     from nhf_spatial_targets.aggregate._driver import _default_open_hook
 
     src_dir = tmp_path / "datastore" / "merra2"
@@ -390,13 +391,17 @@ def test_default_open_hook_raises_on_multiple_ncs(tmp_path):
             src_dir / name
         )
 
-    # Fake project that points raw_dir at our two-NC directory.
     class _FakeProject:
         def raw_dir(self, key):
             return src_dir
 
+    adapter = SourceAdapter(
+        source_key="merra2",
+        output_name="merra2_agg.nc",
+        variables=["GWETTOP"],
+    )
     with pytest.raises(ValueError, match="Multiple"):
-        _default_open_hook(_FakeProject(), "merra2")
+        _default_open_hook(_FakeProject(), adapter)
 
 
 def test_compute_or_load_weights_writes_cache_on_miss(tmp_path, tiny_fabric):
@@ -487,3 +492,80 @@ def test_update_manifest_raises_on_corrupt_json(project):
             output_file="foo_agg.nc",
             weight_files=[],
         )
+
+
+def test_source_adapter_rejects_invalid_source_crs():
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+
+    with pytest.raises(ValueError, match="source_crs"):
+        SourceAdapter(
+            source_key="merra2",
+            output_name="merra2_agg.nc",
+            variables=["GWETTOP"],
+            source_crs="EPSG4326",  # missing colon
+        )
+
+
+def test_source_adapter_accepts_valid_epsg():
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+
+    # Default EPSG:4326 is implicitly tested by all other adapter tests.
+    adapter = SourceAdapter(
+        source_key="merra2",
+        output_name="merra2_agg.nc",
+        variables=["GWETTOP"],
+        source_crs="EPSG:5070",
+    )
+    assert adapter.source_crs == "EPSG:5070"
+
+
+def test_compute_or_load_weights_ignores_stray_tmp_from_crashed_run(
+    tmp_path, tiny_fabric
+):
+    """A leftover .tmp file from a prior crashed run must not be loaded
+    as a valid cache; the final-name CSV must be written cleanly."""
+    from nhf_spatial_targets.aggregate._driver import compute_or_load_weights
+
+    (tmp_path / "weights").mkdir()
+    # Simulate a crashed prior run that left behind a partial tmp file.
+    stray = tmp_path / "weights" / "toy_batch0.csv.tmp"
+    stray.write_text("garbage,partial\n1,2\n")
+
+    batch_gdf = gpd.read_file(tiny_fabric)
+    source_ds = xr.Dataset(
+        {"a": (["time", "lat", "lon"], np.ones((1, 2, 2)))},
+        coords={
+            "time": pd.date_range("2000-01-01", periods=1, freq="MS"),
+            "lat": [0.25, 0.75],
+            "lon": [0.5, 1.5],
+        },
+    )
+    fake = _fake_weights()
+
+    with (
+        patch("nhf_spatial_targets.aggregate._driver.WeightGen") as mock_wg,
+        patch("nhf_spatial_targets.aggregate._driver.UserCatData"),
+    ):
+        inst = MagicMock()
+        inst.calculate_weights.return_value = fake
+        mock_wg.return_value = inst
+        weights = compute_or_load_weights(
+            batch_gdf=batch_gdf,
+            source_ds=source_ds,
+            source_var="a",
+            source_crs="EPSG:4326",
+            x_coord="lon",
+            y_coord="lat",
+            time_coord="time",
+            id_col="hru_id",
+            source_key="toy",
+            batch_id=0,
+            workdir=tmp_path,
+        )
+
+    # Final-name CSV present and equals the fresh computation.
+    final = tmp_path / "weights" / "toy_batch0.csv"
+    assert final.exists()
+    pd.testing.assert_frame_equal(weights, fake)
+    # WeightGen was invoked — cache was NOT short-circuited by the stray tmp.
+    assert mock_wg.called

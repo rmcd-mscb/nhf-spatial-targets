@@ -84,7 +84,7 @@ def update_manifest(
     logger.info("Updated manifest.json with '%s' aggregation provenance", source_key)
 
 
-_WEIGHT_GEN_CRS = 5070  # NAD83 / CONUS Albers (equal-area)
+WEIGHT_GEN_CRS = 5070  # NAD83 / CONUS Albers (equal-area)
 
 
 def load_and_batch_fabric(fabric_path: Path, batch_size: int = 500) -> gpd.GeoDataFrame:
@@ -193,7 +193,7 @@ def compute_or_load_weights(
     wg = WeightGen(
         user_data=user_data,
         method="serial",
-        weight_gen_crs=_WEIGHT_GEN_CRS,
+        weight_gen_crs=WEIGHT_GEN_CRS,
     )
     weights = wg.calculate_weights()
     wp.parent.mkdir(parents=True, exist_ok=True)
@@ -277,14 +277,19 @@ def aggregate_variables_for_batch(
     return xr.merge(per_var)
 
 
-def _default_open_hook(project: Project, source_key: str) -> xr.Dataset:
-    """Open the single consolidated NC in ``project.raw_dir(source_key)``."""
-    raw_dir = project.raw_dir(source_key)
+def _default_open_hook(project: Project, adapter: SourceAdapter) -> xr.Dataset:
+    """Open the single consolidated NC in ``project.raw_dir(adapter.source_key)``.
+
+    Raises ``FileNotFoundError`` when the datastore has no NCs and
+    ``ValueError`` when it has more than one (ambiguous — the consolidated
+    contract is a single NC per source).
+    """
+    raw_dir = project.raw_dir(adapter.source_key)
     ncs = sorted(raw_dir.glob("*.nc"))
     if not ncs:
         raise FileNotFoundError(
             f"No consolidated NC found in {raw_dir}. "
-            f"Run 'nhf-targets fetch {source_key}' first."
+            f"Run 'nhf-targets fetch {adapter.source_key}' first."
         )
     if len(ncs) > 1:
         names = ", ".join(nc.name for nc in ncs)
@@ -340,7 +345,7 @@ def aggregate_source(
     if adapter.open_hook is not None:
         source_ds = adapter.open_hook(project)
     else:
-        source_ds = _default_open_hook(project, adapter.source_key)
+        source_ds = _default_open_hook(project, adapter)
 
     missing = [v for v in adapter.variables if v not in source_ds.data_vars]
     if missing:

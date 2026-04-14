@@ -12,7 +12,7 @@ from gdptools import AggGen, NHGFStacZarrData, WeightGen
 from gdptools.helpers import get_stac_collection
 
 from nhf_spatial_targets import catalog
-from nhf_spatial_targets.aggregate._driver import update_manifest
+from nhf_spatial_targets.aggregate._driver import WEIGHT_GEN_CRS, update_manifest
 from nhf_spatial_targets.aggregate.batching import spatial_batch
 from nhf_spatial_targets.workspace import load as _load_project
 
@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 
 _SOURCE_KEY = "ssebop"
 _SOURCE_VAR = "et"
-_WEIGHT_GEN_CRS = 5070  # NAD83 / CONUS Albers
 
 
 def _parse_period(period: str) -> list[str]:
@@ -59,7 +58,7 @@ def _process_batch(
         wg = WeightGen(
             user_data=stac_data,
             method="serial",
-            weight_gen_crs=_WEIGHT_GEN_CRS,
+            weight_gen_crs=WEIGHT_GEN_CRS,
         )
         weights = wg.calculate_weights()
         wp.parent.mkdir(parents=True, exist_ok=True)
