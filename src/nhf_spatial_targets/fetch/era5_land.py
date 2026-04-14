@@ -481,11 +481,22 @@ def fetch_era5_land(workdir: Path, period: str) -> dict:
             "ERA5-Land fetch failed after completing %d year(s); "
             "completed chunks preserved on disk, re-run to resume.",
             len(files),
+            exc_info=True,
         )
         raise
     finally:
+        # Persist partial-run provenance even if the loop raised above.
+        # Swallow any manifest-write exception so it does not mask the
+        # original fetch failure (which is the important signal).
         if files:
-            _update_manifest(workdir, period, bbox, meta, license_str, files)
+            try:
+                _update_manifest(workdir, period, bbox, meta, license_str, files)
+            except Exception:
+                logger.exception(
+                    "Failed to persist partial ERA5-Land manifest for "
+                    "%d year(s); manifest.json may be stale.",
+                    len(files),
+                )
 
     return {
         "source_key": _SOURCE_KEY,
@@ -540,10 +551,17 @@ def _update_manifest(
         try:
             existing_by_year[int(f["year"])] = f
         except (TypeError, ValueError) as exc:
-            raise ValueError(
-                f"manifest.json entry for {_SOURCE_KEY} has invalid year "
-                f"{f['year']!r}: {exc}"
-            ) from exc
+            # Match the sibling "missing year" handler above: skip-and-warn
+            # rather than raise. A corrupt prior entry shouldn't block
+            # recording of newly fetched years (which is arguably more
+            # valuable than failing hard on old cruft).
+            logger.warning(
+                "Skipping manifest entry with invalid year %r in %s: %s",
+                f.get("year"),
+                manifest_path,
+                exc,
+            )
+            continue
     for f in files:
         existing_by_year[int(f["year"])] = f
 
@@ -552,8 +570,17 @@ def _update_manifest(
     # current filename (prior entries pointed at the now-deleted old name).
     latest_monthly_path = files[-1]["monthly_path"] if files else None
     if latest_monthly_path is not None:
+        refreshed = 0
         for entry_file in existing_by_year.values():
-            entry_file["monthly_path"] = latest_monthly_path
+            if entry_file.get("monthly_path") != latest_monthly_path:
+                entry_file["monthly_path"] = latest_monthly_path
+                refreshed += 1
+        if refreshed > len(files):
+            logger.info(
+                "Refreshed monthly_path on %d prior manifest entries to %s",
+                refreshed - len(files),
+                latest_monthly_path,
+            )
 
     merged_files = [existing_by_year[y] for y in sorted(existing_by_year)]
 

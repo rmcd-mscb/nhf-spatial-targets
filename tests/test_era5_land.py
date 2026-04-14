@@ -242,8 +242,6 @@ def test_download_month_variable_atomic_cleanup_on_failure(tmp_path, monkeypatch
         "nhf_spatial_targets.fetch.era5_land._cds_client", lambda: fake_client
     )
 
-    import pytest
-
     with pytest.raises(RuntimeError, match="CDS server error"):
         download_month_variable(year=2020, month=3, variable="ro", output_path=out)
 
@@ -305,8 +303,6 @@ def test_download_year_atomic_cleanup_on_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "nhf_spatial_targets.fetch.era5_land._cds_client", lambda: fake_client
     )
-
-    import pytest
 
     with pytest.raises(RuntimeError, match="CDS server error"):
         download_year_variable(year=2020, variable="ro", output_path=out)
@@ -800,9 +796,14 @@ def test_update_manifest_handles_missing_year_key(tmp_path, caplog):
     assert years == [1979, 1980]
 
 
-def test_update_manifest_raises_on_bad_year_type(tmp_path):
-    """Prior manifest entry with a non-numeric 'year' raises a clear error."""
+def test_update_manifest_skips_bad_year_with_warning(tmp_path, caplog):
+    """Prior manifest entry with a non-numeric 'year' is skipped + warned.
+
+    Consistency with the sibling missing-'year' handler: corrupt prior
+    entries should not block recording of newly fetched years.
+    """
     import json
+    import logging
 
     from nhf_spatial_targets.fetch.era5_land import _update_manifest
 
@@ -814,11 +815,22 @@ def test_update_manifest_raises_on_bad_year_type(tmp_path):
     bbox = {"minx": -125.0, "miny": 24.7, "maxx": -66.0, "maxy": 53.0}
 
     manifest = {
-        "sources": {"era5_land": {"files": [{"year": "twenty", "daily_path": "/x.nc"}]}}
+        "sources": {
+            "era5_land": {
+                "files": [
+                    {"year": "twenty", "daily_path": "/bad.nc"},
+                    {
+                        "year": 1979,
+                        "daily_path": "/good.nc",
+                        "monthly_path": "/m.nc",
+                    },
+                ]
+            }
+        }
     }
     (wd / "manifest.json").write_text(json.dumps(manifest))
 
-    with pytest.raises(ValueError, match="invalid year"):
+    with caplog.at_level(logging.WARNING):
         _update_manifest(
             wd,
             "1980/1980",
@@ -834,6 +846,15 @@ def test_update_manifest_raises_on_bad_year_type(tmp_path):
                 }
             ],
         )
+
+    assert any(
+        "invalid year" in rec.message and "twenty" in rec.message
+        for rec in caplog.records
+    )
+    result = json.loads((wd / "manifest.json").read_text())
+    years = sorted(f["year"] for f in result["sources"]["era5_land"]["files"])
+    # Bad entry skipped; the good 1979 entry and new 1980 entry both kept.
+    assert years == [1979, 1980]
 
 
 def test_update_manifest_refreshes_monthly_path_on_prior_entries(tmp_path):
