@@ -21,6 +21,18 @@ pixi run run -- --project-dir /data/nhf-runs/my-run
 # Run a single target
 pixi run run-aet -- --project-dir /data/nhf-runs/my-run
 
+# Aggregate sources to fabric (full source period; clipping happens in targets)
+pixi run nhf-targets agg era5-land    --project-dir /data/nhf-runs/my-run
+pixi run nhf-targets agg gldas        --project-dir /data/nhf-runs/my-run
+pixi run nhf-targets agg merra2       --project-dir /data/nhf-runs/my-run
+pixi run nhf-targets agg ncep-ncar    --project-dir /data/nhf-runs/my-run
+pixi run nhf-targets agg nldas-mosaic --project-dir /data/nhf-runs/my-run
+pixi run nhf-targets agg nldas-noah   --project-dir /data/nhf-runs/my-run
+pixi run nhf-targets agg watergap22d  --project-dir /data/nhf-runs/my-run
+pixi run nhf-targets agg mod16a2      --project-dir /data/nhf-runs/my-run
+pixi run nhf-targets agg mod10c1      --project-dir /data/nhf-runs/my-run
+pixi run nhf-targets agg all          --project-dir /data/nhf-runs/my-run
+
 # Catalog inspection
 pixi run catalog-sources
 pixi run catalog-variables

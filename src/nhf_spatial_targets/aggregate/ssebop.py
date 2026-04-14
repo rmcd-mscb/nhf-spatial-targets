@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 
 import geopandas as gpd
@@ -16,6 +12,7 @@ from gdptools import AggGen, NHGFStacZarrData, WeightGen
 from gdptools.helpers import get_stac_collection
 
 from nhf_spatial_targets import catalog
+from nhf_spatial_targets.aggregate._driver import WEIGHT_GEN_CRS, update_manifest
 from nhf_spatial_targets.aggregate.batching import spatial_batch
 from nhf_spatial_targets.workspace import load as _load_project
 
@@ -23,7 +20,6 @@ logger = logging.getLogger(__name__)
 
 _SOURCE_KEY = "ssebop"
 _SOURCE_VAR = "et"
-_WEIGHT_GEN_CRS = 5070  # NAD83 / CONUS Albers
 
 
 def _parse_period(period: str) -> list[str]:
@@ -62,7 +58,7 @@ def _process_batch(
         wg = WeightGen(
             user_data=stac_data,
             method="serial",
-            weight_gen_crs=_WEIGHT_GEN_CRS,
+            weight_gen_crs=WEIGHT_GEN_CRS,
         )
         weights = wg.calculate_weights()
         wp.parent.mkdir(parents=True, exist_ok=True)
@@ -161,63 +157,20 @@ def aggregate_ssebop(
     logger.info("Output written to %s", output_path)
 
     # 6. Update manifest
-    _update_manifest(ws, period, meta, n_batches)
-
-    return combined
-
-
-def _update_manifest(
-    ws,
-    period: str,
-    meta: dict,
-    n_batches: int,
-) -> None:
-    """Merge SSEBop aggregation provenance into manifest.json."""
-    manifest_path = ws.manifest_path
-    if manifest_path.exists():
-        try:
-            manifest = json.loads(manifest_path.read_text())
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"manifest.json in {ws.workdir} is corrupt: {exc}"
-            ) from exc
-    else:
-        manifest = {"sources": {}, "steps": []}
-
-    if "sources" not in manifest:
-        manifest["sources"] = {}
-
-    fabric_json = ws.workdir / "fabric.json"
-    fabric_sha = ""
-    if fabric_json.exists():
-        fabric_meta = json.loads(fabric_json.read_text())
-        fabric_sha = fabric_meta.get("sha256", "")
-
-    access = meta["access"]
-    time_period = _parse_period(period)
     weight_files = [
         str(Path("weights") / f"ssebop_batch{i}.csv") for i in range(n_batches)
     ]
+    access = meta["access"]
+    access_with_doi = {**access}
+    if meta.get("doi"):
+        access_with_doi["doi"] = meta["doi"]
+    update_manifest(
+        project=ws,
+        source_key=_SOURCE_KEY,
+        access=access_with_doi,
+        period=f"{time_period[0]}/{time_period[1]}",
+        output_file=str(Path("data") / "aggregated" / "ssebop_agg_aet.nc"),
+        weight_files=weight_files,
+    )
 
-    manifest["sources"][_SOURCE_KEY] = {
-        "source_key": _SOURCE_KEY,
-        "access_type": access["type"],
-        "collection_id": access["collection_id"],
-        "doi": meta.get("doi", ""),
-        "period": f"{time_period[0]}/{time_period[1]}",
-        "fabric_sha256": fabric_sha,
-        "output_file": str(Path("data") / "aggregated" / "ssebop_agg_aet.nc"),
-        "weight_files": weight_files,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-
-    tmp_fd, tmp_path = tempfile.mkstemp(dir=manifest_path.parent, suffix=".json.tmp")
-    try:
-        with os.fdopen(tmp_fd, "w") as f:
-            json.dump(manifest, f, indent=2)
-        Path(tmp_path).replace(manifest_path)
-    except BaseException:
-        Path(tmp_path).unlink(missing_ok=True)
-        raise
-
-    logger.info("Updated manifest.json with SSEBop aggregation provenance")
+    return combined

@@ -4,14 +4,26 @@ from __future__ import annotations
 
 import logging
 import sys
+from collections.abc import Callable
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from typing import Annotated
+
+import xarray as xr
 
 import yaml
 from cyclopts import App, Parameter
 
 from nhf_spatial_targets._logging import setup_logging
+from nhf_spatial_targets.aggregate.era5_land import aggregate_era5_land
+from nhf_spatial_targets.aggregate.gldas import aggregate_gldas
+from nhf_spatial_targets.aggregate.merra2 import aggregate_merra2
+from nhf_spatial_targets.aggregate.mod10c1 import aggregate_mod10c1
+from nhf_spatial_targets.aggregate.mod16a2 import aggregate_mod16a2
+from nhf_spatial_targets.aggregate.ncep_ncar import aggregate_ncep_ncar
+from nhf_spatial_targets.aggregate.nldas_mosaic import aggregate_nldas_mosaic
+from nhf_spatial_targets.aggregate.nldas_noah import aggregate_nldas_noah
+from nhf_spatial_targets.aggregate.watergap22d import aggregate_watergap22d
 
 _logger = logging.getLogger(__name__)
 
@@ -976,6 +988,186 @@ def catalog_variables():
     from rich import print as rprint
 
     rprint(variables())
+
+
+def _run_tier_agg(
+    aggregate_fn,
+    label: str,
+    workdir: Path,
+    batch_size: int,
+) -> None:
+    """Common boilerplate for tier-1/tier-2 aggregator CLI wrappers."""
+    from rich.console import Console
+
+    if not workdir.exists():
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
+        sys.exit(2)
+    if not (workdir / "fabric.json").exists():
+        print(
+            f"Error: fabric.json not found in {workdir}. "
+            "Run 'nhf-targets validate' first.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    try:
+        cfg = yaml.safe_load((workdir / "config.yml").read_text())
+    except yaml.YAMLError as exc:
+        print(f"Error: Cannot parse config.yml: {exc}", file=sys.stderr)
+        sys.exit(1)
+    fabric_path = cfg["fabric"]["path"]
+    id_col = cfg["fabric"].get("id_col", "nhm_id")
+
+    console = Console()
+    console.print(f"[bold]Aggregating {label} (batch_size={batch_size})...[/bold]")
+    try:
+        ds = aggregate_fn(
+            fabric_path=fabric_path,
+            id_col=id_col,
+            workdir=workdir,
+            batch_size=batch_size,
+        )
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        print(f"Error ({type(exc).__name__}): {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        _logger.exception("Unexpected error during %s aggregation", label)
+        print(
+            f"Unexpected error ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    console.print(
+        f"[green]{label} aggregation complete: "
+        f"{ds.sizes.get('time', '?')} time steps x "
+        f"{ds.sizes.get(id_col, '?')} HRUs[/green]"
+    )
+
+
+@agg_app.command(name="era5-land")
+def agg_era5_land_cmd(
+    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    batch_size: Annotated[int, Parameter(name="--batch-size")] = 500,
+):
+    """Aggregate ERA5-Land monthly runoff to HRU polygons."""
+    _run_tier_agg(aggregate_era5_land, "ERA5-Land", workdir, batch_size)
+
+
+@agg_app.command(name="gldas")
+def agg_gldas_cmd(
+    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    batch_size: Annotated[int, Parameter(name="--batch-size")] = 500,
+):
+    """Aggregate GLDAS-2.1 NOAH monthly runoff to HRU polygons."""
+    _run_tier_agg(aggregate_gldas, "GLDAS", workdir, batch_size)
+
+
+@agg_app.command(name="merra2")
+def agg_merra2_cmd(
+    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    batch_size: Annotated[int, Parameter(name="--batch-size")] = 500,
+):
+    """Aggregate MERRA-2 monthly soil wetness to HRU polygons."""
+    _run_tier_agg(aggregate_merra2, "MERRA-2", workdir, batch_size)
+
+
+@agg_app.command(name="ncep-ncar")
+def agg_ncep_ncar_cmd(
+    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    batch_size: Annotated[int, Parameter(name="--batch-size")] = 500,
+):
+    """Aggregate NCEP/NCAR monthly soil moisture to HRU polygons."""
+    _run_tier_agg(aggregate_ncep_ncar, "NCEP/NCAR", workdir, batch_size)
+
+
+@agg_app.command(name="nldas-mosaic")
+def agg_nldas_mosaic_cmd(
+    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    batch_size: Annotated[int, Parameter(name="--batch-size")] = 500,
+):
+    """Aggregate NLDAS-2 MOSAIC monthly soil moisture to HRU polygons."""
+    _run_tier_agg(aggregate_nldas_mosaic, "NLDAS-MOSAIC", workdir, batch_size)
+
+
+@agg_app.command(name="nldas-noah")
+def agg_nldas_noah_cmd(
+    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    batch_size: Annotated[int, Parameter(name="--batch-size")] = 500,
+):
+    """Aggregate NLDAS-2 NOAH monthly soil moisture to HRU polygons."""
+    _run_tier_agg(aggregate_nldas_noah, "NLDAS-NOAH", workdir, batch_size)
+
+
+@agg_app.command(name="watergap22d")
+def agg_watergap22d_cmd(
+    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    batch_size: Annotated[int, Parameter(name="--batch-size")] = 500,
+):
+    """Aggregate WaterGAP 2.2d monthly diffuse recharge to HRU polygons."""
+    _run_tier_agg(aggregate_watergap22d, "WaterGAP 2.2d", workdir, batch_size)
+
+
+@agg_app.command(name="mod16a2")
+def agg_mod16a2_cmd(
+    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    batch_size: Annotated[int, Parameter(name="--batch-size")] = 500,
+):
+    """Aggregate MOD16A2 v061 8-day AET to HRU polygons."""
+    _run_tier_agg(aggregate_mod16a2, "MOD16A2", workdir, batch_size)
+
+
+@agg_app.command(name="mod10c1")
+def agg_mod10c1_cmd(
+    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    batch_size: Annotated[int, Parameter(name="--batch-size")] = 500,
+):
+    """Aggregate MOD10C1 v061 daily SCA to HRU polygons."""
+    _run_tier_agg(aggregate_mod10c1, "MOD10C1", workdir, batch_size)
+
+
+@agg_app.command(name="all")
+def agg_all_cmd(
+    workdir: Annotated[
+        Path,
+        Parameter(
+            name=["--project-dir"], help="Project created by 'nhf-targets init'."
+        ),
+    ],
+    batch_size: Annotated[
+        int,
+        Parameter(name="--batch-size", help="Target HRUs per spatial batch."),
+    ] = 500,
+):
+    """Aggregate every registered source for this project.
+
+    Runs tier-1/tier-2 aggregators in sequence; stops on first failure.
+    SSEBop is not included here — run ``agg ssebop --period`` separately.
+    """
+    from rich.console import Console
+
+    console = Console()
+    if not workdir.exists():
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
+        sys.exit(2)
+
+    sources: list[tuple[str, Callable[..., xr.Dataset]]] = [
+        ("era5-land", aggregate_era5_land),
+        ("gldas", aggregate_gldas),
+        ("merra2", aggregate_merra2),
+        ("ncep-ncar", aggregate_ncep_ncar),
+        ("nldas-mosaic", aggregate_nldas_mosaic),
+        ("nldas-noah", aggregate_nldas_noah),
+        ("watergap22d", aggregate_watergap22d),
+        ("mod16a2", aggregate_mod16a2),
+        ("mod10c1", aggregate_mod10c1),
+    ]
+    for label, fn in sources:
+        console.print(f"\n[bold]{'─' * 60}[/bold]")
+        _run_tier_agg(fn, label, workdir, batch_size)
+
+    console.print(
+        f"\n[bold green]All {len(sources)} sources aggregated successfully.[/bold green]"
+    )
 
 
 main = app.meta
