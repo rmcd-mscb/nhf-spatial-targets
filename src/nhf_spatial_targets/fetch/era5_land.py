@@ -120,8 +120,10 @@ def download_month_variable(
     Submits a single CDS request covering all days × all hours of the
     given year-month, clipped to ``BBOX_NWSE``.
 
-    Monthly requests (~480 MB for the CONUS bbox) stay comfortably within
-    the CDS per-request cost limit. Called by ``download_year_variable``.
+    Monthly requests (~100 MB per variable-month for the CONUS+buffered
+    bbox) stay comfortably within the CDS per-request cost limit. Called
+    by ``download_year_variable``. See README "Datastore Storage
+    Estimates" for the authoritative per-period totals.
 
     Parameters
     ----------
@@ -193,9 +195,10 @@ def download_year_variable(
     """Download one year of one ERA5-Land variable to ``output_path``.
 
     Splits the annual download into 12 monthly CDS requests to stay within
-    the CDS per-request cost/size limit (~480 MB/month vs ~5.8 GB/year for
-    the CONUS bbox at hourly resolution). Monthly chunk files are written
-    alongside ``output_path`` as::
+    the CDS per-request cost/size limit (~100 MB per variable-month, i.e.
+    ~1.2 GB per variable-year, for the CONUS+buffered bbox at hourly
+    resolution). Monthly chunk files are written alongside ``output_path``
+    as::
 
         era5_land_{variable}_{year}_{month:02d}.nc
 
