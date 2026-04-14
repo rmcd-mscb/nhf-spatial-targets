@@ -1122,4 +1122,49 @@ def agg_mod10c1_cmd(
     _run_tier_agg(aggregate_mod10c1, "MOD10C1", workdir, batch_size)
 
 
+@agg_app.command(name="all")
+def agg_all_cmd(
+    workdir: Annotated[
+        Path,
+        Parameter(
+            name=["--project-dir"], help="Project created by 'nhf-targets init'."
+        ),
+    ],
+    batch_size: Annotated[
+        int,
+        Parameter(name="--batch-size", help="Target HRUs per spatial batch."),
+    ] = 500,
+):
+    """Aggregate every registered source for this project.
+
+    Runs tier-1/tier-2 aggregators in sequence; stops on first failure.
+    SSEBop is not included here — run ``agg ssebop --period`` separately.
+    """
+    from rich.console import Console
+
+    console = Console()
+    if not workdir.exists():
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
+        sys.exit(2)
+
+    sources: list[tuple[str, callable]] = [
+        ("era5-land", aggregate_era5_land),
+        ("gldas", aggregate_gldas),
+        ("merra2", aggregate_merra2),
+        ("ncep-ncar", aggregate_ncep_ncar),
+        ("nldas-mosaic", aggregate_nldas_mosaic),
+        ("nldas-noah", aggregate_nldas_noah),
+        ("watergap22d", aggregate_watergap22d),
+        ("mod16a2", aggregate_mod16a2),
+        ("mod10c1", aggregate_mod10c1),
+    ]
+    for label, fn in sources:
+        console.print(f"\n[bold]{'─' * 60}[/bold]")
+        _run_tier_agg(fn, label, workdir, batch_size)
+
+    console.print(
+        f"\n[bold green]All {len(sources)} sources aggregated successfully.[/bold green]"
+    )
+
+
 main = app.meta
