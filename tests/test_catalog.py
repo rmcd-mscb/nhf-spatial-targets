@@ -89,3 +89,17 @@ def test_recharge_includes_era5_land():
     v = catalog.variable("recharge")
     assert "era5_land" in v["sources"]
     assert v["range_method"] == "normalized_minmax"
+
+
+def test_every_current_source_has_status_field():
+    """Every non-superseded source must declare ``status: current``.
+
+    Guards against accidents where status is dropped (e.g., the
+    mod10c1_v061 regression where a trailing key got overwritten).
+    """
+    for key, src in sources().items():
+        if src.get("superseded_by") is not None:
+            continue
+        assert src.get("status") == "current", (
+            f"Source {key!r} is missing 'status: current'"
+        )
