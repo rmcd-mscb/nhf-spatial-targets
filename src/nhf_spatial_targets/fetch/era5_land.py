@@ -444,25 +444,35 @@ def fetch_era5_land(workdir: Path, period: str) -> dict:
     now_utc = datetime.now(timezone.utc).isoformat()
     files: list[dict] = []
 
-    for year in years_in_period(period):
-        for var in VARIABLES:
-            out = hourly_dir / f"era5_land_{var}_{year}.nc"
-            download_year_variable(year, var, out)
-        daily_path, monthly_path = consolidate_year(
-            year, hourly_dir, daily_dir, monthly_dir
-        )
-        files.append(
-            {
-                "year": year,
-                "daily_path": str(daily_path),
-                "monthly_path": str(monthly_path),
-                "consolidated_utc": now_utc,
-            }
-        )
-
     bbox = ws.fabric["bbox_buffered"]
     license_str = meta.get("license", "Copernicus license")
-    _update_manifest(workdir, period, bbox, meta, license_str, files)
+
+    try:
+        for year in years_in_period(period):
+            for var in VARIABLES:
+                out = hourly_dir / f"era5_land_{var}_{year}.nc"
+                download_year_variable(year, var, out)
+            daily_path, monthly_path = consolidate_year(
+                year, hourly_dir, daily_dir, monthly_dir
+            )
+            files.append(
+                {
+                    "year": year,
+                    "daily_path": str(daily_path),
+                    "monthly_path": str(monthly_path),
+                    "consolidated_utc": now_utc,
+                }
+            )
+    except Exception:
+        logger.error(
+            "ERA5-Land fetch failed after completing %d year(s); "
+            "completed chunks preserved on disk, re-run to resume.",
+            len(files),
+        )
+        raise
+    finally:
+        if files:
+            _update_manifest(workdir, period, bbox, meta, license_str, files)
 
     return {
         "source_key": _SOURCE_KEY,
@@ -502,13 +512,39 @@ def _update_manifest(
     manifest.setdefault("sources", {})
     entry = manifest["sources"].get(_SOURCE_KEY, {})
 
-    # Merge files by year so incremental runs accumulate records
-    existing_by_year: dict[int, dict] = {f["year"]: f for f in entry.get("files", [])}
+    # Merge files by year so incremental runs accumulate records.
+    # Parse defensively: prior manifests may have been hand-edited or
+    # written by an older version with a different schema.
+    existing_by_year: dict[int, dict] = {}
+    for f in entry.get("files", []):
+        if "year" not in f:
+            logger.warning(
+                "Skipping malformed manifest entry in %s (missing 'year' key): %s",
+                manifest_path,
+                f,
+            )
+            continue
+        try:
+            existing_by_year[int(f["year"])] = f
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"manifest.json entry for {_SOURCE_KEY} has invalid year "
+                f"{f['year']!r}: {exc}"
+            ) from exc
     for f in files:
-        existing_by_year[f["year"]] = f
+        existing_by_year[int(f["year"])] = f
+
+    # Refresh monthly_path on every merged entry — consolidate_year writes
+    # a single rolling monthly NC, so all year entries should point to the
+    # current filename (prior entries pointed at the now-deleted old name).
+    latest_monthly_path = files[-1]["monthly_path"] if files else None
+    if latest_monthly_path is not None:
+        for entry_file in existing_by_year.values():
+            entry_file["monthly_path"] = latest_monthly_path
+
     merged_files = [existing_by_year[y] for y in sorted(existing_by_year)]
 
-    all_years = sorted(f["year"] for f in merged_files)
+    all_years = sorted(existing_by_year)
     effective_period = f"{all_years[0]}/{all_years[-1]}" if all_years else period
 
     entry.update(

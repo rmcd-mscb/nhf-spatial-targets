@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pandas as pd
+import pytest
 import xarray as xr
 
 from nhf_spatial_targets.fetch.era5_land import daily_to_monthly, hourly_to_daily
@@ -699,3 +700,140 @@ def test_update_manifest_updates_existing_year(tmp_path):
     entry = m["sources"]["era5_land"]
     assert len(entry["files"]) == 1
     assert entry["files"][0]["consolidated_utc"] == "2024-06-01T00:00:00+00:00"
+
+
+def test_update_manifest_handles_missing_year_key(tmp_path, caplog):
+    """Prior manifest entries missing 'year' are skipped with a warning."""
+    import json
+    import logging
+
+    from nhf_spatial_targets.fetch.era5_land import _update_manifest
+
+    wd = _minimal_workdir(tmp_path)
+    meta = {
+        "access": {"url": "https://cds.climate.copernicus.eu"},
+        "variables": [{"name": "ro"}],
+    }
+    bbox = {"minx": -125.0, "miny": 24.7, "maxx": -66.0, "maxy": 53.0}
+
+    # Seed a manifest with a malformed file entry (no "year" key)
+    manifest = {
+        "sources": {
+            "era5_land": {
+                "files": [
+                    {"daily_path": "/orphan.nc"},  # missing year
+                    {
+                        "year": 1979,
+                        "daily_path": "/ds/daily_1979.nc",
+                        "monthly_path": "/ds/monthly_1979_1979.nc",
+                    },
+                ]
+            }
+        }
+    }
+    (wd / "manifest.json").write_text(json.dumps(manifest))
+
+    files_new = [
+        {
+            "year": 1980,
+            "daily_path": "/ds/daily_1980.nc",
+            "monthly_path": "/ds/monthly_1979_1980.nc",
+            "consolidated_utc": "2024-01-01T00:00:00+00:00",
+        }
+    ]
+    with caplog.at_level(logging.WARNING):
+        _update_manifest(wd, "1980/1980", bbox, meta, "L", files_new)
+
+    assert any("missing 'year' key" in rec.message for rec in caplog.records)
+    result = json.loads((wd / "manifest.json").read_text())
+    years = sorted(f["year"] for f in result["sources"]["era5_land"]["files"])
+    assert years == [1979, 1980]
+
+
+def test_update_manifest_raises_on_bad_year_type(tmp_path):
+    """Prior manifest entry with a non-numeric 'year' raises a clear error."""
+    import json
+
+    from nhf_spatial_targets.fetch.era5_land import _update_manifest
+
+    wd = _minimal_workdir(tmp_path)
+    meta = {
+        "access": {"url": "https://cds.climate.copernicus.eu"},
+        "variables": [{"name": "ro"}],
+    }
+    bbox = {"minx": -125.0, "miny": 24.7, "maxx": -66.0, "maxy": 53.0}
+
+    manifest = {
+        "sources": {"era5_land": {"files": [{"year": "twenty", "daily_path": "/x.nc"}]}}
+    }
+    (wd / "manifest.json").write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="invalid year"):
+        _update_manifest(
+            wd,
+            "1980/1980",
+            bbox,
+            meta,
+            "L",
+            [
+                {
+                    "year": 1980,
+                    "daily_path": "/d.nc",
+                    "monthly_path": "/m.nc",
+                    "consolidated_utc": "2024-01-01",
+                }
+            ],
+        )
+
+
+def test_update_manifest_refreshes_monthly_path_on_prior_entries(tmp_path):
+    """After rolling rebuild, every merged entry points to the current monthly file."""
+    import json
+
+    from nhf_spatial_targets.fetch.era5_land import _update_manifest
+
+    wd = _minimal_workdir(tmp_path)
+    meta = {
+        "access": {"url": "https://cds.climate.copernicus.eu"},
+        "variables": [{"name": "ro"}],
+    }
+    bbox = {"minx": -125.0, "miny": 24.7, "maxx": -66.0, "maxy": 53.0}
+
+    # First run: year 1979, monthly path reflects 1979-only range.
+    _update_manifest(
+        wd,
+        "1979/1979",
+        bbox,
+        meta,
+        "L",
+        [
+            {
+                "year": 1979,
+                "daily_path": "/ds/daily_1979.nc",
+                "monthly_path": "/ds/monthly_1979_1979.nc",
+                "consolidated_utc": "2024-01-01T00:00:00+00:00",
+            }
+        ],
+    )
+
+    # Second run: year 1980, rolling rebuild produces a new monthly path.
+    new_monthly = "/ds/monthly_1979_1980.nc"
+    _update_manifest(
+        wd,
+        "1980/1980",
+        bbox,
+        meta,
+        "L",
+        [
+            {
+                "year": 1980,
+                "daily_path": "/ds/daily_1980.nc",
+                "monthly_path": new_monthly,
+                "consolidated_utc": "2024-01-02T00:00:00+00:00",
+            }
+        ],
+    )
+
+    entry = json.loads((wd / "manifest.json").read_text())["sources"]["era5_land"]
+    # Both the prior 1979 entry AND the new 1980 entry point to the new path.
+    assert all(f["monthly_path"] == new_monthly for f in entry["files"])
