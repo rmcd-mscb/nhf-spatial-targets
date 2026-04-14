@@ -263,7 +263,7 @@ Array index → source mapping:
 | 8 | MOD16A2 v061 | 2000/2025 | LP DAAC via earthaccess; ~10–20 GB |
 | 9 | MOD10C1 v061 | 2000/2025 | NSIDC via earthaccess |
 
-All fetch routines are network I/O-bound (sequential downloads); the script allocates 1 CPU and 16 GB RAM per task with a 24-hour wall-clock limit. SLURM directives (`--account`, `--partition`, `--chdir`) at the top of `fetch_all.slurm` may need to be adjusted for your cluster.
+All fetch routines are network I/O-bound (sequential downloads); the script allocates 1 CPU and 128 GB RAM per task with a 24-hour wall-clock limit. The 128 GB figure is driven by ERA5-Land hourly CONUS concatenation (`xr.open_mfdataset` over 12 monthly chunks × 3 variables); other tasks use far less. Override `PROJECT_DIR` via environment before submission (e.g. `export PROJECT_DIR=/path/to/project; sbatch fetch_all.slurm`). SLURM directives (`--account`, `--partition`, `--chdir`) at the top of `fetch_all.slurm` may need to be adjusted for your cluster.
 
 ## Aggregation
 

@@ -7,7 +7,6 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=128G
 #SBATCH --time=24:00:00
-#SBATCH --chdir=/caldera/hovenweep/projects/usgs/water/impd/nhgf/nhf-spatial-targets
 #SBATCH --output=logs/fetch_%a_%A.out
 #SBATCH --error=logs/fetch_%a_%A.err
 
@@ -15,8 +14,10 @@
 # Submits one SLURM job per source dataset (10 total).
 # Each job downloads independently; they can run concurrently.
 #
-# Usage:
+# Usage (the repo dir and project dir are required overrides):
 #   mkdir -p logs
+#   export REPO_DIR=/path/to/nhf-spatial-targets
+#   export PROJECT_DIR=/path/to/your/project
 #   sbatch fetch_all.slurm
 #
 # To run a single source only (e.g. index 2 = merra2):
@@ -24,7 +25,13 @@
 
 set -euo pipefail
 
-PROJECT_DIR="/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2-spatial-targets"
+# Repo and project directories — override via environment, or edit these
+# defaults for your site. The repo default mirrors the USGS Hovenweep path;
+# $PROJECT_DIR must be a project directory created by `nhf-targets init`.
+REPO_DIR="${REPO_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/nhf-spatial-targets}"
+PROJECT_DIR="${PROJECT_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2-spatial-targets}"
+
+cd "$REPO_DIR"
 
 # Map array index → pixi task name
 FETCH_TASKS=(
@@ -62,9 +69,6 @@ PERIOD="${FETCH_PERIODS[$SLURM_ARRAY_TASK_ID]}"
 echo "=== Array task $SLURM_ARRAY_TASK_ID: $TASK  period=$PERIOD ==="
 echo "=== Start: $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 echo "=== Host:  $(hostname) ==="
-
-# Activate pixi environment (--chdir in SBATCH header sets cwd to repo root)
-eval "$(pixi shell-hook)"
 
 pixi run "$TASK" -- --project-dir "$PROJECT_DIR" --period "$PERIOD"
 
