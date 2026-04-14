@@ -283,9 +283,12 @@ def _update_manifest(
         {
             "source_key": source_key,
             "access_url": meta["access"]["url"],
+            "license": meta.get("license", ""),
             "period": period,
             "bbox": bbox,
-            "variables": meta["variables"],
+            "variables": [
+                v["name"] if isinstance(v, dict) else v for v in meta["variables"]
+            ],
             "files": files,
             "consolidated_ncs": consolidated_ncs,
             "last_consolidated_utc": now_utc if consolidated_ncs else None,

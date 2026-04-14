@@ -147,6 +147,7 @@ sources:
     spatial_extent: CONUS
     spatial_resolution: 500m
     units: kg/m2/8day
+    license: public domain (NASA)
     status: current
 
   ssebop:
@@ -354,6 +355,8 @@ sources:
     period: "1980/present"
     spatial_extent: global
     spatial_resolution: 0.5 x 0.625 degree
+    units: dimensionless (fraction of saturation, 0-1)
+    license: public domain (NASA)
     status: current
 
   ncep_ncar:
@@ -387,6 +390,7 @@ sources:
     spatial_extent: global
     spatial_resolution: T62 Gaussian grid (~1.875 degree)
     units: kg/m2 (normalized to dimensionless for calibration)
+    license: public domain (NOAA)
     status: current
 
   nldas_mosaic:
@@ -421,6 +425,7 @@ sources:
     spatial_extent: CONUS
     spatial_resolution: 0.125 degree
     units: kg/m2 (normalized to dimensionless for calibration)
+    license: public domain (NASA)
     status: current
 
   nldas_noah:
@@ -460,6 +465,7 @@ sources:
     spatial_extent: CONUS
     spatial_resolution: 0.125 degree
     units: kg/m2 (normalized to dimensionless for calibration)
+    license: public domain (NASA)
     status: current
 
   # ---------------------------------------------------------------------------
@@ -510,4 +516,4 @@ sources:
     spatial_resolution: 0.05 degree CMG
     units: percent (convert to fraction 0-1)
     ci_threshold: 70
-    status: current
+    license: public domain (NASA)

@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import tempfile
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -164,6 +165,19 @@ def download_month_variable(
     tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
     try:
         client.retrieve("reanalysis-era5-land", request, str(tmp_path))
+        # CDS API (cdsapi ≥0.7.7) wraps the NetCDF in a zip archive.
+        # Detect and extract the .nc member before renaming to output_path.
+        if zipfile.is_zipfile(tmp_path):
+            with zipfile.ZipFile(tmp_path) as zf:
+                nc_names = [n for n in zf.namelist() if n.endswith(".nc")]
+                if not nc_names:
+                    raise ValueError(
+                        f"No .nc file found in CDS zip: {list(zf.namelist())}"
+                    )
+                zf.extract(nc_names[0], path=tmp_path.parent)
+                extracted = tmp_path.parent / nc_names[0]
+                tmp_path.unlink()
+                extracted.rename(tmp_path)
         tmp_path.rename(output_path)
     except BaseException:
         tmp_path.unlink(missing_ok=True)
@@ -331,6 +345,11 @@ def consolidate_year(
             if not path.exists():
                 raise FileNotFoundError(f"Missing hourly file: {path}")
             ds = xr.open_dataset(path)
+            # CDS API ≥0.7 changed the time dimension from "time" to
+            # "valid_time"; normalize here so downstream code always sees
+            # a "time" dimension.
+            if "valid_time" in ds.dims:
+                ds = ds.rename({"valid_time": "time"})
             da = ds[var].load()
             ds.close()
             daily_arrays[var] = hourly_to_daily(da)
@@ -469,15 +488,30 @@ def _update_manifest(
     else:
         manifest = {"sources": {}, "steps": []}
 
-    manifest.setdefault("sources", {})[_SOURCE_KEY] = {
-        "source_key": _SOURCE_KEY,
-        "access_url": meta["access"]["url"],
-        "license": license_str,
-        "period": period,
-        "bbox": bbox,
-        "variables": [v["name"] for v in meta["variables"]],
-        "files": files,
-    }
+    manifest.setdefault("sources", {})
+    entry = manifest["sources"].get(_SOURCE_KEY, {})
+
+    # Merge files by year so incremental runs accumulate records
+    existing_by_year: dict[int, dict] = {f["year"]: f for f in entry.get("files", [])}
+    for f in files:
+        existing_by_year[f["year"]] = f
+    merged_files = [existing_by_year[y] for y in sorted(existing_by_year)]
+
+    all_years = sorted(f["year"] for f in merged_files)
+    effective_period = f"{all_years[0]}/{all_years[-1]}" if all_years else period
+
+    entry.update(
+        {
+            "source_key": _SOURCE_KEY,
+            "access_url": meta["access"]["url"],
+            "license": license_str,
+            "period": effective_period,
+            "bbox": bbox,
+            "variables": [v["name"] for v in meta["variables"]],
+            "files": merged_files,
+        }
+    )
+    manifest["sources"][_SOURCE_KEY] = entry
 
     fd, tmp = tempfile.mkstemp(dir=manifest_path.parent, suffix=".json.tmp")
     try:

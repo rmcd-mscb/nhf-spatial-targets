@@ -302,6 +302,7 @@ def _update_manifest(
         {
             "source_key": source_key,
             "access_url": meta["access"]["url"],
+            "license": meta.get("license", ""),
             "period": period,
             "bbox": bbox,
             "variables": [v["name"] for v in meta["variables"]],
