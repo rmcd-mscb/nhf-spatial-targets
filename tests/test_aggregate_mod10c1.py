@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from nhf_spatial_targets.aggregate.mod10c1 import _open, build_masked_source
+from nhf_spatial_targets.aggregate.mod10c1 import build_masked_source
 
 
 @pytest.fixture()
@@ -128,122 +128,12 @@ def test_log_low_valid_coverage_silent_below_threshold(caplog):
     assert not any("zero valid-area" in rec.message for rec in caplog.records)
 
 
-# ---------------------------------------------------------------------------
-# _open: consolidated NC selection
-# ---------------------------------------------------------------------------
+def test_mod10c1_adapter_wires_hooks_and_variables():
+    from nhf_spatial_targets.aggregate.mod10c1 import ADAPTER, build_masked_source
 
-
-def _make_consolidated_nc(path, times):
-    """Write a minimal consolidated MOD10C1 NC with a time coordinate."""
-    snow = np.ones((len(times), 2, 2)) * 50.0
-    qa = np.ones((len(times), 2, 2)) * 80.0
-    ds = xr.Dataset(
-        {
-            "Day_CMG_Snow_Cover": (["time", "lat", "lon"], snow),
-            "Snow_Spatial_QA": (["time", "lat", "lon"], qa),
-        },
-        coords={"time": times, "lat": [0.25, 0.75], "lon": [0.5, 1.5]},
-    )
-    ds.to_netcdf(path)
-
-
-def test_open_loads_single_consolidated_nc(tmp_path):
-    """`_open` returns a Dataset with a 'time' coordinate from one consolidated file."""
-    raw_dir = tmp_path / "mod10c1_v061"
-    raw_dir.mkdir()
-    times = pd.date_range("2000-03-01", periods=3, freq="D")
-    _make_consolidated_nc(raw_dir / "mod10c1_v061_2000_consolidated.nc", times)
-    # Also put a .conus.nc file in the dir to confirm it is ignored
-    (raw_dir / "MOD10C1.A2000061.061.conus.nc").write_bytes(b"not a real nc")
-
-    class _FakeProject:
-        def raw_dir(self, key):
-            return raw_dir
-
-    result = _open(_FakeProject())
-    assert "time" in result.coords
-    assert len(result["time"]) == 3
-
-
-def test_open_concatenates_multiple_consolidated_ncs(tmp_path):
-    """`_open` merges multi-year consolidated files into one Dataset along time."""
-    raw_dir = tmp_path / "mod10c1_v061"
-    raw_dir.mkdir()
-    times_2000 = pd.date_range("2000-01-01", periods=2, freq="D")
-    times_2001 = pd.date_range("2001-01-01", periods=2, freq="D")
-    _make_consolidated_nc(raw_dir / "mod10c1_v061_2000_consolidated.nc", times_2000)
-    _make_consolidated_nc(raw_dir / "mod10c1_v061_2001_consolidated.nc", times_2001)
-
-    class _FakeProject:
-        def raw_dir(self, key):
-            return raw_dir
-
-    result = _open(_FakeProject())
-    assert "time" in result.coords
-    assert len(result["time"]) == 4
-    # Verify time is sorted (2000 before 2001)
-    assert result["time"].values[0] < result["time"].values[-1]
-    # Both years must be represented (catches a regression that drops a file)
-    years_present = set(pd.DatetimeIndex(result["time"].values).year)
-    assert years_present == {2000, 2001}
-
-
-def test_open_concat_sorts_when_filename_order_disagrees_with_time(tmp_path):
-    """sortby('time') must run even when filename glob order is non-chronological."""
-    raw_dir = tmp_path / "mod10c1_v061"
-    raw_dir.mkdir()
-
-    # partA covers 2001, partB covers 2000 — filename order is reversed
-    times_partA = pd.date_range("2001-01-01", periods=2, freq="D")
-    times_partB = pd.date_range("2000-01-01", periods=2, freq="D")
-    _make_consolidated_nc(raw_dir / "mod10c1_v061_partA_consolidated.nc", times_partA)
-    _make_consolidated_nc(raw_dir / "mod10c1_v061_partB_consolidated.nc", times_partB)
-
-    class _FakeProject:
-        def raw_dir(self, key):
-            return raw_dir
-
-    result = _open(_FakeProject())
-    times = pd.DatetimeIndex(result["time"].values)
-    assert list(times.year) == [2000, 2000, 2001, 2001]
-
-
-def test_open_raises_when_no_consolidated_nc_found(tmp_path):
-    """`_open` raises FileNotFoundError when only .conus.nc files exist."""
-    raw_dir = tmp_path / "mod10c1_v061"
-    raw_dir.mkdir()
-    (raw_dir / "MOD10C1.A2000061.061.conus.nc").write_bytes(b"not a real nc")
-
-    class _FakeProject:
-        def raw_dir(self, key):
-            return raw_dir
-
-    with pytest.raises(FileNotFoundError, match="consolidated"):
-        _open(_FakeProject())
-
-
-def test_open_raises_on_duplicate_time_across_consolidated_ncs(tmp_path):
-    """Overlapping-time mod10c1 consolidated NCs must raise."""
-    raw_dir = tmp_path / "mod10c1_v061"
-    raw_dir.mkdir()
-
-    times_a = pd.date_range("2001-01-01", periods=10, freq="D")
-    times_b = pd.date_range("2001-01-05", periods=10, freq="D")  # overlaps
-    for name, times in (
-        ("mod10c1_v061_2001a_consolidated.nc", times_a),
-        ("mod10c1_v061_2001b_consolidated.nc", times_b),
-    ):
-        xr.Dataset(
-            {
-                "Day_CMG_Snow_Cover": (["time", "lat", "lon"], np.ones((10, 2, 2))),
-                "Snow_Spatial_QA": (["time", "lat", "lon"], np.ones((10, 2, 2)) * 90),
-            },
-            coords={"time": times, "lat": [0.25, 0.75], "lon": [0.5, 1.5]},
-        ).to_netcdf(raw_dir / name)
-
-    class _FakeProject:
-        def raw_dir(self, key):
-            return raw_dir
-
-    with pytest.raises(ValueError, match="Duplicate"):
-        _open(_FakeProject())
+    assert ADAPTER.source_key == "mod10c1_v061"
+    assert ADAPTER.output_name == "mod10c1_agg.nc"
+    assert set(ADAPTER.variables) == {"sca", "ci", "valid_mask"}
+    assert ADAPTER.grid_variable == "sca"
+    assert ADAPTER.pre_aggregate_hook is build_masked_source
+    assert ADAPTER.post_aggregate_hook is not None
