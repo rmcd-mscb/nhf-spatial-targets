@@ -12,4 +12,4 @@ def test_adapter_declares_runoff_vars():
 
 
 def test_adapter_uses_monthly_files_glob():
-    assert ADAPTER.files_glob == "*monthly*.nc"
+    assert ADAPTER.files_glob == "era5_land_monthly_*.nc"

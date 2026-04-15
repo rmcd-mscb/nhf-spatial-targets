@@ -59,5 +59,5 @@ def test_derive_runoff_total_preserves_nan():
 def test_adapter_sets_files_glob_and_pre_hook():
     from nhf_spatial_targets.aggregate.gldas import ADAPTER, _derive_runoff_total
 
-    assert ADAPTER.files_glob == "*.nc"
+    assert ADAPTER.files_glob == "gldas_noah_v21_monthly*.nc"
     assert ADAPTER.pre_aggregate_hook is _derive_runoff_total

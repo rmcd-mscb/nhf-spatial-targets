@@ -16,7 +16,7 @@ ADAPTER = SourceAdapter(
     variables=("ro", "sro", "ssro"),
     x_coord="longitude",
     y_coord="latitude",
-    files_glob="*monthly*.nc",
+    files_glob="era5_land_monthly_*.nc",
 )
 
 
