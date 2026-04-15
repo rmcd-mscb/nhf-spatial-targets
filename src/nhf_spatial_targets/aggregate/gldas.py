@@ -28,7 +28,7 @@ ADAPTER = SourceAdapter(
     source_key=_SOURCE_KEY,
     output_name="gldas_agg.nc",
     variables=("Qs_acc", "Qsb_acc", "runoff_total"),
-    files_glob="*.nc",
+    files_glob="gldas_noah_v21_monthly*.nc",
     pre_aggregate_hook=_derive_runoff_total,
 )
 

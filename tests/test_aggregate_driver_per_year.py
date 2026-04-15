@@ -221,3 +221,71 @@ def test_concat_years_raises_on_duplicate_time(tmp_path):
     _write_year_intermediate(p2, 2001)
     with pytest.raises(ValueError, match="[Dd]uplicate"):
         concat_years([p1, p2], time_coord="time")
+
+
+def test_concat_years_raises_on_year_gap(tmp_path):
+    from nhf_spatial_targets.aggregate._driver import concat_years
+
+    p2000 = tmp_path / "src_2000_agg.nc"
+    p2002 = tmp_path / "src_2002_agg.nc"
+    _write_year_intermediate(p2000, 2000)
+    _write_year_intermediate(p2002, 2002)
+    with pytest.raises(ValueError, match="year gap"):
+        concat_years([p2000, p2002], time_coord="time")
+
+
+def test_concat_years_detaches_from_disk(tmp_path):
+    """Returned Dataset must remain usable after source intermediates deleted."""
+    from nhf_spatial_targets.aggregate._driver import concat_years
+
+    p2000 = tmp_path / "src_2000_agg.nc"
+    p2001 = tmp_path / "src_2001_agg.nc"
+    _write_year_intermediate(p2000, 2000)
+    _write_year_intermediate(p2001, 2001)
+
+    combined = concat_years([p2000, p2001], time_coord="time")
+    p2000.unlink()
+    p2001.unlink()
+    assert combined["v"].values.shape == (24, 2)
+
+
+def test_find_time_coord_returns_none_without_cf_attrs(tmp_path):
+    """Legacy literal-name fallback is removed — return None for non-CF coord."""
+    from nhf_spatial_targets.aggregate._driver import _find_time_coord_name
+
+    ds = xr.Dataset(
+        {"v": (["time", "x"], np.zeros((3, 2)))},
+        coords={
+            "time": ("time", pd.date_range("2000-01-01", periods=3, freq="D")),
+            "x": ("x", [0.0, 1.0]),
+        },
+    )
+    assert _find_time_coord_name(ds) is None
+
+
+def test_aggregate_year_wraps_batch_failure_with_context(
+    project, tiny_batched_fabric, tmp_path
+):
+    """gdptools failures inside a batch must surface with year/batch/file context."""
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import aggregate_year
+
+    src = tmp_path / "datastore" / "era5_land" / "era5_land_monthly_2005.nc"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    _write_nc(src, pd.date_range("2005-01-01", periods=12, freq="MS"))
+
+    adapter = SourceAdapter(
+        source_key="era5_land",
+        output_name="era5_land_agg.nc",
+        variables=("v",),
+    )
+
+    def boom(**_kwargs):
+        raise RuntimeError("gdptools exploded")
+
+    with patch(
+        "nhf_spatial_targets.aggregate._driver.compute_or_load_weights",
+        side_effect=boom,
+    ):
+        with pytest.raises(RuntimeError, match=r"year=2005.*batch=0"):
+            aggregate_year(adapter, project, 2005, src, tiny_batched_fabric, "hru_id")
