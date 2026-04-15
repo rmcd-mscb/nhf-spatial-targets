@@ -130,6 +130,8 @@ def compute_or_load_weights(
     source_key: str,
     batch_id: int,
     workdir: Path,
+    *,
+    period: tuple[str, str],
 ) -> pd.DataFrame:
     """Compute (or load from cache) the per-batch weight table.
 
@@ -188,10 +190,7 @@ def compute_or_load_weights(
         f_feature=batch_gdf,
         proj_feature=batch_gdf.crs.to_string(),
         id_feature=id_col,
-        period=[
-            str(source_ds[time_coord].values[0]),
-            str(source_ds[time_coord].values[-1]),
-        ],
+        period=[period[0], period[1]],
     )
     wg = WeightGen(
         user_data=user_data,
@@ -222,6 +221,8 @@ def aggregate_variables_for_batch(
     time_coord: str,
     id_col: str,
     weights: pd.DataFrame,
+    *,
+    period: tuple[str, str],
 ) -> xr.Dataset:
     """Run gdptools AggGen once per variable, merge results on HRU ID.
 
@@ -263,10 +264,7 @@ def aggregate_variables_for_batch(
             f_feature=batch_gdf,
             proj_feature=batch_gdf.crs.to_string(),
             id_feature=id_col,
-            period=[
-                str(source_ds[time_coord].values[0]),
-                str(source_ds[time_coord].values[-1]),
-            ],
+            period=[period[0], period[1]],
         )
         agg = AggGen(
             user_data=user_data,
@@ -413,6 +411,10 @@ def aggregate_source(
         n_batches,
     )
 
+    t0 = str(source_ds[time_coord].values[0])
+    t1 = str(source_ds[time_coord].values[-1])
+    period_full = (t0, t1)
+
     datasets: list[xr.Dataset] = []
     for bid in sorted(batched["batch_id"].unique()):
         batch_gdf = batched[batched["batch_id"] == bid].drop(columns=["batch_id"])
@@ -428,6 +430,7 @@ def aggregate_source(
             source_key=adapter.source_key,
             batch_id=int(bid),
             workdir=workdir,
+            period=period_full,
         )
         ds = aggregate_variables_for_batch(
             batch_gdf=batch_gdf,
@@ -439,6 +442,7 @@ def aggregate_source(
             time_coord=time_coord,
             id_col=id_col,
             weights=weights,
+            period=period_full,
         )
         datasets.append(ds)
 

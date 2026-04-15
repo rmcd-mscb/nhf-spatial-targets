@@ -184,6 +184,7 @@ def test_aggregate_variables_for_batch_merges_variables(tiny_fabric):
             time_coord="time",
             id_col="hru_id",
             weights=_fake_weights(),
+            period=("2000-01-01", "2000-02-01"),
         )
     assert set(result.data_vars) == {"a", "b"}
     assert result.sizes["hru_id"] == 4
@@ -657,6 +658,7 @@ def test_compute_or_load_weights_writes_cache_on_miss(tmp_path, tiny_fabric):
             source_key="toy",
             batch_id=0,
             workdir=tmp_path,
+            period=("2000-01-01", "2000-02-01"),
         )
     assert mock_wg.called
     cache_path = tmp_path / "weights" / "toy_batch0.csv"
@@ -695,6 +697,7 @@ def test_compute_or_load_weights_uses_cache_on_hit(tmp_path, tiny_fabric):
             source_key="toy",
             batch_id=0,
             workdir=tmp_path,
+            period=("2000-01-01", "2000-02-01"),
         )
     assert not mock_wg.called
     pd.testing.assert_frame_equal(weights, cached)
@@ -782,6 +785,7 @@ def test_compute_or_load_weights_ignores_stray_tmp_from_crashed_run(
             source_key="toy",
             batch_id=0,
             workdir=tmp_path,
+            period=("2000-01-01", "2000-02-01"),
         )
 
     # Final-name CSV present and equals the fresh computation.
@@ -810,3 +814,40 @@ def test_source_adapter_accepts_hooks():
     )
     assert adapter.pre_aggregate_hook is _pre
     assert adapter.post_aggregate_hook is _post
+
+
+def test_aggregate_variables_for_batch_passes_period_through(tiny_fabric):
+    from nhf_spatial_targets.aggregate._driver import aggregate_variables_for_batch
+
+    batch_gdf = gpd.read_file(tiny_fabric)
+    batch_gdf["batch_id"] = 0
+    times = pd.date_range("2005-01-01", periods=12, freq="MS")
+    source_ds = xr.Dataset(
+        {"a": (["time", "lat", "lon"], np.ones((12, 2, 2)))},
+        coords={"time": times, "lat": [0.25, 0.75], "lon": [0.5, 1.5]},
+    )
+
+    with (
+        patch("nhf_spatial_targets.aggregate._driver.AggGen") as mock_agg,
+        patch("nhf_spatial_targets.aggregate._driver.UserCatData") as mock_ucd,
+    ):
+        mock_ucd.return_value = _fake_user_data()
+        inst = MagicMock()
+        mock_agg.return_value = inst
+        inst.calculate_agg.side_effect = [_fake_agg_result("a", [0, 1, 2, 3])]
+
+        aggregate_variables_for_batch(
+            batch_gdf=batch_gdf,
+            source_ds=source_ds,
+            variables=["a"],
+            source_crs="EPSG:4326",
+            x_coord="lon",
+            y_coord="lat",
+            time_coord="time",
+            id_col="hru_id",
+            weights=_fake_weights(),
+            period=("2005-01-01", "2005-12-01"),
+        )
+
+    call_kwargs = mock_ucd.call_args.kwargs
+    assert call_kwargs["period"] == ["2005-01-01", "2005-12-01"]
