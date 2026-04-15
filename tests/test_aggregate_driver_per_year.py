@@ -185,3 +185,39 @@ def test_aggregate_year_writes_intermediate_when_missing(project, tiny_batched_f
     assert path.exists()
     call = mock_batch.call_args
     assert call.kwargs["period"] == ("2005-01-01", "2005-12-31")
+
+
+def _write_year_intermediate(path: Path, year: int) -> None:
+    times = pd.date_range(f"{year}-01-01", periods=12, freq="MS")
+    xr.Dataset(
+        {"v": (["time", "hru_id"], np.ones((12, 2)) * year)},
+        coords={
+            "time": ("time", times, {"standard_name": "time"}),
+            "hru_id": [0, 1],
+        },
+    ).to_netcdf(path)
+
+
+def test_concat_years_orders_by_time(tmp_path):
+    from nhf_spatial_targets.aggregate._driver import concat_years
+
+    p2001 = tmp_path / "src_2001_agg.nc"
+    p2000 = tmp_path / "src_2000_agg.nc"
+    _write_year_intermediate(p2001, 2001)
+    _write_year_intermediate(p2000, 2000)
+
+    combined = concat_years([p2001, p2000], time_coord="time")
+    years = pd.DatetimeIndex(combined["time"].values).year
+    assert list(years[:12]) == [2000] * 12
+    assert list(years[-12:]) == [2001] * 12
+
+
+def test_concat_years_raises_on_duplicate_time(tmp_path):
+    from nhf_spatial_targets.aggregate._driver import concat_years
+
+    p1 = tmp_path / "src_a_agg.nc"
+    p2 = tmp_path / "src_b_agg.nc"
+    _write_year_intermediate(p1, 2001)
+    _write_year_intermediate(p2, 2001)
+    with pytest.raises(ValueError, match="[Dd]uplicate"):
+        concat_years([p1, p2], time_coord="time")

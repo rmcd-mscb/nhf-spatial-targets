@@ -273,6 +273,28 @@ def aggregate_year(
     return out_path
 
 
+def concat_years(paths: list[Path], time_coord: str) -> xr.Dataset:
+    """Open per-year intermediates, concat on time, validate monotonic + unique.
+
+    Loads each intermediate into memory and closes the on-disk handle so the
+    returned Dataset is detached from the filesystem.
+    """
+    if not paths:
+        raise ValueError("concat_years called with empty paths list")
+    loaded: list[xr.Dataset] = []
+    for p in paths:
+        with xr.open_dataset(p) as ds:
+            loaded.append(ds.load())
+    combined = xr.concat(loaded, dim=time_coord).sortby(time_coord)
+    t = combined[time_coord].values
+    if len(np.unique(t)) != len(t):
+        raise ValueError(
+            f"Duplicate time coords across per-year intermediates: "
+            f"{[p.name for p in paths]}"
+        )
+    return combined
+
+
 def compute_or_load_weights(
     batch_gdf: gpd.GeoDataFrame,
     source_ds: xr.Dataset,
