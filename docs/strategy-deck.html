@@ -1,0 +1,1195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>nhf-spatial-targets — Strategy</title>
+
+<!-- Fonts: Cormorant Garamond (display serif) + Source Serif 4 + IBM Plex Mono for code -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link
+  href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Source+Serif+4:ital,wght@0,300;0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap"
+  rel="stylesheet"
+/>
+
+<style>
+/* ===========================================
+   THEME — PAPER & INK (editorial, literary)
+   =========================================== */
+:root {
+    --bg-paper:       #faf7f1;   /* warm cream */
+    --bg-paper-deep:  #f3ede1;   /* slightly deeper cream for gradient */
+    --ink:            #1a1a1a;   /* near-black */
+    --ink-soft:       #3d3a36;
+    --ink-muted:      #6b665e;
+    --rule:           #cfc7b8;   /* hairline rules */
+    --accent:         #a62a2a;   /* deep crimson */
+    --accent-soft:    #c4504b;
+    --gold:           #b38b3f;   /* secondary accent */
+
+    --font-display:   "Cormorant Garamond", "Times New Roman", serif;
+    --font-body:      "Source Serif 4", Georgia, serif;
+    --font-mono:      "IBM Plex Mono", ui-monospace, monospace;
+
+    --title-size:     clamp(2.2rem, 6vw, 5.2rem);
+    --h2-size:        clamp(1.5rem, 3.6vw, 2.8rem);
+    --h3-size:        clamp(1rem, 2.1vw, 1.5rem);
+    --body-size:      clamp(0.85rem, 1.25vw, 1.1rem);
+    --small-size:     clamp(0.7rem, 1vw, 0.9rem);
+
+    --slide-padding:  clamp(1.5rem, 5vw, 5rem);
+    --content-gap:    clamp(0.75rem, 2vw, 1.75rem);
+    --element-gap:    clamp(0.4rem, 1vw, 1rem);
+
+    --ease:           cubic-bezier(0.16, 1, 0.3, 1);
+    --dur:            0.7s;
+}
+
+/* =========================================
+   RESET
+   ========================================= */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* =========================================
+   VIEWPORT BASE (mandatory viewport fitting)
+   ========================================= */
+html, body { height: 100%; overflow-x: hidden; }
+html {
+    scroll-snap-type: y mandatory;
+    scroll-behavior: smooth;
+}
+
+body {
+    font-family: var(--font-body);
+    font-size: var(--body-size);
+    color: var(--ink);
+    background: var(--bg-paper);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+}
+
+.slide {
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+    scroll-snap-align: start;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    padding: var(--slide-padding);
+    background:
+        radial-gradient(ellipse at 18% 12%, rgba(255,255,255,0.45) 0%, transparent 55%),
+        radial-gradient(ellipse at 85% 90%, rgba(179,139,63,0.08) 0%, transparent 60%),
+        linear-gradient(180deg, var(--bg-paper) 0%, var(--bg-paper-deep) 100%);
+}
+
+/* Subtle paper texture via SVG noise */
+.slide::before {
+    content: "";
+    position: absolute; inset: 0;
+    pointer-events: none;
+    opacity: 0.35;
+    mix-blend-mode: multiply;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.1 0 0 0 0 0.09 0 0 0 0 0.08 0 0 0 0.08 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+}
+
+.slide-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    max-height: 100%;
+    overflow: hidden;
+    position: relative;
+    z-index: 1;
+}
+
+/* Typography */
+h1, h2, h3 {
+    font-family: var(--font-display);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+    line-height: 1.05;
+}
+h1 { font-size: var(--title-size); font-weight: 700; }
+h2 { font-size: var(--h2-size); }
+h3 { font-size: var(--h3-size); font-weight: 600; }
+
+p { color: var(--ink-soft); }
+
+.eyebrow {
+    font-family: var(--font-body);
+    font-size: var(--small-size);
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.lede {
+    font-family: var(--font-display);
+    font-size: clamp(1.1rem, 2vw, 1.5rem);
+    font-style: italic;
+    color: var(--ink-muted);
+    font-weight: 400;
+    max-width: 60ch;
+}
+
+/* Hairline rule with ornamental dot */
+.rule {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    color: var(--rule);
+}
+.rule::before, .rule::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--rule);
+}
+.rule-dot {
+    width: 6px; height: 6px;
+    background: var(--accent);
+    border-radius: 50%;
+    flex: 0 0 auto;
+}
+
+/* Drop cap */
+.dropcap::first-letter {
+    font-family: var(--font-display);
+    float: left;
+    font-size: clamp(3.5rem, 8vw, 6rem);
+    line-height: 0.85;
+    padding: 0.25rem 0.6rem 0 0;
+    color: var(--accent);
+    font-weight: 700;
+}
+
+/* Slide number, top-left corner */
+.slide-num {
+    position: absolute;
+    top: clamp(1rem, 2.5vw, 2rem);
+    left: clamp(1.5rem, 5vw, 5rem);
+    font-family: var(--font-mono);
+    font-size: var(--small-size);
+    color: var(--ink-muted);
+    letter-spacing: 0.15em;
+    z-index: 2;
+}
+.slide-footer {
+    position: absolute;
+    bottom: clamp(1rem, 2.5vw, 2rem);
+    left: clamp(1.5rem, 5vw, 5rem);
+    right: clamp(1.5rem, 5vw, 5rem);
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--font-mono);
+    font-size: var(--small-size);
+    color: var(--ink-muted);
+    letter-spacing: 0.1em;
+    z-index: 2;
+}
+
+/* Two-column editorial layout */
+.two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: clamp(1.25rem, 3vw, 3rem);
+    align-items: start;
+    height: 100%;
+}
+@media (max-width: 780px) { .two-col { grid-template-columns: 1fr; } }
+
+/* Pull quote */
+.pullquote {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: clamp(1.3rem, 2.8vw, 2.2rem);
+    line-height: 1.25;
+    color: var(--ink);
+    border-left: 3px solid var(--accent);
+    padding-left: clamp(0.8rem, 2vw, 1.5rem);
+    max-width: 24ch;
+}
+
+/* Feature list (bulleted) */
+.feature-list { list-style: none; display: flex; flex-direction: column; gap: clamp(0.5rem, 1.2vw, 1rem); }
+.feature-list li {
+    position: relative;
+    padding-left: 1.6rem;
+    font-size: var(--body-size);
+    color: var(--ink-soft);
+}
+.feature-list li::before {
+    content: "§";
+    position: absolute;
+    left: 0;
+    top: 0;
+    font-family: var(--font-display);
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 1.15em;
+    line-height: 1.4;
+}
+
+/* Simple grid of cards */
+.grid-3 {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: clamp(0.8rem, 2vw, 1.4rem);
+}
+.grid-2 {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: clamp(0.8rem, 2vw, 1.4rem);
+}
+@media (max-width: 780px) { .grid-3, .grid-2 { grid-template-columns: 1fr; } }
+
+.card {
+    border: 1px solid var(--rule);
+    background: rgba(255, 253, 248, 0.5);
+    padding: clamp(0.75rem, 1.6vw, 1.25rem);
+    position: relative;
+}
+.card .marker {
+    font-family: var(--font-mono);
+    font-size: var(--small-size);
+    color: var(--accent);
+    letter-spacing: 0.15em;
+    display: block;
+    margin-bottom: 0.4rem;
+}
+.card h3 { margin-bottom: 0.35rem; font-size: clamp(0.95rem, 1.6vw, 1.25rem); }
+.card p { font-size: var(--small-size); color: var(--ink-muted); line-height: 1.45; }
+
+/* Pipeline stages — horizontal timeline */
+.pipeline {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: clamp(0.5rem, 1.2vw, 1rem);
+    position: relative;
+    margin-top: clamp(1rem, 2vw, 2rem);
+}
+.pipeline::before {
+    content: "";
+    position: absolute;
+    top: clamp(1.2rem, 2vw, 1.8rem);
+    left: 5%; right: 5%;
+    height: 1px;
+    background: var(--rule);
+    z-index: 0;
+}
+.stage {
+    position: relative;
+    text-align: center;
+    z-index: 1;
+}
+.stage .dot {
+    width: clamp(1.8rem, 3vw, 2.4rem);
+    height: clamp(1.8rem, 3vw, 2.4rem);
+    border-radius: 50%;
+    background: var(--bg-paper);
+    border: 1.5px solid var(--accent);
+    color: var(--accent);
+    display: grid;
+    place-items: center;
+    margin: 0 auto clamp(0.4rem, 1vw, 0.7rem);
+    font-family: var(--font-mono);
+    font-weight: 500;
+    font-size: var(--small-size);
+}
+.stage.future .dot {
+    border-color: var(--rule);
+    color: var(--ink-muted);
+    background: var(--bg-paper-deep);
+}
+.stage.future .label, .stage.future .sub { color: var(--ink-muted); opacity: 0.75; }
+.stage .label {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: clamp(0.85rem, 1.4vw, 1.1rem);
+    color: var(--ink);
+}
+.stage .sub {
+    font-family: var(--font-mono);
+    font-size: clamp(0.6rem, 0.9vw, 0.75rem);
+    color: var(--ink-muted);
+    letter-spacing: 0.08em;
+    margin-top: 0.15rem;
+}
+
+/* Code block */
+.code {
+    font-family: var(--font-mono);
+    font-size: clamp(0.7rem, 1.05vw, 0.88rem);
+    background: #1a1a1a;
+    color: #e8e2d5;
+    padding: clamp(0.8rem, 1.6vw, 1.2rem) clamp(1rem, 2vw, 1.5rem);
+    border-radius: 2px;
+    line-height: 1.6;
+    white-space: pre;
+    overflow: hidden;
+    border-left: 3px solid var(--accent);
+}
+.code .k  { color: #c9b896; }   /* keyword */
+.code .c  { color: #7a7468; font-style: italic; } /* comment */
+.code .s  { color: #c4504b; }   /* string */
+.code .n  { color: #b38b3f; }   /* number */
+
+/* Source list (for fetch slide) */
+.source-table {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    column-gap: clamp(0.8rem, 2vw, 1.8rem);
+    row-gap: clamp(0.3rem, 0.8vw, 0.6rem);
+    font-size: var(--small-size);
+    align-items: baseline;
+}
+.source-table .s-name {
+    font-family: var(--font-mono);
+    color: var(--ink);
+    font-weight: 500;
+}
+.source-table .s-desc { color: var(--ink-muted); }
+.source-table .s-api {
+    font-family: var(--font-mono);
+    font-size: clamp(0.6rem, 0.85vw, 0.72rem);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    padding: 0.12rem 0.45rem;
+    border-radius: 2px;
+    white-space: nowrap;
+}
+
+/* =========================================
+   TITLE SLIDE
+   ========================================= */
+.title-slide { justify-content: center; }
+.title-slide .title-wrap {
+    max-width: 20ch;
+    margin: 0 auto;
+    text-align: center;
+}
+.title-slide h1 {
+    font-size: clamp(2.5rem, 9vw, 7rem);
+    line-height: 0.95;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+}
+.title-slide h1 em {
+    font-family: var(--font-display);
+    font-style: italic;
+    color: var(--accent);
+    font-weight: 600;
+}
+.title-slide .subtitle {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: clamp(1rem, 2.2vw, 1.5rem);
+    color: var(--ink-muted);
+    margin-top: clamp(1rem, 2vw, 1.5rem);
+}
+.title-ornament {
+    display: flex;
+    justify-content: center;
+    gap: 0.75rem;
+    margin: clamp(1rem, 2.5vw, 2rem) 0;
+    color: var(--accent);
+    font-size: 1.2rem;
+    letter-spacing: 0.6em;
+}
+
+/* Abstract ornament: single crimson rule + circle */
+.cornermark {
+    position: absolute;
+    top: clamp(1rem, 2.5vw, 2rem);
+    right: clamp(1.5rem, 5vw, 5rem);
+    font-family: var(--font-mono);
+    font-size: var(--small-size);
+    color: var(--ink-muted);
+    letter-spacing: 0.2em;
+    z-index: 2;
+    text-align: right;
+}
+.cornermark strong { color: var(--accent); font-weight: 500; }
+
+/* =========================================
+   ANIMATIONS — reveal on .visible
+   ========================================= */
+.reveal {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity var(--dur) var(--ease),
+                transform var(--dur) var(--ease),
+                filter var(--dur) var(--ease);
+    filter: blur(4px);
+}
+.slide.visible .reveal {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+}
+.slide.visible .reveal.delay-1 { transition-delay: 0.08s; }
+.slide.visible .reveal.delay-2 { transition-delay: 0.18s; }
+.slide.visible .reveal.delay-3 { transition-delay: 0.30s; }
+.slide.visible .reveal.delay-4 { transition-delay: 0.42s; }
+.slide.visible .reveal.delay-5 { transition-delay: 0.54s; }
+.slide.visible .reveal.delay-6 { transition-delay: 0.66s; }
+.slide.visible .reveal.delay-7 { transition-delay: 0.78s; }
+.slide.visible .reveal.delay-8 { transition-delay: 0.90s; }
+
+/* Slow wash on title */
+@keyframes gentleDrift {
+    0%, 100% { transform: translateX(0) translateY(0); }
+    50%      { transform: translateX(-3px) translateY(-5px); }
+}
+.title-slide h1 em { display: inline-block; animation: gentleDrift 9s ease-in-out infinite; }
+
+/* =========================================
+   PROGRESS BAR & NAV DOTS
+   ========================================= */
+.progress-bar {
+    position: fixed;
+    top: 0; left: 0;
+    height: 2px;
+    width: 0%;
+    background: var(--accent);
+    z-index: 1000;
+    transition: width 0.2s linear;
+}
+
+.nav-dots {
+    position: fixed;
+    right: clamp(0.75rem, 1.5vw, 1.2rem);
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    z-index: 1000;
+}
+.nav-dots button {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    border: 1px solid var(--ink-muted);
+    background: transparent;
+    cursor: pointer;
+    padding: 0;
+    transition: all 0.25s ease;
+}
+.nav-dots button.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    transform: scale(1.35);
+}
+
+/* =========================================
+   INLINE EDITING (opt-in)
+   ========================================= */
+.edit-hotzone {
+    position: fixed;
+    top: 0; left: 0;
+    width: 80px; height: 80px;
+    z-index: 10000;
+    cursor: pointer;
+}
+.edit-toggle {
+    position: fixed;
+    top: clamp(0.75rem, 1.5vw, 1rem);
+    left: clamp(0.75rem, 1.5vw, 1rem);
+    width: clamp(2rem, 3vw, 2.5rem);
+    height: clamp(2rem, 3vw, 2.5rem);
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    font-size: 1rem;
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease, transform 0.2s ease;
+    z-index: 10001;
+    box-shadow: 0 3px 12px rgba(0,0,0,0.25);
+}
+.edit-toggle.show, .edit-toggle.active {
+    opacity: 1;
+    pointer-events: auto;
+}
+.edit-toggle:hover { transform: scale(1.1); }
+.edit-banner {
+    position: fixed;
+    bottom: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--ink);
+    color: var(--bg-paper);
+    font-family: var(--font-mono);
+    font-size: var(--small-size);
+    padding: 0.5rem 1rem;
+    border-radius: 2px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease;
+    z-index: 10001;
+    letter-spacing: 0.1em;
+}
+.edit-banner.active { opacity: 1; }
+body.edit-active [contenteditable="true"] {
+    outline: 1px dashed var(--accent-soft);
+    outline-offset: 4px;
+    cursor: text;
+}
+body.edit-active [contenteditable="true"]:focus {
+    outline: 2px solid var(--accent);
+    background: rgba(198, 100, 95, 0.06);
+}
+
+/* =========================================
+   RESPONSIVE SCALING
+   ========================================= */
+@media (max-height: 700px) {
+    :root {
+        --slide-padding: clamp(1rem, 3.5vw, 2.5rem);
+        --content-gap:   clamp(0.5rem, 1.5vw, 1rem);
+        --title-size:    clamp(1.8rem, 5vw, 3.5rem);
+        --h2-size:       clamp(1.25rem, 3vw, 2rem);
+    }
+    .pipeline::before { top: 1rem; }
+}
+@media (max-height: 600px) {
+    :root {
+        --slide-padding: clamp(0.75rem, 2.5vw, 1.5rem);
+        --body-size:     clamp(0.75rem, 1.1vw, 0.95rem);
+    }
+    .nav-dots, .slide-footer { display: none; }
+}
+@media (max-height: 500px) {
+    :root {
+        --title-size: clamp(1.4rem, 4vw, 2rem);
+        --h2-size:    clamp(1rem, 2.5vw, 1.4rem);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.2s !important;
+    }
+    html { scroll-behavior: auto; }
+    .reveal { filter: none; transform: none; opacity: 1; }
+}
+</style>
+</head>
+<body>
+
+<!-- Progress bar — updates as user scrolls -->
+<div class="progress-bar" id="progressBar"></div>
+
+<!-- Navigation dots — generated by JS -->
+<nav class="nav-dots" id="navDots" aria-label="Slide navigation"></nav>
+
+<!-- Inline edit affordances (opt-in) -->
+<div class="edit-hotzone" aria-hidden="true"></div>
+<button class="edit-toggle" id="editToggle" title="Edit mode (E)" aria-label="Toggle edit mode">✎</button>
+<div class="edit-banner" id="editBanner">EDIT MODE — Ctrl+S to save</div>
+
+
+<!-- =========================================
+     SLIDE 1 — TITLE
+     ========================================= -->
+<section class="slide title-slide">
+    <div class="cornermark reveal delay-1">
+        USGS · NATIONAL HYDROLOGIC MODEL<br/>
+        <strong>TM 6-B10 CALIBRATION TARGETS</strong>
+    </div>
+
+    <div class="title-wrap">
+        <div class="eyebrow reveal">An internal walkthrough</div>
+        <div class="title-ornament reveal delay-1">· · ·</div>
+        <h1 class="reveal delay-2">
+            nhf-<em>spatial</em>-<br/>targets
+        </h1>
+        <div class="title-ornament reveal delay-3">· · ·</div>
+        <p class="subtitle reveal delay-4">
+            Curating calibration targets from heterogeneous earth-system data
+        </p>
+    </div>
+
+    <div class="slide-footer reveal delay-5">
+        <span>R. MCDONALD</span>
+        <span>2026 · VOL. I</span>
+    </div>
+</section>
+
+
+<!-- =========================================
+     SLIDE 2 — THE MISSION
+     ========================================= -->
+<section class="slide">
+    <div class="slide-num reveal">I / VIII</div>
+    <div class="slide-content">
+        <div class="eyebrow reveal">The Mission</div>
+        <h2 class="reveal delay-1" style="max-width: 20ch; margin-top: 0.5rem;">
+            Turn gridded earth-system data into <em style="color:var(--accent);font-style:italic;">calibration targets</em> for the National Hydrologic Model.
+        </h2>
+
+        <div class="rule reveal delay-2" style="margin: clamp(1rem,2.5vw,2rem) 0;">
+            <span class="rule-dot"></span>
+        </div>
+
+        <div class="two-col">
+            <p class="reveal delay-3 dropcap" style="font-size: var(--body-size); max-width: 42ch;">
+                Five targets defined in USGS TM&nbsp;6-B10 — runoff, actual ET, recharge, soil moisture, and snow-covered area — are built by spatially aggregating public gridded datasets onto an HRU fabric with <span style="font-family:var(--font-mono);color:var(--accent);">gdptools</span>. Each target is a normalized range of plausible values, not a single estimate.
+            </p>
+            <div class="reveal delay-4">
+                <p class="pullquote">
+                    Many sources, one fabric, one reproducible answer.
+                </p>
+            </div>
+        </div>
+    </div>
+    <div class="slide-footer reveal delay-5">
+        <span>THE MISSION</span>
+        <span>HAY ET AL. 2022</span>
+    </div>
+</section>
+
+
+<!-- =========================================
+     SLIDE 3 — ARCHITECTURE: PROJECT vs DATASTORE
+     ========================================= -->
+<section class="slide">
+    <div class="slide-num reveal">II / VIII</div>
+    <div class="slide-content">
+        <div class="eyebrow reveal">Architecture</div>
+        <h2 class="reveal delay-1" style="margin-bottom: clamp(0.5rem, 1.5vw, 1rem);">
+            Projects are fabric-specific.<br/>
+            <em style="font-style: italic; color: var(--ink-muted);">The datastore is shared.</em>
+        </h2>
+
+        <div class="two-col" style="margin-top: clamp(0.75rem, 2vw, 1.5rem);">
+            <!-- Datastore side -->
+            <div class="card reveal delay-2">
+                <span class="marker">◆ DATASTORE — shared</span>
+                <h3>Raw consolidated data, fabric-agnostic</h3>
+                <p>One directory per source: <span style="font-family:var(--font-mono);">merra2/</span>, <span style="font-family:var(--font-mono);">era5_land/</span>, <span style="font-family:var(--font-mono);">reitz2017/</span>… Fetch writes here once; every project that points at the same datastore reuses the data.</p>
+            </div>
+
+            <!-- Project side -->
+            <div class="card reveal delay-3" style="border-color: var(--accent);">
+                <span class="marker">◇ PROJECT — per fabric</span>
+                <h3>config · manifest · weights · targets</h3>
+                <p>Holds <span style="font-family:var(--font-mono);">config.yml</span>, <span style="font-family:var(--font-mono);">fabric.json</span>, credentials, the run manifest, aggregated outputs, weight caches, and final calibration targets — never deleted; it <em>is</em> the audit trail.</p>
+            </div>
+        </div>
+
+        <p class="reveal delay-4" style="margin-top: clamp(0.75rem, 2vw, 1.5rem); font-style: italic; color: var(--ink-muted); max-width: 70ch;">
+            Two projects (GFv1.1 and GFv2.0, say) can share a single datastore on a large drive while their project directories live wherever the modeler wants them.
+        </p>
+    </div>
+    <div class="slide-footer reveal delay-5">
+        <span>ARCHITECTURE</span>
+        <span>SEPARATION OF CONCERNS</span>
+    </div>
+</section>
+
+
+<!-- =========================================
+     SLIDE 4 — PIPELINE STAGES
+     ========================================= -->
+<section class="slide">
+    <div class="slide-num reveal">III / VIII</div>
+    <div class="slide-content">
+        <div class="eyebrow reveal">The Pipeline</div>
+        <h2 class="reveal delay-1" style="margin-bottom: clamp(0.25rem, 1vw, 0.5rem);">
+            Five stages, <em style="font-style:italic;color:var(--accent);">catalog-driven</em> end to end.
+        </h2>
+        <p class="reveal delay-2 lede" style="margin-bottom: clamp(1rem, 2vw, 1.5rem);">
+            Today’s focus — the first three. The last two are deliberately left for later.
+        </p>
+
+        <div class="pipeline">
+            <div class="stage reveal delay-3">
+                <div class="dot">01</div>
+                <div class="label">Catalog</div>
+                <div class="sub">SOURCES · VARIABLES</div>
+            </div>
+            <div class="stage reveal delay-4">
+                <div class="dot">02</div>
+                <div class="label">Fetch</div>
+                <div class="sub">DOWNLOAD</div>
+            </div>
+            <div class="stage reveal delay-5">
+                <div class="dot">03</div>
+                <div class="label">Consolidate</div>
+                <div class="sub">CF-1.6 NETCDF</div>
+            </div>
+            <div class="stage future reveal delay-6">
+                <div class="dot">04</div>
+                <div class="label">Aggregate</div>
+                <div class="sub">LATER</div>
+            </div>
+            <div class="stage future reveal delay-7">
+                <div class="dot">05</div>
+                <div class="label">Targets</div>
+                <div class="sub">LATER</div>
+            </div>
+        </div>
+
+        <div class="rule reveal delay-7" style="margin-top: clamp(1.5rem, 3vw, 2.5rem);">
+            <span class="rule-dot"></span>
+        </div>
+        <p class="reveal delay-8" style="text-align:center; font-style: italic; color: var(--ink-muted); margin-top: clamp(0.5rem, 1.2vw, 0.8rem);">
+            catalog/ YAML is the only source of truth — no URLs, no product IDs, no magic strings in Python.
+        </p>
+    </div>
+    <div class="slide-footer reveal delay-8">
+        <span>PIPELINE</span>
+        <span>SCOPE · TODAY</span>
+    </div>
+</section>
+
+
+<!-- =========================================
+     SLIDE 5 — SOURCE LANDSCAPE
+     ========================================= -->
+<section class="slide">
+    <div class="slide-num reveal">IV / VIII</div>
+    <div class="slide-content">
+        <div class="eyebrow reveal">The Source Landscape</div>
+        <h2 class="reveal delay-1" style="max-width: 22ch;">
+            Nine active sources across <em style="color:var(--accent);font-style:italic;">six different APIs</em>.
+        </h2>
+
+        <div class="source-table reveal delay-2" style="margin-top: clamp(1rem, 2.5vw, 1.8rem);">
+            <span class="s-name">era5_land</span>
+            <span class="s-desc">ECMWF reanalysis · runoff (ro, sro, ssro)</span>
+            <span class="s-api">CDS</span>
+
+            <span class="s-name">gldas_noah_v21</span>
+            <span class="s-desc">Monthly land-surface runoff</span>
+            <span class="s-api">Earthdata</span>
+
+            <span class="s-name">mod16a2_v061</span>
+            <span class="s-desc">MODIS 8-day actual ET</span>
+            <span class="s-api">Earthdata</span>
+
+            <span class="s-name">ssebop</span>
+            <span class="s-desc">Monthly AET — remote Zarr, no download</span>
+            <span class="s-api">STAC</span>
+
+            <span class="s-name">reitz2017</span>
+            <span class="s-desc">Empirical recharge rasters</span>
+            <span class="s-api">ScienceBase</span>
+
+            <span class="s-name">watergap22d</span>
+            <span class="s-desc">Global diffuse recharge (qrdif)</span>
+            <span class="s-api">PANGAEA</span>
+
+            <span class="s-name">merra2</span>
+            <span class="s-desc">Surface soil wetness (GWETTOP)</span>
+            <span class="s-api">Earthdata</span>
+
+            <span class="s-name">nldas_mosaic / noah</span>
+            <span class="s-desc">Multi-layer soil moisture</span>
+            <span class="s-api">Earthdata</span>
+
+            <span class="s-name">ncep_ncar</span>
+            <span class="s-desc">Reanalysis-1 soil moisture (daily→monthly)</span>
+            <span class="s-api">NOAA&nbsp;PSL</span>
+
+            <span class="s-name">mod10c1_v061</span>
+            <span class="s-desc">Daily snow-covered area</span>
+            <span class="s-api">NSIDC</span>
+        </div>
+    </div>
+    <div class="slide-footer reveal delay-3">
+        <span>CATALOG / SOURCES.YML</span>
+        <span>N = 9 CURRENT</span>
+    </div>
+</section>
+
+
+<!-- =========================================
+     SLIDE 6 — FETCH: COMMON SHAPE
+     ========================================= -->
+<section class="slide">
+    <div class="slide-num reveal">V / VIII</div>
+    <div class="slide-content">
+        <div class="eyebrow reveal">Fetch Routines</div>
+        <h2 class="reveal delay-1" style="max-width: 24ch;">
+            One module per source.<br/>
+            <em style="font-style:italic;color:var(--ink-muted);">One shape.</em>
+        </h2>
+
+        <div class="two-col" style="margin-top: clamp(1rem, 2vw, 1.5rem);">
+            <ul class="feature-list reveal delay-2">
+                <li>Metadata (URL, product ID, bbox, variables) comes <em>only</em> from <span style="font-family:var(--font-mono);">catalog.py</span>.</li>
+                <li>Downloads land in <span style="font-family:var(--font-mono);color:var(--accent);">&lt;datastore&gt;/&lt;source_key&gt;/</span> — never inside a project.</li>
+                <li>Credentials resolved from <span style="font-family:var(--font-mono);">.credentials.yml</span> → <span style="font-family:var(--font-mono);">~/.netrc</span>, <span style="font-family:var(--font-mono);">~/.cdsapirc</span>.</li>
+                <li>Idempotent: mtime checks + atomic rename — never re-download what’s already current.</li>
+                <li>Annual splits where APIs demand it (ERA5-Land: 12 monthly CDS requests per year).</li>
+                <li>Every module has a matching <span style="font-family:var(--font-mono);">tests/test_&lt;module&gt;.py</span>.</li>
+            </ul>
+
+            <div class="reveal delay-3">
+                <div class="code"><span class="c"># fetch/era5_land.py — abridged</span>
+<span class="k">def</span> fetch(project, year):
+    src = catalog.<span class="k">get_source</span>(<span class="s">"era5_land"</span>)
+    dest = project.datastore / src.key
+    <span class="k">for</span> month <span class="k">in</span> <span class="n">range</span>(<span class="n">1</span>, <span class="n">13</span>):
+        chunk = _download_chunk(src, year, month)
+        _atomic_write(dest / chunk.name, chunk)
+    project.manifest.<span class="k">record</span>(src, year)</div>
+            </div>
+        </div>
+    </div>
+    <div class="slide-footer reveal delay-4">
+        <span>FETCH / PATTERNS</span>
+        <span>src/…/fetch/*.py</span>
+    </div>
+</section>
+
+
+<!-- =========================================
+     SLIDE 7 — CONSOLIDATION
+     ========================================= -->
+<section class="slide">
+    <div class="slide-num reveal">VI / VIII</div>
+    <div class="slide-content">
+        <div class="eyebrow reveal">Consolidation</div>
+        <h2 class="reveal delay-1" style="max-width: 24ch;">
+            From raw chunks to one <em style="color:var(--accent);font-style:italic;">CF-1.6 NetCDF</em> per source.
+        </h2>
+
+        <div class="grid-3 reveal delay-2" style="margin-top: clamp(1rem, 2.5vw, 1.8rem);">
+            <div class="card">
+                <span class="marker">◆ CF-COMPLIANT</span>
+                <h3>Standards in, standards out</h3>
+                <p>Explicit CRS, <span style="font-family:var(--font-mono);">grid_mapping</span>, units, coordinates, cell methods — so downstream tools (gdptools, xarray) never guess.</p>
+            </div>
+            <div class="card">
+                <span class="marker">◆ ATOMIC</span>
+                <h3>Write-then-rename</h3>
+                <p>Consolidated NCs are written to a temp path and renamed on success. A killed run never leaves a half-valid file behind.</p>
+            </div>
+            <div class="card">
+                <span class="marker">◆ INCREMENTAL</span>
+                <h3>mtime-aware re-aggregation</h3>
+                <p>Daily NCs rebuild only when any hourly input is newer; the monthly roll-up follows. Re-runs are near-free when nothing has changed.</p>
+            </div>
+        </div>
+
+        <div class="rule reveal delay-3" style="margin-top: clamp(1.25rem, 2.5vw, 1.8rem);">
+            <span class="rule-dot"></span>
+        </div>
+        <p class="reveal delay-4" style="margin-top: clamp(0.5rem, 1.2vw, 0.8rem); font-style: italic; color: var(--ink-muted); max-width: 70ch;">
+            The consolidated NC is the hand-off point — aggregation (later) reads it and nothing else.
+        </p>
+    </div>
+    <div class="slide-footer reveal delay-4">
+        <span>CONSOLIDATION</span>
+        <span>fetch/consolidate.py</span>
+    </div>
+</section>
+
+
+<!-- =========================================
+     SLIDE 8 — WHAT'S NEXT
+     ========================================= -->
+<section class="slide">
+    <div class="slide-num reveal">VII / VIII</div>
+    <div class="slide-content" style="justify-content: center; text-align: center;">
+        <div class="eyebrow reveal">Still Ahead</div>
+        <h2 class="reveal delay-1" style="max-width: 22ch; margin: 0.5rem auto 0;">
+            Aggregation &amp; target generation<br/>
+            <em style="font-style:italic; color:var(--ink-muted);">— intentionally deferred.</em>
+        </h2>
+
+        <div class="title-ornament reveal delay-2" style="margin: clamp(1.5rem, 3vw, 2.5rem) 0;">· · ·</div>
+
+        <div class="grid-2 reveal delay-3" style="max-width: min(900px, 90vw); margin: 0 auto; text-align: left;">
+            <div class="card">
+                <span class="marker">◇ AGGREGATE</span>
+                <h3>HRU area-weighted means</h3>
+                <p>gdptools weight caches (fabric × source grid), reused across every run against the same fabric.</p>
+            </div>
+            <div class="card">
+                <span class="marker">◇ TARGETS</span>
+                <h3>Normalized ranges per variable</h3>
+                <p>Min–max bands across sources, per TM 6-B10. Output: one calibration target dataset per HRU.</p>
+            </div>
+        </div>
+
+        <p class="reveal delay-4" style="margin-top: clamp(1.5rem, 3vw, 2.5rem); font-style: italic; color: var(--ink-muted);">
+            The foundation is stable. We build upward from here.
+        </p>
+    </div>
+    <div class="slide-footer reveal delay-5">
+        <span>ROADMAP</span>
+        <span>POST-FOUNDATION</span>
+    </div>
+</section>
+
+
+<!-- =========================================
+     SLIDE 9 — COLOPHON / CLOSE
+     ========================================= -->
+<section class="slide title-slide">
+    <div class="slide-num reveal">VIII / VIII</div>
+    <div class="title-wrap">
+        <div class="eyebrow reveal">fin.</div>
+        <div class="title-ornament reveal delay-1">· · ·</div>
+        <h1 class="reveal delay-2" style="font-size: clamp(2rem, 6vw, 4.5rem);">
+            Thank you.
+        </h1>
+        <div class="title-ornament reveal delay-3">· · ·</div>
+        <p class="subtitle reveal delay-4" style="max-width: 40ch; margin-left:auto; margin-right:auto;">
+            Questions, corrections, or ideas — welcome on the repo.
+        </p>
+        <p class="reveal delay-5" style="font-family: var(--font-mono); font-size: var(--small-size); color: var(--ink-muted); margin-top: clamp(1.5rem, 3vw, 2.5rem); letter-spacing: 0.15em;">
+            github.com · usgs · nhf-spatial-targets
+        </p>
+    </div>
+</section>
+
+
+<script>
+/* ===========================================
+   PRESENTATION CONTROLLER
+   =========================================== */
+class SlidePresentation {
+    constructor() {
+        this.slides = Array.from(document.querySelectorAll('.slide'));
+        this.currentSlide = 0;
+        this.progressBar = document.getElementById('progressBar');
+        this.navDotsContainer = document.getElementById('navDots');
+
+        this.setupIntersectionObserver();
+        this.setupKeyboardNav();
+        this.setupTouchNav();
+        this.setupProgressBar();
+        this.setupNavDots();
+    }
+
+    /* Add .visible class when a slide scrolls into view */
+    setupIntersectionObserver() {
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach((entry) => {
+                if (entry.intersectionRatio >= 0.55) {
+                    entry.target.classList.add('visible');
+                    this.currentSlide = this.slides.indexOf(entry.target);
+                    this.updateNavDots();
+                }
+            });
+        }, { threshold: [0, 0.55, 1] });
+        this.slides.forEach((s) => observer.observe(s));
+    }
+
+    /* Arrow keys, Space, Home/End */
+    setupKeyboardNav() {
+        document.addEventListener('keydown', (e) => {
+            // Skip nav when editing a contenteditable element
+            if (e.target.getAttribute && e.target.getAttribute('contenteditable') === 'true') return;
+
+            if (e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === ' ') {
+                e.preventDefault();
+                this.goTo(this.currentSlide + 1);
+            } else if (e.key === 'ArrowUp' || e.key === 'PageUp') {
+                e.preventDefault();
+                this.goTo(this.currentSlide - 1);
+            } else if (e.key === 'Home') { e.preventDefault(); this.goTo(0); }
+            else if (e.key === 'End')    { e.preventDefault(); this.goTo(this.slides.length - 1); }
+        });
+    }
+
+    /* Touch swipe for mobile */
+    setupTouchNav() {
+        let startY = null;
+        document.addEventListener('touchstart', (e) => { startY = e.touches[0].clientY; }, { passive: true });
+        document.addEventListener('touchend', (e) => {
+            if (startY === null) return;
+            const dy = e.changedTouches[0].clientY - startY;
+            if (Math.abs(dy) > 60) {
+                this.goTo(this.currentSlide + (dy < 0 ? 1 : -1));
+            }
+            startY = null;
+        }, { passive: true });
+    }
+
+    /* Progress bar follows scroll */
+    setupProgressBar() {
+        const update = () => {
+            const total = document.documentElement.scrollHeight - window.innerHeight;
+            const pct = total > 0 ? (window.scrollY / total) * 100 : 0;
+            this.progressBar.style.width = pct + '%';
+        };
+        window.addEventListener('scroll', update, { passive: true });
+        update();
+    }
+
+    /* Navigation dots — always clear before rebuilding (prevents
+       duplicate dots if an exported file captured existing ones) */
+    setupNavDots() {
+        this.navDotsContainer.innerHTML = '';
+        this.slides.forEach((_, i) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.setAttribute('aria-label', 'Go to slide ' + (i + 1));
+            btn.addEventListener('click', () => this.goTo(i));
+            this.navDotsContainer.appendChild(btn);
+        });
+        this.updateNavDots();
+    }
+
+    updateNavDots() {
+        const buttons = this.navDotsContainer.querySelectorAll('button');
+        buttons.forEach((b, i) => b.classList.toggle('active', i === this.currentSlide));
+    }
+
+    goTo(idx) {
+        idx = Math.max(0, Math.min(this.slides.length - 1, idx));
+        this.slides[idx].scrollIntoView({ behavior: 'smooth' });
+    }
+}
+
+
+/* ===========================================
+   INLINE EDITOR (opt-in)
+   Hotzone hover + E key + click-to-edit.
+   =========================================== */
+class InlineEditor {
+    constructor() {
+        this.isActive = false;
+        this.toggleBtn = document.getElementById('editToggle');
+        this.banner = document.getElementById('editBanner');
+        this.editableSelector = 'h1, h2, h3, p, li, .eyebrow, .marker, .subtitle, .lede, .pullquote, .label, .s-name, .s-desc';
+
+        this.setupHotzone();
+        this.setupToggleButton();
+        this.setupKeyboard();
+        this.setupSaveShortcut();
+        this.restoreFromStorage();
+    }
+
+    setupHotzone() {
+        const hotzone = document.querySelector('.edit-hotzone');
+        let hideTimeout = null;
+
+        hotzone.addEventListener('mouseenter', () => {
+            clearTimeout(hideTimeout);
+            this.toggleBtn.classList.add('show');
+        });
+        hotzone.addEventListener('mouseleave', () => {
+            hideTimeout = setTimeout(() => {
+                if (!this.isActive) this.toggleBtn.classList.remove('show');
+            }, 400);
+        });
+        this.toggleBtn.addEventListener('mouseenter', () => clearTimeout(hideTimeout));
+        this.toggleBtn.addEventListener('mouseleave', () => {
+            hideTimeout = setTimeout(() => {
+                if (!this.isActive) this.toggleBtn.classList.remove('show');
+            }, 400);
+        });
+        hotzone.addEventListener('click', () => this.toggleEditMode());
+    }
+
+    setupToggleButton() {
+        this.toggleBtn.addEventListener('click', () => this.toggleEditMode());
+    }
+
+    setupKeyboard() {
+        document.addEventListener('keydown', (e) => {
+            if ((e.key === 'e' || e.key === 'E') &&
+                !e.target.getAttribute('contenteditable') &&
+                !e.ctrlKey && !e.metaKey) {
+                this.toggleEditMode();
+            }
+        });
+    }
+
+    setupSaveShortcut() {
+        document.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+                e.preventDefault();
+                this.persistToStorage();
+                this.exportFile();
+            }
+        });
+    }
+
+    toggleEditMode() {
+        this.isActive = !this.isActive;
+        document.body.classList.toggle('edit-active', this.isActive);
+        this.toggleBtn.classList.toggle('active', this.isActive);
+        this.banner.classList.toggle('active', this.isActive);
+        this.toggleBtn.textContent = this.isActive ? '✓' : '✎';
+
+        const els = document.querySelectorAll(this.editableSelector);
+        els.forEach((el) => {
+            if (this.isActive) el.setAttribute('contenteditable', 'true');
+            else el.removeAttribute('contenteditable');
+        });
+
+        if (!this.isActive) this.persistToStorage();
+    }
+
+    persistToStorage() {
+        const snapshot = {};
+        document.querySelectorAll(this.editableSelector).forEach((el, i) => {
+            snapshot[i] = el.innerHTML;
+        });
+        try { localStorage.setItem('nhf-deck-edits', JSON.stringify(snapshot)); } catch (e) {}
+    }
+
+    restoreFromStorage() {
+        try {
+            const raw = localStorage.getItem('nhf-deck-edits');
+            if (!raw) return;
+            const snapshot = JSON.parse(raw);
+            document.querySelectorAll(this.editableSelector).forEach((el, i) => {
+                if (snapshot[i] !== undefined) el.innerHTML = snapshot[i];
+            });
+        } catch (e) {}
+    }
+
+    /* Strip edit state from DOM before capturing outerHTML so the
+       saved file opens cleanly — then restore so editing continues. */
+    exportFile() {
+        const editableEls = Array.from(document.querySelectorAll('[contenteditable]'));
+        editableEls.forEach((el) => el.removeAttribute('contenteditable'));
+        document.body.classList.remove('edit-active');
+        this.toggleBtn.classList.remove('active', 'show');
+        this.banner.classList.remove('active', 'show');
+
+        const html = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+
+        // Restore so user can keep editing
+        if (this.isActive) {
+            document.body.classList.add('edit-active');
+            editableEls.forEach((el) => el.setAttribute('contenteditable', 'true'));
+            this.toggleBtn.classList.add('active');
+            this.banner.classList.add('active');
+        }
+
+        const blob = new Blob([html], { type: 'text/html' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'nhf-strategy-deck.html';
+        a.click();
+        URL.revokeObjectURL(a.href);
+    }
+}
+
+/* Boot */
+const deck = new SlidePresentation();
+const editor = new InlineEditor();
+</script>
+</body>
+</html>

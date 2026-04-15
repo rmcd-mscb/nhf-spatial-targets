@@ -11,5 +11,7 @@ def test_adapter_declares_sinusoidal_crs():
     assert ADAPTER.variables == ("ET_500m",)
     assert ADAPTER.source_crs == MODIS_SINUSOIDAL_PROJ
     assert "+proj=sinu" in ADAPTER.source_crs
-    assert ADAPTER.x_coord == "x"
-    assert ADAPTER.y_coord == "y"
+    # x_coord / y_coord are None — resolved at runtime via CF attrs on the
+    # consolidated NC (projection_x_coordinate / projection_y_coordinate).
+    assert ADAPTER.x_coord is None
+    assert ADAPTER.y_coord is None

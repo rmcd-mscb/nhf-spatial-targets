@@ -21,8 +21,6 @@ ADAPTER = SourceAdapter(
     source_key="mod16a2_v061",
     output_name="mod16a2_agg.nc",
     variables=["ET_500m"],
-    x_coord="x",
-    y_coord="y",
     source_crs=MODIS_SINUSOIDAL_PROJ,
 )
 
