@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import tempfile
-from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -455,71 +454,19 @@ def aggregate_variables_for_batch(
     return xr.merge(per_var)
 
 
-def _default_open_hook(project: Project, adapter: SourceAdapter) -> xr.Dataset:
-    """Open the consolidated NC(s) in ``project.raw_dir(adapter.source_key)``.
-
-    Strategy:
-
-    1. Glob all ``*.nc`` files in the raw directory.
-    2. If exactly one is found, open it directly (single-file sources such as
-       merra2, watergap22d, ncep_ncar) — handles both ``*_consolidated.nc``
-       and bare names like ``watergap22d_qrdif_cf.nc``.
-    3. If multiple are found, narrow to ``*_consolidated.nc`` files (per-year
-       sources such as mod16a2) and concatenate along ``time``, then
-       ``sortby("time")`` so the time coord is monotonic regardless of
-       filename order. This avoids accidentally picking up raw per-timestep
-       files that share the directory.
-
-    Raises:
-        FileNotFoundError: no NCs are present, or the multi-file path finds
-            no ``*_consolidated.nc`` matches (the error lists the offending
-            filenames so the operator can investigate).
-        ValueError: concatenated time coord contains duplicates (e.g. a
-            re-fetch left both old and new per-year files in place).
-    """
-    raw_dir = project.raw_dir(adapter.source_key)
-    all_ncs = sorted(raw_dir.glob("*.nc"))
-    if not all_ncs:
-        raise FileNotFoundError(
-            f"No consolidated NC found in {raw_dir}. "
-            f"Run 'nhf-targets fetch {adapter.source_key}' first."
-        )
-    if len(all_ncs) == 1:
-        ncs = all_ncs
-        logger.info("Opening single NC: %s", ncs[0].name)
-        with ExitStack() as stack:
-            datasets = [stack.enter_context(xr.open_dataset(p)) for p in ncs]
-            loaded = datasets[0].load()
-        return loaded
-    else:
-        ncs = sorted(raw_dir.glob("*_consolidated.nc"))
-        if not ncs:
-            sample = [p.name for p in all_ncs[:5]]
-            raise FileNotFoundError(
-                f"Multiple NCs found in {raw_dir} but none match "
-                f"'*_consolidated.nc'. Existing files (first 5 of "
-                f"{len(all_ncs)}): {sample}. Run "
-                f"'nhf-targets fetch {adapter.source_key}' to produce "
-                f"consolidated files."
-            )
-        logger.info(
-            "Concatenating %d consolidated NCs: %s",
-            len(ncs),
-            [p.name for p in ncs],
-        )
-        with ExitStack() as stack:
-            datasets = [stack.enter_context(xr.open_dataset(p)) for p in ncs]
-            loaded = [d.load() for d in datasets]
-            combined = xr.concat(loaded, dim="time").sortby("time")
-        time_values = combined["time"].values
-        if len(np.unique(time_values)) != len(time_values):
-            raise ValueError(
-                f"Duplicate time coords across consolidated files "
-                f"{[p.name for p in ncs]}. Check the datastore for overlapping "
-                f"per-year files (e.g. a re-fetch may have left both the old and "
-                f"new file in place)."
-            )
-        return combined
+def _attach_cf_global_attrs(ds: xr.Dataset, source_key: str, meta: dict) -> None:
+    """Attach CF-1.6 global attrs in place (non-destructive for var attrs)."""
+    access = meta.get("access", {})
+    history = (
+        f"{datetime.now(timezone.utc).isoformat()}: aggregated to HRU fabric "
+        f"by nhf_spatial_targets.aggregate._driver"
+    )
+    ds.attrs.setdefault("Conventions", "CF-1.6")
+    ds.attrs["history"] = history
+    ds.attrs["source"] = source_key
+    if "doi" in access:
+        ds.attrs["source_doi"] = access["doi"]
+    ds.attrs.setdefault("institution", "USGS")
 
 
 def aggregate_source(
@@ -529,120 +476,72 @@ def aggregate_source(
     workdir: Path,
     batch_size: int = 500,
 ) -> xr.Dataset:
-    """Aggregate a tier-1 source to fabric HRU polygons.
+    """Aggregate a source to fabric HRU polygons via the per-year pipeline.
 
-    Processes the full temporal range present in the consolidated source NC;
-    no period clipping is applied. Weights are cached per batch under
-    ``workdir/weights/<source_key>_batch<id>.csv``.
+    Enumerates years from ``*_consolidated.nc`` in the datastore, aggregates
+    each year to ``data/aggregated/_by_year/<source_key>_<year>_agg.nc``
+    (idempotent; existing intermediates are reused on restart), then concats
+    on time to ``data/aggregated/<output_name>``. Per-year intermediates
+    are preserved for audit/restart.
 
-    Parameters
-    ----------
-    adapter : SourceAdapter
-        Declarative description of the source (variables, open_hook, CRS, etc).
-    fabric_path : Path
-        Path to the HRU fabric file.
-    id_col : str
-        Name of the HRU identifier column in the fabric.
-    workdir : Path
-        Project working directory (contains config.yml, fabric.json, manifest.json).
-    batch_size : int
-        Target number of HRUs per spatial batch.
-
-    Returns
-    -------
-    xr.Dataset
-        Combined aggregated dataset with all HRUs and time steps.
+    Variables declared by ``adapter.variables`` that are missing from the
+    source NC cause ValueError before any year is aggregated — unless the
+    adapter defines a ``pre_aggregate_hook`` (in which case the declared
+    variables are constructed by the hook, not read from the raw NC).
     """
     workdir = Path(workdir)
     project = load_project(workdir)
     meta = catalog_source(adapter.source_key)
 
-    if adapter.open_hook is not None:
-        source_ds = adapter.open_hook(project)
-    else:
-        source_ds = _default_open_hook(project, adapter)
-
-    missing = [v for v in adapter.variables if v not in source_ds.data_vars]
-    if missing:
-        raise ValueError(
-            f"{adapter.source_key}: variables {missing} missing from source "
-            f"dataset (have {list(source_ds.data_vars)})"
+    raw_dir = project.raw_dir(adapter.source_key)
+    files = sorted(raw_dir.glob("*_consolidated.nc"))
+    if not files:
+        raise FileNotFoundError(
+            f"No consolidated NC found in {raw_dir}. "
+            f"Run 'nhf-targets fetch {adapter.source_key}' first."
         )
 
-    # Resolve coordinate names: use adapter overrides when set, else auto-detect
-    # via CF attrs on the grid variable.  This handles both legacy adapters that
-    # hard-code coord names and new adapters that leave coords as None.
-    x_coord, y_coord, time_coord = detect_coords(
-        source_ds,
-        adapter.grid_variable,
-        x_override=adapter.x_coord,
-        y_override=adapter.y_coord,
-        time_override=adapter.time_coord,
-    )
+    # Fail fast on missing declared variables — but only if there is no
+    # pre_aggregate_hook. Hooked adapters derive their declared variables.
+    if adapter.pre_aggregate_hook is None:
+        with xr.open_dataset(files[0]) as peek:
+            missing = [v for v in adapter.variables if v not in peek.data_vars]
+            if missing:
+                raise ValueError(
+                    f"{adapter.source_key}: variables {missing} missing from "
+                    f"source dataset (have {list(peek.data_vars)})"
+                )
 
-    batched = load_and_batch_fabric(fabric_path, batch_size=batch_size)
-    n_batches = int(batched["batch_id"].nunique())
+    year_files = enumerate_years(files)
+    fabric_batched = load_and_batch_fabric(fabric_path, batch_size=batch_size)
+    n_batches = int(fabric_batched["batch_id"].nunique())
     logger.info(
-        "%s: fabric split into %d spatial batches",
+        "%s: %d years to aggregate across %d spatial batches",
         adapter.source_key,
+        len(year_files),
         n_batches,
     )
 
-    t0 = str(source_ds[time_coord].values[0])
-    t1 = str(source_ds[time_coord].values[-1])
-    period_full = (t0, t1)
+    per_year_paths = [
+        aggregate_year(adapter, project, year, path, fabric_batched, id_col)
+        for year, path in year_files
+    ]
 
-    datasets: list[xr.Dataset] = []
-    for bid in sorted(batched["batch_id"].unique()):
-        batch_gdf = batched[batched["batch_id"] == bid].drop(columns=["batch_id"])
-        weights = compute_or_load_weights(
-            batch_gdf=batch_gdf,
-            source_ds=source_ds,
-            source_var=adapter.grid_variable,
-            source_crs=adapter.source_crs,
-            x_coord=x_coord,
-            y_coord=y_coord,
-            time_coord=time_coord,
-            id_col=id_col,
-            source_key=adapter.source_key,
-            batch_id=int(bid),
-            workdir=workdir,
-            period=period_full,
-        )
-        ds = aggregate_variables_for_batch(
-            batch_gdf=batch_gdf,
-            source_ds=source_ds,
-            variables=adapter.variables,
-            source_crs=adapter.source_crs,
-            x_coord=x_coord,
-            y_coord=y_coord,
-            time_coord=time_coord,
-            id_col=id_col,
-            weights=weights,
-            period=period_full,
-        )
-        datasets.append(ds)
+    with xr.open_dataset(per_year_paths[0]) as probe:
+        time_coord = _find_time_coord_name(probe) or "time"
+    combined = concat_years(per_year_paths, time_coord=time_coord)
 
-    combined = xr.concat(datasets, dim=id_col)
-    logger.info(
-        "%s: combined dataset: %s time steps x %s HRUs",
-        adapter.source_key,
-        combined.sizes.get(time_coord, "?"),
-        combined.sizes.get(id_col, "?"),
-    )
+    if adapter.post_aggregate_hook is not None:
+        combined = adapter.post_aggregate_hook(combined)
 
-    output_dir = project.aggregated_dir()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / adapter.output_name
-    combined.to_netcdf(output_path)
+    _attach_cf_global_attrs(combined, adapter.source_key, meta)
+
+    output_path = project.aggregated_dir() / adapter.output_name
+    _atomic_write_netcdf(combined, output_path)
     logger.info("%s: output written to %s", adapter.source_key, output_path)
-    # Load a detached in-memory copy so callers can use the return value safely
-    # after the on-disk handle is closed.
-    loaded = combined.load()
-    combined.close()
 
-    t0 = str(loaded[time_coord].values[0])[:10]
-    t1 = str(loaded[time_coord].values[-1])[:10]
+    t0 = str(combined[time_coord].values[0])[:10]
+    t1 = str(combined[time_coord].values[-1])[:10]
     update_manifest(
         project=project,
         source_key=adapter.source_key,
@@ -654,5 +553,4 @@ def aggregate_source(
             for i in range(n_batches)
         ],
     )
-
-    return loaded
+    return combined
