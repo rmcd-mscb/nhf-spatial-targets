@@ -183,6 +183,29 @@ def test_open_concatenates_multiple_consolidated_ncs(tmp_path):
     assert len(result["time"]) == 4
     # Verify time is sorted (2000 before 2001)
     assert result["time"].values[0] < result["time"].values[-1]
+    # Both years must be represented (catches a regression that drops a file)
+    years_present = set(pd.DatetimeIndex(result["time"].values).year)
+    assert years_present == {2000, 2001}
+
+
+def test_open_concat_sorts_when_filename_order_disagrees_with_time(tmp_path):
+    """sortby('time') must run even when filename glob order is non-chronological."""
+    raw_dir = tmp_path / "mod10c1_v061"
+    raw_dir.mkdir()
+
+    # partA covers 2001, partB covers 2000 — filename order is reversed
+    times_partA = pd.date_range("2001-01-01", periods=2, freq="D")
+    times_partB = pd.date_range("2000-01-01", periods=2, freq="D")
+    _make_consolidated_nc(raw_dir / "mod10c1_v061_partA_consolidated.nc", times_partA)
+    _make_consolidated_nc(raw_dir / "mod10c1_v061_partB_consolidated.nc", times_partB)
+
+    class _FakeProject:
+        def raw_dir(self, key):
+            return raw_dir
+
+    result = _open(_FakeProject())
+    times = pd.DatetimeIndex(result["time"].values)
+    assert list(times.year) == [2000, 2000, 2001, 2001]
 
 
 def test_open_raises_when_no_consolidated_nc_found(tmp_path):
@@ -196,4 +219,31 @@ def test_open_raises_when_no_consolidated_nc_found(tmp_path):
             return raw_dir
 
     with pytest.raises(FileNotFoundError, match="consolidated"):
+        _open(_FakeProject())
+
+
+def test_open_raises_on_duplicate_time_across_consolidated_ncs(tmp_path):
+    """Overlapping-time mod10c1 consolidated NCs must raise."""
+    raw_dir = tmp_path / "mod10c1_v061"
+    raw_dir.mkdir()
+
+    times_a = pd.date_range("2001-01-01", periods=10, freq="D")
+    times_b = pd.date_range("2001-01-05", periods=10, freq="D")  # overlaps
+    for name, times in (
+        ("mod10c1_v061_2001a_consolidated.nc", times_a),
+        ("mod10c1_v061_2001b_consolidated.nc", times_b),
+    ):
+        xr.Dataset(
+            {
+                "Day_CMG_Snow_Cover": (["time", "lat", "lon"], np.ones((10, 2, 2))),
+                "Snow_Spatial_QA": (["time", "lat", "lon"], np.ones((10, 2, 2)) * 90),
+            },
+            coords={"time": times, "lat": [0.25, 0.75], "lon": [0.5, 1.5]},
+        ).to_netcdf(raw_dir / name)
+
+    class _FakeProject:
+        def raw_dir(self, key):
+            return raw_dir
+
+    with pytest.raises(ValueError, match="Duplicate"):
         _open(_FakeProject())

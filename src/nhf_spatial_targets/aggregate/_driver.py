@@ -6,9 +6,11 @@ import json
 import logging
 import os
 import tempfile
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 import geopandas as gpd
 import pandas as pd
 import xarray as xr
@@ -284,13 +286,20 @@ def _default_open_hook(project: Project, adapter: SourceAdapter) -> xr.Dataset:
 
     1. Glob all ``*.nc`` files in the raw directory.
     2. If exactly one is found, open it directly (single-file sources such as
-       merra2, watergap22d, ncep_ncar).
+       merra2, watergap22d, ncep_ncar) — handles both ``*_consolidated.nc``
+       and bare names like ``watergap22d_qrdif_cf.nc``.
     3. If multiple are found, narrow to ``*_consolidated.nc`` files (per-year
-       sources such as mod16a2) and concatenate along ``time``.  This avoids
-       accidentally picking up raw per-timestep files that share the directory.
+       sources such as mod16a2) and concatenate along ``time``, then
+       ``sortby("time")`` so the time coord is monotonic regardless of
+       filename order. This avoids accidentally picking up raw per-timestep
+       files that share the directory.
 
-    Raises ``FileNotFoundError`` when no NCs are present, or when the
-    multi-file path finds no ``*_consolidated.nc`` matches.
+    Raises:
+        FileNotFoundError: no NCs are present, or the multi-file path finds
+            no ``*_consolidated.nc`` matches (the error lists the offending
+            filenames so the operator can investigate).
+        ValueError: concatenated time coord contains duplicates (e.g. a
+            re-fetch left both old and new per-year files in place).
     """
     raw_dir = project.raw_dir(adapter.source_key)
     all_ncs = sorted(raw_dir.glob("*.nc"))
@@ -301,27 +310,40 @@ def _default_open_hook(project: Project, adapter: SourceAdapter) -> xr.Dataset:
         )
     if len(all_ncs) == 1:
         ncs = all_ncs
+        logger.info("Opening single NC: %s", ncs[0].name)
+        with ExitStack() as stack:
+            datasets = [stack.enter_context(xr.open_dataset(p)) for p in ncs]
+            loaded = datasets[0].load()
+        return loaded
     else:
         ncs = sorted(raw_dir.glob("*_consolidated.nc"))
         if not ncs:
+            sample = [p.name for p in all_ncs[:5]]
             raise FileNotFoundError(
                 f"Multiple NCs found in {raw_dir} but none match "
-                f"'*_consolidated.nc'. Run "
+                f"'*_consolidated.nc'. Existing files (first 5 of "
+                f"{len(all_ncs)}): {sample}. Run "
                 f"'nhf-targets fetch {adapter.source_key}' to produce "
                 f"consolidated files."
             )
-    datasets = [xr.open_dataset(p) for p in ncs]
-    try:
-        if len(datasets) == 1:
-            loaded = datasets[0].load()
-        else:
-            combined = xr.concat(datasets, dim="time")
-            combined = combined.sortby("time")
-            loaded = combined.load()
-    finally:
-        for d in datasets:
-            d.close()
-    return loaded
+        logger.info(
+            "Concatenating %d consolidated NCs: %s",
+            len(ncs),
+            [p.name for p in ncs],
+        )
+        with ExitStack() as stack:
+            datasets = [stack.enter_context(xr.open_dataset(p)) for p in ncs]
+            loaded = [d.load() for d in datasets]
+            combined = xr.concat(loaded, dim="time").sortby("time")
+        time_values = combined["time"].values
+        if len(np.unique(time_values)) != len(time_values):
+            raise ValueError(
+                f"Duplicate time coords across consolidated files "
+                f"{[p.name for p in ncs]}. Check the datastore for overlapping "
+                f"per-year files (e.g. a re-fetch may have left both the old and "
+                f"new file in place)."
+            )
+        return combined
 
 
 def aggregate_source(

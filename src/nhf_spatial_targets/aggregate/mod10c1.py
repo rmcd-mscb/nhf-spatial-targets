@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+from contextlib import ExitStack
 from pathlib import Path
 
+import numpy as np
 import xarray as xr
 
 from nhf_spatial_targets.aggregate._driver import (
@@ -81,25 +83,55 @@ def build_masked_source(ds: xr.Dataset) -> xr.Dataset:
 
 
 def _open(project) -> xr.Dataset:
+    """Open MOD10C1 v061 consolidated NC(s) for the project's datastore.
+
+    The fetch step writes one ``mod10c1_v061_<year>_consolidated.nc`` per
+    year alongside the raw ``MOD10C1.A*.conus.nc`` per-day tiles. This
+    helper globs only the ``*_consolidated.nc`` pattern so the per-day
+    files (which sort earlier under POSIX uppercase ordering and lack a
+    ``time`` dimension) are ignored. Multi-year files are loaded into
+    memory and concatenated along ``time``, then ``sortby("time")`` so
+    the time coord is monotonic regardless of filename order.
+
+    Raises:
+        FileNotFoundError: no ``*_consolidated.nc`` files are present.
+        ValueError: concatenated time coord contains duplicates (e.g. a
+            re-fetch left both old and new per-year files in place).
+    """
     raw_dir = project.raw_dir(_SOURCE_KEY)
     ncs = sorted(Path(raw_dir).glob("*_consolidated.nc"))
     if not ncs:
+        all_ncs = sorted(Path(raw_dir).glob("*.nc"))
+        if all_ncs:
+            sample = [p.name for p in all_ncs[:5]]
+            raise FileNotFoundError(
+                f"No consolidated MOD10C1 NC found in {raw_dir} (only "
+                f"raw per-day files present, first 5 of {len(all_ncs)}: "
+                f"{sample}). Run 'nhf-targets fetch mod10c1' to produce "
+                f"the consolidated file."
+            )
         raise FileNotFoundError(
             f"No consolidated MOD10C1 NC found in {raw_dir}. "
             f"Run 'nhf-targets fetch mod10c1' first."
         )
-    datasets = [xr.open_dataset(p) for p in ncs]
-    try:
-        if len(datasets) == 1:
-            loaded = datasets[0].load()
+    logger.info("Opening %d consolidated NC(s): %s", len(ncs), [p.name for p in ncs])
+    with ExitStack() as stack:
+        datasets = [stack.enter_context(xr.open_dataset(p)) for p in ncs]
+        loaded_list = [d.load() for d in datasets]
+        if len(loaded_list) == 1:
+            combined = loaded_list[0]
         else:
-            combined = xr.concat(datasets, dim="time")
-            combined = combined.sortby("time")
-            loaded = combined.load()
-    finally:
-        for d in datasets:
-            d.close()
-    return loaded
+            combined = xr.concat(loaded_list, dim="time").sortby("time")
+    if len(ncs) > 1:
+        time_values = combined["time"].values
+        if len(np.unique(time_values)) != len(time_values):
+            raise ValueError(
+                f"Duplicate time coords across consolidated files "
+                f"{[p.name for p in ncs]}. Check the datastore for overlapping "
+                f"per-year files (e.g. a re-fetch may have left both the old and "
+                f"new file in place)."
+            )
+    return combined
 
 
 def aggregate_mod10c1(
