@@ -118,6 +118,48 @@ def weight_cache_path(workdir: Path, source_key: str, batch_id: int) -> Path:
     return Path(workdir) / "weights" / f"{source_key}_batch{batch_id}.csv"
 
 
+def _find_time_coord_name(ds: xr.Dataset) -> str | None:
+    """Return the name of the time coord via CF attrs, or None."""
+    for name in ds.coords:
+        attrs = ds.coords[name].attrs
+        if attrs.get("axis") == "T" or attrs.get("standard_name") == "time":
+            return name
+    # Fall back: any coord literally named 'time' (non-CF legacy NCs).
+    return "time" if "time" in ds.coords else None
+
+
+def enumerate_years(files: list[Path]) -> list[tuple[int, Path]]:
+    """Map each year covered by the files to its source file.
+
+    Opens each NC lazily, reads its time coord, and expands to one
+    ``(year, file)`` tuple per distinct year. Returns results sorted by year.
+
+    Raises:
+        ValueError: two files cover the same year (stale fetch), or a file has
+            no resolvable time coord.
+    """
+    year_to_file: dict[int, Path] = {}
+    for path in files:
+        with xr.open_dataset(path) as ds:
+            time_name = _find_time_coord_name(ds)
+            if time_name is None:
+                attrs_by_coord = {n: dict(ds.coords[n].attrs) for n in ds.coords}
+                raise ValueError(
+                    f"No time coord found in {path.name}. "
+                    f"dims={list(ds.dims)}, coord attrs={attrs_by_coord}"
+                )
+            years = pd.DatetimeIndex(ds[time_name].values).year.unique().tolist()
+        for y in years:
+            if y in year_to_file:
+                raise ValueError(
+                    f"Year {y} overlaps between {year_to_file[y].name} "
+                    f"and {path.name}. Check the datastore for a stale "
+                    f"fetch artifact."
+                )
+            year_to_file[int(y)] = path
+    return sorted(year_to_file.items())
+
+
 def compute_or_load_weights(
     batch_gdf: gpd.GeoDataFrame,
     source_ds: xr.Dataset,
