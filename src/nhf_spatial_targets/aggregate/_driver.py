@@ -160,6 +160,119 @@ def enumerate_years(files: list[Path]) -> list[tuple[int, Path]]:
     return sorted(year_to_file.items())
 
 
+def per_year_output_path(project: Project, source_key: str, year: int) -> Path:
+    """Return the per-year intermediate NC path."""
+    return (
+        project.workdir
+        / "data"
+        / "aggregated"
+        / "_by_year"
+        / f"{source_key}_{year}_agg.nc"
+    )
+
+
+def _atomic_write_netcdf(ds: xr.Dataset, path: Path) -> None:
+    """Atomically write a Dataset to disk via tempfile + rename."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".nc.tmp")
+    os.close(tmp_fd)
+    try:
+        ds.to_netcdf(tmp_path)
+        Path(tmp_path).replace(path)
+    except BaseException:
+        Path(tmp_path).unlink(missing_ok=True)
+        raise
+
+
+def aggregate_year(
+    adapter: SourceAdapter,
+    project: Project,
+    year: int,
+    source_file: Path,
+    fabric_batched: gpd.GeoDataFrame,
+    id_col: str,
+) -> Path:
+    """Aggregate one year to HRU polygons; idempotent on the intermediate NC.
+
+    Returns the path of the per-year intermediate. If that path already
+    exists, returns immediately without opening the source file. Otherwise
+    opens the source file lazily, applies ``adapter.pre_aggregate_hook`` if
+    set, detects coords via CF attrs (respecting adapter overrides), runs
+    the batch loop with ``period=(YYYY-01-01, YYYY-12-31)``, concatenates
+    batches on ``id_col``, and writes the intermediate atomically.
+    """
+    out_path = per_year_output_path(project, adapter.source_key, year)
+    if out_path.exists():
+        logger.info(
+            "%s: year %d: intermediate exists, skipping (%s)",
+            adapter.source_key,
+            year,
+            out_path,
+        )
+        return out_path
+
+    logger.info(
+        "%s: year %d: aggregating from %s",
+        adapter.source_key,
+        year,
+        source_file.name,
+    )
+    period = (f"{year}-01-01", f"{year}-12-31")
+
+    with xr.open_dataset(source_file) as raw:
+        ds = raw
+        if adapter.pre_aggregate_hook is not None:
+            ds = adapter.pre_aggregate_hook(ds)
+
+        grid_var = adapter.grid_variable or adapter.variables[0]
+        x_coord, y_coord, time_coord = detect_coords(
+            ds,
+            grid_var,
+            x_override=adapter.x_coord,
+            y_override=adapter.y_coord,
+            time_override=adapter.time_coord,
+        )
+
+        datasets: list[xr.Dataset] = []
+        for bid in sorted(fabric_batched["batch_id"].unique()):
+            batch_gdf = fabric_batched[fabric_batched["batch_id"] == bid].drop(
+                columns=["batch_id"]
+            )
+            weights = compute_or_load_weights(
+                batch_gdf=batch_gdf,
+                source_ds=ds,
+                source_var=grid_var,
+                source_crs=adapter.source_crs,
+                x_coord=x_coord,
+                y_coord=y_coord,
+                time_coord=time_coord,
+                id_col=id_col,
+                source_key=adapter.source_key,
+                batch_id=int(bid),
+                workdir=project.workdir,
+                period=period,
+            )
+            batch_ds = aggregate_variables_for_batch(
+                batch_gdf=batch_gdf,
+                source_ds=ds,
+                variables=list(adapter.variables),
+                source_crs=adapter.source_crs,
+                x_coord=x_coord,
+                y_coord=y_coord,
+                time_coord=time_coord,
+                id_col=id_col,
+                weights=weights,
+                period=period,
+            )
+            datasets.append(batch_ds)
+
+        year_ds = xr.concat(datasets, dim=id_col)
+
+    _atomic_write_netcdf(year_ds, out_path)
+    logger.info("%s: year %d: wrote %s", adapter.source_key, year, out_path)
+    return out_path
+
+
 def compute_or_load_weights(
     batch_gdf: gpd.GeoDataFrame,
     source_ds: xr.Dataset,
