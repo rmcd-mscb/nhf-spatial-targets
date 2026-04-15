@@ -478,11 +478,12 @@ def aggregate_source(
 ) -> xr.Dataset:
     """Aggregate a source to fabric HRU polygons via the per-year pipeline.
 
-    Enumerates years from ``*_consolidated.nc`` in the datastore, aggregates
-    each year to ``data/aggregated/_by_year/<source_key>_<year>_agg.nc``
-    (idempotent; existing intermediates are reused on restart), then concats
-    on time to ``data/aggregated/<output_name>``. Per-year intermediates
-    are preserved for audit/restart.
+    Enumerates years from files matching ``adapter.files_glob`` in the
+    datastore raw directory, aggregates each year to
+    ``data/aggregated/_by_year/<source_key>_<year>_agg.nc`` (idempotent;
+    existing intermediates are reused on restart), then concats on time to
+    ``data/aggregated/<output_name>``. Per-year intermediates are preserved
+    for audit/restart.
 
     Variables declared by ``adapter.variables`` that are missing from the
     source NC cause ValueError before any year is aggregated — unless the
@@ -494,10 +495,10 @@ def aggregate_source(
     meta = catalog_source(adapter.source_key)
 
     raw_dir = project.raw_dir(adapter.source_key)
-    files = sorted(raw_dir.glob("*_consolidated.nc"))
+    files = sorted(raw_dir.glob(adapter.files_glob))
     if not files:
         raise FileNotFoundError(
-            f"No consolidated NC found in {raw_dir}. "
+            f"No NC matching '{adapter.files_glob}' found in {raw_dir}. "
             f"Run 'nhf-targets fetch {adapter.source_key}' first."
         )
 

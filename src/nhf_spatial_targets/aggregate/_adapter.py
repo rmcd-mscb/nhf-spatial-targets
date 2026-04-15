@@ -7,23 +7,22 @@ from dataclasses import dataclass, field
 
 import xarray as xr
 
-from nhf_spatial_targets.workspace import Project
-
 
 @dataclass(frozen=True)
 class SourceAdapter:
     """Declarative description of a source for the shared aggregation driver.
 
-    Use for sources whose consolidated NetCDF can be opened directly (optionally
-    via an ``open_hook`` for derived variables or file selection) and handed to
+    Use for sources whose NetCDFs can be opened directly and handed to
     ``aggregate_source`` without per-source batching/weighting logic. Sources
     requiring pre-aggregation masking or post-aggregation rename (e.g. MOD10C1)
     call the driver helpers directly and do not use this adapter.
 
-    ``open_hook`` receives the resolved :class:`Project` and must return an
-    :class:`xarray.Dataset` with CRS set and all ``variables`` present
-    (including any derived variables). When ``None``, the driver opens the
-    single consolidated NetCDF under ``project.raw_dir(source_key)``.
+    ``files_glob`` controls which files are enumerated from the datastore raw
+    directory.  The default ``"*_consolidated.nc"`` matches the standard fetch
+    output; sources with non-standard naming (e.g. ERA5-Land monthly NCs) set
+    this to a tighter pattern.  ``pre_aggregate_hook``, when set, receives each
+    lazily-opened per-year Dataset and may add derived variables before the
+    aggregation loop runs.
     """
 
     source_key: str
@@ -34,7 +33,7 @@ class SourceAdapter:
     time_coord: str | None = None
     source_crs: str = "EPSG:4326"
     grid_variable: str | None = None
-    open_hook: Callable[[Project], xr.Dataset] | None = field(default=None)
+    files_glob: str = "*_consolidated.nc"
     pre_aggregate_hook: Callable[[xr.Dataset], xr.Dataset] | None = field(default=None)
     post_aggregate_hook: Callable[[xr.Dataset], xr.Dataset] | None = field(default=None)
 

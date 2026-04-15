@@ -81,27 +81,8 @@ def test_source_adapter_defaults():
     assert adapter.x_coord is None
     assert adapter.y_coord is None
     assert adapter.time_coord is None
-    assert adapter.open_hook is None
     assert adapter.pre_aggregate_hook is None
     assert adapter.post_aggregate_hook is None
-
-
-def test_source_adapter_open_hook_invocable(project):
-    import xarray as xr
-
-    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
-
-    def _open(proj):
-        return xr.Dataset({"a": (("time",), [1.0])}, coords={"time": [0]})
-
-    adapter = SourceAdapter(
-        source_key="merra2",
-        output_name="merra2_agg.nc",
-        variables=["GWETTOP"],
-        open_hook=_open,
-    )
-    ds = adapter.open_hook(project)
-    assert "a" in ds
 
 
 @pytest.fixture()
