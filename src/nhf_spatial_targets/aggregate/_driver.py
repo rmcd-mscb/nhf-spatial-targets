@@ -17,6 +17,7 @@ import xarray as xr
 from gdptools import AggGen, UserCatData, WeightGen
 
 from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+from nhf_spatial_targets.aggregate._coords import detect_coords
 from nhf_spatial_targets.aggregate.batching import spatial_batch
 from nhf_spatial_targets.catalog import source as catalog_source
 from nhf_spatial_targets.workspace import Project, load as load_project
@@ -393,6 +394,17 @@ def aggregate_source(
             f"dataset (have {list(source_ds.data_vars)})"
         )
 
+    # Resolve coordinate names: use adapter overrides when set, else auto-detect
+    # via CF attrs on the grid variable.  This handles both legacy adapters that
+    # hard-code coord names and new adapters that leave coords as None.
+    x_coord, y_coord, time_coord = detect_coords(
+        source_ds,
+        adapter.grid_variable,
+        x_override=adapter.x_coord,
+        y_override=adapter.y_coord,
+        time_override=adapter.time_coord,
+    )
+
     batched = load_and_batch_fabric(fabric_path, batch_size=batch_size)
     n_batches = int(batched["batch_id"].nunique())
     logger.info(
@@ -409,9 +421,9 @@ def aggregate_source(
             source_ds=source_ds,
             source_var=adapter.grid_variable,
             source_crs=adapter.source_crs,
-            x_coord=adapter.x_coord,
-            y_coord=adapter.y_coord,
-            time_coord=adapter.time_coord,
+            x_coord=x_coord,
+            y_coord=y_coord,
+            time_coord=time_coord,
             id_col=id_col,
             source_key=adapter.source_key,
             batch_id=int(bid),
@@ -422,9 +434,9 @@ def aggregate_source(
             source_ds=source_ds,
             variables=adapter.variables,
             source_crs=adapter.source_crs,
-            x_coord=adapter.x_coord,
-            y_coord=adapter.y_coord,
-            time_coord=adapter.time_coord,
+            x_coord=x_coord,
+            y_coord=y_coord,
+            time_coord=time_coord,
             id_col=id_col,
             weights=weights,
         )
@@ -434,7 +446,7 @@ def aggregate_source(
     logger.info(
         "%s: combined dataset: %s time steps x %s HRUs",
         adapter.source_key,
-        combined.sizes.get(adapter.time_coord, "?"),
+        combined.sizes.get(time_coord, "?"),
         combined.sizes.get(id_col, "?"),
     )
 
@@ -448,8 +460,8 @@ def aggregate_source(
     loaded = combined.load()
     combined.close()
 
-    t0 = str(loaded[adapter.time_coord].values[0])[:10]
-    t1 = str(loaded[adapter.time_coord].values[-1])[:10]
+    t0 = str(loaded[time_coord].values[0])[:10]
+    t1 = str(loaded[time_coord].values[-1])[:10]
     update_manifest(
         project=project,
         source_key=adapter.source_key,

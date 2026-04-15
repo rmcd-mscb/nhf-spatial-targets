@@ -29,12 +29,14 @@ class SourceAdapter:
     source_key: str
     output_name: str
     variables: tuple[str, ...]
-    x_coord: str = "lon"
-    y_coord: str = "lat"
-    time_coord: str = "time"
+    x_coord: str | None = None
+    y_coord: str | None = None
+    time_coord: str | None = None
     source_crs: str = "EPSG:4326"
     grid_variable: str | None = None
     open_hook: Callable[[Project], xr.Dataset] | None = field(default=None)
+    pre_aggregate_hook: Callable[[xr.Dataset], xr.Dataset] | None = field(default=None)
+    post_aggregate_hook: Callable[[xr.Dataset], xr.Dataset] | None = field(default=None)
 
     def __post_init__(self) -> None:
         # Coerce list → tuple so callers can pass list literals.

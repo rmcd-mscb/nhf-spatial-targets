@@ -78,10 +78,12 @@ def test_source_adapter_defaults():
         variables=["GWETTOP", "GWETROOT"],
     )
     assert adapter.source_crs == "EPSG:4326"
-    assert adapter.x_coord == "lon"
-    assert adapter.y_coord == "lat"
-    assert adapter.time_coord == "time"
+    assert adapter.x_coord is None
+    assert adapter.y_coord is None
+    assert adapter.time_coord is None
     assert adapter.open_hook is None
+    assert adapter.pre_aggregate_hook is None
+    assert adapter.post_aggregate_hook is None
 
 
 def test_source_adapter_open_hook_invocable(project):
@@ -222,6 +224,9 @@ def test_aggregate_source_writes_multi_var_nc_and_manifest(tmp_path, tiny_fabric
         source_key="merra2",
         output_name="merra2_agg.nc",
         variables=["a", "b"],
+        x_coord="lon",
+        y_coord="lat",
+        time_coord="time",
     )
 
     # Patch catalog.source to supply access metadata for the manifest
@@ -368,6 +373,9 @@ def test_aggregate_source_raises_when_variable_missing(tmp_path, tiny_fabric):
         source_key="merra2",
         output_name="merra2_agg.nc",
         variables=["GWETTOP", "BOGUS_VAR"],
+        x_coord="lon",
+        y_coord="lat",
+        time_coord="time",
     )
     with pytest.raises(ValueError, match="BOGUS_VAR"):
         aggregate_source(
@@ -782,3 +790,23 @@ def test_compute_or_load_weights_ignores_stray_tmp_from_crashed_run(
     pd.testing.assert_frame_equal(weights, fake)
     # WeightGen was invoked — cache was NOT short-circuited by the stray tmp.
     assert mock_wg.called
+
+
+def test_source_adapter_accepts_hooks():
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+
+    def _pre(ds):
+        return ds
+
+    def _post(ds):
+        return ds
+
+    adapter = SourceAdapter(
+        source_key="merra2",
+        output_name="merra2_agg.nc",
+        variables=["GWETTOP"],
+        pre_aggregate_hook=_pre,
+        post_aggregate_hook=_post,
+    )
+    assert adapter.pre_aggregate_hook is _pre
+    assert adapter.post_aggregate_hook is _post
