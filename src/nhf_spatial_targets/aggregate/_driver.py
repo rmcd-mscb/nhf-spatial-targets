@@ -364,7 +364,7 @@ def compute_or_load_weights(
         t_coord=time_coord,
         var=[source_var],
         f_feature=batch_gdf,
-        proj_feature=batch_gdf.crs.to_string(),
+        proj_feature=WEIGHT_GEN_CRS,
         id_feature=id_col,
         period=[period[0], period[1]],
     )
@@ -438,13 +438,13 @@ def aggregate_variables_for_batch(
             t_coord=time_coord,
             var=[var],
             f_feature=batch_gdf,
-            proj_feature=batch_gdf.crs.to_string(),
+            proj_feature=WEIGHT_GEN_CRS,
             id_feature=id_col,
             period=[period[0], period[1]],
         )
         agg = AggGen(
             user_data=user_data,
-            stat_method="masked_mean",
+            stat_method="mean",
             agg_engine="serial",
             agg_writer="none",
             weights=weights,
