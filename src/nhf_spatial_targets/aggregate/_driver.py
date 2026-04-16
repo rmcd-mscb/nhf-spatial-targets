@@ -9,12 +9,14 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 import geopandas as gpd
 import pandas as pd
 import xarray as xr
 from gdptools import AggGen, UserCatData, WeightGen
 
 from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+from nhf_spatial_targets.aggregate._coords import detect_coords
 from nhf_spatial_targets.aggregate.batching import spatial_batch
 from nhf_spatial_targets.catalog import source as catalog_source
 from nhf_spatial_targets.workspace import Project, load as load_project
@@ -115,6 +117,183 @@ def weight_cache_path(workdir: Path, source_key: str, batch_id: int) -> Path:
     return Path(workdir) / "weights" / f"{source_key}_batch{batch_id}.csv"
 
 
+def _find_time_coord_name(ds: xr.Dataset) -> str | None:
+    """Return the name of the time coord via CF attrs, or None."""
+    for name in ds.coords:
+        attrs = ds.coords[name].attrs
+        if attrs.get("axis") == "T" or attrs.get("standard_name") == "time":
+            return name
+    # Fall back: any coord literally named 'time' (non-CF legacy NCs).
+    return "time" if "time" in ds.coords else None
+
+
+def enumerate_years(files: list[Path]) -> list[tuple[int, Path]]:
+    """Map each year covered by the files to its source file.
+
+    Opens each NC lazily, reads its time coord, and expands to one
+    ``(year, file)`` tuple per distinct year. Returns results sorted by year.
+
+    Raises:
+        ValueError: two files cover the same year (stale fetch), or a file has
+            no resolvable time coord.
+    """
+    year_to_file: dict[int, Path] = {}
+    for path in files:
+        with xr.open_dataset(path) as ds:
+            time_name = _find_time_coord_name(ds)
+            if time_name is None:
+                attrs_by_coord = {n: dict(ds.coords[n].attrs) for n in ds.coords}
+                raise ValueError(
+                    f"No time coord found in {path.name}. "
+                    f"dims={list(ds.dims)}, coord attrs={attrs_by_coord}"
+                )
+            years = pd.DatetimeIndex(ds[time_name].values).year.unique().tolist()
+        for y in years:
+            if y in year_to_file:
+                raise ValueError(
+                    f"Year {y} overlaps between {year_to_file[y].name} "
+                    f"and {path.name}. Check the datastore for a stale "
+                    f"fetch artifact."
+                )
+            year_to_file[int(y)] = path
+    return sorted(year_to_file.items())
+
+
+def per_year_output_path(project: Project, source_key: str, year: int) -> Path:
+    """Return the per-year intermediate NC path."""
+    return (
+        project.workdir
+        / "data"
+        / "aggregated"
+        / "_by_year"
+        / f"{source_key}_{year}_agg.nc"
+    )
+
+
+def _atomic_write_netcdf(ds: xr.Dataset, path: Path) -> None:
+    """Atomically write a Dataset to disk via tempfile + rename."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".nc.tmp")
+    os.close(tmp_fd)
+    try:
+        ds.to_netcdf(tmp_path)
+        Path(tmp_path).replace(path)
+    except BaseException:
+        Path(tmp_path).unlink(missing_ok=True)
+        raise
+
+
+def aggregate_year(
+    adapter: SourceAdapter,
+    project: Project,
+    year: int,
+    source_file: Path,
+    fabric_batched: gpd.GeoDataFrame,
+    id_col: str,
+) -> Path:
+    """Aggregate one year to HRU polygons; idempotent on the intermediate NC.
+
+    Returns the path of the per-year intermediate. If that path already
+    exists, returns immediately without opening the source file. Otherwise
+    opens the source file lazily, applies ``adapter.pre_aggregate_hook`` if
+    set, detects coords via CF attrs (respecting adapter overrides), runs
+    the batch loop with ``period=(YYYY-01-01, YYYY-12-31)``, concatenates
+    batches on ``id_col``, and writes the intermediate atomically.
+    """
+    out_path = per_year_output_path(project, adapter.source_key, year)
+    if out_path.exists():
+        logger.info(
+            "%s: year %d: intermediate exists, skipping (%s)",
+            adapter.source_key,
+            year,
+            out_path,
+        )
+        return out_path
+
+    logger.info(
+        "%s: year %d: aggregating from %s",
+        adapter.source_key,
+        year,
+        source_file.name,
+    )
+    period = (f"{year}-01-01", f"{year}-12-31")
+
+    with xr.open_dataset(source_file) as raw:
+        ds = raw
+        if adapter.pre_aggregate_hook is not None:
+            ds = adapter.pre_aggregate_hook(ds)
+
+        grid_var = adapter.grid_variable or adapter.variables[0]
+        x_coord, y_coord, time_coord = detect_coords(
+            ds,
+            grid_var,
+            x_override=adapter.x_coord,
+            y_override=adapter.y_coord,
+            time_override=adapter.time_coord,
+        )
+
+        datasets: list[xr.Dataset] = []
+        for bid in sorted(fabric_batched["batch_id"].unique()):
+            batch_gdf = fabric_batched[fabric_batched["batch_id"] == bid].drop(
+                columns=["batch_id"]
+            )
+            weights = compute_or_load_weights(
+                batch_gdf=batch_gdf,
+                source_ds=ds,
+                source_var=grid_var,
+                source_crs=adapter.source_crs,
+                x_coord=x_coord,
+                y_coord=y_coord,
+                time_coord=time_coord,
+                id_col=id_col,
+                source_key=adapter.source_key,
+                batch_id=int(bid),
+                workdir=project.workdir,
+                period=period,
+            )
+            batch_ds = aggregate_variables_for_batch(
+                batch_gdf=batch_gdf,
+                source_ds=ds,
+                variables=list(adapter.variables),
+                source_crs=adapter.source_crs,
+                x_coord=x_coord,
+                y_coord=y_coord,
+                time_coord=time_coord,
+                id_col=id_col,
+                weights=weights,
+                period=period,
+            )
+            datasets.append(batch_ds)
+
+        year_ds = xr.concat(datasets, dim=id_col)
+
+    _atomic_write_netcdf(year_ds, out_path)
+    logger.info("%s: year %d: wrote %s", adapter.source_key, year, out_path)
+    return out_path
+
+
+def concat_years(paths: list[Path], time_coord: str) -> xr.Dataset:
+    """Open per-year intermediates, concat on time, validate monotonic + unique.
+
+    Loads each intermediate into memory and closes the on-disk handle so the
+    returned Dataset is detached from the filesystem.
+    """
+    if not paths:
+        raise ValueError("concat_years called with empty paths list")
+    loaded: list[xr.Dataset] = []
+    for p in paths:
+        with xr.open_dataset(p) as ds:
+            loaded.append(ds.load())
+    combined = xr.concat(loaded, dim=time_coord).sortby(time_coord)
+    t = combined[time_coord].values
+    if len(np.unique(t)) != len(t):
+        raise ValueError(
+            f"Duplicate time coords across per-year intermediates: "
+            f"{[p.name for p in paths]}"
+        )
+    return combined
+
+
 def compute_or_load_weights(
     batch_gdf: gpd.GeoDataFrame,
     source_ds: xr.Dataset,
@@ -127,6 +306,8 @@ def compute_or_load_weights(
     source_key: str,
     batch_id: int,
     workdir: Path,
+    *,
+    period: tuple[str, str],
 ) -> pd.DataFrame:
     """Compute (or load from cache) the per-batch weight table.
 
@@ -183,12 +364,9 @@ def compute_or_load_weights(
         t_coord=time_coord,
         var=[source_var],
         f_feature=batch_gdf,
-        proj_feature=batch_gdf.crs.to_string(),
+        proj_feature=WEIGHT_GEN_CRS,
         id_feature=id_col,
-        period=[
-            str(source_ds[time_coord].values[0]),
-            str(source_ds[time_coord].values[-1]),
-        ],
+        period=[period[0], period[1]],
     )
     wg = WeightGen(
         user_data=user_data,
@@ -219,6 +397,8 @@ def aggregate_variables_for_batch(
     time_coord: str,
     id_col: str,
     weights: pd.DataFrame,
+    *,
+    period: tuple[str, str],
 ) -> xr.Dataset:
     """Run gdptools AggGen once per variable, merge results on HRU ID.
 
@@ -258,16 +438,13 @@ def aggregate_variables_for_batch(
             t_coord=time_coord,
             var=[var],
             f_feature=batch_gdf,
-            proj_feature=batch_gdf.crs.to_string(),
+            proj_feature=WEIGHT_GEN_CRS,
             id_feature=id_col,
-            period=[
-                str(source_ds[time_coord].values[0]),
-                str(source_ds[time_coord].values[-1]),
-            ],
+            period=[period[0], period[1]],
         )
         agg = AggGen(
             user_data=user_data,
-            stat_method="masked_mean",
+            stat_method="mean",
             agg_engine="serial",
             agg_writer="none",
             weights=weights,
@@ -277,34 +454,19 @@ def aggregate_variables_for_batch(
     return xr.merge(per_var)
 
 
-def _default_open_hook(project: Project, adapter: SourceAdapter) -> xr.Dataset:
-    """Open the single consolidated NC in ``project.raw_dir(adapter.source_key)``.
-
-    Raises ``FileNotFoundError`` when the datastore has no NCs and
-    ``ValueError`` when it has more than one (ambiguous — the consolidated
-    contract is a single NC per source).
-    """
-    raw_dir = project.raw_dir(adapter.source_key)
-    ncs = sorted(raw_dir.glob("*.nc"))
-    if not ncs:
-        raise FileNotFoundError(
-            f"No consolidated NC found in {raw_dir}. "
-            f"Run 'nhf-targets fetch {adapter.source_key}' first."
-        )
-    if len(ncs) > 1:
-        names = ", ".join(nc.name for nc in ncs)
-        raise ValueError(
-            f"Multiple consolidated NCs found in {raw_dir}: [{names}]. "
-            "The consolidated-source contract expects exactly one NC per source. "
-            "Check the datastore for duplicate or stale files and remove all but "
-            "the correct consolidated file."
-        )
-    ds = xr.open_dataset(ncs[0])
-    try:
-        loaded = ds.load()
-    finally:
-        ds.close()
-    return loaded
+def _attach_cf_global_attrs(ds: xr.Dataset, source_key: str, meta: dict) -> None:
+    """Attach CF-1.6 global attrs in place (non-destructive for var attrs)."""
+    access = meta.get("access", {})
+    history = (
+        f"{datetime.now(timezone.utc).isoformat()}: aggregated to HRU fabric "
+        f"by nhf_spatial_targets.aggregate._driver"
+    )
+    ds.attrs.setdefault("Conventions", "CF-1.6")
+    ds.attrs["history"] = history
+    ds.attrs["source"] = source_key
+    if "doi" in access:
+        ds.attrs["source_doi"] = access["doi"]
+    ds.attrs.setdefault("institution", "USGS")
 
 
 def aggregate_source(
@@ -314,103 +476,73 @@ def aggregate_source(
     workdir: Path,
     batch_size: int = 500,
 ) -> xr.Dataset:
-    """Aggregate a tier-1 source to fabric HRU polygons.
+    """Aggregate a source to fabric HRU polygons via the per-year pipeline.
 
-    Processes the full temporal range present in the consolidated source NC;
-    no period clipping is applied. Weights are cached per batch under
-    ``workdir/weights/<source_key>_batch<id>.csv``.
+    Enumerates years from files matching ``adapter.files_glob`` in the
+    datastore raw directory, aggregates each year to
+    ``data/aggregated/_by_year/<source_key>_<year>_agg.nc`` (idempotent;
+    existing intermediates are reused on restart), then concats on time to
+    ``data/aggregated/<output_name>``. Per-year intermediates are preserved
+    for audit/restart.
 
-    Parameters
-    ----------
-    adapter : SourceAdapter
-        Declarative description of the source (variables, open_hook, CRS, etc).
-    fabric_path : Path
-        Path to the HRU fabric file.
-    id_col : str
-        Name of the HRU identifier column in the fabric.
-    workdir : Path
-        Project working directory (contains config.yml, fabric.json, manifest.json).
-    batch_size : int
-        Target number of HRUs per spatial batch.
-
-    Returns
-    -------
-    xr.Dataset
-        Combined aggregated dataset with all HRUs and time steps.
+    Variables declared by ``adapter.variables`` that are missing from the
+    source NC cause ValueError before any year is aggregated — unless the
+    adapter defines a ``pre_aggregate_hook`` (in which case the declared
+    variables are constructed by the hook, not read from the raw NC).
     """
     workdir = Path(workdir)
     project = load_project(workdir)
     meta = catalog_source(adapter.source_key)
 
-    if adapter.open_hook is not None:
-        source_ds = adapter.open_hook(project)
-    else:
-        source_ds = _default_open_hook(project, adapter)
-
-    missing = [v for v in adapter.variables if v not in source_ds.data_vars]
-    if missing:
-        raise ValueError(
-            f"{adapter.source_key}: variables {missing} missing from source "
-            f"dataset (have {list(source_ds.data_vars)})"
+    raw_dir = project.raw_dir(adapter.source_key)
+    files = sorted(raw_dir.glob(adapter.files_glob))
+    if not files:
+        raise FileNotFoundError(
+            f"No NC matching '{adapter.files_glob}' found in {raw_dir}. "
+            f"Run 'nhf-targets fetch {adapter.source_key}' first."
         )
 
-    batched = load_and_batch_fabric(fabric_path, batch_size=batch_size)
-    n_batches = int(batched["batch_id"].nunique())
+    # Fail fast on missing declared variables — but only if there is no
+    # pre_aggregate_hook. Hooked adapters derive their declared variables.
+    if adapter.pre_aggregate_hook is None:
+        with xr.open_dataset(files[0]) as peek:
+            missing = [v for v in adapter.variables if v not in peek.data_vars]
+            if missing:
+                raise ValueError(
+                    f"{adapter.source_key}: variables {missing} missing from "
+                    f"source dataset (have {list(peek.data_vars)})"
+                )
+
+    year_files = enumerate_years(files)
+    fabric_batched = load_and_batch_fabric(fabric_path, batch_size=batch_size)
+    n_batches = int(fabric_batched["batch_id"].nunique())
     logger.info(
-        "%s: fabric split into %d spatial batches",
+        "%s: %d years to aggregate across %d spatial batches",
         adapter.source_key,
+        len(year_files),
         n_batches,
     )
 
-    datasets: list[xr.Dataset] = []
-    for bid in sorted(batched["batch_id"].unique()):
-        batch_gdf = batched[batched["batch_id"] == bid].drop(columns=["batch_id"])
-        weights = compute_or_load_weights(
-            batch_gdf=batch_gdf,
-            source_ds=source_ds,
-            source_var=adapter.grid_variable,
-            source_crs=adapter.source_crs,
-            x_coord=adapter.x_coord,
-            y_coord=adapter.y_coord,
-            time_coord=adapter.time_coord,
-            id_col=id_col,
-            source_key=adapter.source_key,
-            batch_id=int(bid),
-            workdir=workdir,
-        )
-        ds = aggregate_variables_for_batch(
-            batch_gdf=batch_gdf,
-            source_ds=source_ds,
-            variables=adapter.variables,
-            source_crs=adapter.source_crs,
-            x_coord=adapter.x_coord,
-            y_coord=adapter.y_coord,
-            time_coord=adapter.time_coord,
-            id_col=id_col,
-            weights=weights,
-        )
-        datasets.append(ds)
+    per_year_paths = [
+        aggregate_year(adapter, project, year, path, fabric_batched, id_col)
+        for year, path in year_files
+    ]
 
-    combined = xr.concat(datasets, dim=id_col)
-    logger.info(
-        "%s: combined dataset: %s time steps x %s HRUs",
-        adapter.source_key,
-        combined.sizes.get(adapter.time_coord, "?"),
-        combined.sizes.get(id_col, "?"),
-    )
+    with xr.open_dataset(per_year_paths[0]) as probe:
+        time_coord = _find_time_coord_name(probe) or "time"
+    combined = concat_years(per_year_paths, time_coord=time_coord)
 
-    output_dir = project.aggregated_dir()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / adapter.output_name
-    combined.to_netcdf(output_path)
+    if adapter.post_aggregate_hook is not None:
+        combined = adapter.post_aggregate_hook(combined)
+
+    _attach_cf_global_attrs(combined, adapter.source_key, meta)
+
+    output_path = project.aggregated_dir() / adapter.output_name
+    _atomic_write_netcdf(combined, output_path)
     logger.info("%s: output written to %s", adapter.source_key, output_path)
-    # Load a detached in-memory copy so callers can use the return value safely
-    # after the on-disk handle is closed.
-    loaded = combined.load()
-    combined.close()
 
-    t0 = str(loaded[adapter.time_coord].values[0])[:10]
-    t1 = str(loaded[adapter.time_coord].values[-1])[:10]
+    t0 = str(combined[time_coord].values[0])[:10]
+    t1 = str(combined[time_coord].values[-1])[:10]
     update_manifest(
         project=project,
         source_key=adapter.source_key,
@@ -422,5 +554,4 @@ def aggregate_source(
             for i in range(n_batches)
         ],
     )
-
-    return loaded
+    return combined

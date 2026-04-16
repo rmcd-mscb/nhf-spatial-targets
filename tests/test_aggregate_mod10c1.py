@@ -126,3 +126,14 @@ def test_log_low_valid_coverage_silent_below_threshold(caplog):
     ):
         _log_low_valid_coverage(combined)
     assert not any("zero valid-area" in rec.message for rec in caplog.records)
+
+
+def test_mod10c1_adapter_wires_hooks_and_variables():
+    from nhf_spatial_targets.aggregate.mod10c1 import ADAPTER, build_masked_source
+
+    assert ADAPTER.source_key == "mod10c1_v061"
+    assert ADAPTER.output_name == "mod10c1_agg.nc"
+    assert set(ADAPTER.variables) == {"sca", "ci", "valid_mask"}
+    assert ADAPTER.grid_variable == "sca"
+    assert ADAPTER.pre_aggregate_hook is build_masked_source
+    assert ADAPTER.post_aggregate_hook is not None

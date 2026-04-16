@@ -75,7 +75,7 @@ def _process_batch(
     )
     agg = AggGen(
         user_data=stac_data,
-        stat_method="masked_mean",
+        stat_method="mean",
         agg_engine="serial",
         agg_writer="none",
         weights=weights,

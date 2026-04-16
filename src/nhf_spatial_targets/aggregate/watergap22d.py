@@ -14,6 +14,7 @@ ADAPTER = SourceAdapter(
     source_key="watergap22d",
     output_name="watergap22d_agg.nc",
     variables=["qrdif"],
+    files_glob="*_cf.nc",
 )
 
 

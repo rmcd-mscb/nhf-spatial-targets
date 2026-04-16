@@ -78,28 +78,11 @@ def test_source_adapter_defaults():
         variables=["GWETTOP", "GWETROOT"],
     )
     assert adapter.source_crs == "EPSG:4326"
-    assert adapter.x_coord == "lon"
-    assert adapter.y_coord == "lat"
-    assert adapter.time_coord == "time"
-    assert adapter.open_hook is None
-
-
-def test_source_adapter_open_hook_invocable(project):
-    import xarray as xr
-
-    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
-
-    def _open(proj):
-        return xr.Dataset({"a": (("time",), [1.0])}, coords={"time": [0]})
-
-    adapter = SourceAdapter(
-        source_key="merra2",
-        output_name="merra2_agg.nc",
-        variables=["GWETTOP"],
-        open_hook=_open,
-    )
-    ds = adapter.open_hook(project)
-    assert "a" in ds
+    assert adapter.x_coord is None
+    assert adapter.y_coord is None
+    assert adapter.time_coord is None
+    assert adapter.pre_aggregate_hook is None
+    assert adapter.post_aggregate_hook is None
 
 
 @pytest.fixture()
@@ -182,6 +165,7 @@ def test_aggregate_variables_for_batch_merges_variables(tiny_fabric):
             time_coord="time",
             id_col="hru_id",
             weights=_fake_weights(),
+            period=("2000-01-01", "2000-02-01"),
         )
     assert set(result.data_vars) == {"a", "b"}
     assert result.sizes["hru_id"] == 4
@@ -191,18 +175,20 @@ def test_aggregate_source_writes_multi_var_nc_and_manifest(tmp_path, tiny_fabric
     from nhf_spatial_targets.aggregate._adapter import SourceAdapter
     from nhf_spatial_targets.aggregate._driver import aggregate_source
 
-    # --- minimal project ---
     datastore = tmp_path / "datastore"
     (datastore / "merra2").mkdir(parents=True)
-    # write a placeholder consolidated NC so default open_hook has something
-    src_nc = datastore / "merra2" / "merra2.nc"
-    times = pd.date_range("2000-01-01", periods=2, freq="MS")
+    src_nc = datastore / "merra2" / "merra2_2000_consolidated.nc"
+    times = pd.date_range("2000-01-01", periods=12, freq="MS")
     xr.Dataset(
         {
-            "a": (["time", "lat", "lon"], np.ones((2, 2, 2))),
-            "b": (["time", "lat", "lon"], np.ones((2, 2, 2)) * 2.0),
+            "a": (["time", "lat", "lon"], np.ones((12, 2, 2))),
+            "b": (["time", "lat", "lon"], np.ones((12, 2, 2)) * 2.0),
         },
-        coords={"time": times, "lat": [0.25, 0.75], "lon": [0.5, 1.5]},
+        coords={
+            "time": ("time", times, {"standard_name": "time"}),
+            "lat": ("lat", [0.25, 0.75], {"standard_name": "latitude"}),
+            "lon": ("lon", [0.5, 1.5], {"standard_name": "longitude"}),
+        },
     ).to_netcdf(src_nc)
 
     (tmp_path / "config.yml").write_text(
@@ -224,8 +210,17 @@ def test_aggregate_source_writes_multi_var_nc_and_manifest(tmp_path, tiny_fabric
         variables=["a", "b"],
     )
 
-    # Patch catalog.source to supply access metadata for the manifest
     fake_meta = {"access": {"type": "local_nc"}}
+    fake_year_ds = xr.Dataset(
+        {
+            "a": (["time", "hru_id"], np.ones((12, 4))),
+            "b": (["time", "hru_id"], np.ones((12, 4)) * 2.0),
+        },
+        coords={
+            "time": ("time", times, {"standard_name": "time"}),
+            "hru_id": [0, 1, 2, 3],
+        },
+    )
 
     with (
         patch(
@@ -237,17 +232,10 @@ def test_aggregate_source_writes_multi_var_nc_and_manifest(tmp_path, tiny_fabric
             return_value=_fake_weights(),
         ),
         patch(
-            "nhf_spatial_targets.aggregate._driver.aggregate_variables_for_batch"
-        ) as mock_agg_batch,
+            "nhf_spatial_targets.aggregate._driver.aggregate_variables_for_batch",
+            return_value=fake_year_ds,
+        ),
     ):
-        times = pd.date_range("2000-01-01", periods=2, freq="MS")
-        mock_agg_batch.return_value = xr.Dataset(
-            {
-                "a": (["time", "hru_id"], np.ones((2, 4))),
-                "b": (["time", "hru_id"], np.ones((2, 4)) * 2.0),
-            },
-            coords={"time": times, "hru_id": [0, 1, 2, 3]},
-        )
         out = aggregate_source(
             adapter,
             fabric_path=tiny_fabric,
@@ -259,6 +247,9 @@ def test_aggregate_source_writes_multi_var_nc_and_manifest(tmp_path, tiny_fabric
     assert set(out.data_vars) == {"a", "b"}
     output_nc = tmp_path / "data" / "aggregated" / "merra2_agg.nc"
     assert output_nc.exists()
+    assert (
+        tmp_path / "data" / "aggregated" / "_by_year" / "merra2_2000_agg.nc"
+    ).exists()
     manifest = json.loads((tmp_path / "manifest.json").read_text())
     assert "merra2" in manifest["sources"]
     assert manifest["sources"]["merra2"]["output_file"] == (
@@ -351,7 +342,7 @@ def test_aggregate_source_raises_when_variable_missing(tmp_path, tiny_fabric):
     xr.Dataset(
         {"GWETTOP": (["time", "lat", "lon"], np.ones((2, 2, 2)))},
         coords={"time": times, "lat": [0.25, 0.75], "lon": [0.5, 1.5]},
-    ).to_netcdf(datastore / "merra2" / "merra2.nc")
+    ).to_netcdf(datastore / "merra2" / "merra2_2000_consolidated.nc")
 
     (tmp_path / "config.yml").write_text(
         yaml.dump(
@@ -368,6 +359,9 @@ def test_aggregate_source_raises_when_variable_missing(tmp_path, tiny_fabric):
         source_key="merra2",
         output_name="merra2_agg.nc",
         variables=["GWETTOP", "BOGUS_VAR"],
+        x_coord="lon",
+        y_coord="lat",
+        time_coord="time",
     )
     with pytest.raises(ValueError, match="BOGUS_VAR"):
         aggregate_source(
@@ -376,32 +370,6 @@ def test_aggregate_source_raises_when_variable_missing(tmp_path, tiny_fabric):
             id_col="hru_id",
             workdir=tmp_path,
         )
-
-
-def test_default_open_hook_raises_on_multiple_ncs(tmp_path):
-    """Multiple NCs in the datastore for a source is a user-facing error."""
-    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
-    from nhf_spatial_targets.aggregate._driver import _default_open_hook
-
-    src_dir = tmp_path / "datastore" / "merra2"
-    src_dir.mkdir(parents=True)
-    times = pd.date_range("2000-01-01", periods=1, freq="MS")
-    for name in ("a.nc", "b.nc"):
-        xr.Dataset({"x": (["time"], [1.0])}, coords={"time": times}).to_netcdf(
-            src_dir / name
-        )
-
-    class _FakeProject:
-        def raw_dir(self, key):
-            return src_dir
-
-    adapter = SourceAdapter(
-        source_key="merra2",
-        output_name="merra2_agg.nc",
-        variables=["GWETTOP"],
-    )
-    with pytest.raises(ValueError, match="Multiple"):
-        _default_open_hook(_FakeProject(), adapter)
 
 
 def test_compute_or_load_weights_writes_cache_on_miss(tmp_path, tiny_fabric):
@@ -436,6 +404,7 @@ def test_compute_or_load_weights_writes_cache_on_miss(tmp_path, tiny_fabric):
             source_key="toy",
             batch_id=0,
             workdir=tmp_path,
+            period=("2000-01-01", "2000-02-01"),
         )
     assert mock_wg.called
     cache_path = tmp_path / "weights" / "toy_batch0.csv"
@@ -474,6 +443,7 @@ def test_compute_or_load_weights_uses_cache_on_hit(tmp_path, tiny_fabric):
             source_key="toy",
             batch_id=0,
             workdir=tmp_path,
+            period=("2000-01-01", "2000-02-01"),
         )
     assert not mock_wg.called
     pd.testing.assert_frame_equal(weights, cached)
@@ -561,6 +531,7 @@ def test_compute_or_load_weights_ignores_stray_tmp_from_crashed_run(
             source_key="toy",
             batch_id=0,
             workdir=tmp_path,
+            period=("2000-01-01", "2000-02-01"),
         )
 
     # Final-name CSV present and equals the fresh computation.
@@ -569,3 +540,60 @@ def test_compute_or_load_weights_ignores_stray_tmp_from_crashed_run(
     pd.testing.assert_frame_equal(weights, fake)
     # WeightGen was invoked — cache was NOT short-circuited by the stray tmp.
     assert mock_wg.called
+
+
+def test_source_adapter_accepts_hooks():
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+
+    def _pre(ds):
+        return ds
+
+    def _post(ds):
+        return ds
+
+    adapter = SourceAdapter(
+        source_key="merra2",
+        output_name="merra2_agg.nc",
+        variables=["GWETTOP"],
+        pre_aggregate_hook=_pre,
+        post_aggregate_hook=_post,
+    )
+    assert adapter.pre_aggregate_hook is _pre
+    assert adapter.post_aggregate_hook is _post
+
+
+def test_aggregate_variables_for_batch_passes_period_through(tiny_fabric):
+    from nhf_spatial_targets.aggregate._driver import aggregate_variables_for_batch
+
+    batch_gdf = gpd.read_file(tiny_fabric)
+    batch_gdf["batch_id"] = 0
+    times = pd.date_range("2005-01-01", periods=12, freq="MS")
+    source_ds = xr.Dataset(
+        {"a": (["time", "lat", "lon"], np.ones((12, 2, 2)))},
+        coords={"time": times, "lat": [0.25, 0.75], "lon": [0.5, 1.5]},
+    )
+
+    with (
+        patch("nhf_spatial_targets.aggregate._driver.AggGen") as mock_agg,
+        patch("nhf_spatial_targets.aggregate._driver.UserCatData") as mock_ucd,
+    ):
+        mock_ucd.return_value = _fake_user_data()
+        inst = MagicMock()
+        mock_agg.return_value = inst
+        inst.calculate_agg.side_effect = [_fake_agg_result("a", [0, 1, 2, 3])]
+
+        aggregate_variables_for_batch(
+            batch_gdf=batch_gdf,
+            source_ds=source_ds,
+            variables=["a"],
+            source_crs="EPSG:4326",
+            x_coord="lon",
+            y_coord="lat",
+            time_coord="time",
+            id_col="hru_id",
+            weights=_fake_weights(),
+            period=("2005-01-01", "2005-12-01"),
+        )
+
+    call_kwargs = mock_ucd.call_args.kwargs
+    assert call_kwargs["period"] == ["2005-01-01", "2005-12-01"]
