@@ -84,6 +84,7 @@ ADAPTER = SourceAdapter(
     output_name=_OUTPUT_NAME,
     variables=("sca", "ci", "valid_mask"),
     grid_variable="sca",
+    raw_grid_variable="Day_CMG_Snow_Cover",
     source_crs="EPSG:4326",
     pre_aggregate_hook=build_masked_source,
     post_aggregate_hook=_rename_and_warn,

@@ -33,6 +33,7 @@ class SourceAdapter:
     time_coord: str | None = None
     source_crs: str = "EPSG:4326"
     grid_variable: str | None = None
+    raw_grid_variable: str | None = None
     files_glob: str = "*_consolidated.nc"
     pre_aggregate_hook: Callable[[xr.Dataset], xr.Dataset] | None = field(default=None)
     post_aggregate_hook: Callable[[xr.Dataset], xr.Dataset] | None = field(default=None)
@@ -56,6 +57,15 @@ class SourceAdapter:
                 f"SourceAdapter.grid_variable {self.grid_variable!r} must be one of "
                 f"variables={self.variables}"
             )
+        # raw_grid_variable names the pre-hook raw-NC variable used to detect
+        # grid-shape invariance across source files. For non-hooked adapters it
+        # defaults to grid_variable (which is itself a raw var). For adapters
+        # whose pre_aggregate_hook synthesizes all declared variables from
+        # raw inputs (e.g. MOD10C1), raw_grid_variable must be set explicitly
+        # to a variable that exists in the raw NC; otherwise the driver cannot
+        # enforce the cross-year grid invariant.
+        if self.raw_grid_variable is None:
+            object.__setattr__(self, "raw_grid_variable", self.grid_variable)
         # Catalog-typo check. If the catalog is unavailable at construction
         # time (e.g. test harness, repackaged install), defer the check until
         # the driver runs. Do NOT swallow KeyError — that's the typo case we

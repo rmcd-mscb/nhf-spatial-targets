@@ -234,6 +234,63 @@ def test_concat_years_raises_on_year_gap(tmp_path):
         concat_years([p2000, p2002], time_coord="time")
 
 
+def test_concat_years_handles_cftime_calendar(tmp_path):
+    """Year-gap detection must not crash when time coord is cftime (noleap etc.)."""
+    from nhf_spatial_targets.aggregate._driver import concat_years
+
+    def _write_cftime_year(path: Path, year: int) -> None:
+        times = xr.date_range(
+            f"{year}-01-01",
+            periods=12,
+            freq="MS",
+            calendar="noleap",
+            use_cftime=True,
+        )
+        xr.Dataset(
+            {"v": (["time", "hru_id"], np.ones((12, 2)) * year)},
+            coords={
+                "time": ("time", times, {"standard_name": "time"}),
+                "hru_id": [0, 1],
+            },
+        ).to_netcdf(path)
+
+    p2000 = tmp_path / "src_2000_agg.nc"
+    p2001 = tmp_path / "src_2001_agg.nc"
+    _write_cftime_year(p2000, 2000)
+    _write_cftime_year(p2001, 2001)
+
+    combined = concat_years([p2000, p2001], time_coord="time")
+    assert combined["v"].values.shape == (24, 2)
+
+
+def test_concat_years_cftime_year_gap_still_detected(tmp_path):
+    """Even on cftime calendars, interior year gaps must raise."""
+    from nhf_spatial_targets.aggregate._driver import concat_years
+
+    def _write_cftime_year(path: Path, year: int) -> None:
+        times = xr.date_range(
+            f"{year}-01-01",
+            periods=12,
+            freq="MS",
+            calendar="noleap",
+            use_cftime=True,
+        )
+        xr.Dataset(
+            {"v": (["time", "hru_id"], np.ones((12, 2)))},
+            coords={
+                "time": ("time", times, {"standard_name": "time"}),
+                "hru_id": [0, 1],
+            },
+        ).to_netcdf(path)
+
+    p2000 = tmp_path / "src_2000_agg.nc"
+    p2002 = tmp_path / "src_2002_agg.nc"
+    _write_cftime_year(p2000, 2000)
+    _write_cftime_year(p2002, 2002)
+    with pytest.raises(ValueError, match="year gap"):
+        concat_years([p2000, p2002], time_coord="time")
+
+
 def test_concat_years_detaches_from_disk(tmp_path):
     """Returned Dataset must remain usable after source intermediates deleted."""
     from nhf_spatial_targets.aggregate._driver import concat_years
@@ -263,10 +320,11 @@ def test_find_time_coord_returns_none_without_cf_attrs(tmp_path):
     assert _find_time_coord_name(ds) is None
 
 
-def test_aggregate_year_wraps_batch_failure_with_context(
+def test_aggregate_year_preserves_exception_type_and_adds_context_note(
     project, tiny_batched_fabric, tmp_path
 ):
-    """gdptools failures inside a batch must surface with year/batch/file context."""
+    """Batch failures must surface with original exception type and a note
+    carrying year/batch/source_file provenance."""
     from nhf_spatial_targets.aggregate._adapter import SourceAdapter
     from nhf_spatial_targets.aggregate._driver import aggregate_year
 
@@ -280,12 +338,21 @@ def test_aggregate_year_wraps_batch_failure_with_context(
         variables=("v",),
     )
 
+    class GdptoolsSentinel(RuntimeError):
+        pass
+
     def boom(**_kwargs):
-        raise RuntimeError("gdptools exploded")
+        raise GdptoolsSentinel("gdptools exploded")
 
     with patch(
         "nhf_spatial_targets.aggregate._driver.compute_or_load_weights",
         side_effect=boom,
     ):
-        with pytest.raises(RuntimeError, match=r"year=2005.*batch=0"):
+        with pytest.raises(GdptoolsSentinel) as excinfo:
             aggregate_year(adapter, project, 2005, src, tiny_batched_fabric, "hru_id")
+
+    notes = getattr(excinfo.value, "__notes__", [])
+    assert any(
+        "year=2005" in n and "batch=0" in n and "era5_land_monthly_2005.nc" in n
+        for n in notes
+    ), f"Expected provenance note; got notes={notes}"

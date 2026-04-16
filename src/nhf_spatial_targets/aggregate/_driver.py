@@ -271,11 +271,15 @@ def aggregate_year(
                     period=period,
                 )
             except Exception as exc:
-                raise RuntimeError(
+                # Preserve the original exception type (FileNotFoundError,
+                # PermissionError, gdptools errors, etc.) so callers can still
+                # except on concrete types; attach provenance via a note.
+                exc.add_note(
                     f"{adapter.source_key}: aggregation failed for "
-                    f"year={year} batch={int(bid)} source_file={source_file.name}: "
-                    f"{exc}"
-                ) from exc
+                    f"year={year} batch={int(bid)} "
+                    f"source_file={source_file.name}"
+                )
+                raise
             datasets.append(batch_ds)
 
         year_ds = xr.concat(datasets, dim=id_col)
@@ -306,7 +310,10 @@ def concat_years(paths: list[Path], time_coord: str) -> xr.Dataset:
             f"Duplicate time coords across per-year intermediates: "
             f"{[p.name for p in paths]}"
         )
-    years_present = set(pd.DatetimeIndex(t).year.unique().tolist())
+    # Use the xarray .dt accessor rather than pd.DatetimeIndex: the latter
+    # raises TypeError on cftime calendars (noleap, 360_day, etc.), which
+    # some upstream sources ship with.
+    years_present = set(int(y) for y in combined[time_coord].dt.year.values)
     expected = set(range(min(years_present), max(years_present) + 1))
     missing_years = sorted(expected - years_present)
     if missing_years:
@@ -535,7 +542,7 @@ def aggregate_source(
     # check is skipped in that case. The grid-shape check always runs: weight
     # caches are keyed per (source_key, batch_id) — not per year — and reused
     # across years, so every file must share the same source grid.
-    grid_var = adapter.grid_variable or adapter.variables[0]
+    raw_grid_var = adapter.raw_grid_variable
     reference_grid: tuple | None = None
     for f in files:
         with xr.open_dataset(f) as peek:
@@ -546,21 +553,36 @@ def aggregate_source(
                         f"{adapter.source_key}: variables {missing} missing from "
                         f"{f.name} (have {list(peek.data_vars)})"
                     )
-            if grid_var in peek.data_vars:
-                shape = tuple(
-                    peek[grid_var].sizes[d]
-                    for d in peek[grid_var].dims
-                    if d != adapter.time_coord and d != "time"
+            if raw_grid_var not in peek.data_vars:
+                raise ValueError(
+                    f"{adapter.source_key}: raw_grid_variable "
+                    f"{raw_grid_var!r} missing from {f.name} "
+                    f"(have {list(peek.data_vars)}). For adapters whose "
+                    f"pre_aggregate_hook synthesizes declared variables, set "
+                    f"SourceAdapter.raw_grid_variable to a variable that exists "
+                    f"in the raw NC so the cross-year grid invariant can be "
+                    f"enforced."
                 )
-                if reference_grid is None:
-                    reference_grid = shape
-                elif shape != reference_grid:
-                    raise ValueError(
-                        f"{adapter.source_key}: grid shape drift across source "
-                        f"files — {f.name} has {shape}, expected {reference_grid}. "
-                        f"Weight caches are reused across years and require a "
-                        f"stable source grid."
-                    )
+            # Exclude the CF-detected time dim from the grid shape so that
+            # per-file timestep differences (leap years, partial-year
+            # fetches) don't masquerade as grid drift. Name-based filtering
+            # would false-positive on sources whose time dim is not named
+            # literally "time" (e.g. ERA5-Land "valid_time").
+            time_name = _find_time_coord_name(peek)
+            shape = tuple(
+                peek[raw_grid_var].sizes[d]
+                for d in peek[raw_grid_var].dims
+                if d != time_name
+            )
+            if reference_grid is None:
+                reference_grid = shape
+            elif shape != reference_grid:
+                raise ValueError(
+                    f"{adapter.source_key}: grid shape drift across source "
+                    f"files — {f.name} has {shape}, expected {reference_grid}. "
+                    f"Weight caches are reused across years and require a "
+                    f"stable source grid."
+                )
 
     year_files = enumerate_years(files)
     fabric_batched = load_and_batch_fabric(fabric_path, batch_size=batch_size)
