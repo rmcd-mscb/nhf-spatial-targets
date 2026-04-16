@@ -9,8 +9,8 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-import numpy as np
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 import xarray as xr
 from gdptools import AggGen, UserCatData, WeightGen
@@ -79,7 +79,7 @@ def update_manifest(
         with os.fdopen(tmp_fd, "w") as f:
             json.dump(manifest, f, indent=2)
         Path(tmp_path).replace(manifest_path)
-    except BaseException:
+    except Exception:
         Path(tmp_path).unlink(missing_ok=True)
         raise
 
@@ -118,13 +118,19 @@ def weight_cache_path(workdir: Path, source_key: str, batch_id: int) -> Path:
 
 
 def _find_time_coord_name(ds: xr.Dataset) -> str | None:
-    """Return the name of the time coord via CF attrs, or None."""
-    for name in ds.coords:
+    """Return the name of the time coord via CF ``axis=T`` / ``standard_name=time``.
+
+    Returns ``None`` only if no dim carries either CF attribute. Callers
+    should raise with context rather than guessing a literal name — a coord
+    literally named ``"time"`` without CF attrs could be a non-time axis.
+    """
+    for name in ds.dims:
+        if name not in ds.coords:
+            continue
         attrs = ds.coords[name].attrs
         if attrs.get("axis") == "T" or attrs.get("standard_name") == "time":
             return name
-    # Fall back: any coord literally named 'time' (non-CF legacy NCs).
-    return "time" if "time" in ds.coords else None
+    return None
 
 
 def enumerate_years(files: list[Path]) -> list[tuple[int, Path]]:
@@ -178,7 +184,7 @@ def _atomic_write_netcdf(ds: xr.Dataset, path: Path) -> None:
     try:
         ds.to_netcdf(tmp_path)
         Path(tmp_path).replace(path)
-    except BaseException:
+    except Exception:
         Path(tmp_path).unlink(missing_ok=True)
         raise
 
@@ -237,32 +243,43 @@ def aggregate_year(
             batch_gdf = fabric_batched[fabric_batched["batch_id"] == bid].drop(
                 columns=["batch_id"]
             )
-            weights = compute_or_load_weights(
-                batch_gdf=batch_gdf,
-                source_ds=ds,
-                source_var=grid_var,
-                source_crs=adapter.source_crs,
-                x_coord=x_coord,
-                y_coord=y_coord,
-                time_coord=time_coord,
-                id_col=id_col,
-                source_key=adapter.source_key,
-                batch_id=int(bid),
-                workdir=project.workdir,
-                period=period,
-            )
-            batch_ds = aggregate_variables_for_batch(
-                batch_gdf=batch_gdf,
-                source_ds=ds,
-                variables=list(adapter.variables),
-                source_crs=adapter.source_crs,
-                x_coord=x_coord,
-                y_coord=y_coord,
-                time_coord=time_coord,
-                id_col=id_col,
-                weights=weights,
-                period=period,
-            )
+            try:
+                weights = compute_or_load_weights(
+                    batch_gdf=batch_gdf,
+                    source_ds=ds,
+                    source_var=grid_var,
+                    source_crs=adapter.source_crs,
+                    x_coord=x_coord,
+                    y_coord=y_coord,
+                    time_coord=time_coord,
+                    id_col=id_col,
+                    source_key=adapter.source_key,
+                    batch_id=int(bid),
+                    workdir=project.workdir,
+                    period=period,
+                )
+                batch_ds = aggregate_variables_for_batch(
+                    batch_gdf=batch_gdf,
+                    source_ds=ds,
+                    variables=list(adapter.variables),
+                    source_crs=adapter.source_crs,
+                    x_coord=x_coord,
+                    y_coord=y_coord,
+                    time_coord=time_coord,
+                    id_col=id_col,
+                    weights=weights,
+                    period=period,
+                )
+            except Exception as exc:
+                # Preserve the original exception type (FileNotFoundError,
+                # PermissionError, gdptools errors, etc.) so callers can still
+                # except on concrete types; attach provenance via a note.
+                exc.add_note(
+                    f"{adapter.source_key}: aggregation failed for "
+                    f"year={year} batch={int(bid)} "
+                    f"source_file={source_file.name}"
+                )
+                raise
             datasets.append(batch_ds)
 
         year_ds = xr.concat(datasets, dim=id_col)
@@ -276,7 +293,9 @@ def concat_years(paths: list[Path], time_coord: str) -> xr.Dataset:
     """Open per-year intermediates, concat on time, validate monotonic + unique.
 
     Loads each intermediate into memory and closes the on-disk handle so the
-    returned Dataset is detached from the filesystem.
+    returned Dataset is detached from the filesystem. Raises if duplicate
+    time coords appear across inputs or if the covered calendar years have
+    interior gaps (i.e. a year between min and max is not represented).
     """
     if not paths:
         raise ValueError("concat_years called with empty paths list")
@@ -290,6 +309,17 @@ def concat_years(paths: list[Path], time_coord: str) -> xr.Dataset:
         raise ValueError(
             f"Duplicate time coords across per-year intermediates: "
             f"{[p.name for p in paths]}"
+        )
+    # Use the xarray .dt accessor rather than pd.DatetimeIndex: the latter
+    # raises TypeError on cftime calendars (noleap, 360_day, etc.), which
+    # some upstream sources ship with.
+    years_present = set(int(y) for y in combined[time_coord].dt.year.values)
+    expected = set(range(min(years_present), max(years_present) + 1))
+    missing_years = sorted(expected - years_present)
+    if missing_years:
+        raise ValueError(
+            f"concat_years: year gap(s) in per-year intermediates: "
+            f"missing={missing_years}, covered={sorted(years_present)}"
         )
     return combined
 
@@ -380,7 +410,7 @@ def compute_or_load_weights(
         with os.fdopen(tmp_fd, "w") as f:
             weights.to_csv(f, index=False)
         Path(tmp_path).replace(wp)
-    except BaseException:
+    except Exception:
         Path(tmp_path).unlink(missing_ok=True)
         raise
     logger.info("Batch %d: weights saved to %s", batch_id, wp)
@@ -455,14 +485,19 @@ def aggregate_variables_for_batch(
 
 
 def _attach_cf_global_attrs(ds: xr.Dataset, source_key: str, meta: dict) -> None:
-    """Attach CF-1.6 global attrs in place (non-destructive for var attrs)."""
+    """Attach CF-1.6 global attrs in place (non-destructive for var attrs).
+
+    Appends to any existing ``history`` rather than overwriting, preserving
+    provenance carried on the consolidated source NC.
+    """
     access = meta.get("access", {})
-    history = (
+    entry = (
         f"{datetime.now(timezone.utc).isoformat()}: aggregated to HRU fabric "
         f"by nhf_spatial_targets.aggregate._driver"
     )
     ds.attrs.setdefault("Conventions", "CF-1.6")
-    ds.attrs["history"] = history
+    existing = ds.attrs.get("history", "")
+    ds.attrs["history"] = f"{existing}\n{entry}" if existing else entry
     ds.attrs["source"] = source_key
     if "doi" in access:
         ds.attrs["source_doi"] = access["doi"]
@@ -502,15 +537,51 @@ def aggregate_source(
             f"Run 'nhf-targets fetch {adapter.source_key}' first."
         )
 
-    # Fail fast on missing declared variables — but only if there is no
-    # pre_aggregate_hook. Hooked adapters derive their declared variables.
-    if adapter.pre_aggregate_hook is None:
-        with xr.open_dataset(files[0]) as peek:
-            missing = [v for v in adapter.variables if v not in peek.data_vars]
-            if missing:
+    # Fail fast on missing declared variables and on source-grid drift across
+    # files. Hooked adapters derive their declared variables, so the missing-var
+    # check is skipped in that case. The grid-shape check always runs: weight
+    # caches are keyed per (source_key, batch_id) — not per year — and reused
+    # across years, so every file must share the same source grid.
+    raw_grid_var = adapter.raw_grid_variable
+    reference_grid: tuple | None = None
+    for f in files:
+        with xr.open_dataset(f) as peek:
+            if adapter.pre_aggregate_hook is None:
+                missing = [v for v in adapter.variables if v not in peek.data_vars]
+                if missing:
+                    raise ValueError(
+                        f"{adapter.source_key}: variables {missing} missing from "
+                        f"{f.name} (have {list(peek.data_vars)})"
+                    )
+            if raw_grid_var not in peek.data_vars:
                 raise ValueError(
-                    f"{adapter.source_key}: variables {missing} missing from "
-                    f"source dataset (have {list(peek.data_vars)})"
+                    f"{adapter.source_key}: raw_grid_variable "
+                    f"{raw_grid_var!r} missing from {f.name} "
+                    f"(have {list(peek.data_vars)}). For adapters whose "
+                    f"pre_aggregate_hook synthesizes declared variables, set "
+                    f"SourceAdapter.raw_grid_variable to a variable that exists "
+                    f"in the raw NC so the cross-year grid invariant can be "
+                    f"enforced."
+                )
+            # Exclude the CF-detected time dim from the grid shape so that
+            # per-file timestep differences (leap years, partial-year
+            # fetches) don't masquerade as grid drift. Name-based filtering
+            # would false-positive on sources whose time dim is not named
+            # literally "time" (e.g. ERA5-Land "valid_time").
+            time_name = _find_time_coord_name(peek)
+            shape = tuple(
+                peek[raw_grid_var].sizes[d]
+                for d in peek[raw_grid_var].dims
+                if d != time_name
+            )
+            if reference_grid is None:
+                reference_grid = shape
+            elif shape != reference_grid:
+                raise ValueError(
+                    f"{adapter.source_key}: grid shape drift across source "
+                    f"files — {f.name} has {shape}, expected {reference_grid}. "
+                    f"Weight caches are reused across years and require a "
+                    f"stable source grid."
                 )
 
     year_files = enumerate_years(files)
@@ -529,7 +600,13 @@ def aggregate_source(
     ]
 
     with xr.open_dataset(per_year_paths[0]) as probe:
-        time_coord = _find_time_coord_name(probe) or "time"
+        time_coord = _find_time_coord_name(probe)
+    if time_coord is None:
+        raise ValueError(
+            f"{adapter.source_key}: could not detect CF time coord on "
+            f"per-year intermediate {per_year_paths[0].name}. Expected a "
+            f"coord with axis='T' or standard_name='time'."
+        )
     combined = concat_years(per_year_paths, time_coord=time_coord)
 
     if adapter.post_aggregate_hook is not None:

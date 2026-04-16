@@ -321,6 +321,44 @@ def test_source_adapter_accepts_valid_grid_variable():
     assert adapter.grid_variable == "GWETROOT"
 
 
+def test_source_adapter_raw_grid_variable_defaults_to_grid_variable():
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+
+    adapter = SourceAdapter(
+        source_key="merra2",
+        output_name="merra2_agg.nc",
+        variables=("GWETTOP", "GWETROOT"),
+        grid_variable="GWETROOT",
+    )
+    assert adapter.raw_grid_variable == "GWETROOT"
+
+
+def test_source_adapter_raw_grid_variable_can_differ_from_declared_vars():
+    """Hooked adapters whose declared variables are all derived must be able to
+    name a raw-NC variable for the grid-shape invariant."""
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+
+    adapter = SourceAdapter(
+        source_key="mod10c1_v061",
+        output_name="mod10c1_agg.nc",
+        variables=("sca", "ci", "valid_mask"),
+        grid_variable="sca",
+        raw_grid_variable="Day_CMG_Snow_Cover",
+        pre_aggregate_hook=lambda ds: ds,
+    )
+    assert adapter.raw_grid_variable == "Day_CMG_Snow_Cover"
+    assert "Day_CMG_Snow_Cover" not in adapter.variables
+
+
+def test_mod10c1_adapter_declares_raw_grid_variable():
+    """Regression: MOD10C1 must set raw_grid_variable so the grid-drift check
+    is not silently skipped (it used to short-circuit on ``sca not in raw``)."""
+    from nhf_spatial_targets.aggregate.mod10c1 import ADAPTER
+
+    assert ADAPTER.raw_grid_variable == "Day_CMG_Snow_Cover"
+    assert ADAPTER.raw_grid_variable not in ADAPTER.variables
+
+
 def test_source_adapter_coerces_list_to_tuple():
     from nhf_spatial_targets.aggregate._adapter import SourceAdapter
 
@@ -597,3 +635,353 @@ def test_aggregate_variables_for_batch_passes_period_through(tiny_fabric):
 
     call_kwargs = mock_ucd.call_args.kwargs
     assert call_kwargs["period"] == ["2005-01-01", "2005-12-01"]
+
+
+def _setup_aggregate_source_project(tmp_path, tiny_fabric, source_key):
+    """Helper: create project + datastore dir for aggregate_source integration tests."""
+    datastore = tmp_path / "datastore"
+    (datastore / source_key).mkdir(parents=True)
+    (tmp_path / "config.yml").write_text(
+        yaml.dump(
+            {
+                "fabric": {"path": str(tiny_fabric), "id_col": "hru_id"},
+                "datastore": str(datastore),
+            }
+        )
+    )
+    (tmp_path / "fabric.json").write_text(json.dumps({"sha256": "f00"}))
+    (tmp_path / "manifest.json").write_text(json.dumps({"sources": {}, "steps": []}))
+    (tmp_path / "data" / "aggregated").mkdir(parents=True)
+    (tmp_path / "weights").mkdir()
+    return datastore / source_key
+
+
+def test_aggregate_source_invokes_pre_aggregate_hook(tmp_path, tiny_fabric):
+    """pre_aggregate_hook must run before the missing-variable check."""
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import aggregate_source
+
+    src_dir = _setup_aggregate_source_project(
+        tmp_path, tiny_fabric, "gldas_noah_v21_monthly"
+    )
+    times = pd.date_range("2000-01-01", periods=12, freq="MS")
+    # Raw NC lacks 'derived' — hook injects it. Missing-var check must be skipped.
+    xr.Dataset(
+        {"raw": (["time", "lat", "lon"], np.ones((12, 2, 2)))},
+        coords={
+            "time": ("time", times, {"standard_name": "time"}),
+            "lat": ("lat", [0.25, 0.75], {"standard_name": "latitude"}),
+            "lon": ("lon", [0.5, 1.5], {"standard_name": "longitude"}),
+        },
+    ).to_netcdf(src_dir / "gldas_noah_v21_monthly.nc")
+
+    hook_calls = []
+
+    def hook(ds):
+        hook_calls.append(1)
+        return ds.assign(derived=ds["raw"] * 2.0)
+
+    adapter = SourceAdapter(
+        source_key="gldas_noah_v21_monthly",
+        output_name="gldas_agg.nc",
+        variables=("derived",),
+        raw_grid_variable="raw",
+        files_glob="gldas_noah_v21_monthly*.nc",
+        pre_aggregate_hook=hook,
+    )
+
+    fake_year_ds = xr.Dataset(
+        {"derived": (["time", "hru_id"], np.ones((12, 4)) * 2.0)},
+        coords={
+            "time": ("time", times, {"standard_name": "time"}),
+            "hru_id": [0, 1, 2, 3],
+        },
+    )
+    with (
+        patch(
+            "nhf_spatial_targets.aggregate._driver.catalog_source",
+            return_value={"access": {"type": "local_nc"}},
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.compute_or_load_weights",
+            return_value=_fake_weights(),
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.aggregate_variables_for_batch",
+            return_value=fake_year_ds,
+        ),
+    ):
+        out = aggregate_source(
+            adapter, fabric_path=tiny_fabric, id_col="hru_id", workdir=tmp_path
+        )
+
+    assert hook_calls, "pre_aggregate_hook was not invoked"
+    assert "derived" in out.data_vars
+
+
+def test_aggregate_source_invokes_post_aggregate_hook(tmp_path, tiny_fabric):
+    """post_aggregate_hook must run on the concatenated dataset before write."""
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import aggregate_source
+
+    src_dir = _setup_aggregate_source_project(tmp_path, tiny_fabric, "merra2")
+    times = pd.date_range("2000-01-01", periods=12, freq="MS")
+    xr.Dataset(
+        {"a": (["time", "lat", "lon"], np.ones((12, 2, 2)))},
+        coords={
+            "time": ("time", times, {"standard_name": "time"}),
+            "lat": ("lat", [0.25, 0.75], {"standard_name": "latitude"}),
+            "lon": ("lon", [0.5, 1.5], {"standard_name": "longitude"}),
+        },
+    ).to_netcdf(src_dir / "merra2_2000_consolidated.nc")
+
+    def post_hook(ds):
+        return ds.rename({"a": "a_renamed"})
+
+    adapter = SourceAdapter(
+        source_key="merra2",
+        output_name="merra2_agg.nc",
+        variables=("a",),
+        post_aggregate_hook=post_hook,
+    )
+    fake_year_ds = xr.Dataset(
+        {"a": (["time", "hru_id"], np.ones((12, 4)))},
+        coords={
+            "time": ("time", times, {"standard_name": "time"}),
+            "hru_id": [0, 1, 2, 3],
+        },
+    )
+    with (
+        patch(
+            "nhf_spatial_targets.aggregate._driver.catalog_source",
+            return_value={"access": {"type": "local_nc"}},
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.compute_or_load_weights",
+            return_value=_fake_weights(),
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.aggregate_variables_for_batch",
+            return_value=fake_year_ds,
+        ),
+    ):
+        out = aggregate_source(
+            adapter, fabric_path=tiny_fabric, id_col="hru_id", workdir=tmp_path
+        )
+
+    assert "a_renamed" in out.data_vars
+    assert "a" not in out.data_vars
+    written = xr.open_dataset(tmp_path / "data" / "aggregated" / "merra2_agg.nc")
+    try:
+        assert "a_renamed" in written.data_vars
+    finally:
+        written.close()
+
+
+def test_aggregate_source_raises_on_grid_drift_across_files(tmp_path, tiny_fabric):
+    """Differing grid shape across per-year files must fail before aggregation."""
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import aggregate_source
+
+    src_dir = _setup_aggregate_source_project(tmp_path, tiny_fabric, "merra2")
+    t0 = pd.date_range("2000-01-01", periods=12, freq="MS")
+    t1 = pd.date_range("2001-01-01", periods=12, freq="MS")
+    xr.Dataset(
+        {"a": (["time", "lat", "lon"], np.ones((12, 2, 2)))},
+        coords={
+            "time": ("time", t0, {"standard_name": "time"}),
+            "lat": ("lat", [0.25, 0.75], {"standard_name": "latitude"}),
+            "lon": ("lon", [0.5, 1.5], {"standard_name": "longitude"}),
+        },
+    ).to_netcdf(src_dir / "merra2_2000_consolidated.nc")
+    # Second year has a different grid shape (3x3 instead of 2x2).
+    xr.Dataset(
+        {"a": (["time", "lat", "lon"], np.ones((12, 3, 3)))},
+        coords={
+            "time": ("time", t1, {"standard_name": "time"}),
+            "lat": ("lat", [0.2, 0.5, 0.8], {"standard_name": "latitude"}),
+            "lon": ("lon", [0.2, 0.5, 0.8], {"standard_name": "longitude"}),
+        },
+    ).to_netcdf(src_dir / "merra2_2001_consolidated.nc")
+
+    adapter = SourceAdapter(
+        source_key="merra2", output_name="merra2_agg.nc", variables=("a",)
+    )
+    with patch(
+        "nhf_spatial_targets.aggregate._driver.catalog_source",
+        return_value={"access": {"type": "local_nc"}},
+    ):
+        with pytest.raises(ValueError, match="grid shape drift"):
+            aggregate_source(
+                adapter, fabric_path=tiny_fabric, id_col="hru_id", workdir=tmp_path
+            )
+
+
+def test_aggregate_source_raises_when_raw_grid_variable_missing(tmp_path, tiny_fabric):
+    """Hooked adapter whose raw_grid_variable is absent from the raw NC must
+    raise — the prior silent-skip left the cross-year grid invariant un-enforced."""
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import aggregate_source
+
+    src_dir = _setup_aggregate_source_project(tmp_path, tiny_fabric, "merra2")
+    times = pd.date_range("2000-01-01", periods=12, freq="MS")
+    xr.Dataset(
+        {"raw_present": (["time", "lat", "lon"], np.ones((12, 2, 2)))},
+        coords={
+            "time": ("time", times, {"standard_name": "time"}),
+            "lat": ("lat", [0.25, 0.75], {"standard_name": "latitude"}),
+            "lon": ("lon", [0.5, 1.5], {"standard_name": "longitude"}),
+        },
+    ).to_netcdf(src_dir / "merra2_2000_consolidated.nc")
+
+    adapter = SourceAdapter(
+        source_key="merra2",
+        output_name="merra2_agg.nc",
+        variables=("derived",),
+        raw_grid_variable="raw_missing",
+        pre_aggregate_hook=lambda ds: ds.assign(derived=ds["raw_present"] * 2.0),
+    )
+    with patch(
+        "nhf_spatial_targets.aggregate._driver.catalog_source",
+        return_value={"access": {"type": "local_nc"}},
+    ):
+        with pytest.raises(ValueError, match="raw_grid_variable.*raw_missing"):
+            aggregate_source(
+                adapter, fabric_path=tiny_fabric, id_col="hru_id", workdir=tmp_path
+            )
+
+
+def test_aggregate_source_missing_var_check_scans_all_files(tmp_path, tiny_fabric):
+    """Missing variable in any input file (not just files[0]) must raise."""
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import aggregate_source
+
+    src_dir = _setup_aggregate_source_project(tmp_path, tiny_fabric, "merra2")
+    t0 = pd.date_range("2000-01-01", periods=12, freq="MS")
+    t1 = pd.date_range("2001-01-01", periods=12, freq="MS")
+    # First file has both a and b; second file is missing b.
+    xr.Dataset(
+        {
+            "a": (["time", "lat", "lon"], np.ones((12, 2, 2))),
+            "b": (["time", "lat", "lon"], np.ones((12, 2, 2))),
+        },
+        coords={
+            "time": ("time", t0, {"standard_name": "time"}),
+            "lat": ("lat", [0.25, 0.75], {"standard_name": "latitude"}),
+            "lon": ("lon", [0.5, 1.5], {"standard_name": "longitude"}),
+        },
+    ).to_netcdf(src_dir / "merra2_2000_consolidated.nc")
+    xr.Dataset(
+        {"a": (["time", "lat", "lon"], np.ones((12, 2, 2)))},
+        coords={
+            "time": ("time", t1, {"standard_name": "time"}),
+            "lat": ("lat", [0.25, 0.75], {"standard_name": "latitude"}),
+            "lon": ("lon", [0.5, 1.5], {"standard_name": "longitude"}),
+        },
+    ).to_netcdf(src_dir / "merra2_2001_consolidated.nc")
+
+    adapter = SourceAdapter(
+        source_key="merra2", output_name="merra2_agg.nc", variables=("a", "b")
+    )
+    with patch(
+        "nhf_spatial_targets.aggregate._driver.catalog_source",
+        return_value={"access": {"type": "local_nc"}},
+    ):
+        with pytest.raises(ValueError, match="b.*missing.*2001"):
+            aggregate_source(
+                adapter, fabric_path=tiny_fabric, id_col="hru_id", workdir=tmp_path
+            )
+
+
+def test_attach_cf_global_attrs_appends_to_existing_history():
+    """Existing history attr on consolidated NC must be preserved, not overwritten."""
+    from nhf_spatial_targets.aggregate._driver import _attach_cf_global_attrs
+
+    ds = xr.Dataset({"v": (["x"], [1.0])})
+    ds.attrs["history"] = "2024-01-01: fetched from provider"
+    _attach_cf_global_attrs(ds, "src", {"access": {}})
+    assert "2024-01-01: fetched from provider" in ds.attrs["history"]
+    assert "aggregated to HRU fabric" in ds.attrs["history"]
+
+
+def test_find_time_coord_name_detects_non_standard_name():
+    """Time dim named anything (not literally 'time') is found via axis='T'."""
+    from nhf_spatial_targets.aggregate._driver import _find_time_coord_name
+
+    times = pd.date_range("2000-01-01", periods=3, freq="MS")
+    ds = xr.Dataset(
+        {"v": (["valid_time", "y"], np.ones((3, 2)))},
+        coords={
+            "valid_time": ("valid_time", times, {"axis": "T"}),
+            "y": [0.0, 1.0],
+        },
+    )
+    assert _find_time_coord_name(ds) == "valid_time"
+
+
+def test_aggregate_source_grid_drift_check_uses_cf_time_detection(
+    tmp_path, tiny_fabric
+):
+    """Grid-drift check must exclude the CF-detected time dim regardless of name.
+
+    Regression: if the filter used literal "time" / adapter.time_coord to
+    exclude the time axis, a source whose time dim is named ``valid_time``
+    (ERA5-Land) with different per-file timestep counts would be reported
+    as a spurious grid shape drift.
+    """
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import aggregate_source
+
+    src_dir = _setup_aggregate_source_project(tmp_path, tiny_fabric, "merra2")
+    t0 = pd.date_range("2000-01-01", periods=11, freq="MS")  # 11 timesteps
+    t1 = pd.date_range("2001-01-01", periods=12, freq="MS")  # 12 timesteps
+    # Same spatial grid (2x2), different time lengths, CF time named 'valid_time'.
+    xr.Dataset(
+        {"a": (["valid_time", "lat", "lon"], np.ones((11, 2, 2)))},
+        coords={
+            "valid_time": ("valid_time", t0, {"axis": "T"}),
+            "lat": ("lat", [0.25, 0.75], {"standard_name": "latitude"}),
+            "lon": ("lon", [0.5, 1.5], {"standard_name": "longitude"}),
+        },
+    ).to_netcdf(src_dir / "merra2_2000_consolidated.nc")
+    xr.Dataset(
+        {"a": (["valid_time", "lat", "lon"], np.ones((12, 2, 2)))},
+        coords={
+            "valid_time": ("valid_time", t1, {"axis": "T"}),
+            "lat": ("lat", [0.25, 0.75], {"standard_name": "latitude"}),
+            "lon": ("lon", [0.5, 1.5], {"standard_name": "longitude"}),
+        },
+    ).to_netcdf(src_dir / "merra2_2001_consolidated.nc")
+
+    adapter = SourceAdapter(
+        source_key="merra2", output_name="merra2_agg.nc", variables=("a",)
+    )
+
+    def _year_ds(times):
+        return xr.Dataset(
+            {"a": (["valid_time", "hru_id"], np.ones((len(times), 4)))},
+            coords={
+                "valid_time": ("valid_time", times, {"axis": "T"}),
+                "hru_id": [0, 1, 2, 3],
+            },
+        )
+
+    with (
+        patch(
+            "nhf_spatial_targets.aggregate._driver.catalog_source",
+            return_value={"access": {"type": "local_nc"}},
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.compute_or_load_weights",
+            return_value=_fake_weights(),
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.aggregate_variables_for_batch",
+            side_effect=[_year_ds(t0), _year_ds(t1)],
+        ),
+    ):
+        # Must NOT raise "grid shape drift" — the name-based filter would have
+        # incorrectly included valid_time in the shape tuple.
+        aggregate_source(
+            adapter, fabric_path=tiny_fabric, id_col="hru_id", workdir=tmp_path
+        )
