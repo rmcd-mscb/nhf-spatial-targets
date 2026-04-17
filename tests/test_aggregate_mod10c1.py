@@ -95,17 +95,17 @@ def test_log_low_valid_coverage_warns_above_threshold(caplog):
     times = pd.date_range("2000-01-01", periods=10, freq="D")
     vaf_data = np.zeros((10, 10))
     vaf_data[0, 0] = 1.0  # 1 nonzero, 99 zero, 0 NaN -> 99% zero
-    combined = xr.Dataset(
+    year_ds = xr.Dataset(
         {"valid_area_fraction": (["time", "hru_id"], vaf_data)},
         coords={"time": times, "hru_id": range(10)},
     )
     with caplog.at_level(
         logging.WARNING, logger="nhf_spatial_targets.aggregate.mod10c1"
     ):
-        _log_low_valid_coverage(combined)
-    assert any("zero valid-area" in rec.message for rec in caplog.records), [
-        rec.message for rec in caplog.records
-    ]
+        _log_low_valid_coverage(year_ds, year=2000)
+    warnings = [rec.message for rec in caplog.records]
+    assert any("zero valid-area" in m for m in warnings), warnings
+    assert any("year=2000" in m for m in warnings), warnings
 
 
 def test_log_low_valid_coverage_silent_below_threshold(caplog):
@@ -117,14 +117,14 @@ def test_log_low_valid_coverage_silent_below_threshold(caplog):
     # 99 nonzero, 1 zero -> 1% zero, below 10% threshold
     vaf_data = np.ones((10, 10)) * 0.8
     vaf_data[0, 0] = 0.0
-    combined = xr.Dataset(
+    year_ds = xr.Dataset(
         {"valid_area_fraction": (["time", "hru_id"], vaf_data)},
         coords={"time": times, "hru_id": range(10)},
     )
     with caplog.at_level(
         logging.WARNING, logger="nhf_spatial_targets.aggregate.mod10c1"
     ):
-        _log_low_valid_coverage(combined)
+        _log_low_valid_coverage(year_ds, year=2000)
     assert not any("zero valid-area" in rec.message for rec in caplog.records)
 
 
