@@ -103,7 +103,7 @@ def test_per_year_output_path(project):
     from nhf_spatial_targets.aggregate._driver import per_year_output_path
 
     p = per_year_output_path(project, "foo", 2005)
-    assert p == project.workdir / "data" / "aggregated" / "_by_year" / "foo_2005_agg.nc"
+    assert p == (project.workdir / "data" / "aggregated" / "foo" / "foo_2005_agg.nc")
 
 
 def test_aggregate_year_skips_when_intermediate_exists(project, tiny_batched_fabric):

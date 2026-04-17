@@ -247,9 +247,7 @@ def test_aggregate_source_writes_multi_var_nc_and_manifest(tmp_path, tiny_fabric
     assert set(out.data_vars) == {"a", "b"}
     output_nc = tmp_path / "data" / "aggregated" / "merra2_agg.nc"
     assert output_nc.exists()
-    assert (
-        tmp_path / "data" / "aggregated" / "_by_year" / "merra2_2000_agg.nc"
-    ).exists()
+    assert (tmp_path / "data" / "aggregated" / "merra2" / "merra2_2000_agg.nc").exists()
     manifest = json.loads((tmp_path / "manifest.json").read_text())
     assert "merra2" in manifest["sources"]
     assert manifest["sources"]["merra2"]["output_file"] == (

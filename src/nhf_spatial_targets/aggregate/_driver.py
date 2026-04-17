@@ -166,12 +166,12 @@ def enumerate_years(files: list[Path]) -> list[tuple[int, Path]]:
 
 
 def per_year_output_path(project: Project, source_key: str, year: int) -> Path:
-    """Return the per-year intermediate NC path."""
+    """Return the per-year aggregated NC path (canonical output)."""
     return (
         project.workdir
         / "data"
         / "aggregated"
-        / "_by_year"
+        / source_key
         / f"{source_key}_{year}_agg.nc"
     )
 
@@ -197,14 +197,14 @@ def aggregate_year(
     fabric_batched: gpd.GeoDataFrame,
     id_col: str,
 ) -> Path:
-    """Aggregate one year to HRU polygons; idempotent on the intermediate NC.
+    """Aggregate one year to HRU polygons; idempotent on the per-year NC.
 
-    Returns the path of the per-year intermediate. If that path already
+    Returns the path of the per-year aggregated NC. If that path already
     exists, returns immediately without opening the source file. Otherwise
     opens the source file lazily, applies ``adapter.pre_aggregate_hook`` if
     set, detects coords via CF attrs (respecting adapter overrides), runs
     the batch loop with ``period=(YYYY-01-01, YYYY-12-31)``, concatenates
-    batches on ``id_col``, and writes the intermediate atomically.
+    batches on ``id_col``, and writes the per-year NC atomically.
     """
     out_path = per_year_output_path(project, adapter.source_key, year)
     if out_path.exists():
