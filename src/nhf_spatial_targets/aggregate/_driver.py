@@ -37,7 +37,9 @@ def update_manifest(
     The manifest is keyed as ``sources[source_key]``; existing entries for
     other sources are preserved. ``period`` is stored as-is for provenance;
     ``fabric_sha256`` is read from ``fabric.json``. ``output_files`` lists
-    each per-year NC relative to ``project.workdir``.
+    aggregated output NC paths relative to ``project.workdir`` (one per year
+    for per-year pipelines, a single-element list for sources like ssebop
+    that emit one consolidated file).
     """
     manifest_path = project.manifest_path
     if manifest_path.exists():
@@ -206,14 +208,21 @@ def _migrate_legacy_layout(project: Project, source_key: str) -> None:
     if legacy_dir.is_dir():
         new_dir.mkdir(parents=True, exist_ok=True)
         for legacy_file in sorted(legacy_dir.glob(f"{source_key}_*_agg.nc")):
+            # Filter out prefix collisions (e.g. source_key="era5" would
+            # otherwise greedily match "era5_land_2000_agg.nc"). The regex
+            # anchors on "_<YYYY>_agg.nc" and returns None for the wrong key.
+            if _parse_year_from_filename(legacy_file, source_key) is None:
+                continue
             target = new_dir / legacy_file.name
             if target.exists():
-                logger.info(
-                    "%s: legacy %s collides with existing %s; "
-                    "leaving both in place (new path is canonical)",
+                logger.warning(
+                    "%s: legacy file %s conflicts with canonical %s; "
+                    "new-path file is authoritative. Delete the legacy file "
+                    "manually to silence this warning: `rm %s`",
                     source_key,
                     legacy_file,
                     target,
+                    legacy_file,
                 )
                 continue
             legacy_file.rename(target)
@@ -243,18 +252,24 @@ def _parse_year_from_filename(path: Path, source_key: str) -> int | None:
 def _verify_year_coverage(per_source_dir: Path, source_key: str) -> None:
     """Scan the per-source dir and verify contiguous year coverage.
 
-    Filename-level check: parses ``<source_key>_<YYYY>_agg.nc`` matches.
-    Raises ``ValueError`` if no matching files exist or if there is an
-    interior gap between ``min_year`` and ``max_year``. Filesystem
-    uniqueness prevents two files with the same name in one directory,
-    so the duplicate-year case that the old ``concat_years`` caught via
-    time-coord inspection is unreachable here.
+    Filename-level check: parses ``<source_key>_<YYYY>_agg.nc`` matches and
+    rejects zero-byte files (likely stale tmp artifacts from a SIGKILL/OOM
+    between the tempfile open and the atomic rename). Files not matching
+    the ``<source_key>_<YYYY>_agg.nc`` filename are silently skipped, since
+    per-year files are the terminal output and cross-file time-coord
+    uniqueness no longer matters.
     """
     years: list[int] = []
     for p in sorted(per_source_dir.glob(f"{source_key}_*_agg.nc")):
         y = _parse_year_from_filename(p, source_key)
-        if y is not None:
-            years.append(y)
+        if y is None:
+            continue
+        if p.stat().st_size == 0:
+            raise ValueError(
+                f"{source_key}: per-year file {p} is zero bytes — likely "
+                f"a stale artifact. Delete and re-run to regenerate."
+            )
+        years.append(y)
     if not years:
         raise ValueError(
             f"{source_key}: no per-year aggregated files found in {per_source_dir}"
@@ -385,13 +400,27 @@ def _derive_period(per_year_paths: list[Path], time_coord: str) -> str:
     """Return ``'YYYY-MM-DD/YYYY-MM-DD'`` from the first/last per-year files.
 
     Opens only the first and last files (lazy, closed immediately) and reads
-    the first/last ``time_coord`` values. Avoids opening intermediate files.
+    the first/last ``time_coord`` values. Avoids opening any file other
+    than the first and last.
     """
     first, last = per_year_paths[0], per_year_paths[-1]
     with xr.open_dataset(first) as ds_first:
-        t0 = str(ds_first[time_coord].values[0])[:10]
+        vals = ds_first[time_coord].values
+        if len(vals) == 0:
+            raise ValueError(
+                f"Per-year NC {first} has an empty {time_coord!r} coord; "
+                f"cannot derive period. This indicates the aggregation "
+                f"produced zero timesteps for that year."
+            )
+        t0 = str(vals[0])[:10]
     with xr.open_dataset(last) as ds_last:
-        t1 = str(ds_last[time_coord].values[-1])[:10]
+        vals = ds_last[time_coord].values
+        if len(vals) == 0:
+            raise ValueError(
+                f"Per-year NC {last} has an empty {time_coord!r} coord; "
+                f"cannot derive period."
+            )
+        t1 = str(vals[-1])[:10]
     return f"{t0}/{t1}"
 
 
@@ -588,9 +617,9 @@ def aggregate_source(
     ``data/aggregated/<source_key>/<source_key>_<year>_agg.nc``. No
     consolidated single-file output is produced; per-year files are the
     canonical aggregated output. Idempotent: existing per-year files are
-    preserved on restart. Legacy ``_by_year/`` files and stale
-    ``<source_key>_agg.nc`` consolidated files are migrated via
-    ``_migrate_legacy_layout`` at the top of the function.
+    preserved on restart. Legacy ``_by_year/`` files are moved into
+    ``<source_key>/`` and stale ``<source_key>_agg.nc`` consolidated files
+    are removed via ``_migrate_legacy_layout`` at the top of the function.
 
     Variables declared by ``adapter.variables`` that are missing from the
     source NC cause ValueError before any year is aggregated — unless the

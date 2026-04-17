@@ -995,3 +995,194 @@ def test_aggregate_source_grid_drift_check_uses_cf_time_detection(
         aggregate_source(
             adapter, fabric_path=tiny_fabric, id_col="hru_id", workdir=tmp_path
         )
+
+
+def test_aggregate_source_multi_year_output_files_order_and_period(
+    tmp_path, tiny_fabric
+):
+    """Regression: two-year aggregation. Pins output_files ordering, verifies
+    _derive_period straddles both years, and confirms per-year files land in
+    the new per-source subdir with no consolidated file.
+
+    Covers three integration seams at once:
+      1. aggregate_source invokes the per-year loop in order.
+      2. _derive_period uses first/last files (not first twice).
+      3. manifest output_files is a list in year order.
+    """
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import aggregate_source
+
+    src_dir = _setup_aggregate_source_project(tmp_path, tiny_fabric, "merra2")
+    t2000 = pd.date_range("2000-01-01", periods=12, freq="MS")
+    t2001 = pd.date_range("2001-01-01", periods=12, freq="MS")
+    for year, times in [(2000, t2000), (2001, t2001)]:
+        xr.Dataset(
+            {"a": (["time", "lat", "lon"], np.ones((12, 2, 2)))},
+            coords={
+                "time": ("time", times, {"standard_name": "time"}),
+                "lat": ("lat", [0.25, 0.75], {"standard_name": "latitude"}),
+                "lon": ("lon", [0.5, 1.5], {"standard_name": "longitude"}),
+            },
+        ).to_netcdf(src_dir / f"merra2_{year}_consolidated.nc")
+
+    adapter = SourceAdapter(
+        source_key="merra2", output_name="merra2_agg.nc", variables=("a",)
+    )
+
+    def _year_ds(times):
+        return xr.Dataset(
+            {"a": (["time", "hru_id"], np.ones((len(times), 4)))},
+            coords={
+                "time": ("time", times, {"standard_name": "time"}),
+                "hru_id": [0, 1, 2, 3],
+            },
+        )
+
+    with (
+        patch(
+            "nhf_spatial_targets.aggregate._driver.catalog_source",
+            return_value={"access": {"type": "local_nc"}},
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.compute_or_load_weights",
+            return_value=_fake_weights(),
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.aggregate_variables_for_batch",
+            side_effect=[_year_ds(t2000), _year_ds(t2001)],
+        ),
+    ):
+        aggregate_source(
+            adapter, fabric_path=tiny_fabric, id_col="hru_id", workdir=tmp_path
+        )
+
+    agg_dir = tmp_path / "data" / "aggregated"
+    assert (agg_dir / "merra2" / "merra2_2000_agg.nc").exists()
+    assert (agg_dir / "merra2" / "merra2_2001_agg.nc").exists()
+    assert not (agg_dir / "merra2_agg.nc").exists()  # no consolidated file
+
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    entry = manifest["sources"]["merra2"]
+    assert entry["output_files"] == [
+        "data/aggregated/merra2/merra2_2000_agg.nc",
+        "data/aggregated/merra2/merra2_2001_agg.nc",
+    ]
+    # Period must span both years: first-of-first .. last-of-last.
+    assert entry["period"].startswith("2000-01-01/")
+    assert entry["period"].endswith("/2001-12-01")
+
+
+def test_aggregate_source_surfaces_year_coverage_gap(tmp_path, tiny_fabric):
+    """Regression: _verify_year_coverage must fire when a year is missing.
+    Pins the integration seam between the per-year loop and the coverage
+    check — e.g., a future refactor that silences the check or reorders it
+    would slip through other tests."""
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import aggregate_source
+
+    src_dir = _setup_aggregate_source_project(tmp_path, tiny_fabric, "merra2")
+    t2000 = pd.date_range("2000-01-01", periods=12, freq="MS")
+    t2002 = pd.date_range("2002-01-01", periods=12, freq="MS")
+    # 2001 skipped on purpose.
+    for year, times in [(2000, t2000), (2002, t2002)]:
+        xr.Dataset(
+            {"a": (["time", "lat", "lon"], np.ones((12, 2, 2)))},
+            coords={
+                "time": ("time", times, {"standard_name": "time"}),
+                "lat": ("lat", [0.25, 0.75], {"standard_name": "latitude"}),
+                "lon": ("lon", [0.5, 1.5], {"standard_name": "longitude"}),
+            },
+        ).to_netcdf(src_dir / f"merra2_{year}_consolidated.nc")
+
+    adapter = SourceAdapter(
+        source_key="merra2", output_name="merra2_agg.nc", variables=("a",)
+    )
+
+    def _year_ds(times):
+        return xr.Dataset(
+            {"a": (["time", "hru_id"], np.ones((len(times), 4)))},
+            coords={
+                "time": ("time", times, {"standard_name": "time"}),
+                "hru_id": [0, 1, 2, 3],
+            },
+        )
+
+    with (
+        patch(
+            "nhf_spatial_targets.aggregate._driver.catalog_source",
+            return_value={"access": {"type": "local_nc"}},
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.compute_or_load_weights",
+            return_value=_fake_weights(),
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.aggregate_variables_for_batch",
+            side_effect=[_year_ds(t2000), _year_ds(t2002)],
+        ),
+    ):
+        with pytest.raises(ValueError, match=r"missing=\[2001\]"):
+            aggregate_source(
+                adapter,
+                fabric_path=tiny_fabric,
+                id_col="hru_id",
+                workdir=tmp_path,
+            )
+
+    # Per-year files are on disk from the per-year loop (that's fine); the
+    # manifest must NOT record this source as complete because the coverage
+    # check raised before update_manifest ran.
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    assert "merra2" not in manifest["sources"]
+
+
+def test_aggregate_source_migrates_legacy_layout_on_startup(tmp_path, tiny_fabric):
+    """Regression: aggregate_source must call _migrate_legacy_layout before
+    the per-year loop. A legacy _by_year/ file and a stale consolidated file
+    must both be handled on the next aggregation pass, reusing the moved file
+    rather than re-aggregating."""
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import aggregate_source
+
+    src_dir = _setup_aggregate_source_project(tmp_path, tiny_fabric, "merra2")
+    times = pd.date_range("2000-01-01", periods=12, freq="MS")
+    xr.Dataset(
+        {"a": (["time", "lat", "lon"], np.ones((12, 2, 2)))},
+        coords={
+            "time": ("time", times, {"standard_name": "time"}),
+            "lat": ("lat", [0.25, 0.75], {"standard_name": "latitude"}),
+            "lon": ("lon", [0.5, 1.5], {"standard_name": "longitude"}),
+        },
+    ).to_netcdf(src_dir / "merra2_2000_consolidated.nc")
+
+    # Seed legacy state: a _by_year intermediate and a stale consolidated NC.
+    legacy_by_year = tmp_path / "data" / "aggregated" / "_by_year"
+    legacy_by_year.mkdir(parents=True, exist_ok=True)
+    legacy_file = legacy_by_year / "merra2_2000_agg.nc"
+    # Write a valid per-year shape so aggregate_year's idempotent skip fires.
+    xr.Dataset(
+        {"a": (["time", "hru_id"], np.ones((12, 4)))},
+        coords={
+            "time": ("time", times, {"standard_name": "time"}),
+            "hru_id": [0, 1, 2, 3],
+        },
+    ).to_netcdf(legacy_file)
+    stale = tmp_path / "data" / "aggregated" / "merra2_agg.nc"
+    stale.write_bytes(b"placeholder")
+
+    adapter = SourceAdapter(
+        source_key="merra2", output_name="merra2_agg.nc", variables=("a",)
+    )
+    with patch(
+        "nhf_spatial_targets.aggregate._driver.catalog_source",
+        return_value={"access": {"type": "local_nc"}},
+    ):
+        aggregate_source(
+            adapter, fabric_path=tiny_fabric, id_col="hru_id", workdir=tmp_path
+        )
+
+    # Legacy location emptied; stale consolidated removed; canonical file lives.
+    assert not legacy_file.exists()
+    assert not stale.exists()
+    canonical = tmp_path / "data" / "aggregated" / "merra2" / "merra2_2000_agg.nc"
+    assert canonical.exists()

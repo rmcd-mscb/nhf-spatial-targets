@@ -9,7 +9,10 @@ import pandas as pd
 import xarray as xr
 
 from nhf_spatial_targets.aggregate._adapter import SourceAdapter
-from nhf_spatial_targets.aggregate._driver import aggregate_source
+from nhf_spatial_targets.aggregate._driver import (
+    _find_time_coord_name,
+    aggregate_source,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,8 +81,24 @@ def _rename_and_warn(year_ds: xr.Dataset) -> xr.Dataset:
         "ci_threshold": _CI_THRESHOLD,
     }
     # post_aggregate_hook runs inside aggregate_year, so year_ds covers
-    # exactly one calendar year; taking the first timestep gives that year.
-    year = int(pd.DatetimeIndex(year_ds["time"].values).year[0])
+    # exactly one calendar year. Use CF time-coord detection rather than
+    # a hardcoded "time" name so a future source-coord rename doesn't
+    # break the warning silently.
+    time_name = _find_time_coord_name(year_ds)
+    if time_name is None:
+        logger.warning(
+            "mod10c1: post-aggregate year_ds has no CF time coord; "
+            "skipping low-valid-coverage warning."
+        )
+        return year_ds
+    time_vals = year_ds[time_name].values
+    if len(time_vals) == 0:
+        logger.warning(
+            "mod10c1: post-aggregate year_ds has zero timesteps; "
+            "skipping low-valid-coverage warning."
+        )
+        return year_ds
+    year = int(pd.DatetimeIndex(time_vals).year[0])
     _log_low_valid_coverage(year_ds, year=year)
     return year_ds
 

@@ -433,7 +433,7 @@ def test_verify_year_coverage_ok_on_contiguous(tmp_path):
     d = tmp_path / "foo"
     d.mkdir()
     for y in (2000, 2001, 2002):
-        (d / f"foo_{y}_agg.nc").write_bytes(b"")
+        (d / f"foo_{y}_agg.nc").write_bytes(b"x")  # non-empty
 
     # Must not raise.
     _verify_year_coverage(d, "foo")
@@ -445,9 +445,23 @@ def test_verify_year_coverage_raises_on_interior_gap(tmp_path):
     d = tmp_path / "foo"
     d.mkdir()
     for y in (2000, 2002, 2003):
-        (d / f"foo_{y}_agg.nc").write_bytes(b"")
+        (d / f"foo_{y}_agg.nc").write_bytes(b"x")
 
     with pytest.raises(ValueError, match=r"missing=\[2001\]"):
+        _verify_year_coverage(d, "foo")
+
+
+def test_verify_year_coverage_rejects_zero_byte_file(tmp_path):
+    """Regression: a zero-byte per-year file (e.g. leftover from a SIGKILL
+    between tempfile open and atomic rename) must surface with context, not
+    propagate obscurely through _derive_period."""
+    from nhf_spatial_targets.aggregate._driver import _verify_year_coverage
+
+    d = tmp_path / "foo"
+    d.mkdir()
+    (d / "foo_2000_agg.nc").write_bytes(b"x")
+    (d / "foo_2001_agg.nc").write_bytes(b"")  # zero-byte
+    with pytest.raises(ValueError, match="zero bytes"):
         _verify_year_coverage(d, "foo")
 
 
