@@ -37,7 +37,10 @@ def test_update_manifest_writes_source_entry(project):
         source_key="foo",
         access={"type": "nasa_gesdisc", "short_name": "FOO"},
         period="2000-01-01/2009-12-31",
-        output_file="data/aggregated/foo_agg.nc",
+        output_files=[
+            "data/aggregated/foo/foo_2000_agg.nc",
+            "data/aggregated/foo/foo_2001_agg.nc",
+        ],
         weight_files=["weights/foo_batch0.csv"],
     )
     manifest = json.loads((project.workdir / "manifest.json").read_text())
@@ -47,7 +50,10 @@ def test_update_manifest_writes_source_entry(project):
     assert entry["short_name"] == "FOO"
     assert entry["period"] == "2000-01-01/2009-12-31"
     assert entry["fabric_sha256"] == "abc123"
-    assert entry["output_file"] == "data/aggregated/foo_agg.nc"
+    assert entry["output_files"] == [
+        "data/aggregated/foo/foo_2000_agg.nc",
+        "data/aggregated/foo/foo_2001_agg.nc",
+    ]
     assert entry["weight_files"] == ["weights/foo_batch0.csv"]
     assert "timestamp" in entry
 
@@ -62,7 +68,7 @@ def test_update_manifest_preserves_existing_sources(project):
         source_key="foo",
         access={"type": "local"},
         period="2000/2001",
-        output_file="data/aggregated/foo_agg.nc",
+        output_files=["data/aggregated/foo/foo_2000_agg.nc"],
         weight_files=[],
     )
     manifest = json.loads(manifest_path.read_text())
@@ -236,7 +242,7 @@ def test_aggregate_source_writes_multi_var_nc_and_manifest(tmp_path, tiny_fabric
             return_value=fake_year_ds,
         ),
     ):
-        out = aggregate_source(
+        aggregate_source(
             adapter,
             fabric_path=tiny_fabric,
             id_col="hru_id",
@@ -244,15 +250,16 @@ def test_aggregate_source_writes_multi_var_nc_and_manifest(tmp_path, tiny_fabric
             batch_size=500,
         )
 
-    assert set(out.data_vars) == {"a", "b"}
-    output_nc = tmp_path / "data" / "aggregated" / "merra2_agg.nc"
-    assert output_nc.exists()
-    assert (tmp_path / "data" / "aggregated" / "merra2" / "merra2_2000_agg.nc").exists()
+    # No consolidated file is produced anymore.
+    legacy_consolidated = tmp_path / "data" / "aggregated" / "merra2_agg.nc"
+    assert not legacy_consolidated.exists()
+    per_year = tmp_path / "data" / "aggregated" / "merra2" / "merra2_2000_agg.nc"
+    assert per_year.exists()
     manifest = json.loads((tmp_path / "manifest.json").read_text())
     assert "merra2" in manifest["sources"]
-    assert manifest["sources"]["merra2"]["output_file"] == (
-        "data/aggregated/merra2_agg.nc"
-    )
+    assert manifest["sources"]["merra2"]["output_files"] == [
+        "data/aggregated/merra2/merra2_2000_agg.nc"
+    ]
 
 
 def test_source_adapter_rejects_empty_variables():
@@ -495,7 +502,7 @@ def test_update_manifest_raises_on_corrupt_json(project):
             source_key="foo",
             access={"type": "local"},
             period="2000/2001",
-            output_file="foo_agg.nc",
+            output_files=["data/aggregated/foo/foo_2000_agg.nc"],
             weight_files=[],
         )
 
@@ -709,12 +716,20 @@ def test_aggregate_source_invokes_pre_aggregate_hook(tmp_path, tiny_fabric):
             return_value=fake_year_ds,
         ),
     ):
-        out = aggregate_source(
+        aggregate_source(
             adapter, fabric_path=tiny_fabric, id_col="hru_id", workdir=tmp_path
         )
 
     assert hook_calls, "pre_aggregate_hook was not invoked"
-    assert "derived" in out.data_vars
+    per_year = (
+        tmp_path
+        / "data"
+        / "aggregated"
+        / "gldas_noah_v21_monthly"
+        / "gldas_noah_v21_monthly_2000_agg.nc"
+    )
+    with xr.open_dataset(per_year) as written:
+        assert "derived" in written.data_vars
 
 
 def test_aggregate_source_invokes_post_aggregate_hook(tmp_path, tiny_fabric):
@@ -763,17 +778,14 @@ def test_aggregate_source_invokes_post_aggregate_hook(tmp_path, tiny_fabric):
             return_value=fake_year_ds,
         ),
     ):
-        out = aggregate_source(
+        aggregate_source(
             adapter, fabric_path=tiny_fabric, id_col="hru_id", workdir=tmp_path
         )
 
-    assert "a_renamed" in out.data_vars
-    assert "a" not in out.data_vars
-    written = xr.open_dataset(tmp_path / "data" / "aggregated" / "merra2_agg.nc")
-    try:
+    per_year = tmp_path / "data" / "aggregated" / "merra2" / "merra2_2000_agg.nc"
+    with xr.open_dataset(per_year) as written:
         assert "a_renamed" in written.data_vars
-    finally:
-        written.close()
+        assert "a" not in written.data_vars
 
 
 def test_aggregate_source_raises_on_grid_drift_across_files(tmp_path, tiny_fabric):

@@ -169,7 +169,7 @@ def aggregate_ssebop(
         source_key=_SOURCE_KEY,
         access=access_with_doi,
         period=f"{time_period[0]}/{time_period[1]}",
-        output_file=str(Path("data") / "aggregated" / "ssebop_agg_aet.nc"),
+        output_files=[str(Path("data") / "aggregated" / "ssebop_agg_aet.nc")],
         weight_files=weight_files,
     )
 

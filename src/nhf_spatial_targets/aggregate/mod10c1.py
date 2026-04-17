@@ -96,11 +96,12 @@ def aggregate_mod10c1(
     id_col: str,
     workdir: Path,
     batch_size: int = 500,
-) -> xr.Dataset:
+) -> None:
     """Aggregate MOD10C1 v061 daily SCA to HRU polygons with CI masking.
 
     The CI>0.70 filter is applied per-year inside the driver's per-year loop
-    via ``pre_aggregate_hook``. Final output at ``data/aggregated/mod10c1_agg.nc``
-    carries ``sca``, ``ci``, and ``valid_area_fraction`` keyed on (time, HRU).
+    via ``pre_aggregate_hook``. Output is one NC per year at
+    ``data/aggregated/mod10c1_v061/mod10c1_v061_<year>_agg.nc``; each carries
+    ``sca``, ``ci``, and ``valid_area_fraction`` keyed on (time, HRU).
     """
-    return aggregate_source(ADAPTER, fabric_path, id_col, workdir, batch_size)
+    aggregate_source(ADAPTER, fabric_path, id_col, workdir, batch_size)
