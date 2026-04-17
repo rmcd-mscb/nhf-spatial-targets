@@ -487,16 +487,16 @@ def compute_or_load_weights(
         source_var,
     )
     user_data = UserCatData(
-        ds=source_ds,
-        proj_ds=source_crs,
-        x_coord=x_coord,
-        y_coord=y_coord,
-        t_coord=time_coord,
-        var=[source_var],
-        f_feature=batch_gdf,
-        proj_feature=WEIGHT_GEN_CRS,
-        id_feature=id_col,
-        period=[period[0], period[1]],
+        source_ds=source_ds,
+        source_crs=source_crs,
+        source_x_coord=x_coord,
+        source_y_coord=y_coord,
+        source_t_coord=time_coord,
+        source_var=[source_var],
+        target_gdf=batch_gdf,
+        target_crs=WEIGHT_GEN_CRS,
+        target_id=id_col,
+        source_time_period=[period[0], period[1]],
     )
     wg = WeightGen(
         user_data=user_data,
@@ -561,16 +561,16 @@ def aggregate_variables_for_batch(
     per_var: list[xr.Dataset] = []
     for var in variables:
         user_data = UserCatData(
-            ds=source_ds,
-            proj_ds=source_crs,
-            x_coord=x_coord,
-            y_coord=y_coord,
-            t_coord=time_coord,
-            var=[var],
-            f_feature=batch_gdf,
-            proj_feature=WEIGHT_GEN_CRS,
-            id_feature=id_col,
-            period=[period[0], period[1]],
+            source_ds=source_ds,
+            source_crs=source_crs,
+            source_x_coord=x_coord,
+            source_y_coord=y_coord,
+            source_t_coord=time_coord,
+            source_var=[var],
+            target_gdf=batch_gdf,
+            target_crs=WEIGHT_GEN_CRS,
+            target_id=id_col,
+            source_time_period=[period[0], period[1]],
         )
         agg = AggGen(
             user_data=user_data,
