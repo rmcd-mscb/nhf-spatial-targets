@@ -1,3 +1,6 @@
+# Ignore files and directories
+.claude/settings.local.json
+
 # pixi
 .pixi/
 *.tar.bz2
