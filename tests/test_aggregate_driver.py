@@ -639,7 +639,7 @@ def test_aggregate_variables_for_batch_passes_period_through(tiny_fabric):
         )
 
     call_kwargs = mock_ucd.call_args.kwargs
-    assert call_kwargs["period"] == ["2005-01-01", "2005-12-01"]
+    assert call_kwargs["source_time_period"] == ["2005-01-01", "2005-12-01"]
 
 
 def _setup_aggregate_source_project(tmp_path, tiny_fabric, source_key):
