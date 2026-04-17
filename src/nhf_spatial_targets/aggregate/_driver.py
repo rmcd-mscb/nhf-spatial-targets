@@ -196,6 +196,8 @@ def aggregate_year(
     source_file: Path,
     fabric_batched: gpd.GeoDataFrame,
     id_col: str,
+    *,
+    catalog_meta: dict | None = None,
 ) -> Path:
     """Aggregate one year to HRU polygons; idempotent on the per-year NC.
 
@@ -204,12 +206,15 @@ def aggregate_year(
     opens the source file lazily, applies ``adapter.pre_aggregate_hook`` if
     set, detects coords via CF attrs (respecting adapter overrides), runs
     the batch loop with ``period=(YYYY-01-01, YYYY-12-31)``, concatenates
-    batches on ``id_col``, and writes the per-year NC atomically.
+    batches on ``id_col``, applies ``adapter.post_aggregate_hook`` if set,
+    attaches CF-1.6 global attrs (using ``catalog_meta`` when provided;
+    otherwise looked up from the catalog), and writes the per-year NC
+    atomically.
     """
     out_path = per_year_output_path(project, adapter.source_key, year)
     if out_path.exists():
         logger.info(
-            "%s: year %d: intermediate exists, skipping (%s)",
+            "%s: year %d: per-year NC exists, skipping (%s)",
             adapter.source_key,
             year,
             out_path,
@@ -283,6 +288,14 @@ def aggregate_year(
             datasets.append(batch_ds)
 
         year_ds = xr.concat(datasets, dim=id_col)
+
+    if adapter.post_aggregate_hook is not None:
+        year_ds = adapter.post_aggregate_hook(year_ds)
+
+    meta = (
+        catalog_meta if catalog_meta is not None else catalog_source(adapter.source_key)
+    )
+    _attach_cf_global_attrs(year_ds, adapter.source_key, meta)
 
     _atomic_write_netcdf(year_ds, out_path)
     logger.info("%s: year %d: wrote %s", adapter.source_key, year, out_path)
@@ -595,7 +608,15 @@ def aggregate_source(
     )
 
     per_year_paths = [
-        aggregate_year(adapter, project, year, path, fabric_batched, id_col)
+        aggregate_year(
+            adapter,
+            project,
+            year,
+            path,
+            fabric_batched,
+            id_col,
+            catalog_meta=meta,
+        )
         for year, path in year_files
     ]
 
@@ -608,11 +629,6 @@ def aggregate_source(
             f"coord with axis='T' or standard_name='time'."
         )
     combined = concat_years(per_year_paths, time_coord=time_coord)
-
-    if adapter.post_aggregate_hook is not None:
-        combined = adapter.post_aggregate_hook(combined)
-
-    _attach_cf_global_attrs(combined, adapter.source_key, meta)
 
     output_path = project.aggregated_dir() / adapter.output_name
     _atomic_write_netcdf(combined, output_path)
