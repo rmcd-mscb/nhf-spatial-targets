@@ -82,3 +82,42 @@ def test_agg_all_runs_every_source(tmp_path):
             app(["agg", "all", "--project-dir", str(tmp_path)])
     for m in mocks:
         m.assert_called_once()
+
+
+def test_agg_tier_succeeds_when_aggregator_returns_none(tmp_path):
+    """Regression: aggregators return None (not an xr.Dataset).
+
+    MagicMock's default return_value silently satisfies `.sizes.get(...)`,
+    so without this test a success-path `AttributeError` on a real None
+    return slips through. Explicitly pin `return_value=None` here.
+    """
+    import json
+
+    import yaml
+
+    from nhf_spatial_targets.cli import app
+
+    (tmp_path / "config.yml").write_text(
+        yaml.dump(
+            {
+                "fabric": {"path": str(tmp_path / "fabric.gpkg"), "id_col": "nhm_id"},
+                "datastore": str(tmp_path / "datastore"),
+            }
+        )
+    )
+    (tmp_path / "fabric.json").write_text(json.dumps({"sha256": "f00"}))
+
+    with patch(
+        "nhf_spatial_targets.cli.aggregate_era5_land",
+        return_value=None,
+    ) as mock_agg:
+        with pytest.raises(SystemExit) as excinfo:
+            app(["agg", "era5-land", "--project-dir", str(tmp_path)])
+    mock_agg.assert_called_once()
+    # Cyclopts exits cleanly (code 0 or None) on success — not with a raised
+    # AttributeError wrapped in a non-zero exit from the broad except block.
+    assert excinfo.value.code in (0, None), (
+        f"Expected clean success exit; got code={excinfo.value.code!r}. "
+        "A non-zero code here means _run_tier_agg crashed on the None "
+        "return value from a successful aggregation."
+    )

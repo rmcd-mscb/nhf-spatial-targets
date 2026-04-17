@@ -51,13 +51,13 @@ ADAPTER = SourceAdapter(
 
 def aggregate_mod16a2(
     fabric_path: Path, id_col: str, workdir: Path, batch_size: int = 500
-) -> xr.Dataset:
+) -> None:
     """Aggregate MOD16A2 v061 8-day AET to HRU polygons.
 
     gdptools reprojects the declared sinusoidal source onto the driver's
     equal-area weight CRS for area-weighted intersection.
     """
-    return aggregate_source(
+    aggregate_source(
         ADAPTER,
         fabric_path,
         id_col,

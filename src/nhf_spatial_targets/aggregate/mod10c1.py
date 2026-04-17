@@ -5,10 +5,14 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import pandas as pd
 import xarray as xr
 
 from nhf_spatial_targets.aggregate._adapter import SourceAdapter
-from nhf_spatial_targets.aggregate._driver import aggregate_source
+from nhf_spatial_targets.aggregate._driver import (
+    _find_time_coord_name,
+    aggregate_source,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +52,9 @@ def build_masked_source(ds: xr.Dataset) -> xr.Dataset:
     return out
 
 
-def _log_low_valid_coverage(combined: xr.Dataset) -> None:
-    """Warn if > 10% of (HRU, time) cells have zero valid area."""
-    vaf = combined["valid_area_fraction"]
+def _log_low_valid_coverage(year_ds: xr.Dataset, *, year: int) -> None:
+    """Warn if > 10% of (HRU, time) cells for this year have zero valid area."""
+    vaf = year_ds["valid_area_fraction"]
     n_total = int(vaf.notnull().sum())
     if n_total == 0:
         return
@@ -58,9 +62,10 @@ def _log_low_valid_coverage(combined: xr.Dataset) -> None:
     zero_frac = n_zero / n_total
     if zero_frac > _LOW_COVERAGE_WARN_THRESHOLD:
         logger.warning(
-            "mod10c1: %.1f%% of (HRU, time) cells had zero valid-area "
-            "after CI>%.2f filter (n=%d of %d finite). Downstream sca "
-            "values are NaN for these cells.",
+            "mod10c1 year=%d: %.1f%% of (HRU, time) cells had zero "
+            "valid-area after CI>%.2f filter (n=%d of %d finite). "
+            "Downstream sca values are NaN for these cells.",
+            year,
             zero_frac * 100,
             _CI_THRESHOLD,
             n_zero,
@@ -68,15 +73,34 @@ def _log_low_valid_coverage(combined: xr.Dataset) -> None:
         )
 
 
-def _rename_and_warn(combined: xr.Dataset) -> xr.Dataset:
-    combined = combined.rename({"valid_mask": "valid_area_fraction"})
-    combined["valid_area_fraction"].attrs = {
+def _rename_and_warn(year_ds: xr.Dataset) -> xr.Dataset:
+    year_ds = year_ds.rename({"valid_mask": "valid_area_fraction"})
+    year_ds["valid_area_fraction"].attrs = {
         "long_name": "fraction of HRU area that passed CI filter",
         "units": "1",
         "ci_threshold": _CI_THRESHOLD,
     }
-    _log_low_valid_coverage(combined)
-    return combined
+    # post_aggregate_hook runs inside aggregate_year, so year_ds covers
+    # exactly one calendar year. Use CF time-coord detection rather than
+    # a hardcoded "time" name so a future source-coord rename doesn't
+    # break the warning silently.
+    time_name = _find_time_coord_name(year_ds)
+    if time_name is None:
+        logger.warning(
+            "mod10c1: post-aggregate year_ds has no CF time coord; "
+            "skipping low-valid-coverage warning."
+        )
+        return year_ds
+    time_vals = year_ds[time_name].values
+    if len(time_vals) == 0:
+        logger.warning(
+            "mod10c1: post-aggregate year_ds has zero timesteps; "
+            "skipping low-valid-coverage warning."
+        )
+        return year_ds
+    year = int(pd.DatetimeIndex(time_vals).year[0])
+    _log_low_valid_coverage(year_ds, year=year)
+    return year_ds
 
 
 ADAPTER = SourceAdapter(
@@ -96,11 +120,12 @@ def aggregate_mod10c1(
     id_col: str,
     workdir: Path,
     batch_size: int = 500,
-) -> xr.Dataset:
+) -> None:
     """Aggregate MOD10C1 v061 daily SCA to HRU polygons with CI masking.
 
     The CI>0.70 filter is applied per-year inside the driver's per-year loop
-    via ``pre_aggregate_hook``. Final output at ``data/aggregated/mod10c1_agg.nc``
-    carries ``sca``, ``ci``, and ``valid_area_fraction`` keyed on (time, HRU).
+    via ``pre_aggregate_hook``. Output is one NC per year at
+    ``data/aggregated/mod10c1_v061/mod10c1_v061_<year>_agg.nc``; each carries
+    ``sca``, ``ci``, and ``valid_area_fraction`` keyed on (time, HRU).
     """
-    return aggregate_source(ADAPTER, fabric_path, id_col, workdir, batch_size)
+    aggregate_source(ADAPTER, fabric_path, id_col, workdir, batch_size)

@@ -9,7 +9,6 @@ from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from typing import Annotated
 
-import xarray as xr
 
 import yaml
 from cyclopts import App, Parameter
@@ -1021,7 +1020,7 @@ def _run_tier_agg(
     console = Console()
     console.print(f"[bold]Aggregating {label} (batch_size={batch_size})...[/bold]")
     try:
-        ds = aggregate_fn(
+        aggregate_fn(
             fabric_path=fabric_path,
             id_col=id_col,
             workdir=workdir,
@@ -1038,9 +1037,8 @@ def _run_tier_agg(
         )
         sys.exit(1)
     console.print(
-        f"[green]{label} aggregation complete: "
-        f"{ds.sizes.get('time', '?')} time steps x "
-        f"{ds.sizes.get(id_col, '?')} HRUs[/green]"
+        f"[green]{label} aggregation complete; per-year NCs and manifest "
+        f"updated under {workdir}/data/aggregated/[/green]"
     )
 
 
@@ -1150,7 +1148,7 @@ def agg_all_cmd(
         print(f"Error: Project not found: {workdir}", file=sys.stderr)
         sys.exit(2)
 
-    sources: list[tuple[str, Callable[..., xr.Dataset]]] = [
+    sources: list[tuple[str, Callable[..., None]]] = [
         ("era5-land", aggregate_era5_land),
         ("gldas", aggregate_gldas),
         ("merra2", aggregate_merra2),

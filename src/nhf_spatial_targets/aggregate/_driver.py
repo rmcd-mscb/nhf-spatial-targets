@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 import geopandas as gpd
-import numpy as np
 import pandas as pd
 import xarray as xr
 from gdptools import AggGen, UserCatData, WeightGen
@@ -29,14 +29,17 @@ def update_manifest(
     source_key: str,
     access: dict,
     period: str,
-    output_file: str,
+    output_files: list[str],
     weight_files: list[str],
 ) -> None:
     """Merge an aggregation provenance entry into ``manifest.json`` atomically.
 
     The manifest is keyed as ``sources[source_key]``; existing entries for
     other sources are preserved. ``period`` is stored as-is for provenance;
-    ``fabric_sha256`` is read from ``fabric.json``.
+    ``fabric_sha256`` is read from ``fabric.json``. ``output_files`` lists
+    aggregated output NC paths relative to ``project.workdir`` (one per year
+    for per-year pipelines, a single-element list for sources like ssebop
+    that emit one consolidated file).
     """
     manifest_path = project.manifest_path
     if manifest_path.exists():
@@ -62,7 +65,7 @@ def update_manifest(
         "access_type": access.get("type", ""),
         "period": period,
         "fabric_sha256": fabric_sha,
-        "output_file": output_file,
+        "output_files": list(output_files),
         "weight_files": list(weight_files),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
@@ -166,12 +169,12 @@ def enumerate_years(files: list[Path]) -> list[tuple[int, Path]]:
 
 
 def per_year_output_path(project: Project, source_key: str, year: int) -> Path:
-    """Return the per-year intermediate NC path."""
+    """Return the per-year aggregated NC path (canonical output)."""
     return (
         project.workdir
         / "data"
         / "aggregated"
-        / "_by_year"
+        / source_key
         / f"{source_key}_{year}_agg.nc"
     )
 
@@ -189,6 +192,97 @@ def _atomic_write_netcdf(ds: xr.Dataset, path: Path) -> None:
         raise
 
 
+def _migrate_legacy_layout(project: Project, source_key: str) -> None:
+    """Migrate legacy aggregated layout into per-source subdirs.
+
+    Idempotent. Moves ``data/aggregated/_by_year/<source_key>_*.nc`` into
+    ``data/aggregated/<source_key>/`` and unlinks any stale
+    ``data/aggregated/<source_key>_agg.nc``. If a target path already
+    exists for a given year (collision), the legacy file is left in
+    place — the new-path file is canonical.
+    """
+    agg_dir = project.aggregated_dir()
+    legacy_dir = agg_dir / "_by_year"
+    new_dir = agg_dir / source_key
+
+    if legacy_dir.is_dir():
+        new_dir.mkdir(parents=True, exist_ok=True)
+        for legacy_file in sorted(legacy_dir.glob(f"{source_key}_*_agg.nc")):
+            # Filter out prefix collisions (e.g. source_key="era5" would
+            # otherwise greedily match "era5_land_2000_agg.nc"). The regex
+            # anchors on "_<YYYY>_agg.nc" and returns None for the wrong key.
+            if _parse_year_from_filename(legacy_file, source_key) is None:
+                continue
+            target = new_dir / legacy_file.name
+            if target.exists():
+                logger.warning(
+                    "%s: legacy file %s conflicts with canonical %s; "
+                    "new-path file is authoritative. Delete the legacy file "
+                    "manually to silence this warning: `rm %s`",
+                    source_key,
+                    legacy_file,
+                    target,
+                    legacy_file,
+                )
+                continue
+            legacy_file.rename(target)
+            logger.info("%s: migrated %s -> %s", source_key, legacy_file, target)
+
+    stale_consolidated = agg_dir / f"{source_key}_agg.nc"
+    if stale_consolidated.is_file():
+        stale_consolidated.unlink()
+        logger.info(
+            "%s: removed stale consolidated file %s",
+            source_key,
+            stale_consolidated,
+        )
+
+
+_YEAR_FNAME_RE = re.compile(r"^(?P<key>.+)_(?P<year>\d{4})_agg\.nc$")
+
+
+def _parse_year_from_filename(path: Path, source_key: str) -> int | None:
+    """Return the year parsed from ``<source_key>_<YYYY>_agg.nc``, else None."""
+    m = _YEAR_FNAME_RE.match(path.name)
+    if m is None or m.group("key") != source_key:
+        return None
+    return int(m.group("year"))
+
+
+def _verify_year_coverage(per_source_dir: Path, source_key: str) -> None:
+    """Scan the per-source dir and verify contiguous year coverage.
+
+    Filename-level check: parses ``<source_key>_<YYYY>_agg.nc`` matches and
+    rejects zero-byte files (likely stale tmp artifacts from a SIGKILL/OOM
+    between the tempfile open and the atomic rename). Files not matching
+    the ``<source_key>_<YYYY>_agg.nc`` filename are silently skipped, since
+    per-year files are the terminal output and cross-file time-coord
+    uniqueness no longer matters.
+    """
+    years: list[int] = []
+    for p in sorted(per_source_dir.glob(f"{source_key}_*_agg.nc")):
+        y = _parse_year_from_filename(p, source_key)
+        if y is None:
+            continue
+        if p.stat().st_size == 0:
+            raise ValueError(
+                f"{source_key}: per-year file {p} is zero bytes — likely "
+                f"a stale artifact. Delete and re-run to regenerate."
+            )
+        years.append(y)
+    if not years:
+        raise ValueError(
+            f"{source_key}: no per-year aggregated files found in {per_source_dir}"
+        )
+    expected = set(range(min(years), max(years) + 1))
+    missing = sorted(expected - set(years))
+    if missing:
+        raise ValueError(
+            f"{source_key}: year gap(s) in per-year aggregated files: "
+            f"missing={missing}, covered={sorted(set(years))}"
+        )
+
+
 def aggregate_year(
     adapter: SourceAdapter,
     project: Project,
@@ -196,20 +290,25 @@ def aggregate_year(
     source_file: Path,
     fabric_batched: gpd.GeoDataFrame,
     id_col: str,
+    *,
+    catalog_meta: dict | None = None,
 ) -> Path:
-    """Aggregate one year to HRU polygons; idempotent on the intermediate NC.
+    """Aggregate one year to HRU polygons; idempotent on the per-year NC.
 
-    Returns the path of the per-year intermediate. If that path already
+    Returns the path of the per-year aggregated NC. If that path already
     exists, returns immediately without opening the source file. Otherwise
     opens the source file lazily, applies ``adapter.pre_aggregate_hook`` if
     set, detects coords via CF attrs (respecting adapter overrides), runs
     the batch loop with ``period=(YYYY-01-01, YYYY-12-31)``, concatenates
-    batches on ``id_col``, and writes the intermediate atomically.
+    batches on ``id_col``, applies ``adapter.post_aggregate_hook`` if set,
+    attaches CF-1.6 global attrs (using ``catalog_meta`` when provided;
+    otherwise looked up from the catalog), and writes the per-year NC
+    atomically.
     """
     out_path = per_year_output_path(project, adapter.source_key, year)
     if out_path.exists():
         logger.info(
-            "%s: year %d: intermediate exists, skipping (%s)",
+            "%s: year %d: per-year NC exists, skipping (%s)",
             adapter.source_key,
             year,
             out_path,
@@ -284,44 +383,45 @@ def aggregate_year(
 
         year_ds = xr.concat(datasets, dim=id_col)
 
+    if adapter.post_aggregate_hook is not None:
+        year_ds = adapter.post_aggregate_hook(year_ds)
+
+    meta = (
+        catalog_meta if catalog_meta is not None else catalog_source(adapter.source_key)
+    )
+    _attach_cf_global_attrs(year_ds, adapter.source_key, meta)
+
     _atomic_write_netcdf(year_ds, out_path)
     logger.info("%s: year %d: wrote %s", adapter.source_key, year, out_path)
     return out_path
 
 
-def concat_years(paths: list[Path], time_coord: str) -> xr.Dataset:
-    """Open per-year intermediates, concat on time, validate monotonic + unique.
+def _derive_period(per_year_paths: list[Path], time_coord: str) -> str:
+    """Return ``'YYYY-MM-DD/YYYY-MM-DD'`` from the first/last per-year files.
 
-    Loads each intermediate into memory and closes the on-disk handle so the
-    returned Dataset is detached from the filesystem. Raises if duplicate
-    time coords appear across inputs or if the covered calendar years have
-    interior gaps (i.e. a year between min and max is not represented).
+    Opens only the first and last files (lazy, closed immediately) and reads
+    the first/last ``time_coord`` values. Avoids opening any file other
+    than the first and last.
     """
-    if not paths:
-        raise ValueError("concat_years called with empty paths list")
-    loaded: list[xr.Dataset] = []
-    for p in paths:
-        with xr.open_dataset(p) as ds:
-            loaded.append(ds.load())
-    combined = xr.concat(loaded, dim=time_coord).sortby(time_coord)
-    t = combined[time_coord].values
-    if len(np.unique(t)) != len(t):
-        raise ValueError(
-            f"Duplicate time coords across per-year intermediates: "
-            f"{[p.name for p in paths]}"
-        )
-    # Use the xarray .dt accessor rather than pd.DatetimeIndex: the latter
-    # raises TypeError on cftime calendars (noleap, 360_day, etc.), which
-    # some upstream sources ship with.
-    years_present = set(int(y) for y in combined[time_coord].dt.year.values)
-    expected = set(range(min(years_present), max(years_present) + 1))
-    missing_years = sorted(expected - years_present)
-    if missing_years:
-        raise ValueError(
-            f"concat_years: year gap(s) in per-year intermediates: "
-            f"missing={missing_years}, covered={sorted(years_present)}"
-        )
-    return combined
+    first, last = per_year_paths[0], per_year_paths[-1]
+    with xr.open_dataset(first) as ds_first:
+        vals = ds_first[time_coord].values
+        if len(vals) == 0:
+            raise ValueError(
+                f"Per-year NC {first} has an empty {time_coord!r} coord; "
+                f"cannot derive period. This indicates the aggregation "
+                f"produced zero timesteps for that year."
+            )
+        t0 = str(vals[0])[:10]
+    with xr.open_dataset(last) as ds_last:
+        vals = ds_last[time_coord].values
+        if len(vals) == 0:
+            raise ValueError(
+                f"Per-year NC {last} has an empty {time_coord!r} coord; "
+                f"cannot derive period."
+            )
+        t1 = str(vals[-1])[:10]
+    return f"{t0}/{t1}"
 
 
 def compute_or_load_weights(
@@ -510,15 +610,16 @@ def aggregate_source(
     id_col: str,
     workdir: Path,
     batch_size: int = 500,
-) -> xr.Dataset:
-    """Aggregate a source to fabric HRU polygons via the per-year pipeline.
+) -> None:
+    """Aggregate a source to fabric HRU polygons; emit per-year NCs.
 
-    Enumerates years from files matching ``adapter.files_glob`` in the
-    datastore raw directory, aggregates each year to
-    ``data/aggregated/_by_year/<source_key>_<year>_agg.nc`` (idempotent;
-    existing intermediates are reused on restart), then concats on time to
-    ``data/aggregated/<output_name>``. Per-year intermediates are preserved
-    for audit/restart.
+    Writes one NC per year to
+    ``data/aggregated/<source_key>/<source_key>_<year>_agg.nc``. No
+    consolidated single-file output is produced; per-year files are the
+    canonical aggregated output. Idempotent: existing per-year files are
+    preserved on restart. Legacy ``_by_year/`` files are moved into
+    ``<source_key>/`` and stale ``<source_key>_agg.nc`` consolidated files
+    are removed via ``_migrate_legacy_layout`` at the top of the function.
 
     Variables declared by ``adapter.variables`` that are missing from the
     source NC cause ValueError before any year is aggregated — unless the
@@ -528,6 +629,8 @@ def aggregate_source(
     workdir = Path(workdir)
     project = load_project(workdir)
     meta = catalog_source(adapter.source_key)
+
+    _migrate_legacy_layout(project, adapter.source_key)
 
     raw_dir = project.raw_dir(adapter.source_key)
     files = sorted(raw_dir.glob(adapter.files_glob))
@@ -595,40 +698,46 @@ def aggregate_source(
     )
 
     per_year_paths = [
-        aggregate_year(adapter, project, year, path, fabric_batched, id_col)
+        aggregate_year(
+            adapter,
+            project,
+            year,
+            path,
+            fabric_batched,
+            id_col,
+            catalog_meta=meta,
+        )
         for year, path in year_files
     ]
+
+    per_source_dir = project.aggregated_dir() / adapter.source_key
+    _verify_year_coverage(per_source_dir, adapter.source_key)
 
     with xr.open_dataset(per_year_paths[0]) as probe:
         time_coord = _find_time_coord_name(probe)
     if time_coord is None:
         raise ValueError(
             f"{adapter.source_key}: could not detect CF time coord on "
-            f"per-year intermediate {per_year_paths[0].name}. Expected a "
+            f"per-year NC {per_year_paths[0].name}. Expected a "
             f"coord with axis='T' or standard_name='time'."
         )
-    combined = concat_years(per_year_paths, time_coord=time_coord)
+    period = _derive_period(per_year_paths, time_coord)
 
-    if adapter.post_aggregate_hook is not None:
-        combined = adapter.post_aggregate_hook(combined)
-
-    _attach_cf_global_attrs(combined, adapter.source_key, meta)
-
-    output_path = project.aggregated_dir() / adapter.output_name
-    _atomic_write_netcdf(combined, output_path)
-    logger.info("%s: output written to %s", adapter.source_key, output_path)
-
-    t0 = str(combined[time_coord].values[0])[:10]
-    t1 = str(combined[time_coord].values[-1])[:10]
+    rel_output_files = [str(p.relative_to(project.workdir)) for p in per_year_paths]
     update_manifest(
         project=project,
         source_key=adapter.source_key,
         access=meta.get("access", {}),
-        period=f"{t0}/{t1}",
-        output_file=str(Path("data") / "aggregated" / adapter.output_name),
+        period=period,
+        output_files=rel_output_files,
         weight_files=[
             str(Path("weights") / f"{adapter.source_key}_batch{i}.csv")
             for i in range(n_batches)
         ],
     )
-    return combined
+    logger.info(
+        "%s: %d per-year NCs written to %s",
+        adapter.source_key,
+        len(per_year_paths),
+        per_source_dir,
+    )

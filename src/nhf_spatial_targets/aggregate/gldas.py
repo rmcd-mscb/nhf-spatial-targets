@@ -35,8 +35,8 @@ ADAPTER = SourceAdapter(
 
 def aggregate_gldas(
     fabric_path: Path, id_col: str, workdir: Path, batch_size: int = 500
-) -> xr.Dataset:
-    return aggregate_source(
+) -> None:
+    aggregate_source(
         ADAPTER,
         fabric_path,
         id_col,

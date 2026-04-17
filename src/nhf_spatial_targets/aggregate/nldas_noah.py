@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import xarray as xr
-
 from nhf_spatial_targets.aggregate._adapter import SourceAdapter
 from nhf_spatial_targets.aggregate._driver import aggregate_source
 
@@ -24,8 +22,8 @@ ADAPTER = SourceAdapter(
 
 def aggregate_nldas_noah(
     fabric_path: Path, id_col: str, workdir: Path, batch_size: int = 500
-) -> xr.Dataset:
-    return aggregate_source(
+) -> None:
+    aggregate_source(
         ADAPTER,
         fabric_path,
         id_col,
