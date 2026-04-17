@@ -28,7 +28,7 @@ cdsapi = "*"
 
 [pypi-dependencies]
 nhf-spatial-targets = { path = ".", editable = true }
-gdptools = "*"
+gdptools = ">=0.3.12"
 sciencebasepy = "*"
 earthaccess = "*"
 
