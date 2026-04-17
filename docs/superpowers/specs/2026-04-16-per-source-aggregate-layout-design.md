@@ -65,8 +65,11 @@ The final consolidation step is removed. `aggregate_source` becomes:
 4. **Year-coverage verification** (new): walk filenames in the per-source
    directory (no dataset opens), raise on duplicates or interior year gaps.
 5. Update `manifest.json` with `output_files: list[str]` listing each
-   per-year path relative to `project.workdir`. `period` is derived
-   cheaply from min/max year in the filename set.
+   per-year path relative to `project.workdir`. `period` is derived by
+   opening only the first and last per-year files and reading their
+   first/last time-coord values (cheap — two small-file opens, no full
+   load) so partial trailing years (e.g., a 2026 fetch that ends
+   2026-06-30) are captured accurately.
 
 `concat_years()` is deleted. Its invariants (no duplicate time coords,
 no interior year gaps) are preserved by `_verify_year_coverage` at the
@@ -143,8 +146,9 @@ run overwrites the entry cleanly.
   - `aggregate_source` calls the migration shim at the top and the
     coverage check before the manifest update.
   - `update_manifest` signature: `output_file: str` → `output_files:
-    list[str]`. `period` argument derived from the per-year filenames in
-    `aggregate_source`.
+    list[str]`. `period` is computed by `aggregate_source` by opening
+    only the first and last per-year files and reading their first/last
+    time-coord values.
 - **`aggregate/_adapter.py`** — no change. `post_aggregate_hook`
   signature stays `(Dataset) -> Dataset`; the driver simply calls it
   per-year instead of post-concat.
