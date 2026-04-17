@@ -533,3 +533,36 @@ def test_migrate_legacy_layout_collision_leaves_both(project):
     # New-path file is canonical and untouched; legacy file is left in place.
     assert legacy_file.exists()
     assert new_file.exists()
+
+
+def test_verify_year_coverage_ok_on_contiguous(tmp_path):
+    from nhf_spatial_targets.aggregate._driver import _verify_year_coverage
+
+    d = tmp_path / "foo"
+    d.mkdir()
+    for y in (2000, 2001, 2002):
+        (d / f"foo_{y}_agg.nc").write_bytes(b"")
+
+    # Must not raise.
+    _verify_year_coverage(d, "foo")
+
+
+def test_verify_year_coverage_raises_on_interior_gap(tmp_path):
+    from nhf_spatial_targets.aggregate._driver import _verify_year_coverage
+
+    d = tmp_path / "foo"
+    d.mkdir()
+    for y in (2000, 2002, 2003):
+        (d / f"foo_{y}_agg.nc").write_bytes(b"")
+
+    with pytest.raises(ValueError, match=r"missing=\[2001\]"):
+        _verify_year_coverage(d, "foo")
+
+
+def test_verify_year_coverage_raises_on_empty(tmp_path):
+    from nhf_spatial_targets.aggregate._driver import _verify_year_coverage
+
+    d = tmp_path / "foo"
+    d.mkdir()
+    with pytest.raises(ValueError, match="no per-year"):
+        _verify_year_coverage(d, "foo")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -225,6 +226,45 @@ def _migrate_legacy_layout(project: Project, source_key: str) -> None:
             "%s: removed stale consolidated file %s",
             source_key,
             stale_consolidated,
+        )
+
+
+_YEAR_FNAME_RE = re.compile(r"^(?P<key>.+)_(?P<year>\d{4})_agg\.nc$")
+
+
+def _parse_year_from_filename(path: Path, source_key: str) -> int | None:
+    """Return the year parsed from ``<source_key>_<YYYY>_agg.nc``, else None."""
+    m = _YEAR_FNAME_RE.match(path.name)
+    if m is None or m.group("key") != source_key:
+        return None
+    return int(m.group("year"))
+
+
+def _verify_year_coverage(per_source_dir: Path, source_key: str) -> None:
+    """Scan the per-source dir and verify contiguous year coverage.
+
+    Filename-level check: parses ``<source_key>_<YYYY>_agg.nc`` matches.
+    Raises ``ValueError`` if no matching files exist or if there is an
+    interior gap between ``min_year`` and ``max_year``. Filesystem
+    uniqueness prevents two files with the same name in one directory,
+    so the duplicate-year case that the old ``concat_years`` caught via
+    time-coord inspection is unreachable here.
+    """
+    years: list[int] = []
+    for p in sorted(per_source_dir.glob(f"{source_key}_*_agg.nc")):
+        y = _parse_year_from_filename(p, source_key)
+        if y is not None:
+            years.append(y)
+    if not years:
+        raise ValueError(
+            f"{source_key}: no per-year aggregated files found in {per_source_dir}"
+        )
+    expected = set(range(min(years), max(years) + 1))
+    missing = sorted(expected - set(years))
+    if missing:
+        raise ValueError(
+            f"{source_key}: year gap(s) in per-year aggregated files: "
+            f"missing={missing}, covered={sorted(set(years))}"
         )
 
 
