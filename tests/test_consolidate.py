@@ -402,14 +402,17 @@ def ncep_dir_0_360(tmp_path: Path) -> Path:
     lat = np.arange(-90, 91, 45.0)
     lon = np.arange(0, 360, 60.0)
 
+    # Deterministic values: each cell encodes its longitude so we can verify
+    # data-coordinate alignment survives the shift+sort.
+    values = np.broadcast_to(
+        lon[np.newaxis, np.newaxis, :], (1, len(lat), len(lon))
+    ).astype(np.float32)
+
     for month in range(1, 4):
         time = np.array([f"2010-{month:02d}-15T00:00:00"], dtype="datetime64[ns]")
         ds = xr.Dataset(
             {
-                "soilw": (
-                    ["time", "lat", "lon"],
-                    np.random.rand(1, len(lat), len(lon)).astype(np.float32),
-                ),
+                "soilw": (["time", "lat", "lon"], values.copy()),
             },
             coords={"time": time, "lat": lat, "lon": lon},
         )
@@ -427,11 +430,18 @@ def test_ncep_longitude_normalization(ncep_dir_0_360):
 
     ds = xr.open_dataset(ncep_dir_0_360 / "ncep_ncar_consolidated.nc")
     lon_vals = ds.lon.values
+    data = ds["soilw"].isel(time=0, lat=0).values
     ds.close()
 
+    # Range and monotonicity
     assert float(lon_vals.min()) >= -180.0
     assert float(lon_vals.max()) <= 180.0
     assert all(lon_vals[i] < lon_vals[i + 1] for i in range(len(lon_vals) - 1))
+
+    # Data-coordinate alignment: each cell's value should equal its original
+    # 0-360 longitude, which is (normalized_lon % 360).
+    expected_original = np.array([v % 360 for v in lon_vals], dtype=np.float32)
+    np.testing.assert_array_equal(data, expected_original)
 
 
 @pytest.fixture()

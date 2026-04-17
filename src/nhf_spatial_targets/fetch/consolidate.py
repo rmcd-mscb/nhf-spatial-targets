@@ -1163,6 +1163,7 @@ def consolidate_ncep_ncar(
             "lon",
         )
         if float(ds[lon_name].max()) > 180:
+            logger.info("Normalizing %s from 0..360 to -180..180 range", lon_name)
             ds.coords[lon_name] = ((ds.coords[lon_name] + 180) % 360) - 180
             ds = ds.sortby(lon_name)
 
