@@ -394,6 +394,57 @@ def test_ncep_cf_metadata(ncep_dir):
 
 
 @pytest.fixture()
+def ncep_dir_0_360(tmp_path: Path) -> Path:
+    """Create synthetic NCEP/NCAR monthly files with 0-360 longitude."""
+    out = tmp_path / "ncep_ncar"
+    out.mkdir(parents=True)
+
+    lat = np.arange(-90, 91, 45.0)
+    lon = np.arange(0, 360, 60.0)
+
+    # Deterministic values: each cell encodes its longitude so we can verify
+    # data-coordinate alignment survives the shift+sort.
+    values = np.broadcast_to(
+        lon[np.newaxis, np.newaxis, :], (1, len(lat), len(lon))
+    ).astype(np.float32)
+
+    for month in range(1, 4):
+        time = np.array([f"2010-{month:02d}-15T00:00:00"], dtype="datetime64[ns]")
+        ds = xr.Dataset(
+            {
+                "soilw": (["time", "lat", "lon"], values.copy()),
+            },
+            coords={"time": time, "lat": lat, "lon": lon},
+        )
+        fname = f"soilw.0-10cm.gauss.2010-{month:02d}.monthly.nc"
+        ds.to_netcdf(out / fname, format="NETCDF3_CLASSIC")
+
+    return out
+
+
+def test_ncep_longitude_normalization(ncep_dir_0_360):
+    """NCEP/NCAR 0-360 longitude is normalized to -180..180 and sorted."""
+    from nhf_spatial_targets.fetch.consolidate import consolidate_ncep_ncar
+
+    consolidate_ncep_ncar(source_dir=ncep_dir_0_360, variables=["soilw"])
+
+    ds = xr.open_dataset(ncep_dir_0_360 / "ncep_ncar_consolidated.nc")
+    lon_vals = ds.lon.values
+    data = ds["soilw"].isel(time=0, lat=0).values
+    ds.close()
+
+    # Range and monotonicity
+    assert float(lon_vals.min()) >= -180.0
+    assert float(lon_vals.max()) <= 180.0
+    assert all(lon_vals[i] < lon_vals[i + 1] for i in range(len(lon_vals) - 1))
+
+    # Data-coordinate alignment: each cell's value should equal its original
+    # 0-360 longitude, which is (normalized_lon % 360).
+    expected_original = np.array([v % 360 for v in lon_vals], dtype=np.float32)
+    np.testing.assert_array_equal(data, expected_original)
+
+
+@pytest.fixture()
 def merra2_dir_unsorted(tmp_path: Path) -> Path:
     """Create MERRA-2 files in reverse chronological order."""
     out = tmp_path / "merra2"

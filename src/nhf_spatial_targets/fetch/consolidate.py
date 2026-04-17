@@ -1158,6 +1158,15 @@ def consolidate_ncep_ncar(
         ds = ds[variables]
         ds = apply_cf_metadata(ds, "ncep_ncar", "monthly")
 
+        lon_name = next(
+            (c for c in ds.coords if ds[c].attrs.get("axis") == "X"),
+            "lon",
+        )
+        if float(ds[lon_name].max()) > 180:
+            logger.info("Normalizing %s from 0..360 to -180..180 range", lon_name)
+            ds.coords[lon_name] = ((ds.coords[lon_name] + 180) % 360) - 180
+            ds = ds.sortby(lon_name)
+
         out_path = source_dir / "ncep_ncar_consolidated.nc"
         logger.info("Writing consolidated file: %s", out_path)
         _write_netcdf(ds, out_path)
