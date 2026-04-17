@@ -189,6 +189,45 @@ def _atomic_write_netcdf(ds: xr.Dataset, path: Path) -> None:
         raise
 
 
+def _migrate_legacy_layout(project: Project, source_key: str) -> None:
+    """Migrate legacy aggregated layout into per-source subdirs.
+
+    Idempotent. Moves ``data/aggregated/_by_year/<source_key>_*.nc`` into
+    ``data/aggregated/<source_key>/`` and unlinks any stale
+    ``data/aggregated/<source_key>_agg.nc``. If a target path already
+    exists for a given year (collision), the legacy file is left in
+    place — the new-path file is canonical.
+    """
+    agg_dir = project.aggregated_dir()
+    legacy_dir = agg_dir / "_by_year"
+    new_dir = agg_dir / source_key
+
+    if legacy_dir.is_dir():
+        new_dir.mkdir(parents=True, exist_ok=True)
+        for legacy_file in sorted(legacy_dir.glob(f"{source_key}_*_agg.nc")):
+            target = new_dir / legacy_file.name
+            if target.exists():
+                logger.info(
+                    "%s: legacy %s collides with existing %s; "
+                    "leaving both in place (new path is canonical)",
+                    source_key,
+                    legacy_file,
+                    target,
+                )
+                continue
+            legacy_file.rename(target)
+            logger.info("%s: migrated %s -> %s", source_key, legacy_file, target)
+
+    stale_consolidated = agg_dir / f"{source_key}_agg.nc"
+    if stale_consolidated.is_file():
+        stale_consolidated.unlink()
+        logger.info(
+            "%s: removed stale consolidated file %s",
+            source_key,
+            stale_consolidated,
+        )
+
+
 def aggregate_year(
     adapter: SourceAdapter,
     project: Project,

@@ -468,3 +468,68 @@ def test_aggregate_year_runs_post_aggregate_hook(project, tiny_batched_fabric):
     with xr.open_dataset(per_year_output_path(project, "merra2", 2005)) as written:
         assert "v_renamed" in written.data_vars
         assert "v" not in written.data_vars
+
+
+def test_migrate_legacy_layout_moves_by_year_files(project):
+    from nhf_spatial_targets.aggregate._driver import _migrate_legacy_layout
+
+    legacy_dir = project.workdir / "data" / "aggregated" / "_by_year"
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    f2000 = legacy_dir / "mod10c1_v061_2000_agg.nc"
+    f2001 = legacy_dir / "mod10c1_v061_2001_agg.nc"
+    _write_year_intermediate(f2000, 2000)
+    _write_year_intermediate(f2001, 2001)
+
+    _migrate_legacy_layout(project, "mod10c1_v061")
+
+    new_dir = project.workdir / "data" / "aggregated" / "mod10c1_v061"
+    assert (new_dir / "mod10c1_v061_2000_agg.nc").exists()
+    assert (new_dir / "mod10c1_v061_2001_agg.nc").exists()
+    assert not f2000.exists()
+    assert not f2001.exists()
+
+
+def test_migrate_legacy_layout_removes_stale_consolidated(project):
+    from nhf_spatial_targets.aggregate._driver import _migrate_legacy_layout
+
+    agg_dir = project.workdir / "data" / "aggregated"
+    agg_dir.mkdir(parents=True, exist_ok=True)
+    stale = agg_dir / "mod10c1_v061_agg.nc"
+    stale.write_bytes(b"placeholder")
+
+    _migrate_legacy_layout(project, "mod10c1_v061")
+
+    assert not stale.exists()
+
+
+def test_migrate_legacy_layout_idempotent(project):
+    from nhf_spatial_targets.aggregate._driver import _migrate_legacy_layout
+
+    legacy_dir = project.workdir / "data" / "aggregated" / "_by_year"
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    _write_year_intermediate(legacy_dir / "foo_2000_agg.nc", 2000)
+
+    _migrate_legacy_layout(project, "foo")
+    _migrate_legacy_layout(project, "foo")  # must not raise
+
+    new_file = project.workdir / "data" / "aggregated" / "foo" / "foo_2000_agg.nc"
+    assert new_file.exists()
+
+
+def test_migrate_legacy_layout_collision_leaves_both(project):
+    from nhf_spatial_targets.aggregate._driver import _migrate_legacy_layout
+
+    legacy_dir = project.workdir / "data" / "aggregated" / "_by_year"
+    new_dir = project.workdir / "data" / "aggregated" / "foo"
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    new_dir.mkdir(parents=True, exist_ok=True)
+    legacy_file = legacy_dir / "foo_2000_agg.nc"
+    new_file = new_dir / "foo_2000_agg.nc"
+    _write_year_intermediate(legacy_file, 2000)
+    _write_year_intermediate(new_file, 2000)
+
+    _migrate_legacy_layout(project, "foo")
+
+    # New-path file is canonical and untouched; legacy file is left in place.
+    assert legacy_file.exists()
+    assert new_file.exists()
