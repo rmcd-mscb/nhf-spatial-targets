@@ -274,7 +274,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/70/13/5193c501614cae2cb241f3efd82b711e562ba562435a4930ea8213db86d4/earthaccess-0.16.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/47/3e/1b67df0f5412a98eef8e6e442d0ef5c823f863826e3b28d6490fa2fdbb96/exactextract-0.3.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/eb/26/6c6a1cae46104a3ec5da87cb5fefb3eac0c07f04e56786f928164942e91a/fastparquet-2025.12.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
-      - pypi: https://files.pythonhosted.org/packages/c2/65/f9ad0a7aba651abff448b6ba23b5dfefc5ba92ee886417c1e1282763a29e/gdptools-0.3.12-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/23/c3/bc29a62cd00714cea180a65f3299b4309697cbb999a670603c6ebb0ce9fd/gdptools-0.3.13-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/ce/42/b468aec74a0354b34c8cbf748db20d6e350a68a2b0912e128cabee49806c/google_crc32c-1.8.0-cp313-cp313-manylinux1_x86_64.manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_5_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/a4/ed/1f1afb2e9e7f38a545d628f864d562a5ae64fe6f7a10e28ffb9b185b4e89/importlib_resources-6.5.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/14/2f/967ba146e6d58cf6a652da73885f52fc68001525b4197effc174321d70b4/jmespath-1.1.0-py3-none-any.whl
@@ -555,7 +555,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/70/13/5193c501614cae2cb241f3efd82b711e562ba562435a4930ea8213db86d4/earthaccess-0.16.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/e0/0d/2ede0afac892e46371c5a7c7b07944713ea7749eedd3b58952e6b61c7772/exactextract-0.3.0-cp313-cp313-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/79/f9/5539b19ae7e1e0ad77f5b8a1e8d480fdf0193639cf97239734173b8730ab/fastparquet-2025.12.0-cp313-cp313-macosx_11_0_arm64.whl
-      - pypi: https://files.pythonhosted.org/packages/c2/65/f9ad0a7aba651abff448b6ba23b5dfefc5ba92ee886417c1e1282763a29e/gdptools-0.3.12-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/23/c3/bc29a62cd00714cea180a65f3299b4309697cbb999a670603c6ebb0ce9fd/gdptools-0.3.13-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/d1/db/000f15b41724589b0e7bc24bc7a8967898d8d3bc8caf64c513d91ef1f6c0/google_crc32c-1.8.0-cp313-cp313-macosx_12_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/a4/ed/1f1afb2e9e7f38a545d628f864d562a5ae64fe6f7a10e28ffb9b185b4e89/importlib_resources-6.5.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/14/2f/967ba146e6d58cf6a652da73885f52fc68001525b4197effc174321d70b4/jmespath-1.1.0-py3-none-any.whl
@@ -830,7 +830,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/70/13/5193c501614cae2cb241f3efd82b711e562ba562435a4930ea8213db86d4/earthaccess-0.16.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/e1/74/4a3254d4328314cb5b83a381a37b5f71dde415e6a39157a2e0c380294890/exactextract-0.3.0-cp313-cp313-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/f8/10/380cba3ee18b25384cbf0d229b8cad47d63eb89c630f267cf1e11c64fe16/fastparquet-2025.12.0-cp313-cp313-win_amd64.whl
-      - pypi: https://files.pythonhosted.org/packages/c2/65/f9ad0a7aba651abff448b6ba23b5dfefc5ba92ee886417c1e1282763a29e/gdptools-0.3.12-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/23/c3/bc29a62cd00714cea180a65f3299b4309697cbb999a670603c6ebb0ce9fd/gdptools-0.3.13-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/92/b1/d3cbd4d988afb3d8e4db94ca953df429ed6db7282ed0e700d25e6c7bfc8d/google_crc32c-1.8.0-cp313-cp313-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/a4/ed/1f1afb2e9e7f38a545d628f864d562a5ae64fe6f7a10e28ffb9b185b4e89/importlib_resources-6.5.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/14/2f/967ba146e6d58cf6a652da73885f52fc68001525b4197effc174321d70b4/jmespath-1.1.0-py3-none-any.whl
@@ -941,6 +941,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/geopandas-base-1.1.3-pyha770c72_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/geos-3.14.1-h480dda7_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/gflags-2.2.2-h5888daf_1005.conda
+      - conda: https://conda.anaconda.org/conda-forge/linux-64/gh-2.91.0-hfc2019e_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/giflib-5.2.2-hd590300_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/glog-0.7.1-hbabe93e_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/h2-4.3.0-pyhcf101f3_0.conda
@@ -1170,7 +1171,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/70/13/5193c501614cae2cb241f3efd82b711e562ba562435a4930ea8213db86d4/earthaccess-0.16.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/47/3e/1b67df0f5412a98eef8e6e442d0ef5c823f863826e3b28d6490fa2fdbb96/exactextract-0.3.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/eb/26/6c6a1cae46104a3ec5da87cb5fefb3eac0c07f04e56786f928164942e91a/fastparquet-2025.12.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
-      - pypi: https://files.pythonhosted.org/packages/c2/65/f9ad0a7aba651abff448b6ba23b5dfefc5ba92ee886417c1e1282763a29e/gdptools-0.3.12-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/23/c3/bc29a62cd00714cea180a65f3299b4309697cbb999a670603c6ebb0ce9fd/gdptools-0.3.13-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/ce/42/b468aec74a0354b34c8cbf748db20d6e350a68a2b0912e128cabee49806c/google_crc32c-1.8.0-cp313-cp313-manylinux1_x86_64.manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_5_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/a4/ed/1f1afb2e9e7f38a545d628f864d562a5ae64fe6f7a10e28ffb9b185b4e89/importlib_resources-6.5.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/14/2f/967ba146e6d58cf6a652da73885f52fc68001525b4197effc174321d70b4/jmespath-1.1.0-py3-none-any.whl
@@ -1273,6 +1274,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/geopandas-base-1.1.3-pyha770c72_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/geos-3.14.1-h5afe852_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/gflags-2.2.2-hf9b8971_1005.conda
+      - conda: https://conda.anaconda.org/conda-forge/osx-arm64/gh-2.91.0-hf76c51c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/giflib-5.2.2-h93a5062_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/glog-0.7.1-heb240a5_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/h2-4.3.0-pyhcf101f3_0.conda
@@ -1495,7 +1497,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/70/13/5193c501614cae2cb241f3efd82b711e562ba562435a4930ea8213db86d4/earthaccess-0.16.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/e0/0d/2ede0afac892e46371c5a7c7b07944713ea7749eedd3b58952e6b61c7772/exactextract-0.3.0-cp313-cp313-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/79/f9/5539b19ae7e1e0ad77f5b8a1e8d480fdf0193639cf97239734173b8730ab/fastparquet-2025.12.0-cp313-cp313-macosx_11_0_arm64.whl
-      - pypi: https://files.pythonhosted.org/packages/c2/65/f9ad0a7aba651abff448b6ba23b5dfefc5ba92ee886417c1e1282763a29e/gdptools-0.3.12-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/23/c3/bc29a62cd00714cea180a65f3299b4309697cbb999a670603c6ebb0ce9fd/gdptools-0.3.13-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/d1/db/000f15b41724589b0e7bc24bc7a8967898d8d3bc8caf64c513d91ef1f6c0/google_crc32c-1.8.0-cp313-cp313-macosx_12_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/a4/ed/1f1afb2e9e7f38a545d628f864d562a5ae64fe6f7a10e28ffb9b185b4e89/importlib_resources-6.5.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/14/2f/967ba146e6d58cf6a652da73885f52fc68001525b4197effc174321d70b4/jmespath-1.1.0-py3-none-any.whl
@@ -1596,6 +1598,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/geopandas-1.1.3-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/geopandas-base-1.1.3-pyha770c72_0.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/geos-3.14.1-hdade9fe_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/win-64/gh-2.91.0-h11686cb_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/h2-4.3.0-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/h5netcdf-1.8.1-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/h5py-3.15.1-nompi_py313hf7f959b_101.conda
@@ -1812,7 +1815,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/70/13/5193c501614cae2cb241f3efd82b711e562ba562435a4930ea8213db86d4/earthaccess-0.16.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/e1/74/4a3254d4328314cb5b83a381a37b5f71dde415e6a39157a2e0c380294890/exactextract-0.3.0-cp313-cp313-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/f8/10/380cba3ee18b25384cbf0d229b8cad47d63eb89c630f267cf1e11c64fe16/fastparquet-2025.12.0-cp313-cp313-win_amd64.whl
-      - pypi: https://files.pythonhosted.org/packages/c2/65/f9ad0a7aba651abff448b6ba23b5dfefc5ba92ee886417c1e1282763a29e/gdptools-0.3.12-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/23/c3/bc29a62cd00714cea180a65f3299b4309697cbb999a670603c6ebb0ce9fd/gdptools-0.3.13-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/92/b1/d3cbd4d988afb3d8e4db94ca953df429ed6db7282ed0e700d25e6c7bfc8d/google_crc32c-1.8.0-cp313-cp313-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/a4/ed/1f1afb2e9e7f38a545d628f864d562a5ae64fe6f7a10e28ffb9b185b4e89/importlib_resources-6.5.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/14/2f/967ba146e6d58cf6a652da73885f52fc68001525b4197effc174321d70b4/jmespath-1.1.0-py3-none-any.whl
@@ -4221,10 +4224,10 @@ packages:
   - pkg:pypi/fsspec?source=compressed-mapping
   size: 148757
   timestamp: 1770387898414
-- pypi: https://files.pythonhosted.org/packages/c2/65/f9ad0a7aba651abff448b6ba23b5dfefc5ba92ee886417c1e1282763a29e/gdptools-0.3.12-py3-none-any.whl
+- pypi: https://files.pythonhosted.org/packages/23/c3/bc29a62cd00714cea180a65f3299b4309697cbb999a670603c6ebb0ce9fd/gdptools-0.3.13-py3-none-any.whl
   name: gdptools
-  version: 0.3.12
-  sha256: 1497dc83b35967ecc74c1f4f203ce533068c657441c4bc51aaef9ef432af6ac0
+  version: 0.3.13
+  sha256: 9fde003226822773d50352e6f932db62b47bc889aa16a7d75dbaed25563c67a2
   requires_dist:
   - bottleneck>=1.3.3
   - click>=8.1,<9
@@ -4339,6 +4342,27 @@ packages:
   purls: []
   size: 82090
   timestamp: 1726600145480
+- conda: https://conda.anaconda.org/conda-forge/linux-64/gh-2.91.0-hfc2019e_0.conda
+  sha256: 6d541e0951dbbeeb8165d2e9209dc1ede41001bdbc8b7ad1f7464ce242a28c1a
+  md5: 5cf0c191d87ec18a0db448881da5e771
+  license: Apache-2.0
+  purls: []
+  size: 13093885
+  timestamp: 1776894219860
+- conda: https://conda.anaconda.org/conda-forge/osx-arm64/gh-2.91.0-hf76c51c_0.conda
+  sha256: c95ff4a057b0c4ca4883843f5386fe685dc62cc64a71df3e4d356f2491bfea8f
+  md5: 903b19e580bfbe95ba5fe8b44c844eee
+  license: Apache-2.0
+  purls: []
+  size: 11729176
+  timestamp: 1776894229659
+- conda: https://conda.anaconda.org/conda-forge/win-64/gh-2.91.0-h11686cb_0.conda
+  sha256: 0926c63dc46ba6b3cd16306194387ad45f58d15784589a29eb6cc12c76379319
+  md5: 65d98a9eeb0cad0a8166702a49fb9188
+  license: Apache-2.0
+  purls: []
+  size: 12585846
+  timestamp: 1776894249476
 - conda: https://conda.anaconda.org/conda-forge/linux-64/giflib-5.2.2-hd590300_0.conda
   sha256: aac402a8298f0c0cc528664249170372ef6b37ac39fdc92b40601a6aed1e32ff
   md5: 3bf7b9fd5a7136126e0234db4b87c8b6

@@ -28,7 +28,7 @@ cdsapi = "*"
 
 [pypi-dependencies]
 nhf-spatial-targets = { path = ".", editable = true }
-gdptools = ">=0.3.12"
+gdptools = ">=0.3.13"
 sciencebasepy = "*"
 earthaccess = "*"
 
@@ -39,6 +39,7 @@ ruff = ">=0.4"
 mypy = ">=1.10"
 ipykernel = ">=6.0"
 pre-commit = ">=4.0"
+gh = ">=2.0"
 
 [environments]
 default = { solve-group = "default" }

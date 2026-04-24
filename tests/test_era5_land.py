@@ -677,7 +677,7 @@ def test_update_manifest_accumulates_years(tmp_path):
         {
             "year": 1979,
             "daily_path": "/ds/era5_land/daily/era5_land_daily_1979.nc",
-            "monthly_path": "/ds/era5_land/monthly/era5_land_monthly_1979_1979.nc",
+            "monthly_path": "/ds/era5_land/monthly/era5_land_monthly_1979.nc",
             "consolidated_utc": "2024-01-01T00:00:00+00:00",
         }
     ]
@@ -685,7 +685,7 @@ def test_update_manifest_accumulates_years(tmp_path):
         {
             "year": 1980,
             "daily_path": "/ds/era5_land/daily/era5_land_daily_1980.nc",
-            "monthly_path": "/ds/era5_land/monthly/era5_land_monthly_1979_1980.nc",
+            "monthly_path": "/ds/era5_land/monthly/era5_land_monthly_1980.nc",
             "consolidated_utc": "2024-01-02T00:00:00+00:00",
         }
     ]
@@ -726,7 +726,7 @@ def test_update_manifest_updates_existing_year(tmp_path):
         {
             "year": 1979,
             "daily_path": "/ds/era5_land/daily/era5_land_daily_1979.nc",
-            "monthly_path": "/ds/era5_land/monthly/era5_land_monthly_1979_1979.nc",
+            "monthly_path": "/ds/era5_land/monthly/era5_land_monthly_1979.nc",
             "consolidated_utc": "2024-01-01T00:00:00+00:00",
         }
     ]
@@ -734,7 +734,7 @@ def test_update_manifest_updates_existing_year(tmp_path):
         {
             "year": 1979,
             "daily_path": "/ds/era5_land/daily/era5_land_daily_1979.nc",
-            "monthly_path": "/ds/era5_land/monthly/era5_land_monthly_1979_1979.nc",
+            "monthly_path": "/ds/era5_land/monthly/era5_land_monthly_1979.nc",
             "consolidated_utc": "2024-06-01T00:00:00+00:00",  # updated timestamp
         }
     ]
@@ -771,7 +771,7 @@ def test_update_manifest_handles_missing_year_key(tmp_path, caplog):
                     {
                         "year": 1979,
                         "daily_path": "/ds/daily_1979.nc",
-                        "monthly_path": "/ds/monthly_1979_1979.nc",
+                        "monthly_path": "/ds/monthly_1979.nc",
                     },
                 ]
             }
@@ -783,7 +783,7 @@ def test_update_manifest_handles_missing_year_key(tmp_path, caplog):
         {
             "year": 1980,
             "daily_path": "/ds/daily_1980.nc",
-            "monthly_path": "/ds/monthly_1979_1980.nc",
+            "monthly_path": "/ds/monthly_1980.nc",
             "consolidated_utc": "2024-01-01T00:00:00+00:00",
         }
     ]
@@ -822,7 +822,7 @@ def test_update_manifest_skips_bad_year_with_warning(tmp_path, caplog):
                     {
                         "year": 1979,
                         "daily_path": "/good.nc",
-                        "monthly_path": "/m.nc",
+                        "monthly_path": "/ds/monthly_1979.nc",
                     },
                 ]
             }
@@ -841,7 +841,7 @@ def test_update_manifest_skips_bad_year_with_warning(tmp_path, caplog):
                 {
                     "year": 1980,
                     "daily_path": "/d.nc",
-                    "monthly_path": "/m.nc",
+                    "monthly_path": "/ds/monthly_1980.nc",
                     "consolidated_utc": "2024-01-01",
                 }
             ],
@@ -855,59 +855,6 @@ def test_update_manifest_skips_bad_year_with_warning(tmp_path, caplog):
     years = sorted(f["year"] for f in result["sources"]["era5_land"]["files"])
     # Bad entry skipped; the good 1979 entry and new 1980 entry both kept.
     assert years == [1979, 1980]
-
-
-def test_update_manifest_refreshes_monthly_path_on_prior_entries(tmp_path):
-    """After rolling rebuild, every merged entry points to the current monthly file."""
-    import json
-
-    from nhf_spatial_targets.fetch.era5_land import _update_manifest
-
-    wd = _minimal_workdir(tmp_path)
-    meta = {
-        "access": {"url": "https://cds.climate.copernicus.eu"},
-        "variables": [{"name": "ro"}],
-    }
-    bbox = {"minx": -125.0, "miny": 24.7, "maxx": -66.0, "maxy": 53.0}
-
-    # First run: year 1979, monthly path reflects 1979-only range.
-    _update_manifest(
-        wd,
-        "1979/1979",
-        bbox,
-        meta,
-        "L",
-        [
-            {
-                "year": 1979,
-                "daily_path": "/ds/daily_1979.nc",
-                "monthly_path": "/ds/monthly_1979_1979.nc",
-                "consolidated_utc": "2024-01-01T00:00:00+00:00",
-            }
-        ],
-    )
-
-    # Second run: year 1980, rolling rebuild produces a new monthly path.
-    new_monthly = "/ds/monthly_1979_1980.nc"
-    _update_manifest(
-        wd,
-        "1980/1980",
-        bbox,
-        meta,
-        "L",
-        [
-            {
-                "year": 1980,
-                "daily_path": "/ds/daily_1980.nc",
-                "monthly_path": new_monthly,
-                "consolidated_utc": "2024-01-02T00:00:00+00:00",
-            }
-        ],
-    )
-
-    entry = json.loads((wd / "manifest.json").read_text())["sources"]["era5_land"]
-    # Both the prior 1979 entry AND the new 1980 entry point to the new path.
-    assert all(f["monthly_path"] == new_monthly for f in entry["files"])
 
 
 def test_fetch_era5_land_writes_partial_manifest_on_failure(tmp_path, monkeypatch):
@@ -960,7 +907,7 @@ def test_fetch_era5_land_writes_partial_manifest_on_failure(tmp_path, monkeypatc
         daily_dir.mkdir(parents=True, exist_ok=True)
         monthly_dir.mkdir(parents=True, exist_ok=True)
         daily = daily_dir / f"era5_land_daily_{year}.nc"
-        monthly = monthly_dir / f"era5_land_monthly_{year}_{year}.nc"
+        monthly = monthly_dir / f"era5_land_monthly_{year}.nc"
         daily.write_bytes(b"fake")
         monthly.write_bytes(b"fake")
         return daily, monthly
@@ -985,3 +932,283 @@ def test_variable_name_raises_on_unexpected_type():
         _variable_name(42)
     with pytest.raises(TypeError, match="Unexpected variable entry type"):
         _variable_name(["list_not_allowed"])
+
+
+# ---- _completed_years_from_manifest ----------------------------------------
+
+
+def test_completed_years_no_manifest(tmp_path):
+    """Returns empty set when manifest.json does not exist."""
+    from nhf_spatial_targets.fetch.era5_land import _completed_years_from_manifest
+
+    result = _completed_years_from_manifest(tmp_path)
+    assert result == set()
+
+
+def test_completed_years_empty_sources(tmp_path):
+    """Returns empty set when manifest has no era5_land entry."""
+    import json
+
+    (tmp_path / "manifest.json").write_text(json.dumps({"sources": {}, "steps": []}))
+    from nhf_spatial_targets.fetch.era5_land import _completed_years_from_manifest
+
+    assert _completed_years_from_manifest(tmp_path) == set()
+
+
+def test_completed_years_files_exist(tmp_path):
+    """Years whose daily + monthly files exist on disk are returned."""
+    import json
+
+    daily = tmp_path / "era5_land_daily_2000.nc"
+    monthly = tmp_path / "era5_land_monthly_2000.nc"
+    daily.write_bytes(b"d")
+    monthly.write_bytes(b"m")
+
+    manifest = {
+        "sources": {
+            "era5_land": {
+                "files": [
+                    {
+                        "year": 2000,
+                        "daily_path": str(daily),
+                        "monthly_path": str(monthly),
+                    }
+                ]
+            }
+        }
+    }
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest))
+
+    from nhf_spatial_targets.fetch.era5_land import _completed_years_from_manifest
+
+    assert _completed_years_from_manifest(tmp_path) == {2000}
+
+
+def test_completed_years_filters_missing_files(tmp_path):
+    """Years whose output files are absent on disk are excluded."""
+    import json
+
+    # Only daily exists — monthly is missing → not complete
+    daily = tmp_path / "era5_land_daily_1999.nc"
+    daily.write_bytes(b"d")
+
+    manifest = {
+        "sources": {
+            "era5_land": {
+                "files": [
+                    {
+                        "year": 1999,
+                        "daily_path": str(daily),
+                        "monthly_path": str(tmp_path / "era5_land_monthly_1999.nc"),
+                    }
+                ]
+            }
+        }
+    }
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest))
+
+    from nhf_spatial_targets.fetch.era5_land import _completed_years_from_manifest
+
+    assert _completed_years_from_manifest(tmp_path) == set()
+
+
+def test_completed_years_invalid_json(tmp_path, caplog):
+    """Returns empty set (with a warning) when manifest.json is unparseable."""
+    import logging
+
+    (tmp_path / "manifest.json").write_text("{not valid json")
+
+    from nhf_spatial_targets.fetch.era5_land import _completed_years_from_manifest
+
+    with caplog.at_level(logging.WARNING):
+        result = _completed_years_from_manifest(tmp_path)
+
+    assert result == set()
+    assert any("could not be parsed" in r.message for r in caplog.records)
+
+
+# ---- fetch_era5_land worker partitioning -----------------------------------
+
+
+def _make_fetch_project(tmp_path: Path) -> Path:
+    """Minimal project dir for fetch_era5_land partitioning tests."""
+    import json
+
+    import yaml
+
+    wd = tmp_path / "run"
+    wd.mkdir()
+    (wd / "config.yml").write_text(
+        yaml.dump(
+            {
+                "fabric": {"path": "", "id_col": "nhm_id"},
+                "datastore": str(wd / "datastore"),
+                "dir_mode": "2775",
+            }
+        )
+    )
+    (wd / "fabric.json").write_text(
+        json.dumps(
+            {
+                "hru_count": 3,
+                "id_col": "nhm_id",
+                "bbox_buffered": {
+                    "minx": -125.0,
+                    "miny": 24.7,
+                    "maxx": -66.0,
+                    "maxy": 53.0,
+                },
+            }
+        )
+    )
+    (wd / "manifest.json").write_text(json.dumps({"sources": {}, "steps": []}))
+    return wd
+
+
+def _fake_download_noop(year, variable, output_path):
+    """Fake download that touches the output file."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(b"fake")
+
+
+def test_fetch_era5_land_worker_partitions_years(tmp_path, monkeypatch):
+    """Each worker receives a non-overlapping, correctly assigned subset of years.
+
+    With 3 workers over [2000, 2001, 2002]:
+      worker 0 → [2000]
+      worker 1 → [2001]
+      worker 2 → [2002]
+
+    Workers are simulated sequentially but the manifest is suppressed so each
+    call sees the same empty starting state (matching true parallel execution
+    where all SLURM tasks start before any worker finishes).
+    """
+    from nhf_spatial_targets.fetch import era5_land
+
+    wd = _make_fetch_project(tmp_path)
+    processed: dict[int, list[int]] = {0: [], 1: [], 2: []}
+
+    def fake_consolidate(year, hourly_dir, daily_dir, monthly_dir):
+        daily_dir.mkdir(parents=True, exist_ok=True)
+        monthly_dir.mkdir(parents=True, exist_ok=True)
+        daily = daily_dir / f"era5_land_daily_{year}.nc"
+        monthly = monthly_dir / f"era5_land_monthly_{year}.nc"
+        daily.write_bytes(b"fake")
+        monthly.write_bytes(b"fake")
+        return daily, monthly
+
+    monkeypatch.setattr(era5_land, "download_year_variable", _fake_download_noop)
+    monkeypatch.setattr(era5_land, "consolidate_year", fake_consolidate)
+    # Suppress manifest writes so each sequential call sees the same empty state,
+    # matching true parallel execution where all SLURM tasks start together.
+    monkeypatch.setattr(era5_land, "_update_manifest", lambda *a, **kw: None)
+
+    from nhf_spatial_targets.fetch.era5_land import fetch_era5_land
+
+    for wi in range(3):
+        result = fetch_era5_land(
+            workdir=wd, period="2000/2002", worker_index=wi, n_workers=3
+        )
+        processed[wi] = [f["year"] for f in result["files"]]
+
+    # Every year assigned to exactly one worker
+    all_assigned = sorted(y for years in processed.values() for y in years)
+    assert all_assigned == [2000, 2001, 2002]
+    # No overlap
+    for wi in range(3):
+        for wj in range(wi + 1, 3):
+            assert not set(processed[wi]) & set(processed[wj])
+
+
+def test_fetch_era5_land_skips_manifest_completed(tmp_path, monkeypatch):
+    """Years recorded in manifest with existing files are not re-processed."""
+    import json
+
+    from nhf_spatial_targets.fetch import era5_land
+
+    wd = _make_fetch_project(tmp_path)
+
+    # Pre-stage 2000 as complete in the manifest with real files on disk
+    ws_datastore = wd / "datastore" / "era5_land"
+    daily_2000 = ws_datastore / "daily" / "era5_land_daily_2000.nc"
+    monthly_2000 = ws_datastore / "monthly" / "era5_land_monthly_2000.nc"
+    daily_2000.parent.mkdir(parents=True, exist_ok=True)
+    monthly_2000.parent.mkdir(parents=True, exist_ok=True)
+    daily_2000.write_bytes(b"d")
+    monthly_2000.write_bytes(b"m")
+
+    manifest = {
+        "sources": {
+            "era5_land": {
+                "files": [
+                    {
+                        "year": 2000,
+                        "daily_path": str(daily_2000),
+                        "monthly_path": str(monthly_2000),
+                    }
+                ]
+            }
+        },
+        "steps": [],
+    }
+    (wd / "manifest.json").write_text(json.dumps(manifest))
+
+    processed_years: list[int] = []
+
+    def fake_consolidate(year, hourly_dir, daily_dir, monthly_dir):
+        processed_years.append(year)
+        daily_dir.mkdir(parents=True, exist_ok=True)
+        monthly_dir.mkdir(parents=True, exist_ok=True)
+        daily = daily_dir / f"era5_land_daily_{year}.nc"
+        monthly = monthly_dir / f"era5_land_monthly_{year}.nc"
+        daily.write_bytes(b"fake")
+        monthly.write_bytes(b"fake")
+        return daily, monthly
+
+    monkeypatch.setattr(era5_land, "download_year_variable", _fake_download_noop)
+    monkeypatch.setattr(era5_land, "consolidate_year", fake_consolidate)
+
+    from nhf_spatial_targets.fetch.era5_land import fetch_era5_land
+
+    result = fetch_era5_land(workdir=wd, period="2000/2002")
+
+    # 2000 was in manifest with files on disk → skipped
+    assert 2000 not in processed_years
+    # 2001 and 2002 were not complete → processed
+    assert sorted(processed_years) == [2001, 2002]
+    result_years = [f["year"] for f in result["files"]]
+    assert 2000 not in result_years
+    assert sorted(result_years) == [2001, 2002]
+
+
+def test_fetch_era5_land_invalid_worker_args(tmp_path):
+    """Raises ValueError for invalid worker_index / n_workers combinations."""
+    from nhf_spatial_targets.fetch.era5_land import fetch_era5_land
+
+    wd = _make_fetch_project(tmp_path)
+
+    with pytest.raises(ValueError, match="n_workers must be >= 1"):
+        fetch_era5_land(workdir=wd, period="2000/2000", n_workers=0)
+
+    with pytest.raises(ValueError, match="worker_index must be in"):
+        fetch_era5_land(workdir=wd, period="2000/2000", worker_index=3, n_workers=3)
+
+    with pytest.raises(ValueError, match="worker_index must be in"):
+        fetch_era5_land(workdir=wd, period="2000/2000", worker_index=-1, n_workers=3)
+
+
+def test_fetch_era5_land_returns_empty_when_no_years_assigned(tmp_path, monkeypatch):
+    """Returns an empty files list when this worker has no years to process."""
+    from nhf_spatial_targets.fetch import era5_land
+    from nhf_spatial_targets.fetch.era5_land import fetch_era5_land
+
+    wd = _make_fetch_project(tmp_path)
+    monkeypatch.setattr(era5_land, "download_year_variable", _fake_download_noop)
+
+    # 1 year, 2 workers → worker 1 gets nothing
+    result = fetch_era5_land(
+        workdir=wd, period="2000/2000", worker_index=1, n_workers=2
+    )
+    assert result["files"] == []
+    assert result["worker_index"] == 1
+    assert result["n_workers"] == 2
