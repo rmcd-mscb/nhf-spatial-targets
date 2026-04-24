@@ -146,6 +146,27 @@ The pipeline separates **projects** (fabric-specific) from the **datastore** (sh
 - `dir_mode` in config.yml sets Unix directory permissions (e.g., "2775" for setgid + group-writable); ignored on Windows
 - Never delete a project directory — it is the audit trail
 
+## Relationship to TM 6-B10 (Hay et al. 2023)
+
+`docs/references/tm6b10.pdf` (and `tm6b10.md`, a pymupdf4llm conversion) is the
+methodological reference for the five calibration targets. A short crib sheet
+keyed to this repo lives at `docs/references/tm6b10-summary.md`. This pipeline
+intentionally differs from the report in two ways:
+
+- **Time windows are not fixed to the report.** TM 6-B10 uses specific periods
+  (e.g. 2000–2010 for AET, 2000–2009 for RCH normalization, 1982–2010 for SOM,
+  2000–2010 for SCA). Here, target windows are driven by **available data or
+  user preference** via project config, not hardcoded to the report's numbers.
+  The specific window used for each target is recorded in the target output
+  metadata and the project `manifest.json`. `period` fields in
+  `catalog/variables.yml` reflect historical defaults, not hard constraints.
+- **Dataset versions are current, not original.** Where the original sources
+  have been decommissioned, retired, or superseded (e.g. MOD16A2 v006 → v061,
+  MOD10C1 v006 → v061, MERRA-Land → MERRA-2, NHM-MWBM → ERA5-Land +
+  GLDAS-2.1 NOAH, WaterGAP 2.2a → 2.2d) we use the modern replacement.
+  `catalog/sources.yml` is authoritative for which version is in use; the
+  "Known Gaps (Resolved)" block below documents each substitution.
+
 ## Known Gaps (do not implement until resolved)
 
 See `catalog/sources.yml` `status:` and `notes:` fields for per-source gaps.
