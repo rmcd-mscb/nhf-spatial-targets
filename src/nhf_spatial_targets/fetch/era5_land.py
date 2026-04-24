@@ -16,6 +16,13 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    import fcntl as _fcntl
+
+    _HAVE_FLOCK = True
+except ImportError:  # Windows (not used on HPC, but keeps unit tests portable)
+    _HAVE_FLOCK = False
+
 import pandas as pd
 import xarray as xr
 
@@ -298,11 +305,11 @@ def consolidate_year(
     Reads ``era5_land_{ro,sro,ssro}_{year}.nc`` from ``hourly_dir``,
     aggregates each variable hourly→daily, merges into a single daily
     dataset, applies CF metadata, and writes atomically. Then aggregates
-    all available daily files into a rolling monthly NC.
+    the year's daily file into a per-year monthly NC
+    (``era5_land_monthly_{year}.nc``).
 
-    **Destructive side effect:** any existing monthly NC in ``monthly_dir``
-    whose filename year range differs from the updated range is deleted
-    before the new monthly NC is written.
+    Both the daily and monthly outputs are idempotent: if they already exist
+    and are not older than their inputs, the aggregation step is skipped.
 
     Parameters
     ----------
@@ -392,47 +399,104 @@ def consolidate_year(
         _atomic_to_netcdf(daily_ds, daily_path)
         logger.info("Wrote daily NC: %s", daily_path)
 
-    # Monthly: rebuild from the (possibly multi-year) collection of daily files
-    daily_files = sorted(daily_dir.glob("era5_land_daily_*.nc"))
-    with xr.open_mfdataset(daily_files, combine="by_coords") as ds_all:
-        monthly_arrays: dict[str, xr.DataArray] = {}
-        for var in VARIABLES:
-            monthly_arrays[var] = daily_to_monthly(ds_all[var].load())
-    monthly_ds = xr.Dataset(monthly_arrays)
-    monthly_ds = apply_cf_metadata(monthly_ds, _SOURCE_KEY, "monthly")
-    start_year = pd.Timestamp(monthly_ds.time.min().values).year
-    end_year = pd.Timestamp(monthly_ds.time.max().values).year
-    monthly_ds.attrs.update(
-        {
-            "title": (
-                f"ERA5-Land monthly runoff (CONUS+ buffered) {start_year}–{end_year}"
-            ),
-            "institution": "ECMWF",
-            "source": "reanalysis-era5-land",
-            "references": "doi:10.5194/essd-13-4349-2021",
-            "frequency": "month",
-            "history": f"Consolidated by nhf-spatial-targets v{__version__}",
-        }
-    )
-    monthly_path = monthly_dir / f"era5_land_monthly_{start_year}_{end_year}.nc"
-    # Remove any stale monthly file with a different year range
-    for stale in monthly_dir.glob("era5_land_monthly_*.nc"):
-        if stale != monthly_path:
-            logger.info("Removing stale monthly NC: %s", stale)
-            stale.unlink()
-    _atomic_to_netcdf(monthly_ds, monthly_path)
-    logger.info("Wrote monthly NC: %s", monthly_path)
+    # Monthly: per-year NC derived from this year's daily file only.
+    # Writing one file per year makes parallel fetching safe (no shared
+    # write target) and is directly consumable by the aggregator via its
+    # files_glob="era5_land_monthly_*.nc" pattern.
+    monthly_path = monthly_dir / f"era5_land_monthly_{year}.nc"
+
+    # Idempotency guard: skip if monthly NC exists and daily is not newer.
+    _skip_monthly = False
+    if monthly_path.exists():
+        monthly_mtime = monthly_path.stat().st_mtime
+        daily_mtime_now = daily_path.stat().st_mtime if daily_path.exists() else 0.0
+        if daily_mtime_now <= monthly_mtime:
+            logger.info(
+                "Monthly NC is up-to-date, skipping: %s",
+                monthly_path,
+            )
+            _skip_monthly = True
+        else:
+            logger.info(
+                "Daily NC is newer than monthly NC; re-aggregating: %s",
+                monthly_path,
+            )
+
+    if not _skip_monthly:
+        with xr.open_dataset(daily_path) as ds_year:
+            monthly_arrays: dict[str, xr.DataArray] = {}
+            for var in VARIABLES:
+                monthly_arrays[var] = daily_to_monthly(ds_year[var].load())
+        monthly_ds = xr.Dataset(monthly_arrays)
+        monthly_ds = apply_cf_metadata(monthly_ds, _SOURCE_KEY, "monthly")
+        monthly_ds.attrs.update(
+            {
+                "title": f"ERA5-Land monthly runoff (CONUS+ buffered) {year}",
+                "institution": "ECMWF",
+                "source": "reanalysis-era5-land",
+                "references": "doi:10.5194/essd-13-4349-2021",
+                "frequency": "month",
+                "history": f"Consolidated by nhf-spatial-targets v{__version__}",
+            }
+        )
+        _atomic_to_netcdf(monthly_ds, monthly_path)
+        logger.info("Wrote monthly NC: %s", monthly_path)
 
     return daily_path, monthly_path
 
 
-def fetch_era5_land(workdir: Path, period: str) -> dict:
+def _completed_years_from_manifest(workdir: Path) -> set[int]:
+    """Return the set of years fully recorded in ``manifest.json``.
+
+    A year is considered complete when its manifest entry carries both
+    ``daily_path`` and ``monthly_path`` that exist on disk.  Used by
+    ``fetch_era5_land`` to skip years already processed by a prior run or
+    a sibling parallel worker.
+
+    Returns an empty set (with a warning) if the manifest is absent or
+    unparseable — letting the caller fall through to file-level idempotency.
+    """
+    manifest_path = workdir / "manifest.json"
+    if not manifest_path.exists():
+        return set()
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except json.JSONDecodeError:
+        logger.warning(
+            "manifest.json in %s could not be parsed; "
+            "assuming no ERA5-Land years completed",
+            workdir,
+        )
+        return set()
+    files = manifest.get("sources", {}).get(_SOURCE_KEY, {}).get("files", [])
+    completed: set[int] = set()
+    for f in files:
+        try:
+            year = int(f["year"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        daily = f.get("daily_path", "")
+        monthly = f.get("monthly_path", "")
+        if daily and monthly and Path(daily).exists() and Path(monthly).exists():
+            completed.add(year)
+    return completed
+
+
+def fetch_era5_land(
+    workdir: Path,
+    period: str,
+    *,
+    worker_index: int = 0,
+    n_workers: int = 1,
+) -> dict:
     """Download ERA5-Land hourly runoff and produce daily/monthly NCs.
 
-    Loops over years in ``period``, downloading per-year per-variable
-    hourly NCs from CDS into the project's datastore, then consolidating
-    each year into the daily file and rebuilding the rolling monthly
-    file. Idempotent on already-downloaded years.
+    Reads ``manifest.json`` first to identify years already completed, then
+    divides the remaining years across ``n_workers`` parallel processes
+    (round-robin by ``worker_index``). Each worker downloads per-year
+    per-variable hourly NCs from CDS and consolidates them into a per-year
+    daily NC and a per-year monthly NC. Fully idempotent: already-downloaded
+    months and completed years are skipped at every level.
 
     Parameters
     ----------
@@ -440,12 +504,25 @@ def fetch_era5_land(workdir: Path, period: str) -> dict:
         Project directory containing ``config.yml`` and ``fabric.json``.
     period : str
         Temporal range as ``"YYYY/YYYY"``.
+    worker_index : int
+        0-based index of this worker within the pool (default ``0``).
+    n_workers : int
+        Total number of parallel workers (default ``1`` = serial).
+        All workers must be given the same ``period`` and ``n_workers``.
 
     Returns
     -------
     dict
-        Provenance record for the caller.
+        Provenance record for the caller (includes only this worker's years).
     """
+    if n_workers < 1:
+        raise ValueError(f"n_workers must be >= 1, got {n_workers!r}")
+    if not (0 <= worker_index < n_workers):
+        raise ValueError(
+            f"worker_index must be in [0, n_workers), "
+            f"got worker_index={worker_index!r}, n_workers={n_workers!r}"
+        )
+
     ws = _load_project(workdir)
     meta = _catalog.source(_SOURCE_KEY)
 
@@ -455,13 +532,56 @@ def fetch_era5_land(workdir: Path, period: str) -> dict:
     monthly_dir = raw_root / "monthly"
 
     now_utc = datetime.now(timezone.utc).isoformat()
-    files: list[dict] = []
-
     bbox = ws.fabric["bbox_buffered"]
     license_str = resolve_license(meta, _SOURCE_KEY)
 
+    all_years = years_in_period(period)
+
+    # Skip years already fully recorded in the manifest (both daily and monthly
+    # output files confirmed present on disk).  This is an optimistic fast-path:
+    # file-level idempotency inside download_year_variable / consolidate_year
+    # handles partially-complete years correctly regardless.
+    completed = _completed_years_from_manifest(workdir)
+    remaining = [y for y in all_years if y not in completed]
+    if completed:
+        skipped = sorted(y for y in all_years if y in completed)
+        logger.info(
+            "Worker %d/%d: skipping %d manifest-completed year(s): %s",
+            worker_index,
+            n_workers,
+            len(skipped),
+            skipped,
+        )
+
+    # Assign this worker's slice via round-robin so years spread evenly even
+    # when the list length is not divisible by n_workers.
+    my_years = remaining[worker_index::n_workers]
+    logger.info(
+        "Worker %d/%d: assigned %d year(s) to process: %s",
+        worker_index,
+        n_workers,
+        len(my_years),
+        my_years,
+    )
+
+    files: list[dict] = []
+
+    if not my_years:
+        return {
+            "source_key": _SOURCE_KEY,
+            "access_url": meta["access"]["url"],
+            "license": license_str,
+            "variables": [v["name"] for v in meta["variables"]],
+            "period": period,
+            "bbox": bbox,
+            "download_timestamp": now_utc,
+            "worker_index": worker_index,
+            "n_workers": n_workers,
+            "files": [],
+        }
+
     try:
-        for year in years_in_period(period):
+        for year in my_years:
             for var in VARIABLES:
                 out = hourly_dir / f"era5_land_{var}_{year}.nc"
                 download_year_variable(year, var, out)
@@ -478,8 +598,10 @@ def fetch_era5_land(workdir: Path, period: str) -> dict:
             )
     except Exception:
         logger.error(
-            "ERA5-Land fetch failed after completing %d year(s); "
+            "ERA5-Land fetch (worker %d/%d) failed after completing %d year(s); "
             "completed chunks preserved on disk, re-run to resume.",
+            worker_index,
+            n_workers,
             len(files),
             exc_info=True,
         )
@@ -494,8 +616,10 @@ def fetch_era5_land(workdir: Path, period: str) -> dict:
             except Exception:
                 logger.exception(
                     "Failed to persist partial ERA5-Land manifest for "
-                    "%d year(s); manifest.json may be stale.",
+                    "%d year(s) (worker %d/%d); manifest.json may be stale.",
                     len(files),
+                    worker_index,
+                    n_workers,
                 )
 
     return {
@@ -506,6 +630,8 @@ def fetch_era5_land(workdir: Path, period: str) -> dict:
         "period": period,
         "bbox": bbox,
         "download_timestamp": now_utc,
+        "worker_index": worker_index,
+        "n_workers": n_workers,
         "files": files,
     }
 
@@ -518,94 +644,96 @@ def _update_manifest(
     license_str: str,
     files: list[dict],
 ) -> None:
-    """Merge ERA5-Land provenance into manifest.json (atomic write)."""
+    """Merge ERA5-Land provenance into manifest.json (atomic write, file-locked).
+
+    Uses an advisory ``flock(LOCK_EX)`` on a sibling ``.lock`` file so that
+    concurrent parallel workers do not race on the shared manifest.  The lock
+    is held across the full read-modify-write cycle; it is released
+    automatically when the context manager exits (even on exception or kill).
+    On platforms without ``fcntl`` (Windows) locking is silently skipped —
+    correctness then relies on the atomic rename and incremental merge logic.
+    """
     ws = _load_project(workdir)
     manifest_path = ws.manifest_path
-    if manifest_path.exists():
-        try:
-            manifest = json.loads(manifest_path.read_text())
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"manifest.json in {workdir} is corrupt and cannot be "
-                f"parsed. You may need to delete it and re-run the fetch "
-                f"step. Original error: {exc}"
-            ) from exc
-    else:
-        manifest = {"sources": {}, "steps": []}
+    lock_path = manifest_path.with_suffix(".lock")
 
-    manifest.setdefault("sources", {})
-    entry = manifest["sources"].get(_SOURCE_KEY, {})
+    # Open the lock file in append mode (creates it if absent, never truncates).
+    # Hold the exclusive lock for the entire read-modify-write so sibling
+    # workers see a consistent snapshot.
+    with open(lock_path, "a") as _lock_f:
+        if _HAVE_FLOCK:
+            _fcntl.flock(_lock_f, _fcntl.LOCK_EX)
+        # Re-read inside the lock: another worker may have written new years
+        # between our last read and now.
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text())
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"manifest.json in {workdir} is corrupt and cannot be "
+                    f"parsed. You may need to delete it and re-run the fetch "
+                    f"step. Original error: {exc}"
+                ) from exc
+        else:
+            manifest = {"sources": {}, "steps": []}
 
-    # Merge files by year so incremental runs accumulate records.
-    # Parse defensively: prior manifests may have been hand-edited or
-    # written by an older version with a different schema.
-    existing_by_year: dict[int, dict] = {}
-    for f in entry.get("files", []):
-        if "year" not in f:
-            logger.warning(
-                "Skipping malformed manifest entry in %s (missing 'year' key): %s",
-                manifest_path,
-                f,
-            )
-            continue
-        try:
+        manifest.setdefault("sources", {})
+        entry = manifest["sources"].get(_SOURCE_KEY, {})
+
+        # Merge files by year so incremental runs accumulate records.
+        # Parse defensively: prior manifests may have been hand-edited or
+        # written by an older version with a different schema.
+        existing_by_year: dict[int, dict] = {}
+        for f in entry.get("files", []):
+            if "year" not in f:
+                logger.warning(
+                    "Skipping malformed manifest entry in %s (missing 'year' key): %s",
+                    manifest_path,
+                    f,
+                )
+                continue
+            try:
+                existing_by_year[int(f["year"])] = f
+            except (TypeError, ValueError) as exc:
+                # Match the sibling "missing year" handler above: skip-and-warn
+                # rather than raise. A corrupt prior entry shouldn't block
+                # recording of newly fetched years (which is arguably more
+                # valuable than failing hard on old cruft).
+                logger.warning(
+                    "Skipping manifest entry with invalid year %r in %s: %s",
+                    f.get("year"),
+                    manifest_path,
+                    exc,
+                )
+                continue
+        for f in files:
             existing_by_year[int(f["year"])] = f
-        except (TypeError, ValueError) as exc:
-            # Match the sibling "missing year" handler above: skip-and-warn
-            # rather than raise. A corrupt prior entry shouldn't block
-            # recording of newly fetched years (which is arguably more
-            # valuable than failing hard on old cruft).
-            logger.warning(
-                "Skipping manifest entry with invalid year %r in %s: %s",
-                f.get("year"),
-                manifest_path,
-                exc,
-            )
-            continue
-    for f in files:
-        existing_by_year[int(f["year"])] = f
 
-    # Refresh monthly_path on every merged entry — consolidate_year writes
-    # a single rolling monthly NC, so all year entries should point to the
-    # current filename (prior entries pointed at the now-deleted old name).
-    latest_monthly_path = files[-1]["monthly_path"] if files else None
-    if latest_monthly_path is not None:
-        refreshed = 0
-        for entry_file in existing_by_year.values():
-            if entry_file.get("monthly_path") != latest_monthly_path:
-                entry_file["monthly_path"] = latest_monthly_path
-                refreshed += 1
-        if refreshed > len(files):
-            logger.info(
-                "Refreshed monthly_path on %d prior manifest entries to %s",
-                refreshed - len(files),
-                latest_monthly_path,
-            )
+        merged_files = [existing_by_year[y] for y in sorted(existing_by_year)]
 
-    merged_files = [existing_by_year[y] for y in sorted(existing_by_year)]
+        all_years = sorted(existing_by_year)
+        effective_period = f"{all_years[0]}/{all_years[-1]}" if all_years else period
 
-    all_years = sorted(existing_by_year)
-    effective_period = f"{all_years[0]}/{all_years[-1]}" if all_years else period
+        entry.update(
+            {
+                "source_key": _SOURCE_KEY,
+                "access_url": meta["access"]["url"],
+                "license": license_str,
+                "period": effective_period,
+                "bbox": bbox,
+                "variables": [v["name"] for v in meta["variables"]],
+                "files": merged_files,
+            }
+        )
+        manifest["sources"][_SOURCE_KEY] = entry
 
-    entry.update(
-        {
-            "source_key": _SOURCE_KEY,
-            "access_url": meta["access"]["url"],
-            "license": license_str,
-            "period": effective_period,
-            "bbox": bbox,
-            "variables": [v["name"] for v in meta["variables"]],
-            "files": merged_files,
-        }
-    )
-    manifest["sources"][_SOURCE_KEY] = entry
-
-    fd, tmp = tempfile.mkstemp(dir=manifest_path.parent, suffix=".json.tmp")
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(manifest, f, indent=2)
-        Path(tmp).replace(manifest_path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
+        fd, tmp = tempfile.mkstemp(dir=manifest_path.parent, suffix=".json.tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(manifest, f, indent=2)
+            Path(tmp).replace(manifest_path)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
+        # flock released automatically when the `with open(lock_path)` block exits.
     logger.info("Updated manifest.json with ERA5-Land provenance")

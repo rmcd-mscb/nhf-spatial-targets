@@ -767,6 +767,22 @@ def fetch_era5_land_cmd(
         str,
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
     ] = "1979/2024",
+    worker_index: Annotated[
+        int,
+        Parameter(
+            name=["--worker-index"],
+            help="0-based index of this worker within the pool (default 0). "
+            "Set to $SLURM_ARRAY_TASK_ID in array jobs.",
+        ),
+    ] = 0,
+    n_workers: Annotated[
+        int,
+        Parameter(
+            name=["--n-workers"],
+            help="Total number of parallel workers (default 1 = serial). "
+            "Must match the SLURM array size.",
+        ),
+    ] = 1,
 ):
     """Download ERA5-Land hourly runoff (ro, sro, ssro) via CDS API and consolidate to daily/monthly NetCDFs."""
     import json as json_mod
@@ -780,10 +796,21 @@ def fetch_era5_land_cmd(
         sys.exit(2)
 
     console = Console()
-    console.print(f"[bold]Fetching ERA5-Land for period {period}...[/bold]")
+    if n_workers > 1:
+        console.print(
+            f"[bold]Fetching ERA5-Land for period {period} "
+            f"(worker {worker_index}/{n_workers})...[/bold]"
+        )
+    else:
+        console.print(f"[bold]Fetching ERA5-Land for period {period}...[/bold]")
 
     try:
-        result = fetch_era5_land(workdir=workdir, period=period)
+        result = fetch_era5_land(
+            workdir=workdir,
+            period=period,
+            worker_index=worker_index,
+            n_workers=n_workers,
+        )
     except (ValueError, FileNotFoundError, RuntimeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
