@@ -41,3 +41,6 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Claude Code runtime (settings.json and settings.local.json ARE tracked)
+.claude/scheduled_tasks.lock
