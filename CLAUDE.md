@@ -216,6 +216,8 @@ pixi run -e dev fmt && pixi run -e dev lint && pixi run -e dev test
 
 Pre-commit hooks enforce this automatically, but Claude should run these proactively.
 
+**Always commit via `pixi run git commit`, not bare `git commit`.** The pre-commit config runs ruff and pytest through `pixi run`; invoking `git commit` outside a pixi shell forces every hook to re-resolve the pixi environment, which is slow and prone to stalling on long-running hooks. A PreToolUse hook in `.claude/settings.json` blocks bare `git commit` for Claude sessions — humans should follow the same convention.
+
 ## Test Coverage Rule
 
 Every new module in `fetch/`, `aggregate/`, `normalize/`, or `targets/` must have a corresponding `tests/test_<module>.py`. Every PR should maintain or improve test coverage.
