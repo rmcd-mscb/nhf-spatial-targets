@@ -63,6 +63,7 @@ targets:
     sources:
       - reitz2017
       - watergap22d
+      - era5_land    # ssro (sub-surface runoff) as third recharge proxy
     time_step: annual
     period: "2000-01-01/2009-12-31"
     prms_variable: recharge

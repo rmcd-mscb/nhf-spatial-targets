@@ -10,7 +10,7 @@ Builds the five baseline calibration targets documented in [Hay and others (2022
 |---|---|---|---|---|
 | Runoff | `basin_cfs` | ERA5-Land (`ro`) + GLDAS-2.1 NOAH (`Qs_acc + Qsb_acc`) | Multi-source min/max | Monthly |
 | AET | `hru_actet` | MOD16A2 v061 + SSEBop | Multi-source min/max | Monthly |
-| Recharge | `recharge` | Reitz 2017 + WaterGAP 2.2d | Normalized min/max | Annual |
+| Recharge | `recharge` | Reitz 2017 + WaterGAP 2.2d + ERA5-Land (`ssro`) | Normalized min/max | Annual |
 | Soil Moisture | `soil_rechr` | MERRA-2 + NCEP/NCAR + NLDAS-MOSAIC + NLDAS-NOAH | Normalized min/max | Monthly + Annual |
 | Snow Cover | `snowcov_area` | MOD10C1 v061 | MODIS CI bounds | Daily |
 
