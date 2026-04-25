@@ -202,18 +202,27 @@ sources:
       - name: total_recharge
         file_variable: TotalRecharge
         long_name: total groundwater recharge
-        units: inches/year
-        cf_units: "inches yr-1"
+        units: m/year
+        cf_units: "m yr-1"
+        notes: >
+          Source GeoTIFFs from the ScienceBase release have no embedded
+          units metadata (no Band.GetUnitType, no file/band metadata, no
+          PAM .aux.xml sidecar). The ScienceBase landing page documents
+          the values as m/year, and CONUS-wide mean (~122 mm/yr) plus
+          spot-checks at known-high-recharge locations are consistent
+          with that interpretation. Earlier catalog versions declared
+          inches/year, which produced values ~8x too low; corrected
+          here.
       - name: eff_recharge
         file_variable: EffRecharge
         long_name: effective groundwater recharge (base flow component)
-        units: inches/year
-        cf_units: "inches yr-1"
+        units: m/year
+        cf_units: "m yr-1"
     time_step: annual
     period: "2000/2013"
     spatial_extent: CONUS
     spatial_resolution: 800m raster
-    units: inches/year
+    units: m/year
     license: public domain (USGS)
     status: current
 
