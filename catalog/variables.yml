@@ -122,7 +122,8 @@ variables:
       upper_bound = max across four sources.
       Layer depths and variable names:
         MERRA-2:    GWETTOP (0-0.05m, dimensionless) — preferred
-        NCEP/NCAR:  soilw.0-10cm (0-0.10m, kg/m2) — confirmed variable name
+        NCEP/NCAR:  soilw.0-10cm (0-0.10m, m3/m3) — file metadata mislabels
+                    units as kg/m2 but values are VWC; see catalog notes
         NLDAS-MOSAIC: SoilM_0_10cm (0-0.10m, kg/m2) — confirmed
         NLDAS-NOAH:   SoilM_0_10cm (0-0.10m, kg/m2) — confirmed
     normalize: true

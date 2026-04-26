@@ -398,19 +398,28 @@ sources:
         file_pattern: "https://downloads.psl.noaa.gov/Datasets/ncep.reanalysis.dailyavgs/surface_gauss/soilw.0-10cm.gauss.{year}.nc"
         long_name: "volumetric soil moisture 0-10 cm"
         layer_depth_m: "0.00-0.10"
-        units: kg/m2
+        units: m3/m3
+        notes: >
+          The upstream NCEP/NCAR R1 NetCDFs carry `units: kg/m2` on this
+          variable, but the long_name, var_desc, and valid_range
+          ([0.0, 1.0]) all confirm the values are volumetric water content
+          (m^3/m^3) — a known mislabel in the NCEP R1 GRIB metadata.
+          actual_range is ~[0.10, 0.43], consistent with VWC.  Do NOT
+          divide by `(layer_depth × ρ_water)` to convert to VWC; the data
+          already is VWC.
       - name: soilw_10_200cm
         file_variable: soilw.10-200cm.gauss
         internal_name: soilw
         file_pattern: "https://downloads.psl.noaa.gov/Datasets/ncep.reanalysis.dailyavgs/surface_gauss/soilw.10-200cm.gauss.{year}.nc"
         long_name: "volumetric soil moisture 10-200 cm"
         layer_depth_m: "0.10-2.00"
-        units: kg/m2
+        units: m3/m3
+        notes: "Same upstream `units: kg/m2` mislabel as soilw_0_10cm; values are VWC."
     time_step: monthly (derived from daily)
     period: "1948/present"
     spatial_extent: global
     spatial_resolution: T62 Gaussian grid (~1.875 degree)
-    units: kg/m2 (normalized to dimensionless for calibration)
+    units: m3/m3 (volumetric water content; upstream files mislabel as kg/m2)
     license: public domain (NOAA)
     status: current
 
