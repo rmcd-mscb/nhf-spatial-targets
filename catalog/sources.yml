@@ -99,7 +99,17 @@ sources:
     period: "2000/present"
     spatial_extent: global (clipped to CONUS+contributing-watersheds)
     spatial_resolution: 0.25 degree
-    units: kg m-2 (equivalent to mm over the month)
+    units: kg m-2 (mean of 3-hourly accumulations)
+    notes: >
+      GLDAS-2.1 monthly products store every variable ending in `_acc`
+      (Qs_acc, Qsb_acc, derived runoff_total, etc.) as the *mean* of
+      3-hourly accumulations across the month, NOT as a monthly sum, even
+      though each carries `cell_methods: time: sum` (which describes the
+      underlying 3-hourly value, not the monthly aggregation). To recover
+      a monthly total in mm, multiply by `8 × days_in_month`. Per NASA
+      GES DISC's GLDAS-2.1 README, this convention applies to all `_acc`
+      variables. The runoff target builder (`targets/run.py`) applies the
+      conversion in `gldas_to_mm_per_month`.
     license: public domain (NASA)
     status: current
 
@@ -202,18 +212,27 @@ sources:
       - name: total_recharge
         file_variable: TotalRecharge
         long_name: total groundwater recharge
-        units: inches/year
-        cf_units: "inches yr-1"
+        units: m/year
+        cf_units: "m yr-1"
+        notes: >
+          Source GeoTIFFs from the ScienceBase release have no embedded
+          units metadata (no Band.GetUnitType, no file/band metadata, no
+          PAM .aux.xml sidecar). The ScienceBase landing page documents
+          the values as m/year, and CONUS-wide mean (~122 mm/yr) plus
+          spot-checks at known-high-recharge locations are consistent
+          with that interpretation. Earlier catalog versions declared
+          inches/year, which produced values ~8x too low; corrected
+          here.
       - name: eff_recharge
         file_variable: EffRecharge
         long_name: effective groundwater recharge (base flow component)
-        units: inches/year
-        cf_units: "inches yr-1"
+        units: m/year
+        cf_units: "m yr-1"
     time_step: annual
     period: "2000/2013"
     spatial_extent: CONUS
     spatial_resolution: 800m raster
-    units: inches/year
+    units: m/year
     license: public domain (USGS)
     status: current
 
@@ -379,19 +398,28 @@ sources:
         file_pattern: "https://downloads.psl.noaa.gov/Datasets/ncep.reanalysis.dailyavgs/surface_gauss/soilw.0-10cm.gauss.{year}.nc"
         long_name: "volumetric soil moisture 0-10 cm"
         layer_depth_m: "0.00-0.10"
-        units: kg/m2
+        units: m3/m3
+        notes: >
+          The upstream NCEP/NCAR R1 NetCDFs carry `units: kg/m2` on this
+          variable, but the long_name, var_desc, and valid_range
+          ([0.0, 1.0]) all confirm the values are volumetric water content
+          (m^3/m^3) — a known mislabel in the NCEP R1 GRIB metadata.
+          actual_range is ~[0.10, 0.43], consistent with VWC.  Do NOT
+          divide by `(layer_depth × ρ_water)` to convert to VWC; the data
+          already is VWC.
       - name: soilw_10_200cm
         file_variable: soilw.10-200cm.gauss
         internal_name: soilw
         file_pattern: "https://downloads.psl.noaa.gov/Datasets/ncep.reanalysis.dailyavgs/surface_gauss/soilw.10-200cm.gauss.{year}.nc"
         long_name: "volumetric soil moisture 10-200 cm"
         layer_depth_m: "0.10-2.00"
-        units: kg/m2
+        units: m3/m3
+        notes: "Same upstream `units: kg/m2` mislabel as soilw_0_10cm; values are VWC."
     time_step: monthly (derived from daily)
     period: "1948/present"
     spatial_extent: global
     spatial_resolution: T62 Gaussian grid (~1.875 degree)
-    units: kg/m2 (normalized to dimensionless for calibration)
+    units: m3/m3 (volumetric water content; upstream files mislabel as kg/m2)
     license: public domain (NOAA)
     status: current
 
@@ -509,9 +537,40 @@ sources:
       - name: Day_CMG_Snow_Cover
         long_name: "daily snow-covered area"
         cf_units: "percent"
-      - name: Snow_Spatial_QA
-        long_name: "snow spatial QA confidence"
+        notes: >
+          0-100 = percent of cell with snow.  Source HDF carries flag
+          values that must be masked before any quantitative use:
+          107=lake ice, 111=night, 237=inland water, 239=ocean,
+          250=cloud-obscured water, 253=data not mapped, 255=fill.
+          Mask values > 100 to NaN before plotting or aggregation.
+      - name: Day_CMG_Clear_Index
+        long_name: "daily clear-sky index (% of cell that is cloud-free)"
         cf_units: "percent"
+        notes: >
+          0-100 = clear-sky percentage of the cell on a given day.
+          This is the variable TM 6-B10 calls the "confidence interval"
+          for SCA filtering ("a confidence interval equal to 100 percent
+          indicates clear sky conditions with the highest level of
+          confidence").  Renamed from `Day_CMG_Confidence_Index` in v006.
+          Same flag values as Day_CMG_Snow_Cover (mask >100 before use).
+      - name: Day_CMG_Cloud_Obscured
+        long_name: "daily cloud-obscured percentage"
+        cf_units: "percent"
+        notes: >
+          0-100 = percent of cell obscured by cloud on a given day.
+          Complementary to Day_CMG_Clear_Index; kept for QA cross-checks.
+          Same flag values as Day_CMG_Snow_Cover.
+      - name: Snow_Spatial_QA
+        long_name: "categorical QA confidence (0=best ... 4=other)"
+        cf_units: "1"
+        notes: >
+          Source HDF labels this `units: percent` but it is NOT a percent.
+          The variable is a categorical QA flag with valid_range 0-4:
+          0=best, 1=good, 2=ok, 3=poor, 4=other.  Plus flag values
+          237/239/250/252/253/254/255 for water/Antarctica/no-retrieval.
+          Do NOT divide by 100 to obtain a "fraction"; the result is
+          meaningless.  TM 6-B10 used Day_CMG_Clear_Index for the CI
+          filter, not Snow_Spatial_QA.  Kept here for secondary QA only.
     time_step: daily
     period: "2000/present"
     spatial_extent: CONUS

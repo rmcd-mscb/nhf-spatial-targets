@@ -2,7 +2,9 @@
 
 Two reanalysis sources are used to produce per-HRU per-month bounds:
   - ERA5-Land 'ro' (m water equivalent / month, ECMWF)
-  - GLDAS-2.1 NOAH 'runoff_total' = Qs_acc + Qsb_acc (kg m-2 / month, NASA)
+  - GLDAS-2.1 NOAH 'runoff_total' = Qs_acc + Qsb_acc (kg m-2, monthly mean
+    of 3-hourly accumulations, NASA — multiplied by 8 × days_in_month to
+    recover mm/month)
 
 Unit chain: source native units → mm/month → m³/day → cfs, using HRU area
 and days-in-month.  Per-HRU per-month:
@@ -34,11 +36,19 @@ def era5_to_mm_per_month(da: xr.DataArray) -> xr.DataArray:
 
 
 def gldas_to_mm_per_month(da: xr.DataArray) -> xr.DataArray:
-    """GLDAS Qs_acc + Qsb_acc (kg m-2) ≡ mm/month directly.
+    """GLDAS Qs_acc + Qsb_acc → mm/month.
 
-    Equivalence holds because 1 kg m-2 = 1 mm depth (assuming ρ_water = 1000 kg/m³).
+    GLDAS-2.1 monthly products store ``_acc`` variables (including ``Qs_acc``
+    and ``Qsb_acc``) as the *mean* of 3-hourly accumulations across the
+    month, NOT as monthly sums. Per NASA GES DISC's GLDAS-2.1 README, the
+    monthly total is recovered by multiplying by ``8 × days_in_month``
+    (8 three-hour intervals per day).
+
+    1 kg m-2 of water ≡ 1 mm depth, so after the temporal scaling the units
+    are mm/month.
     """
-    out = da.copy()
+    days = da["time"].dt.days_in_month
+    out = da * 8.0 * days
     out.attrs = dict(da.attrs)
     out.attrs["units"] = "mm"
     return out

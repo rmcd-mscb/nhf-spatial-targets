@@ -78,9 +78,9 @@ def test_consolidate_builds_nc(tmp_path: Path):
     assert ds["eff_recharge"].attrs["grid_mapping"] == "crs"
 
     # CF-compliance: variable metadata (cf_units from catalog)
-    assert ds["total_recharge"].attrs["units"] == "inches yr-1"
+    assert ds["total_recharge"].attrs["units"] == "m yr-1"
     assert "long_name" in ds["total_recharge"].attrs
-    assert ds["eff_recharge"].attrs["units"] == "inches yr-1"
+    assert ds["eff_recharge"].attrs["units"] == "m yr-1"
 
     # CF-compliance: coordinates renamed to lat/lon by apply_cf_metadata
     assert "lat" in ds.dims

@@ -15,7 +15,12 @@ _MOCK_CONSOLIDATION_10 = {
     "consolidated_nc": "data/raw/mod10c1_v061/mod10c1_v061_2005.nc",
     "last_consolidated_utc": "2026-01-01T00:00:00+00:00",
     "n_files": 1,
-    "variables": ["Day_CMG_Snow_Cover", "Snow_Spatial_QA"],
+    "variables": [
+        "Day_CMG_Snow_Cover",
+        "Day_CMG_Clear_Index",
+        "Day_CMG_Cloud_Obscured",
+        "Snow_Spatial_QA",
+    ],
 }
 
 _MOCK_CONSOLIDATION = {
@@ -529,7 +534,12 @@ def test_mod10c1_provenance_record(
 
     assert result["source_key"] == _SOURCE_KEY_10
     assert "access_url" in result
-    assert result["variables"] == ["Day_CMG_Snow_Cover", "Snow_Spatial_QA"]
+    assert result["variables"] == [
+        "Day_CMG_Snow_Cover",
+        "Day_CMG_Clear_Index",
+        "Day_CMG_Cloud_Obscured",
+        "Snow_Spatial_QA",
+    ]
     assert result["period"] == "2005/2005"
     assert "bbox" in result
     assert "download_timestamp" in result
@@ -729,3 +739,36 @@ def test_filter_granules_by_bbox():
     result = _filter_granules_by_bbox([conus, iceland], bbox)
     assert len(result) == 1
     assert result[0] is conus
+
+
+def test_drop_zero_byte_downloads_removes_empty_files(tmp_path):
+    """Helper deletes 0-byte files and returns only the valid ones."""
+    from nhf_spatial_targets.fetch.modis import _drop_zero_byte_downloads
+
+    good = tmp_path / "good.hdf"
+    good.write_bytes(b"\x89HDF\x0d\x0a\x1a\x0a")  # any non-empty content
+    bad = tmp_path / "bad.hdf"
+    bad.touch()  # 0 bytes
+    missing = tmp_path / "missing.hdf"
+
+    valid = _drop_zero_byte_downloads([str(good), str(bad), str(missing)])
+
+    assert valid == [good]
+    assert good.exists()
+    assert not bad.exists(), "0-byte file should have been deleted"
+    assert not missing.exists()
+
+
+def test_drop_zero_byte_downloads_all_valid(tmp_path):
+    """All non-zero files pass through unchanged."""
+    from nhf_spatial_targets.fetch.modis import _drop_zero_byte_downloads
+
+    a = tmp_path / "a.hdf"
+    a.write_bytes(b"data")
+    b = tmp_path / "b.hdf"
+    b.write_bytes(b"more data")
+
+    valid = _drop_zero_byte_downloads([str(a), str(b)])
+
+    assert valid == [a, b]
+    assert a.exists() and b.exists()

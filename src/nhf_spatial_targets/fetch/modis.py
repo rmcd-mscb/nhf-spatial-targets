@@ -39,6 +39,46 @@ _MODIS_YEAR_RE = re.compile(r"\.A(\d{4})\d{3}\.")
 _MODIS_YDOY_RE = re.compile(r"\.A(\d{7})\.")
 
 
+def _drop_zero_byte_downloads(paths: list[str | Path]) -> list[Path]:
+    """Filter out 0-byte (corrupted) downloads and delete them from disk.
+
+    NASA Earthdata occasionally returns truncated streams that earthaccess
+    writes as 0-byte files without raising.  The downstream subset/open
+    step then crashes with an opaque GDAL error.  This helper deletes any
+    such files immediately after download and returns only the valid paths,
+    so the caller can proceed with the good files and the next fetch run
+    will redownload the missing granules (since the corresponding
+    `*.conus.nc` files were never written).
+    """
+    valid: list[Path] = []
+    discarded = 0
+    for s in paths:
+        p = Path(s)
+        if not p.exists():
+            logger.warning("Download path missing on disk: %s", p)
+            discarded += 1
+            continue
+        if p.stat().st_size == 0:
+            logger.warning(
+                "Discarding 0-byte download (will be redownloaded next run): %s",
+                p.name,
+            )
+            try:
+                p.unlink()
+            except OSError as exc:
+                logger.warning("Could not remove %s: %s", p, exc)
+            discarded += 1
+            continue
+        valid.append(p)
+    if discarded:
+        logger.warning(
+            "Filtered %d corrupted download(s); %d valid file(s) remain",
+            discarded,
+            len(valid),
+        )
+    return valid
+
+
 def _variable_name(v: dict | str) -> str:
     """Extract a variable name from a catalog entry.
 
@@ -456,14 +496,17 @@ def fetch_mod16a2(workdir: Path, period: str) -> dict:
                             f"timestep A{ydoy} ({n_expected} granules). "
                             f"Check network connectivity and Earthdata credentials."
                         )
-                    if len(downloaded) < n_expected:
+                    valid = _drop_zero_byte_downloads(downloaded)
+                    if len(valid) < n_expected:
                         logger.warning(
-                            "Partial download for timestep A%s: got %d of %d granules.",
+                            "Partial download for timestep A%s: got %d of %d "
+                            "valid granules (corrupted ones removed; will "
+                            "redownload on next fetch run).",
                             ydoy,
-                            len(downloaded),
+                            len(valid),
                             n_expected,
                         )
-                    return [Path(f) for f in downloaded]
+                    return valid
 
                 def _consolidate_and_cleanup(
                     tile_paths: list[Path],
@@ -797,25 +840,56 @@ def fetch_mod10c1(workdir: Path, period: str) -> dict:
                     f"{len(granules)} granules. Check network connectivity "
                     f"and Earthdata credentials."
                 )
-            if len(downloaded) < len(granules):
+
+            # Drop 0-byte (corrupted) downloads before subsetting.  Earthdata
+            # occasionally returns truncated streams; the missing granules
+            # will be redownloaded on the next fetch run.
+            valid_paths = _drop_zero_byte_downloads(downloaded)
+
+            if len(valid_paths) < len(granules):
                 logger.warning(
-                    "Partial download: got %d of %d granules for year %d. "
-                    "Consolidation will proceed with available files only.",
-                    len(downloaded),
+                    "Partial download: got %d of %d valid granules for year %d. "
+                    "Consolidation will proceed with available files; rerun "
+                    "fetch to pick up the missing granules.",
+                    len(valid_paths),
                     len(granules),
                     year,
                 )
             logger.info(
-                "Downloaded %d files for year %d to %s",
-                len(downloaded),
+                "Downloaded %d valid files for year %d to %s",
+                len(valid_paths),
                 year,
                 output_dir,
             )
 
-            # Subset each HDF to CONUS
-            for p in [Path(f) for f in downloaded]:
-                if p.suffix == ".hdf":
+            # Subset each HDF to CONUS.  One bad HDF should not abort the
+            # entire year — log the failure, drop the bad HDF, and continue
+            # with the rest.  The corresponding `.conus.nc` will be missing,
+            # so the next fetch run will redownload that granule.
+            subset_failures = 0
+            for p in valid_paths:
+                if p.suffix != ".hdf":
+                    continue
+                try:
                     _subset_to_conus(p)
+                except Exception as exc:
+                    subset_failures += 1
+                    logger.warning(
+                        "Failed to subset %s: %s. Removing HDF; will retry "
+                        "on next fetch run.",
+                        p.name,
+                        exc,
+                    )
+                    try:
+                        p.unlink()
+                    except OSError:
+                        pass
+            if subset_failures:
+                logger.warning(
+                    "Year %d: %d HDF(s) failed to subset and were removed.",
+                    year,
+                    subset_failures,
+                )
 
     # Build file inventory from all .conus.nc files on disk
     all_nc_files = sorted(output_dir.glob("*.conus.nc"))
