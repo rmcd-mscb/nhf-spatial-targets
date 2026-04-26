@@ -299,6 +299,31 @@ Per-HRU per-day:
 
 ---
 
+## Aggregation and missing-HRU conventions
+
+The aggregation pipeline uses `gdptools` with **`stat_method="mean"`**
+(set in `src/nhf_spatial_targets/aggregate/_driver.py` and per-source
+modules — do not switch this to `masked_mean`). Plain `mean` produces
+NaN for any HRU whose polygon does not have full source-grid coverage,
+which is the behaviour we want: it makes coverage gaps explicit and
+auditable rather than silently substituting partial averages.
+
+After aggregation, NaN HRUs are filled by **nearest-neighbor in HRU
+space** as a post-processing step before the per-target combination /
+normalization runs. This keeps the aggregation step honest about
+coverage, and pushes the fill choice into a single, auditable place
+where it can be inspected, swapped out (e.g. for a different fill
+algorithm), or disabled per-target.
+
+Implementation lives in `src/nhf_spatial_targets/normalize/` (or
+should — at the time of writing this is a forward-looking convention,
+not yet implemented). Target builders should call the shared fill
+utility on each source's aggregated DataArray before normalizing or
+combining; this also makes the "before fill" and "after fill" states
+both inspectable in the per-target inspect notebook.
+
+---
+
 ## Cross-cutting lessons
 
 ### 1. Upstream metadata can lie about units
