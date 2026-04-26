@@ -99,7 +99,17 @@ sources:
     period: "2000/present"
     spatial_extent: global (clipped to CONUS+contributing-watersheds)
     spatial_resolution: 0.25 degree
-    units: kg m-2 (equivalent to mm over the month)
+    units: kg m-2 (mean of 3-hourly accumulations)
+    notes: >
+      GLDAS-2.1 monthly products store every variable ending in `_acc`
+      (Qs_acc, Qsb_acc, derived runoff_total, etc.) as the *mean* of
+      3-hourly accumulations across the month, NOT as a monthly sum, even
+      though each carries `cell_methods: time: sum` (which describes the
+      underlying 3-hourly value, not the monthly aggregation). To recover
+      a monthly total in mm, multiply by `8 × days_in_month`. Per NASA
+      GES DISC's GLDAS-2.1 README, this convention applies to all `_acc`
+      variables. The runoff target builder (`targets/run.py`) applies the
+      conversion in `gldas_to_mm_per_month`.
     license: public domain (NASA)
     status: current
 

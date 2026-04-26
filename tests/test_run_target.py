@@ -33,10 +33,17 @@ def test_era5_meters_to_mm():
     assert out.attrs["units"] == "mm"
 
 
-def test_gldas_kgm2_passthrough_to_mm():
-    da = _series([20.0, 40.0], "kg m-2")
+def test_gldas_kgm2_to_mm_per_month():
+    """GLDAS Qs_acc/Qsb_acc are monthly means of 3-hourly accumulations.
+
+    Recovering mm/month requires multiplying by 8 (3-hour intervals per day)
+    × days_in_month.  Series here covers Jan 2020 (31 days) and Feb 2020
+    (29 days, leap year) so the multiplier differs between the two months.
+    """
+    da = _series([0.20, 0.40], "kg m-2")
     out = gldas_to_mm_per_month(da)
-    np.testing.assert_allclose(out.values, [20.0, 40.0])
+    # Jan: 0.20 × 8 × 31 = 49.6 mm; Feb 2020: 0.40 × 8 × 29 = 92.8 mm
+    np.testing.assert_allclose(out.values, [49.6, 92.8])
     assert out.attrs["units"] == "mm"
 
 
@@ -78,10 +85,12 @@ def test_build_writes_lower_upper_bounds(tmp_path):
 
     agg = tmp_path / "data" / "aggregated"
     _save(agg / "era5_land" / "ro.nc", "ro", np.full((3, 3), 0.05), "m")
+    # GLDAS values in kg m-2 = monthly mean of 3-hourly accumulations;
+    # 0.15 × 8 × 31 ≈ 37.2 mm/month (Jan), comparable to ERA5's 50 mm.
     _save(
         agg / "gldas_noah_v21_monthly" / "runoff_total.nc",
         "runoff_total",
-        np.full((3, 3), 30.0),
+        np.full((3, 3), 0.15),
         "kg m-2",
     )
 
@@ -113,12 +122,16 @@ def test_build_writes_lower_upper_bounds(tmp_path):
 
 
 def test_build_numeric_correctness(tmp_path):
-    """Verify exact cfs values for ERA5=0.05 m and GLDAS=30 kg/m² in January."""
+    """Verify exact cfs values for ERA5=0.05 m and GLDAS=0.15 kg/m² in January.
+
+    GLDAS-2.1 monthly _acc values are means of 3-hourly accumulations, so
+    0.15 kg m-2 × 8 × 31 days = 37.2 mm/month for January.
+    """
     from nhf_spatial_targets.targets.run import build
 
     HRU_AREA = 1.0e8  # m²
     ERA5_M = 0.05  # m/month
-    GLDAS_KGM2 = 30.0  # kg m-2 = mm
+    GLDAS_KGM2 = 0.15  # kg m-2 (mean of 3-hourly accumulations)
 
     times = pd.date_range("2020-01-01", periods=1, freq="1MS")
     hrus = np.arange(1)
@@ -154,8 +167,9 @@ def test_build_numeric_correctness(tmp_path):
     try:
         # January 2020 has 31 days
         days_jan = 31
-        # ERA5: 0.05 m → 50 mm; GLDAS: 30 mm → lower=30, upper=50
-        for mm_val, bound_name in [(30.0, "lower_bound"), (50.0, "upper_bound")]:
+        # ERA5: 0.05 m → 50 mm; GLDAS: 0.15 × 8 × 31 = 37.2 mm
+        # → lower=37.2, upper=50
+        for mm_val, bound_name in [(37.2, "lower_bound"), (50.0, "upper_bound")]:
             expected_m3_per_day = (mm_val * 1e-3 / days_jan) * HRU_AREA
             expected_cfs = expected_m3_per_day * _M3_PER_DAY_TO_CFS
             np.testing.assert_allclose(
