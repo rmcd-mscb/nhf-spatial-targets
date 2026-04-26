@@ -528,9 +528,40 @@ sources:
       - name: Day_CMG_Snow_Cover
         long_name: "daily snow-covered area"
         cf_units: "percent"
-      - name: Snow_Spatial_QA
-        long_name: "snow spatial QA confidence"
+        notes: >
+          0-100 = percent of cell with snow.  Source HDF carries flag
+          values that must be masked before any quantitative use:
+          107=lake ice, 111=night, 237=inland water, 239=ocean,
+          250=cloud-obscured water, 253=data not mapped, 255=fill.
+          Mask values > 100 to NaN before plotting or aggregation.
+      - name: Day_CMG_Clear_Index
+        long_name: "daily clear-sky index (% of cell that is cloud-free)"
         cf_units: "percent"
+        notes: >
+          0-100 = clear-sky percentage of the cell on a given day.
+          This is the variable TM 6-B10 calls the "confidence interval"
+          for SCA filtering ("a confidence interval equal to 100 percent
+          indicates clear sky conditions with the highest level of
+          confidence").  Renamed from `Day_CMG_Confidence_Index` in v006.
+          Same flag values as Day_CMG_Snow_Cover (mask >100 before use).
+      - name: Day_CMG_Cloud_Obscured
+        long_name: "daily cloud-obscured percentage"
+        cf_units: "percent"
+        notes: >
+          0-100 = percent of cell obscured by cloud on a given day.
+          Complementary to Day_CMG_Clear_Index; kept for QA cross-checks.
+          Same flag values as Day_CMG_Snow_Cover.
+      - name: Snow_Spatial_QA
+        long_name: "categorical QA confidence (0=best ... 4=other)"
+        cf_units: "1"
+        notes: >
+          Source HDF labels this `units: percent` but it is NOT a percent.
+          The variable is a categorical QA flag with valid_range 0-4:
+          0=best, 1=good, 2=ok, 3=poor, 4=other.  Plus flag values
+          237/239/250/252/253/254/255 for water/Antarctica/no-retrieval.
+          Do NOT divide by 100 to obtain a "fraction"; the result is
+          meaningless.  TM 6-B10 used Day_CMG_Clear_Index for the CI
+          filter, not Snow_Spatial_QA.  Kept here for secondary QA only.
     time_step: daily
     period: "2000/present"
     spatial_extent: CONUS

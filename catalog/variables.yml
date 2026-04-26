@@ -143,9 +143,18 @@ variables:
       - mod10c1_v061  # v006 used in original TM 6-B10; v006 decommissioned 2023-07-31
     range_method: modis_ci
     range_notes: >
-      From MOD10C1: sca = Day_CMG_Snow_Cover / 100 (fraction 0-1),
-                    ci  = Snow_Spatial_QA / 100 (fraction 0-1).
-      Filter: only use grid cells/days where ci > 0.70 (confirmed TM 6-B10).
+      From MOD10C1 v061:
+        sca = Day_CMG_Snow_Cover / 100  (fraction 0-1, after masking flag values >100)
+        ci  = Day_CMG_Clear_Index / 100  (fraction 0-1, after masking flag values >100)
+      Filter: only use grid cells/days where ci > 0.70 (per TM 6-B10).
+      TM 6-B10: "a confidence interval equal to 100 percent indicates clear
+      sky conditions with the highest level of confidence... daily values of
+      snow-covered area were used if the confidence interval was greater than
+      70 percent."  In MOD10C1 v006 the CI variable was named
+      Day_CMG_Confidence_Index; it was renamed to Day_CMG_Clear_Index in
+      v061.  Earlier versions of this catalog used Snow_Spatial_QA for the
+      CI filter, which was incorrect — Snow_Spatial_QA is a 0-4 categorical
+      QA flag, not a percent CI.
       TM 6-B10: "upper and lower range...calculated and treated as an error
       bound based on the daily snow-covered area value and the associated
       confidence interval." Exact formula not specified in report.
