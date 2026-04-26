@@ -222,6 +222,26 @@ Pre-commit hooks enforce this automatically, but Claude should run these proacti
 
 Every new module in `fetch/`, `aggregate/`, `normalize/`, or `targets/` must have a corresponding `tests/test_<module>.py`. Every PR should maintain or improve test coverage.
 
+### When to write the tests
+
+Strict test-first TDD is **not** required for exploratory data work. For a new
+or unfamiliar source, it is fine — and usually better — to characterize the
+data first in a notebook, REPL, or scratch script: figure out the schema, units,
+chunking, edge cases, and failure modes against real files before committing
+to a test. Writing tests up front against a guessed shape tends to encode the
+guess rather than the truth.
+
+The hard line is the **PR boundary**, not the first line of code:
+
+- Once an implementation lands in `src/`, the matching `tests/test_<module>.py`
+  must exist before the PR is opened. "I'll add tests later" is not allowed to
+  become "I shipped without tests."
+- For bug fixes, invert the order: write the failing test first, then fix.
+  This converts every bug into permanent regression coverage.
+- Exploratory notebooks and scratch scripts are not a substitute for tests —
+  they are scaffolding to be discarded or moved into `notebooks/` once the
+  characterization work is done.
+
 ## Dependencies
 
 Managed by **pixi** (`pixi.toml`). Key packages:
