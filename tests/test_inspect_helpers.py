@@ -9,7 +9,10 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import pytest
+import xarray as xr
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HELPERS_PATH = REPO_ROOT / "notebooks" / "inspect_aggregated" / "_helpers.py"
@@ -58,3 +61,39 @@ def test_unit_from_catalog_cf_units_takes_precedence(helpers):
     # reitz2017 total_recharge: cf_units="m yr-1", units="m/year" — cf_units wins
     units = helpers.unit_from_catalog("reitz2017", "total_recharge")
     assert units == "m yr-1"
+
+
+def test_select_month_start_of_month(helpers):
+    # GLDAS/NLDAS convention: start-of-month
+    times = pd.date_range("2000-01-01", periods=12, freq="MS")
+    da = xr.DataArray(np.arange(12), coords={"time": times}, dims=["time"])
+    result = helpers.select_month(da, 2000, 3)
+    assert pd.Timestamp(result.time.values) == pd.Timestamp("2000-03-01")
+    assert int(result.values) == 2  # March = index 2
+
+
+def test_select_month_end_of_month(helpers):
+    # NCEP/NCAR convention: end-of-month — "nearest" to mid-month silently
+    # picks the wrong calendar month here; select_month gets it right.
+    times = pd.date_range("2000-01-31", periods=12, freq="ME")
+    da = xr.DataArray(np.arange(12), coords={"time": times}, dims=["time"])
+    result = helpers.select_month(da, 2000, 3)
+    assert pd.Timestamp(result.time.values) == pd.Timestamp("2000-03-31")
+    assert int(result.values) == 2
+
+
+def test_select_month_mid_month(helpers):
+    # MERRA-2 convention: mid-month
+    times = pd.DatetimeIndex(
+        [pd.Timestamp(year=2000, month=m, day=15) for m in range(1, 13)]
+    )
+    da = xr.DataArray(np.arange(12), coords={"time": times}, dims=["time"])
+    result = helpers.select_month(da, 2000, 3)
+    assert pd.Timestamp(result.time.values) == pd.Timestamp("2000-03-15")
+
+
+def test_select_month_no_data_raises(helpers):
+    times = pd.date_range("2000-01-01", periods=12, freq="MS")
+    da = xr.DataArray(np.arange(12), coords={"time": times}, dims=["time"])
+    with pytest.raises(IndexError):
+        helpers.select_month(da, 2099, 1)

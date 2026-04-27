@@ -24,6 +24,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
+import xarray as xr
+
 from nhf_spatial_targets import catalog as cat
 
 SAVE_FIGURES: bool = False
@@ -51,3 +54,24 @@ def unit_from_catalog(source_key: str, var: str) -> str:
         f"Variable {var!r} not found in catalog entry for {source_key!r} "
         f"(available: {variables})"
     )
+
+
+def select_month(da: xr.DataArray, year: int, month: int) -> xr.DataArray:
+    """Select the first timestep in the given calendar month.
+
+    Slices ``da`` to the calendar-month window ``[YYYY-MM-01, YYYY-MM-end]``
+    and returns the first hit. Robust to start-of-month / end-of-month /
+    mid-month timestamping conventions; the canonical SOM pattern from
+    ``docs/references/calibration-target-recipes.md`` lesson 2.
+
+    Raises ``IndexError`` if the window contains no timesteps.
+    """
+    start = pd.Timestamp(year=year, month=month, day=1)
+    end = start + pd.offsets.MonthEnd(0)
+    sliced = da.sel(time=slice(start, end))
+    if sliced.sizes.get("time", 0) == 0:
+        raise IndexError(
+            f"No timesteps in {da.name or 'array'} between {start.date()} "
+            f"and {end.date()}"
+        )
+    return sliced.isel(time=0)
