@@ -174,7 +174,7 @@ def lookup_hrus_by_points(
         {"label": list(points.keys())},
         geometry=[Point(lon, lat) for lon, lat in points.values()],
         crs="EPSG:4326",
-    )
+    ).to_crs(fabric_gdf.crs)
     fabric_for_join = fabric_gdf.reset_index()
     id_col = fabric_gdf.index.name
     joined = gpd.sjoin(pts, fabric_for_join, predicate="within", how="left")
