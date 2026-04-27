@@ -97,3 +97,29 @@ def test_select_month_no_data_raises(helpers):
     da = xr.DataArray(np.arange(12), coords={"time": times}, dims=["time"])
     with pytest.raises(IndexError):
         helpers.select_month(da, 2099, 1)
+
+
+def test_discover_aggregated_returns_sorted_paths(helpers, tmp_path):
+    src = "era5_land"
+    agg_dir = tmp_path / "data" / "aggregated" / src
+    agg_dir.mkdir(parents=True)
+    (agg_dir / f"{src}_2002_agg.nc").touch()
+    (agg_dir / f"{src}_2000_agg.nc").touch()
+    (agg_dir / f"{src}_2001_agg.nc").touch()
+
+    paths = helpers.discover_aggregated(tmp_path, src)
+    assert paths is not None
+    assert [p.name for p in paths] == [
+        f"{src}_2000_agg.nc",
+        f"{src}_2001_agg.nc",
+        f"{src}_2002_agg.nc",
+    ]
+
+
+def test_discover_aggregated_returns_none_when_dir_missing(helpers, tmp_path):
+    assert helpers.discover_aggregated(tmp_path, "no_such_source") is None
+
+
+def test_discover_aggregated_returns_none_when_dir_empty(helpers, tmp_path):
+    (tmp_path / "data" / "aggregated" / "src1").mkdir(parents=True)
+    assert helpers.discover_aggregated(tmp_path, "src1") is None

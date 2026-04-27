@@ -75,3 +75,17 @@ def select_month(da: xr.DataArray, year: int, month: int) -> xr.DataArray:
             f"and {end.date()}"
         )
     return sliced.isel(time=0)
+
+
+def discover_aggregated(project_dir: Path, source_key: str) -> list[Path] | None:
+    """Return sorted per-year aggregated NC paths, or ``None`` if absent.
+
+    Globs ``<project>/data/aggregated/<source_key>/<source_key>_*_agg.nc``.
+    Returns ``None`` when the directory is missing or empty so callers
+    can print a single "skip with reason" line and continue.
+    """
+    agg_dir = Path(project_dir) / "data" / "aggregated" / source_key
+    if not agg_dir.is_dir():
+        return None
+    paths = sorted(agg_dir.glob(f"{source_key}_*_agg.nc"))
+    return paths if paths else None
