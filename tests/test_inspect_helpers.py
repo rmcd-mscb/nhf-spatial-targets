@@ -202,3 +202,31 @@ def test_lookup_hrus_by_points_outside_raises(helpers):
     points = {"in_ocean": (-50.0, 40.5)}
     with pytest.raises(ValueError):
         helpers.lookup_hrus_by_points(fabric, points)
+
+
+def test_save_figure_no_op_when_disabled(helpers, tmp_path, monkeypatch):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    monkeypatch.setattr(helpers, "SAVE_FIGURES", False)
+    monkeypatch.setattr(helpers, "FIGURES_DIR", tmp_path / "figures")
+    fig = plt.figure()
+    helpers.save_figure(fig, "test_disabled")
+    plt.close(fig)
+    assert not (tmp_path / "figures").exists()
+
+
+def test_save_figure_writes_png_when_enabled(helpers, tmp_path, monkeypatch):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    monkeypatch.setattr(helpers, "SAVE_FIGURES", True)
+    monkeypatch.setattr(helpers, "FIGURES_DIR", tmp_path / "figures")
+    fig = plt.figure()
+    helpers.save_figure(fig, "test_enabled")
+    plt.close(fig)
+    assert (tmp_path / "figures" / "test_enabled.png").exists()

@@ -185,3 +185,28 @@ def lookup_hrus_by_points(
             f"Pick coordinates inside the fabric's CONUS extent."
         )
     return dict(zip(joined["label"], joined[id_col].tolist()))
+
+
+def save_figure(fig, name: str) -> None:
+    """Write ``fig`` to ``FIGURES_DIR/<name>.png`` iff ``SAVE_FIGURES``.
+
+    No-op when ``SAVE_FIGURES`` is ``False`` (the default). Notebooks
+    enable saving by setting ``_helpers.SAVE_FIGURES = True`` near the
+    top before any plotting cell runs.
+
+    Relative paths in ``FIGURES_DIR`` are resolved against the repo
+    root (this module's great-grandparent directory), so the default
+    ``Path("docs/figures/inspect_aggregated/")`` lands at repo-root
+    ``docs/figures/inspect_aggregated/`` regardless of the notebook's
+    CWD. Absolute paths (user overrides, pytest tmp_path) are honored
+    as-is.
+    """
+    if not SAVE_FIGURES:
+        return
+    target_dir = FIGURES_DIR
+    if not target_dir.is_absolute():
+        # _helpers.py lives at <repo>/notebooks/inspect_aggregated/_helpers.py;
+        # repo root is two parents up from that.
+        target_dir = Path(__file__).resolve().parent.parent.parent / target_dir
+    target_dir.mkdir(parents=True, exist_ok=True)
+    fig.savefig(target_dir / f"{name}.png", dpi=150, bbox_inches="tight")
