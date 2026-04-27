@@ -45,3 +45,16 @@ def test_unit_from_catalog_flat_variables(helpers):
 def test_unit_from_catalog_unknown_variable_raises(helpers):
     with pytest.raises(KeyError):
         helpers.unit_from_catalog("ssebop", "nonexistent_var")
+
+
+def test_unit_from_catalog_file_variable_lookup(helpers):
+    # reitz2017: name=total_recharge, file_variable=TotalRecharge
+    # Caller passes the on-disk variable name; should resolve via file_variable path
+    units = helpers.unit_from_catalog("reitz2017", "TotalRecharge")
+    assert units == "m yr-1"
+
+
+def test_unit_from_catalog_cf_units_takes_precedence(helpers):
+    # reitz2017 total_recharge: cf_units="m yr-1", units="m/year" — cf_units wins
+    units = helpers.unit_from_catalog("reitz2017", "total_recharge")
+    assert units == "m yr-1"
