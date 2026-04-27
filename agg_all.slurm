@@ -2,7 +2,7 @@
 #SBATCH --job-name=nhf-agg
 #SBATCH --account=impd
 #SBATCH --partition=cpu
-#SBATCH --array=0-8
+#SBATCH --array=0-9
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=128G
@@ -11,7 +11,7 @@
 #SBATCH --error=logs/agg_%a_%A.err
 
 # NHF Spatial Targets — parallel aggregation array (tier-1 + tier-2)
-# Submits one SLURM job per aggregation source (9 total). SSEBop is the
+# Submits one SLURM job per aggregation source (10 total). SSEBop is the
 # remote-STAC aggregator and has its own separate script (agg_ssebop.slurm).
 # Each job aggregates independently; they can run concurrently on separate
 # compute nodes.
@@ -26,11 +26,11 @@
 #   export PROJECT_DIR=/path/to/your/project
 #   sbatch agg_all.slurm
 #
-# Run a single source by index (e.g. MOD10C1 = 8):
-#   sbatch --array=8 agg_all.slurm
+# Run a single source by index (e.g. MOD10C1 = 9):
+#   sbatch --array=9 agg_all.slurm
 #
 # Bump memory for a MODIS rerun:
-#   sbatch --array=7-8 --mem=256G agg_all.slurm
+#   sbatch --array=8-9 --mem=256G agg_all.slurm
 #
 # Override spatial batch size (default 10000 HRUs/batch, tuned for 128 GB):
 #   BATCH_SIZE=2500 sbatch agg_all.slurm
@@ -55,8 +55,9 @@ AGG_TASKS=(
     "agg-nldas-mosaic"  # 4 — NLDAS-2 MOSAIC (0.125° monthly, soil moisture)
     "agg-nldas-noah"    # 5 — NLDAS-2 NOAH   (0.125° monthly, soil moisture)
     "agg-watergap22d"   # 6 — WaterGAP 2.2d  (0.5° monthly, recharge)
-    "agg-mod16a2"       # 7 — MOD16A2 v061   (500m 8-day AET)  — memory-heavy
-    "agg-mod10c1"       # 8 — MOD10C1 v061   (0.05° daily SCA) — memory-heavy
+    "agg-reitz2017"     # 7 — Reitz 2017     (800m annual, recharge)
+    "agg-mod16a2"       # 8 — MOD16A2 v061   (500m 8-day AET)  — memory-heavy
+    "agg-mod10c1"       # 9 — MOD10C1 v061   (0.05° daily SCA) — memory-heavy
 )
 
 if (( SLURM_ARRAY_TASK_ID < 0 || SLURM_ARRAY_TASK_ID >= ${#AGG_TASKS[@]} )); then

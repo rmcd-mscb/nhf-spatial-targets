@@ -95,6 +95,7 @@ agg-ncep-ncar    = { cmd = "nhf-targets agg ncep-ncar",    description = "Aggreg
 agg-nldas-mosaic = { cmd = "nhf-targets agg nldas-mosaic", description = "Aggregate NLDAS-2 MOSAIC soil moisture to HRU fabric" }
 agg-nldas-noah   = { cmd = "nhf-targets agg nldas-noah",   description = "Aggregate NLDAS-2 NOAH soil moisture to HRU fabric" }
 agg-watergap22d  = { cmd = "nhf-targets agg watergap22d",  description = "Aggregate WaterGAP 2.2d recharge to HRU fabric" }
+agg-reitz2017    = { cmd = "nhf-targets agg reitz2017",    description = "Aggregate Reitz 2017 annual recharge to HRU fabric" }
 agg-mod16a2      = { cmd = "nhf-targets agg mod16a2",      description = "Aggregate MOD16A2 v061 AET to HRU fabric" }
 agg-mod10c1      = { cmd = "nhf-targets agg mod10c1",      description = "Aggregate MOD10C1 v061 SCA to HRU fabric" }
 agg-all          = { cmd = "nhf-targets agg all",          description = "Aggregate all tier-1/2 sources to HRU fabric sequentially" }
