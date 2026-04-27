@@ -184,3 +184,21 @@ def test_area_weighted_mean_skips_nan(helpers):
 def test_nan_hru_count(helpers):
     values = pd.Series([1.0, np.nan, 2.0, np.nan, 3.0])
     assert helpers.nan_hru_count(values) == 2
+
+
+def test_lookup_hrus_by_points_resolves_inside(helpers):
+    fabric = _three_hru_fabric()
+    points = {
+        "left": (-99.5, 40.5),  # inside HRU 1
+        "middle": (-98.5, 40.5),  # inside HRU 2
+        "right": (-97.5, 40.5),  # inside HRU 3
+    }
+    result = helpers.lookup_hrus_by_points(fabric, points)
+    assert result == {"left": 1, "middle": 2, "right": 3}
+
+
+def test_lookup_hrus_by_points_outside_raises(helpers):
+    fabric = _three_hru_fabric()
+    points = {"in_ocean": (-50.0, 40.5)}
+    with pytest.raises(ValueError):
+        helpers.lookup_hrus_by_points(fabric, points)

@@ -30,6 +30,8 @@ import pandas as pd
 import xarray as xr
 import yaml
 
+from shapely.geometry import Point
+
 from nhf_spatial_targets import catalog as cat
 
 SAVE_FIGURES: bool = False
@@ -157,3 +159,29 @@ def area_weighted_mean(values: pd.Series, fabric_gdf: gpd.GeoDataFrame) -> float
 def nan_hru_count(values: pd.Series) -> int:
     """Number of NaN HRUs in ``values``."""
     return int(values.isna().sum())
+
+
+def lookup_hrus_by_points(
+    fabric_gdf: gpd.GeoDataFrame,
+    points: dict[str, tuple[float, float]],
+) -> dict[str, object]:
+    """Resolve ``{label: (lon, lat)}`` to ``{label: hru_id}`` via sjoin.
+
+    Raises ``ValueError`` if any point falls outside the fabric — better
+    to fail early than silently drop a regime from the time-series cell.
+    """
+    pts = gpd.GeoDataFrame(
+        {"label": list(points.keys())},
+        geometry=[Point(lon, lat) for lon, lat in points.values()],
+        crs="EPSG:4326",
+    )
+    fabric_for_join = fabric_gdf.reset_index()
+    id_col = fabric_gdf.index.name
+    joined = gpd.sjoin(pts, fabric_for_join, predicate="within", how="left")
+    missing = joined[joined[id_col].isna()]["label"].tolist()
+    if missing:
+        raise ValueError(
+            f"REPRESENTATIVE_POINTS lie outside the fabric: {missing}. "
+            f"Pick coordinates inside the fabric's CONUS extent."
+        )
+    return dict(zip(joined["label"], joined[id_col].tolist()))
