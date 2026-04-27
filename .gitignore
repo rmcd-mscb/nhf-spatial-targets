@@ -44,3 +44,6 @@ htmlcov/
 
 # Claude Code runtime (settings.json and settings.local.json ARE tracked)
 .claude/scheduled_tasks.lock
+
+# Inspection notebook figures (saved when SAVE_FIGURES=True)
+docs/figures/

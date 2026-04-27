@@ -22,6 +22,10 @@ tqdm = ">=4.60"
 libgdal-hdf4 = ">=3.12.2,<4"
 pangaeapy = ">=1.1.0,<2"
 cdsapi = "*"
+# proj-data: bundle PROJ grid shift files locally so PROJ_NETWORK is set
+# OFF by the conda activation script — required behind firewalls where
+# PROJ's CDN fetch fails.
+proj-data = "*"
 # gdptools: spatial aggregation (install from PyPI if not on conda-forge)
 # sciencebasepy: ScienceBase access
 # earthaccess: NASA EDL access for MODIS, MERRA-2, NLDAS
