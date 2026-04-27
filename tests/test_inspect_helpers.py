@@ -9,11 +9,13 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
 import yaml
+from shapely.geometry import box
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HELPERS_PATH = REPO_ROOT / "notebooks" / "inspect_aggregated" / "_helpers.py"
@@ -147,3 +149,38 @@ def test_load_project_paths_reads_config_yml(helpers, tmp_path):
 def test_load_project_paths_missing_config_raises(helpers, tmp_path):
     with pytest.raises(FileNotFoundError):
         helpers.load_project_paths(tmp_path)
+
+
+def _three_hru_fabric() -> gpd.GeoDataFrame:
+    """Three square HRUs in EPSG:4326 with known relative areas."""
+    geoms = [
+        box(-100, 40, -99, 41),  # ~111 x 85 km
+        box(-99, 40, -98, 41),
+        box(-98, 40, -97, 41),
+    ]
+    return gpd.GeoDataFrame(
+        {"hru_id": [1, 2, 3]},
+        geometry=geoms,
+        crs="EPSG:4326",
+    ).set_index("hru_id")
+
+
+def test_area_weighted_mean_equal_areas(helpers):
+    fabric = _three_hru_fabric()
+    values = pd.Series([10.0, 20.0, 30.0], index=[1, 2, 3])
+    result = helpers.area_weighted_mean(values, fabric)
+    # Areas in EPSG:5070 are very nearly equal here; expect ~20.0
+    assert abs(result - 20.0) < 0.5
+
+
+def test_area_weighted_mean_skips_nan(helpers):
+    fabric = _three_hru_fabric()
+    values = pd.Series([10.0, np.nan, 30.0], index=[1, 2, 3])
+    result = helpers.area_weighted_mean(values, fabric)
+    # Should average HRUs 1 and 3 only
+    assert abs(result - 20.0) < 0.5
+
+
+def test_nan_hru_count(helpers):
+    values = pd.Series([1.0, np.nan, 2.0, np.nan, 3.0])
+    assert helpers.nan_hru_count(values) == 2

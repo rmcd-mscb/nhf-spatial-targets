@@ -25,6 +25,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 import xarray as xr
 import yaml
@@ -134,3 +135,25 @@ def load_fabric(fabric_cfg: dict) -> gpd.GeoDataFrame:
     gdf = gpd.read_file(fabric_cfg["path"])
     gdf = gdf.set_index(fabric_cfg["id_col"])
     return gdf
+
+
+ALBERS_CRS = "EPSG:5070"  # matches the aggregator's WEIGHT_GEN_CRS
+
+
+def area_weighted_mean(values: pd.Series, fabric_gdf: gpd.GeoDataFrame) -> float:
+    """Compute Σ(v · A) / Σ(A) using fabric area in EPSG:5070.
+
+    Skips NaN values (and their corresponding areas). Aligns on the
+    fabric's index — ``values`` must be indexed by HRU id.
+    """
+    aligned = values.reindex(fabric_gdf.index)
+    areas = fabric_gdf.to_crs(ALBERS_CRS).area
+    mask = ~aligned.isna()
+    if not mask.any():
+        return float("nan")
+    return float((aligned[mask] * areas[mask]).sum() / areas[mask].sum())
+
+
+def nan_hru_count(values: pd.Series) -> int:
+    """Number of NaN HRUs in ``values``."""
+    return int(values.isna().sum())
