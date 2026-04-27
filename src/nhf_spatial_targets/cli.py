@@ -22,6 +22,7 @@ from nhf_spatial_targets.aggregate.mod16a2 import aggregate_mod16a2
 from nhf_spatial_targets.aggregate.ncep_ncar import aggregate_ncep_ncar
 from nhf_spatial_targets.aggregate.nldas_mosaic import aggregate_nldas_mosaic
 from nhf_spatial_targets.aggregate.nldas_noah import aggregate_nldas_noah
+from nhf_spatial_targets.aggregate.reitz2017 import aggregate_reitz2017
 from nhf_spatial_targets.aggregate.watergap22d import aggregate_watergap22d
 
 _logger = logging.getLogger(__name__)
@@ -1132,6 +1133,15 @@ def agg_watergap22d_cmd(
     _run_tier_agg(aggregate_watergap22d, "WaterGAP 2.2d", workdir, batch_size)
 
 
+@agg_app.command(name="reitz2017")
+def agg_reitz2017_cmd(
+    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    batch_size: Annotated[int, Parameter(name="--batch-size")] = 500,
+):
+    """Aggregate Reitz 2017 annual recharge to HRU polygons."""
+    _run_tier_agg(aggregate_reitz2017, "Reitz 2017", workdir, batch_size)
+
+
 @agg_app.command(name="mod16a2")
 def agg_mod16a2_cmd(
     workdir: Annotated[Path, Parameter(name=["--project-dir"])],
@@ -1183,6 +1193,7 @@ def agg_all_cmd(
         ("nldas-mosaic", aggregate_nldas_mosaic),
         ("nldas-noah", aggregate_nldas_noah),
         ("watergap22d", aggregate_watergap22d),
+        ("reitz2017", aggregate_reitz2017),
         ("mod16a2", aggregate_mod16a2),
         ("mod10c1", aggregate_mod10c1),
     ]
