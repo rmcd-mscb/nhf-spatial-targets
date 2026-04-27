@@ -12,13 +12,19 @@ ADAPTER = SourceAdapter(
     source_key="reitz2017",
     output_name="reitz2017_agg.nc",
     variables=("total_recharge", "eff_recharge"),
-    source_crs="EPSG:4269",  # NAD83 geographic — Reitz GeoTIFFs preserve this
+    source_crs="EPSG:4269",  # NAD83 geographic; overrides EPSG:4326 default — not reprojected at fetch
 )
 
 
 def aggregate_reitz2017(
     fabric_path: Path, id_col: str, workdir: Path, batch_size: int = 500
 ) -> None:
+    """Aggregate Reitz 2017 annual recharge GeoTIFFs to HRU polygons.
+
+    Writes per-year CF-compliant NCs under
+    ``data/aggregated/reitz2017/reitz2017_<year>_agg.nc`` and updates
+    ``manifest.json``. Idempotent: existing per-year files are preserved.
+    """
     aggregate_source(
         ADAPTER,
         fabric_path,
