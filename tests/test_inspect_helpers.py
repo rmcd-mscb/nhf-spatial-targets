@@ -28,3 +28,20 @@ def helpers():
 def test_module_loads_with_default_save_figures_off(helpers):
     assert helpers.SAVE_FIGURES is False
     assert helpers.FIGURES_DIR == Path("docs/figures/inspect_aggregated/")
+
+
+def test_unit_from_catalog_dict_variables(helpers):
+    # gldas_noah_v21_monthly has dict-form variables with cf_units
+    units = helpers.unit_from_catalog("gldas_noah_v21_monthly", "Qs_acc")
+    assert units == "kg m-2"
+
+
+def test_unit_from_catalog_flat_variables(helpers):
+    # ssebop has a flat variables list and a source-level units field
+    units = helpers.unit_from_catalog("ssebop", "actual_et")
+    assert units == "mm/month"
+
+
+def test_unit_from_catalog_unknown_variable_raises(helpers):
+    with pytest.raises(KeyError):
+        helpers.unit_from_catalog("ssebop", "nonexistent_var")
