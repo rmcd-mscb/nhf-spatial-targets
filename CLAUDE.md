@@ -29,6 +29,7 @@ pixi run nhf-targets agg ncep-ncar    --project-dir /data/nhf-runs/my-run
 pixi run nhf-targets agg nldas-mosaic --project-dir /data/nhf-runs/my-run
 pixi run nhf-targets agg nldas-noah   --project-dir /data/nhf-runs/my-run
 pixi run nhf-targets agg watergap22d  --project-dir /data/nhf-runs/my-run
+pixi run nhf-targets agg reitz2017    --project-dir /data/nhf-runs/my-run
 pixi run nhf-targets agg mod16a2      --project-dir /data/nhf-runs/my-run
 pixi run nhf-targets agg mod10c1      --project-dir /data/nhf-runs/my-run
 pixi run nhf-targets agg all          --project-dir /data/nhf-runs/my-run
