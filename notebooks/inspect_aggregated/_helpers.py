@@ -187,6 +187,109 @@ def lookup_hrus_by_points(
     return dict(zip(joined["label"], joined[id_col].tolist()))
 
 
+def open_year(project_dir: Path, source_key: str, year: int) -> xr.Dataset:
+    """Open a single per-year aggregated NC and detach from the file.
+
+    The Dataset is loaded into memory and the underlying file handle is
+    closed before return — the SOM/MERRA-2 family of xarray bugs around
+    file handles staying open is covered by ``feedback_rioxarray_close.md``.
+    """
+    paths = discover_aggregated(project_dir, source_key)
+    if paths is None:
+        raise FileNotFoundError(
+            f"No aggregated NCs for {source_key} in {project_dir}"
+        )
+    target = next((p for p in paths if f"_{year}_agg.nc" in p.name), None)
+    if target is None:
+        raise FileNotFoundError(
+            f"No {source_key}_{year}_agg.nc in {paths[0].parent}"
+        )
+    with xr.open_dataset(target) as ds:
+        loaded = ds.load()
+    return loaded
+
+
+def open_year_range(
+    project_dir: Path, source_key: str, years: range
+) -> xr.Dataset:
+    """Open a contiguous range of per-year aggregated NCs (lazy).
+
+    Caller is responsible for ``.sel(hru=[...])`` and ``.load()`` to bound
+    memory, then ``.close()`` afterwards.
+    """
+    paths = discover_aggregated(project_dir, source_key)
+    if paths is None:
+        raise FileNotFoundError(
+            f"No aggregated NCs for {source_key} in {project_dir}"
+        )
+    wanted = [
+        p for p in paths
+        if any(f"_{y}_agg.nc" in p.name for y in years)
+    ]
+    if not wanted:
+        raise FileNotFoundError(
+            f"None of years {list(years)} present in {paths[0].parent}"
+        )
+    return xr.open_mfdataset(wanted, combine="by_coords")
+
+
+def plot_hru_choropleth(
+    ax,
+    fabric_gdf: gpd.GeoDataFrame,
+    values: pd.Series,
+    *,
+    vmin: float | None = None,
+    vmax: float | None = None,
+    cmap: str = "YlGnBu",
+    title: str = "",
+    units: str = "",
+    nan_color: str = "lightgrey",
+) -> None:
+    """Render an HRU-level choropleth with NaN HRUs in ``nan_color``.
+
+    Joins ``values`` (indexed by HRU id) onto ``fabric_gdf``. NaN HRUs
+    are plotted first in ``nan_color`` so coverage gaps are visually
+    obvious; finite-value HRUs are plotted on top.
+    """
+    plot_gdf = fabric_gdf.copy()
+    plot_gdf["value"] = values.reindex(plot_gdf.index)
+
+    nan_mask = plot_gdf["value"].isna()
+    if nan_mask.any():
+        plot_gdf[nan_mask].plot(ax=ax, color=nan_color, edgecolor="none")
+
+    plot_gdf[~nan_mask].plot(
+        ax=ax,
+        column="value",
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
+        legend=True,
+        legend_kwds={"label": units, "shrink": 0.6},
+        edgecolor="none",
+    )
+    ax.set_title(title, fontsize=11)
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+
+
+def plot_nan_hrus(
+    ax,
+    fabric_gdf: gpd.GeoDataFrame,
+    values: pd.Series,
+    *,
+    title: str = "",
+) -> None:
+    """Boolean coverage map: NaN HRUs in red, finite HRUs in light grey."""
+    plot_gdf = fabric_gdf.copy()
+    plot_gdf["is_nan"] = values.reindex(plot_gdf.index).isna()
+    plot_gdf[~plot_gdf["is_nan"]].plot(ax=ax, color="lightgrey", edgecolor="none")
+    plot_gdf[plot_gdf["is_nan"]].plot(ax=ax, color="crimson", edgecolor="none")
+    ax.set_title(title, fontsize=11)
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+
+
 def save_figure(fig, name: str) -> None:
     """Write ``fig`` to ``FIGURES_DIR/<name>.png`` iff ``SAVE_FIGURES``.
 
