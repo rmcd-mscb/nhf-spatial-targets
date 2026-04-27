@@ -50,6 +50,12 @@ def test_aggregate_watergap22d_end_to_end():
 
 
 @pytest.mark.skip(reason="fixture datastore + mini-fabric not yet checked in")
+def test_aggregate_reitz2017_end_to_end():
+    """aggregate_reitz2017 writes per-year NCs with total_recharge + eff_recharge."""
+    raise NotImplementedError
+
+
+@pytest.mark.skip(reason="fixture datastore + mini-fabric not yet checked in")
 def test_aggregate_mod16a2_end_to_end():
     raise NotImplementedError
 
