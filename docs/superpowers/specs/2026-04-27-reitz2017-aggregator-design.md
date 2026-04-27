@@ -131,20 +131,16 @@ def test_adapter_declares_recharge_variables():
     assert ADAPTER.source_crs == "EPSG:4269"
 ```
 
-**Integration test** in `tests/test_aggregate_integration.py` (`@pytest.mark.integration`, runs via `pixi run -e dev test-integration`):
+**Integration test placeholder** in `tests/test_aggregate_integration.py` (`@pytest.mark.integration`, `@pytest.mark.skip` until fixture infra lands):
 
-- Build a small synthetic Reitz consolidated NC in `tmp_path`: 50×50 NAD83-geographic grid covering a CONUS bbox (e.g. lon −100 to −95, lat 39 to 41), 2 years (2000, 2001), both `total_recharge` and `eff_recharge` filled with deterministic values (e.g. linearly varying west-to-east). Apply CF metadata via the same shared helper the fetch uses.
-- Build a 4-HRU fabric `gpd.GeoDataFrame` covering the bbox; write to `tmp_path/fabric.gpkg`.
-- Initialise a project skeleton at `tmp_path/project` (mirrors `test_aggregate_watergap22d_end_to_end`'s harness — copy the helper, don't reinvent).
-- Place the synthetic NC at `tmp_path/project/data/raw/reitz2017/reitz2017_consolidated.nc`.
-- Call `aggregate_reitz2017(fabric_path, id_col, project_dir)`.
-- Assert:
-  - Files `<project>/data/aggregated/reitz2017/reitz2017_2000_agg.nc` and `..._2001_agg.nc` both exist.
-  - Both files contain both `total_recharge` and `eff_recharge`.
-  - HRU dim equals the fabric's row count.
-  - Time dim has 1 timestep per file at mid-year July 1.
-  - Aggregated values are finite for every HRU (full coverage given the synthetic grid spans the fabric).
-  - Per-HRU aggregated `total_recharge` lies between the source min and max for that HRU's footprint (sanity bound on the area-weighted mean).
+The existing convention in this file is one `@pytest.mark.skip(reason="fixture datastore + mini-fabric not yet checked in")` stub per source, raising `NotImplementedError`. Reitz follows the same convention to keep the file uniform. Real end-to-end validation happens on caldera (see "Open / verify before opening the PR"). Building the synthetic-fixture harness (mini-fabric `.gpkg`, synthetic source-NC builder, project-skeleton fixture) is a separate, larger effort that should retrofit all 9 stubs together — out of scope for this PR.
+
+```python
+@pytest.mark.skip(reason="fixture datastore + mini-fabric not yet checked in")
+def test_aggregate_reitz2017_end_to_end():
+    """aggregate_reitz2017 writes per-year NCs with total_recharge + eff_recharge."""
+    raise NotImplementedError
+```
 
 ## Notebook tweak
 
