@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HELPERS_PATH = REPO_ROOT / "notebooks" / "inspect_aggregated" / "_helpers.py"
@@ -123,3 +124,26 @@ def test_discover_aggregated_returns_none_when_dir_missing(helpers, tmp_path):
 def test_discover_aggregated_returns_none_when_dir_empty(helpers, tmp_path):
     (tmp_path / "data" / "aggregated" / "src1").mkdir(parents=True)
     assert helpers.discover_aggregated(tmp_path, "src1") is None
+
+
+def test_load_project_paths_reads_config_yml(helpers, tmp_path):
+    cfg = {
+        "datastore": "/mnt/d/nhf-datastore",
+        "fabric": {
+            "path": "/mnt/d/fabric/gfv2.gpkg",
+            "id_col": "nhm_id",
+            "crs": "EPSG:4326",
+        },
+    }
+    (tmp_path / "config.yml").write_text(yaml.safe_dump(cfg))
+
+    project_dir, datastore_dir, fabric_cfg = helpers.load_project_paths(tmp_path)
+    assert project_dir == tmp_path
+    assert datastore_dir == Path("/mnt/d/nhf-datastore")
+    assert fabric_cfg["path"] == "/mnt/d/fabric/gfv2.gpkg"
+    assert fabric_cfg["id_col"] == "nhm_id"
+
+
+def test_load_project_paths_missing_config_raises(helpers, tmp_path):
+    with pytest.raises(FileNotFoundError):
+        helpers.load_project_paths(tmp_path)

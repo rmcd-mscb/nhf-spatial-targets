@@ -24,8 +24,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import geopandas as gpd
 import pandas as pd
 import xarray as xr
+import yaml
 
 from nhf_spatial_targets import catalog as cat
 
@@ -89,3 +91,46 @@ def discover_aggregated(project_dir: Path, source_key: str) -> list[Path] | None
         return None
     paths = sorted(agg_dir.glob(f"{source_key}_*_agg.nc"))
     return paths if paths else None
+
+
+DEFAULT_CALDERA_PROJECT = Path(
+    "/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2-spatial-targets"
+)
+
+
+def load_project_paths(
+    project_dir: Path | None = None,
+) -> tuple[Path, Path, dict]:
+    """Read ``<project>/config.yml`` and return ``(project_dir, datastore_dir, fabric_cfg)``.
+
+    ``fabric_cfg`` is the ``fabric`` sub-block from ``config.yml`` (keys
+    typically include ``path``, ``id_col``, ``crs``, ``buffer_deg``).
+    Defaults ``project_dir`` to the caldera ``gfv2-spatial-targets`` project
+    when called with ``None``.
+    """
+    project_dir = (
+        Path(project_dir) if project_dir is not None else DEFAULT_CALDERA_PROJECT
+    )
+    cfg_path = project_dir / "config.yml"
+    if not cfg_path.exists():
+        raise FileNotFoundError(
+            f"config.yml not found at {cfg_path}. "
+            f"Edit PROJECT_DIR at the top of the notebook to point at "
+            f"a real project directory."
+        )
+    cfg = yaml.safe_load(cfg_path.read_text())
+    datastore_dir = Path(cfg["datastore"])
+    fabric_cfg = dict(cfg["fabric"])
+    return project_dir, datastore_dir, fabric_cfg
+
+
+def load_fabric(fabric_cfg: dict) -> gpd.GeoDataFrame:
+    """Read the HRU fabric file and index by ``fabric_cfg['id_col']``.
+
+    Kept in EPSG:4326 for plotting; downstream area calculations
+    re-project to EPSG:5070 (CONUS Albers) so we don't pay that cost
+    on every map.
+    """
+    gdf = gpd.read_file(fabric_cfg["path"])
+    gdf = gdf.set_index(fabric_cfg["id_col"])
+    return gdf
