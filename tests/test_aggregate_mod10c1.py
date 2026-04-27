@@ -14,11 +14,11 @@ from nhf_spatial_targets.aggregate.mod10c1 import build_masked_source
 def raw_mod10c1():
     times = pd.date_range("2000-01-01", periods=1, freq="D")
     snow = np.array([[[50.0, 50.0], [50.0, 50.0]]])  # day, y, x
-    qa = np.array([[[80.0, 60.0], [30.0, 100.0]]])  # CI in percent
+    ci = np.array([[[80.0, 60.0], [30.0, 100.0]]])  # CI in percent
     return xr.Dataset(
         {
             "Day_CMG_Snow_Cover": (["time", "lat", "lon"], snow),
-            "Snow_Spatial_QA": (["time", "lat", "lon"], qa),
+            "Day_CMG_Clear_Index": (["time", "lat", "lon"], ci),
         },
         coords={"time": times, "lat": [0.25, 0.75], "lon": [0.5, 1.5]},
     )
@@ -39,10 +39,11 @@ def test_sca_is_nan_where_ci_below_threshold(raw_mod10c1):
     assert np.isclose(sca[1, 1], 0.5)  # CI=100 -> keep
 
 
-def test_ci_passes_through_unmasked(raw_mod10c1):
+def test_ci_passes_through_unmasked_below_threshold(raw_mod10c1):
     out = build_masked_source(raw_mod10c1)
     ci = out["ci"].isel(time=0).values
-    # ci is raw QA / 100 — no NaNs even where SCA was masked
+    # ci = Day_CMG_Clear_Index / 100; not gated on the 0.70 threshold,
+    # so cells where SCA was masked still carry their fractional CI.
     np.testing.assert_allclose(ci, np.array([[0.8, 0.6], [0.3, 1.0]]))
 
 
@@ -57,11 +58,11 @@ def test_build_masked_source_strict_threshold_at_0_70():
     """CI exactly at 0.70 must fail the filter (strict >, not >=)."""
     times = pd.date_range("2000-01-01", periods=1, freq="D")
     snow = np.array([[[50.0]]])
-    qa = np.array([[[70.0]]])  # exactly 70% -> ci == 0.70 -> fail
+    ci = np.array([[[70.0]]])  # exactly 70% -> ci == 0.70 -> fail
     ds = xr.Dataset(
         {
             "Day_CMG_Snow_Cover": (["time", "lat", "lon"], snow),
-            "Snow_Spatial_QA": (["time", "lat", "lon"], qa),
+            "Day_CMG_Clear_Index": (["time", "lat", "lon"], ci),
         },
         coords={"time": times, "lat": [0.25], "lon": [0.5]},
     )
@@ -74,17 +75,63 @@ def test_build_masked_source_day_with_all_low_ci_yields_all_nan_sca():
     """If every cell fails the CI filter, sca is entirely NaN and valid_mask is 0."""
     times = pd.date_range("2000-01-01", periods=1, freq="D")
     snow = np.ones((1, 2, 2)) * 80.0
-    qa = np.ones((1, 2, 2)) * 50.0  # CI=0.5 everywhere, all fail
+    ci = np.ones((1, 2, 2)) * 50.0  # CI=0.5 everywhere, all fail
     ds = xr.Dataset(
         {
             "Day_CMG_Snow_Cover": (["time", "lat", "lon"], snow),
-            "Snow_Spatial_QA": (["time", "lat", "lon"], qa),
+            "Day_CMG_Clear_Index": (["time", "lat", "lon"], ci),
         },
         coords={"time": times, "lat": [0.25, 0.75], "lon": [0.5, 1.5]},
     )
     out = build_masked_source(ds)
     assert np.isnan(out["sca"].values).all()
     np.testing.assert_array_equal(out["valid_mask"].values, np.zeros((1, 2, 2)))
+
+
+def test_build_masked_source_masks_snow_flag_values():
+    """Day_CMG_Snow_Cover values >100 (107=lake, 237=water, 239=ocean, etc.)
+    must be masked to NaN before scaling so they don't contaminate the
+    weighted mean even when their CI happens to pass the filter.
+    """
+    times = pd.date_range("2000-01-01", periods=1, freq="D")
+    # All cells have CI=100 (pass), but snow values are flag codes
+    snow = np.array([[[50.0, 107.0], [239.0, 253.0]]])
+    ci = np.ones((1, 2, 2)) * 100.0
+    ds = xr.Dataset(
+        {
+            "Day_CMG_Snow_Cover": (["time", "lat", "lon"], snow),
+            "Day_CMG_Clear_Index": (["time", "lat", "lon"], ci),
+        },
+        coords={"time": times, "lat": [0.25, 0.75], "lon": [0.5, 1.5]},
+    )
+    out = build_masked_source(ds)
+    sca = out["sca"].isel(time=0).values
+    assert np.isclose(sca[0, 0], 0.5)  # 50 -> 0.5, valid
+    assert np.isnan(sca[0, 1])  # 107 (lake ice flag)
+    assert np.isnan(sca[1, 0])  # 239 (ocean flag)
+    assert np.isnan(sca[1, 1])  # 253 (not mapped flag)
+
+
+def test_build_masked_source_masks_ci_flag_values():
+    """Day_CMG_Clear_Index values >100 are flag codes; cells with such CI
+    must fail the pass_mask, regardless of snow value.
+    """
+    times = pd.date_range("2000-01-01", periods=1, freq="D")
+    snow = np.ones((1, 2, 2)) * 50.0
+    ci = np.array([[[100.0, 239.0], [255.0, 80.0]]])  # 239 ocean, 255 fill
+    ds = xr.Dataset(
+        {
+            "Day_CMG_Snow_Cover": (["time", "lat", "lon"], snow),
+            "Day_CMG_Clear_Index": (["time", "lat", "lon"], ci),
+        },
+        coords={"time": times, "lat": [0.25, 0.75], "lon": [0.5, 1.5]},
+    )
+    out = build_masked_source(ds)
+    sca = out["sca"].isel(time=0).values
+    assert np.isclose(sca[0, 0], 0.5)  # CI=100 passes
+    assert np.isnan(sca[0, 1])  # CI=239 -> NaN -> fails
+    assert np.isnan(sca[1, 0])  # CI=255 -> NaN -> fails
+    assert np.isclose(sca[1, 1], 0.5)  # CI=80 passes
 
 
 def test_log_low_valid_coverage_warns_above_threshold(caplog):

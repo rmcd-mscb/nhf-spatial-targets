@@ -23,15 +23,28 @@ _LOW_COVERAGE_WARN_THRESHOLD = 0.10
 
 
 def build_masked_source(ds: xr.Dataset) -> xr.Dataset:
-    """Derive ``sca``, ``ci``, ``valid_mask`` from raw MOD10C1 variables.
+    """Derive ``sca``, ``ci``, ``valid_mask`` from raw MOD10C1 v061 variables.
 
-    - ``sca``        = Day_CMG_Snow_Cover / 100, NaN where CI <= 0.70.
-    - ``ci``         = Snow_Spatial_QA / 100 (passed through, unmasked).
-    - ``valid_mask`` = 1.0 where CI > 0.70, 0.0 otherwise.
+    The CI field for MOD10C1 is ``Day_CMG_Clear_Index`` (renamed from
+    ``Day_CMG_Confidence_Index`` in v006); ``Snow_Spatial_QA`` in v061 is a
+    different field — a 0-4 quality code with flag values 237/239/250/etc —
+    and must not be used as a CI percentage.
+
+    Both ``Day_CMG_Snow_Cover`` and ``Day_CMG_Clear_Index`` carry flag values
+    above 100 (107=lake ice, 111=night, 237=inland water, 239=ocean,
+    250=cloud-obscured water, 253=not mapped, 255=fill); these are masked to
+    NaN before scaling so they don't contaminate the weighted mean.
+
+    - ``sca``        = Day_CMG_Snow_Cover / 100, NaN where ci <= 0.70.
+    - ``ci``         = Day_CMG_Clear_Index / 100 (NaN at flag values).
+    - ``valid_mask`` = 1.0 where ci > 0.70, 0.0 otherwise.
     """
-    ci = ds["Snow_Spatial_QA"] / 100.0
+    snow_raw = ds["Day_CMG_Snow_Cover"].where(ds["Day_CMG_Snow_Cover"] <= 100)
+    ci_raw = ds["Day_CMG_Clear_Index"].where(ds["Day_CMG_Clear_Index"] <= 100)
+
+    ci = ci_raw / 100.0
     pass_mask = ci > _CI_THRESHOLD
-    sca_raw = ds["Day_CMG_Snow_Cover"] / 100.0
+    sca_raw = snow_raw / 100.0
     sca = sca_raw.where(pass_mask)
     valid_mask = pass_mask.astype("float64")
 
