@@ -17,6 +17,7 @@ import pytest
         ("nldas-mosaic", "nhf_spatial_targets.cli.aggregate_nldas_mosaic"),
         ("nldas-noah", "nhf_spatial_targets.cli.aggregate_nldas_noah"),
         ("watergap22d", "nhf_spatial_targets.cli.aggregate_watergap22d"),
+        ("reitz2017", "nhf_spatial_targets.cli.aggregate_reitz2017"),
         ("mod16a2", "nhf_spatial_targets.cli.aggregate_mod16a2"),
         ("mod10c1", "nhf_spatial_targets.cli.aggregate_mod10c1"),
     ],
@@ -73,6 +74,7 @@ def test_agg_all_runs_every_source(tmp_path):
         "nhf_spatial_targets.cli.aggregate_nldas_mosaic",
         "nhf_spatial_targets.cli.aggregate_nldas_noah",
         "nhf_spatial_targets.cli.aggregate_watergap22d",
+        "nhf_spatial_targets.cli.aggregate_reitz2017",
         "nhf_spatial_targets.cli.aggregate_mod16a2",
         "nhf_spatial_targets.cli.aggregate_mod10c1",
     ]
