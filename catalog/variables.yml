@@ -33,10 +33,11 @@ variables:
       HRU area and days-in-month. Per-HRU per-month:
         lower_bound = min(era5, gldas), upper_bound = max(era5, gldas).
       mwbm_climgrid is declared as a third source (Wieczorek et al.
-      2024, ClimGrid-forced MWBM, mm/month directly) but not yet
-      consumed by the target builder; the runoff target keeps
-      producing 2-source bounds until targets/run.py is updated in a
-      follow-up PR.
+      2024, ClimGrid-forced MWBM, mm/month directly). The runoff target
+      builder currently consumes only ERA5-Land and GLDAS; the
+      mwbm_climgrid trace is aggregated to disk but not yet folded
+      into the bounds, gated on targets/run.py being extended to
+      three sources.
     normalize: false
     output_format: netcdf
 
@@ -61,9 +62,9 @@ variables:
       aggregated to HRU polygons via gdptools before comparison.
       AET is NOT normalized — absolute values are compared directly.
       mwbm_climgrid contributes the MWBM-family AET trace
-      (Wieczorek et al. 2024, mm/month native) and is declared here
-      for the future 3-source build; targets/aet.py is currently a
-      stub and will land in a follow-up PR.
+      (Wieczorek et al. 2024, mm/month native). Consumption by the
+      AET target builder is gated on targets/aet.py being implemented
+      (currently a NotImplementedError stub).
     normalize: false
     output_format: netcdf
 

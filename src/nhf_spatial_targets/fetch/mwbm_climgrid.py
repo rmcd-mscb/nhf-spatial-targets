@@ -37,15 +37,24 @@ def _hash_file(path: Path) -> str:
 
 
 def _read_manifest_entry(workdir: Path) -> dict | None:
-    """Return the mwbm_climgrid entry from manifest.json, or None if absent."""
+    """Return the mwbm_climgrid entry from manifest.json, or None if absent.
+
+    Raises ValueError if manifest.json exists but cannot be parsed —
+    surfaces corruption fast rather than letting the caller mistake a
+    corrupt manifest for a missing one and trigger a wasteful 7.5 GB
+    re-hash before the corruption is finally detected by `_update_manifest`.
+    """
     ws = _load_project(workdir)
     manifest_path = ws.manifest_path
     if not manifest_path.exists():
         return None
     try:
         manifest = json.loads(manifest_path.read_text())
-    except json.JSONDecodeError:
-        return None
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"manifest.json in {workdir} is corrupt and cannot be parsed. "
+            f"Delete it and re-run the fetch step. Original error: {exc}"
+        ) from exc
     return manifest.get("sources", {}).get(_SOURCE_KEY)
 
 
@@ -54,59 +63,77 @@ def _validate_downloaded_nc(nc_path: Path, meta: dict) -> None:
 
     Raises RuntimeError with a clear message if the publisher-distributed
     file diverges from what the catalog declares, so downstream targets
-    don't silently consume mis-aggregated data.
+    don't silently consume mis-aggregated data. Validation failures leave
+    the file on disk for inspection; every error message tells the user
+    to delete the file before re-running so the next fetch invocation
+    doesn't loop on the same divergence.
     """
     declared = {v["name"]: v.get("cell_methods") for v in meta["variables"]}
+    # File-open failures get the dedicated "truncated/corrupt" wrapper.
+    # netCDF4/HDF5 corruption can surface as RuntimeError or KeyError as
+    # well as OSError/ValueError, so catch broadly here. The internal
+    # validation `raise RuntimeError(...)` calls live OUTSIDE this except
+    # and propagate cleanly.
     try:
         ds = xr.open_dataset(nc_path, decode_times=False)
-        try:
-            present = set(ds.data_vars)
-            missing = set(declared) - present
-            if missing:
-                raise RuntimeError(
-                    f"{nc_path.name} is missing variables {sorted(missing)}. "
-                    f"Catalog declares {sorted(declared)} but file only "
-                    f"contains {sorted(present)}. Publisher may have "
-                    f"reorganized the dataset; check the ScienceBase page."
-                )
-            for name, expected in declared.items():
-                if expected is None:
-                    continue
-                actual = ds[name].attrs.get("cell_methods")
-                if actual != expected:
-                    raise RuntimeError(
-                        f"{nc_path.name}: variable {name!r} has "
-                        f"cell_methods={actual!r}, catalog declares "
-                        f"{expected!r}. Publisher metadata diverged from "
-                        f"this catalog version; do not trust this file "
-                        f"for aggregation until the catalog is updated."
-                    )
-        finally:
-            ds.close()
-    except (OSError, ValueError) as exc:
+    except Exception as exc:
         raise RuntimeError(
             f"Cannot open downloaded NetCDF {nc_path}: {exc}. "
-            f"The file may be truncated; delete it and re-run."
+            f"The file may be truncated or corrupt; delete it and re-run."
         ) from exc
+    try:
+        present = set(ds.data_vars)
+        missing = set(declared) - present
+        if missing:
+            raise RuntimeError(
+                f"{nc_path.name} is missing variables {sorted(missing)}. "
+                f"Catalog declares {sorted(declared)} but file only "
+                f"contains {sorted(present)}. Publisher may have "
+                f"reorganized the dataset; check the ScienceBase page. "
+                f"Delete {nc_path} before re-running, or this error "
+                f"will repeat indefinitely."
+            )
+        for name, expected in declared.items():
+            if expected is None:
+                continue
+            actual = ds[name].attrs.get("cell_methods")
+            if actual != expected:
+                raise RuntimeError(
+                    f"{nc_path.name}: variable {name!r} has "
+                    f"cell_methods={actual!r}, catalog declares "
+                    f"{expected!r}. Publisher metadata diverged from "
+                    f"this catalog version; do not trust this file "
+                    f"for aggregation until the catalog is updated. "
+                    f"Delete {nc_path} before re-running, or this error "
+                    f"will repeat indefinitely."
+                )
+    finally:
+        ds.close()
 
 
 def fetch_mwbm_climgrid(workdir: Path, period: str) -> dict:
     """Download ClimGrid_WBM.nc to <datastore>/mwbm_climgrid/.
 
     Idempotent: skips download if the file is present AND its size +
-    sha256 match the values recorded in manifest.json. Computes sha256
-    streaming during download (no second-pass read of the 7.5 GB file).
-    Validates expected variables and CF metadata after download.
+    sha256 match the values recorded in manifest.json. After download
+    (or on a manifest-repair pass over an existing file), sha256 is
+    computed by streaming the saved file in 8 MB chunks and persisted
+    to manifest.json alongside the file size. Subsequent runs use the
+    same streaming hash to verify the file before trusting the
+    manifest. Validates expected variables and CF metadata after
+    download.
 
     Parameters
     ----------
     workdir : Path
         Project directory.
     period : str
-        Temporal range as "YYYY/YYYY" — used to validate the project's
-        intended use against publisher coverage and to record in the
-        manifest entry. The download itself ignores this argument
-        (the publisher distributes one file).
+        Temporal range as "YYYY/YYYY" — validated against the
+        publisher-usable window (1900-2020) and recorded in the
+        manifest entry. The publisher distributes a single file
+        covering all years, so `period` does not select a subset of
+        bytes to download; it gates the call (rejecting out-of-window
+        years before any network I/O) and provides provenance.
 
     Returns
     -------
