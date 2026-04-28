@@ -2,7 +2,7 @@
 #SBATCH --job-name=nhf-fetch
 #SBATCH --account=impd
 #SBATCH --partition=cpu
-#SBATCH --array=0-9
+#SBATCH --array=0-10
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=128G
@@ -11,7 +11,7 @@
 #SBATCH --error=logs/fetch_%a_%A.err
 
 # NHF Spatial Targets — parallel fetch array
-# Submits one SLURM job per source dataset (10 total).
+# Submits one SLURM job per source dataset (11 total).
 # Each job downloads independently; they can run concurrently.
 #
 # Usage (REPO_DIR and PROJECT_DIR are overridable via environment):
@@ -45,6 +45,7 @@ FETCH_TASKS=(
     "fetch-reitz2017"      # 7  — 2000–2013 at 800m, annual (ScienceBase) — ends 2013
     "fetch-mod16a2"        # 8  — 2000–present at 500m, 8-day (LP DAAC/earthaccess)
     "fetch-mod10c1"        # 9  — 2000–present at 0.05°, daily (NSIDC/earthaccess)
+    "fetch-mwbm-climgrid"  # 10 — 1900–2020 at 2.5 arcmin, monthly (ScienceBase) — ends 2020
 )
 
 # Map array index → fetch period (YYYY/YYYY)
@@ -62,6 +63,7 @@ FETCH_PERIODS=(
     "2000/2013"   # 7  reitz2017   (dataset ends 2013)
     "2000/2025"   # 8  mod16a2     (MODIS starts 2000)
     "2000/2025"   # 9  mod10c1     (MODIS starts 2000)
+    "1979/2020"   # 10 mwbm-climgrid (publisher ends 2020; 1895-1899 spinup excluded)
 )
 
 TASK="${FETCH_TASKS[$SLURM_ARRAY_TASK_ID]}"

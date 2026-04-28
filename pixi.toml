@@ -85,6 +85,7 @@ fetch-watergap22d = { cmd = "nhf-targets fetch watergap22d", description = "Down
 fetch-reitz2017 = { cmd = "nhf-targets fetch reitz2017", description = "Download Reitz 2017 recharge estimates from ScienceBase" }
 fetch-mod16a2 = { cmd = "nhf-targets fetch mod16a2", description = "Download MOD16A2 v061 AET data via earthaccess" }
 fetch-mod10c1 = { cmd = "nhf-targets fetch mod10c1", description = "Download MOD10C1 v061 snow cover data via earthaccess" }
+fetch-mwbm-climgrid = { cmd = "nhf-targets fetch mwbm-climgrid", description = "Download USGS MWBM (ClimGrid-forced) monthly outputs from ScienceBase" }
 fetch-all = { cmd = "nhf-targets fetch all", description = "Download all source datasets sequentially" }
 
 # Aggregation
@@ -99,6 +100,7 @@ agg-watergap22d  = { cmd = "nhf-targets agg watergap22d",  description = "Aggreg
 agg-reitz2017    = { cmd = "nhf-targets agg reitz2017",    description = "Aggregate Reitz 2017 annual recharge to HRU fabric" }
 agg-mod16a2      = { cmd = "nhf-targets agg mod16a2",      description = "Aggregate MOD16A2 v061 AET to HRU fabric" }
 agg-mod10c1      = { cmd = "nhf-targets agg mod10c1",      description = "Aggregate MOD10C1 v061 SCA to HRU fabric" }
+agg-mwbm-climgrid = { cmd = "nhf-targets agg mwbm-climgrid", description = "Aggregate USGS MWBM (ClimGrid-forced) monthly outputs to HRU fabric" }
 agg-all          = { cmd = "nhf-targets agg all",          description = "Aggregate all tier-1/2 sources to HRU fabric sequentially" }
 
 # Catalog inspection
