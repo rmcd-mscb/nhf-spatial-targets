@@ -24,6 +24,7 @@ variables:
     sources:
       - era5_land
       - gldas_noah_v21_monthly
+      - mwbm_climgrid
     range_method: multi_source_minmax
     range_notes: >
       ERA5-Land 'ro' (m water equivalent) and GLDAS-2.1 NOAH
@@ -31,8 +32,11 @@ variables:
       via gdptools, harmonized to mm/month, then converted to cfs using
       HRU area and days-in-month. Per-HRU per-month:
         lower_bound = min(era5, gldas), upper_bound = max(era5, gldas).
-      Replaces the original NHM-MWBM source which had pre-computed
-      uncertainty bounds (Bock et al. 2018) but no public fetch path.
+      mwbm_climgrid is declared as a third source (Wieczorek et al.
+      2024, ClimGrid-forced MWBM, mm/month directly) but not yet
+      consumed by the target builder; the runoff target keeps
+      producing 2-source bounds until targets/run.py is updated in a
+      follow-up PR.
     normalize: false
     output_format: netcdf
 
@@ -49,12 +53,17 @@ variables:
     sources:
       - mod16a2_v061   # v006 used in original TM 6-B10; v061 for new runs
       - ssebop
+      - mwbm_climgrid
     range_method: multi_source_minmax
     range_notes: >
       For each HRU and time step: lower_bound = min(src1, src2, src3),
       upper_bound = max(src1, src2, src3). All sources must be spatially
       aggregated to HRU polygons via gdptools before comparison.
       AET is NOT normalized — absolute values are compared directly.
+      mwbm_climgrid contributes the MWBM-family AET trace
+      (Wieczorek et al. 2024, mm/month native) and is declared here
+      for the future 3-source build; targets/aet.py is currently a
+      stub and will land in a follow-up PR.
     normalize: false
     output_format: netcdf
 
