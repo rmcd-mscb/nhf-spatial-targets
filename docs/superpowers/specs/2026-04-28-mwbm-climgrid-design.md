@@ -10,18 +10,28 @@ Add the USGS Monthly Water Balance Model output driven by ClimGrid
 `64c948dbd34e70357a34c11e`) to the catalog, implement a fetch module
 that downloads the single consolidated NetCDF, and implement an
 aggregation module that produces per-year HRU NetCDFs for four
-variables: `runoff`, `aet`, `soilstorage`, `swe`. This restores an
+variables: `runoff`, `aet`, `soilstorage`, `swe`. Declare
+`mwbm_climgrid` as a source for the `runoff` and `aet` calibration
+targets in `catalog/variables.yml`, and update the four corresponding
+inspection notebooks
+(`inspect_consolidated_<runoff|aet>.ipynb` and
+`inspect_aggregated_<runoff|aet>.ipynb`) so they include
+`mwbm_climgrid` alongside existing sources. This restores an
 MWBM-family source to the project that was retired with the original
 NHM-MWBM (issue #41), but uses the modern ClimGrid-forced product
 rather than the decommissioned Maurer/Daymet-forced one.
 
 ## Non-goals
 
-- **No target-builder wiring.** The decision to add `mwbm_climgrid` as
-  a third source for any of the runoff / AET / soil-moisture targets
-  (or as a future SCA/SWE source) is deferred. Each such addition
-  changes the existing calibration ranges and deserves its own
-  discussion + PR. This spec lands data + aggregation only.
+- **No target-builder code changes.** `targets/run.py` and
+  `targets/aet.py` are not modified. `targets/run.py` continues to
+  produce 2-source bounds (ERA5-Land + GLDAS) until the runoff target
+  is explicitly extended to 3 sources in a separate PR;
+  `targets/aet.py` remains a `NotImplementedError` stub.
+  `catalog/variables.yml` records the *intent* that `mwbm_climgrid`
+  participates in both targets — actual builder wiring is deferred,
+  same reasoning as the original spec scope: each target's
+  source-set change deserves its own discussion + PR.
 - **No consolidation step in fetch.** The publisher distributes a
   single CF-conformant NetCDF (`ClimGrid_WBM.nc`, ~7.5 GB, NetCDF-4,
   int16-packed). The fetch is a pure download.
@@ -30,6 +40,10 @@ rather than the decommissioned Maurer/Daymet-forced one.
 - **No subsetting on download.** The dataset is already CONUS-only,
   matches every project's spatial extent, and is fabric-independent
   by design — the datastore is shared across projects.
+- **No soil-moisture / SCA notebook changes.** `soilstorage` and
+  `swe` are aggregated to disk but not declared in `variables.yml`
+  for the SOM or SCA targets and not surfaced in those notebooks —
+  same deferred-target-decision rationale.
 
 ## Key design decisions
 
@@ -113,6 +127,8 @@ rather than the decommissioned Maurer/Daymet-forced one.
 ```
 catalog/
   sources.yml                                # MODIFIED: new mwbm_climgrid entry
+  variables.yml                              # MODIFIED: mwbm_climgrid added to
+                                             #          runoff + aet source lists
 
 src/nhf_spatial_targets/
   fetch/
@@ -122,7 +138,15 @@ src/nhf_spatial_targets/
   cli.py                                     # MODIFIED: fetch + agg subcommands,
                                              #          fetch-all + agg-all entries
 
+notebooks/
+  inspect_consolidated_runoff.ipynb          # MODIFIED: add mwbm_climgrid section
+  inspect_consolidated_aet.ipynb             # MODIFIED: add mwbm_climgrid section
+  inspect_aggregated/
+    inspect_aggregated_runoff.ipynb          # MODIFIED: add mwbm_climgrid to SOURCES
+    inspect_aggregated_aet.ipynb             # MODIFIED: add mwbm_climgrid to SOURCES
+
 tests/
+  test_catalog.py                            # MODIFIED: variables.yml assertions
   test_fetch_mwbm_climgrid.py                # NEW
   test_aggregate_mwbm_climgrid.py            # NEW
   test_aggregate_integration.py              # MODIFIED: add mwbm_climgrid case
@@ -287,6 +311,97 @@ fabric metadata. Weight cache at
 `<project>/weights/mwbm_climgrid_<fabric>.parquet` is written on the
 first run of any variable and reused for the others.
 
+## `catalog/variables.yml` updates
+
+Both target-variable blocks gain `mwbm_climgrid` in their `sources:`
+list. No structural changes to the YAML — just an additional entry.
+
+For `runoff` (currently sources `era5_land`, `gldas_noah_v21_monthly`):
+
+```yaml
+    sources:
+      - era5_land
+      - gldas_noah_v21_monthly
+      - mwbm_climgrid
+```
+
+For `aet` (currently sources `mod16a2_v061`, `ssebop`):
+
+```yaml
+    sources:
+      - mod16a2_v061
+      - ssebop
+      - mwbm_climgrid
+```
+
+The `range_notes:` block of each is updated to mention that
+`mwbm_climgrid` is declared as a source but not yet consumed by the
+target builder. The note for `runoff` is also reworded to drop the
+"Replaces the original NHM-MWBM source" sentence — that lineage is
+now better captured by the `mwbm_climgrid` entry in `sources.yml`.
+
+The variable for the `aet` target is declared as `aet` in the MWBM
+catalog (matching the file's variable name); the variable for
+`runoff` is `runoff`. Future target-builder wiring will read these
+identifiers directly from the per-year aggregated NCs at
+`<project>/data/aggregated/mwbm_climgrid/<YYYY>/mwbm_climgrid_<YYYY>_agg.nc`.
+
+## Notebook updates
+
+Four notebooks gain an `mwbm_climgrid` source. Each follows an
+established pattern in the corresponding existing source code; the
+edit is uniform in shape across notebooks. No new Markdown narrative
+beyond a one-line introduction citing Wieczorek et al. (2024).
+
+### `notebooks/inspect_consolidated_runoff.ipynb`
+
+The notebook's "configure source paths" cell holds a list-of-dicts
+keyed by source. Add a third entry pointing to
+`<datastore>/mwbm_climgrid/ClimGrid_WBM.nc` and reading the `runoff`
+variable. The unit conversion to mm/month is a no-op — the file's
+`runoff` variable is native mm/month with `cell_methods: time: sum`.
+The plotting/comparison cells iterate the source list and need no
+per-source branch added.
+
+### `notebooks/inspect_consolidated_aet.ipynb`
+
+Same pattern. New entry reads the `aet` variable from
+`ClimGrid_WBM.nc`. Unit conversion to mm/month is a no-op. The
+mod16a2-specific composite-handling helper does not need to change;
+the new MWBM source uses the existing mm/month path.
+
+### `notebooks/inspect_aggregated/inspect_aggregated_runoff.ipynb`
+
+Append `mwbm_climgrid` to the `SOURCES` dict with
+`{"label": "MWBM (ClimGrid, runoff)", "var": "runoff"}`. Add a path
+branch to whatever cell resolves per-source aggregated NC paths,
+pointing at `<aggregated>/mwbm_climgrid/<YYYY>/mwbm_climgrid_<YYYY>_agg.nc`.
+The unit-conversion helper passes MWBM through unchanged (mm/month
+on input matches the comparison unit). The mean-trace and
+choropleth-comparison cells iterate the SOURCES dict and pick up
+the new source automatically.
+
+### `notebooks/inspect_aggregated/inspect_aggregated_aet.ipynb`
+
+Same pattern as runoff. New SOURCES entry
+`{"label": "MWBM (ClimGrid, aet)", "var": "aet"}`. New path branch.
+Unit conversion: pass-through (MWBM `aet` is mm/month, same as the
+notebook's comparison unit).
+
+### Notebook integrity
+
+- Run `pixi run nbstripout --keep-id` on each modified notebook
+  before committing (project memory `reference_nbstripout_keep_id`).
+- Pre-commit hook will re-run nbstripout; ensure `--keep-id` is in
+  the `.pre-commit-config.yaml` invocation (it is, as of PR #72).
+- Notebooks reference data that exists only after the aggregator has
+  been run against a real datastore. They will raise a clear
+  `FileNotFoundError` if the user runs them before
+  `agg mwbm-climgrid` finishes — same behavior as the existing
+  sources (the helper module's `discover_aggregated` builds explicit
+  error messages). This is acceptable; the notebooks are
+  inspection tools, not unit-test fixtures.
+
 ## CLI wiring (`cli.py`)
 
 Three additions, mirroring the `reitz2017` pattern:
@@ -358,8 +473,12 @@ real-data fixtures.
 
 ## Out of scope reminders
 
-- No `targets/run.py`, `targets/aet.py`, or `targets/som.py` changes.
-- No `inspect_consolidated_*` or `inspect_aggregated_*` notebook
-  changes — those land when target wiring lands.
+- No `targets/run.py`, `targets/aet.py`, `targets/som.py`, or any
+  other target-builder code changes. `targets/run.py` keeps producing
+  2-source bounds; `targets/aet.py` stays a stub.
+- No notebook changes for soil moisture, recharge, or snow-covered
+  area. Only the four runoff and AET notebooks are touched, matching
+  the variables.yml declaration of which targets `mwbm_climgrid`
+  participates in.
 - No retroactive re-naming of the retired `mwbm` source key (it was
   removed with #41 and is gone from the catalog already).

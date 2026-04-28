@@ -1365,7 +1365,466 @@ EOF
 
 ---
 
-## Task 11: Final fmt + lint + full test pass
+## Task 11: Declare `mwbm_climgrid` as a source in `catalog/variables.yml`
+
+**Files:**
+- Modify: `catalog/variables.yml` (add `mwbm_climgrid` to `runoff` + `aet` source lists)
+- Modify: `tests/test_catalog.py` (assert the new sources are listed)
+
+This declares *intent* — `mwbm_climgrid` participates in the runoff
+and AET targets — without changing any target-builder code.
+`targets/run.py` and `targets/aet.py` keep their current behavior
+(2-source bounds and `NotImplementedError` respectively).
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `tests/test_catalog.py`:
+
+```python
+def test_runoff_lists_mwbm_climgrid():
+    v = variable("runoff")
+    assert "mwbm_climgrid" in v["sources"]
+    # Existing sources still present
+    assert "era5_land" in v["sources"]
+    assert "gldas_noah_v21_monthly" in v["sources"]
+
+
+def test_aet_lists_mwbm_climgrid():
+    v = variable("aet")
+    assert "mwbm_climgrid" in v["sources"]
+    # Existing sources still present
+    assert "mod16a2_v061" in v["sources"]
+    assert "ssebop" in v["sources"]
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `pixi run -e dev pytest tests/test_catalog.py -v -k "mwbm_climgrid"`
+Expected: FAIL with `AssertionError: assert 'mwbm_climgrid' in [...]` for both new tests.
+
+- [ ] **Step 3: Update `catalog/variables.yml`**
+
+For the `runoff:` block, change `sources:` from:
+
+```yaml
+    sources:
+      - era5_land
+      - gldas_noah_v21_monthly
+```
+
+to:
+
+```yaml
+    sources:
+      - era5_land
+      - gldas_noah_v21_monthly
+      - mwbm_climgrid
+```
+
+In the same block, update `range_notes:` to acknowledge MWBM. Replace
+the existing `range_notes:` block (which currently says "Replaces the
+original NHM-MWBM source which had pre-computed uncertainty bounds...")
+with:
+
+```yaml
+    range_notes: >
+      ERA5-Land 'ro' (m water equivalent) and GLDAS-2.1 NOAH
+      'Qs_acc + Qsb_acc' (kg/m² ≡ mm) are aggregated to HRU polygons
+      via gdptools, harmonized to mm/month, then converted to cfs using
+      HRU area and days-in-month. Per-HRU per-month:
+        lower_bound = min(era5, gldas), upper_bound = max(era5, gldas).
+      mwbm_climgrid is declared as a third source (Wieczorek et al.
+      2024, ClimGrid-forced MWBM, mm/month directly) but not yet
+      consumed by the target builder; the runoff target keeps
+      producing 2-source bounds until targets/run.py is updated in a
+      follow-up PR.
+```
+
+For the `aet:` block, change `sources:` from:
+
+```yaml
+    sources:
+      - mod16a2_v061   # v006 used in original TM 6-B10; v061 for new runs
+      - ssebop
+```
+
+to:
+
+```yaml
+    sources:
+      - mod16a2_v061   # v006 used in original TM 6-B10; v061 for new runs
+      - ssebop
+      - mwbm_climgrid
+```
+
+In the same block, append to the existing `range_notes:` (preserving
+its current text) a sentence acknowledging that MWBM is declared but
+the target builder is still a stub. Replace the closing of the
+existing `range_notes:` block with:
+
+```yaml
+    range_notes: >
+      For each HRU and time step: lower_bound = min(src1, src2, src3),
+      upper_bound = max(src1, src2, src3). All sources must be spatially
+      aggregated to HRU polygons via gdptools before comparison.
+      AET is NOT normalized — absolute values are compared directly.
+      mwbm_climgrid contributes the MWBM-family AET trace
+      (Wieczorek et al. 2024, mm/month native) and is declared here
+      for the future 3-source build; targets/aet.py is currently a
+      stub and will land in a follow-up PR.
+```
+
+(Other fields in the `aet:` block — `prms_variable`, `time_step`,
+`period`, `units`, `range_method`, `normalize`, `output_format` — are
+unchanged.)
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `pixi run -e dev pytest tests/test_catalog.py -v`
+Expected: PASS for the two new tests and every pre-existing test.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add catalog/variables.yml tests/test_catalog.py
+pixi run git commit -m "$(cat <<'EOF'
+feat(catalog): declare mwbm_climgrid as runoff + aet target source
+
+Adds mwbm_climgrid to the runoff and aet variables.yml source lists
+to record intent. No target-builder code changes — targets/run.py
+keeps producing 2-source bounds and targets/aet.py remains a stub
+until follow-up PRs wire the third source through.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
+
+## Task 12: Add `mwbm_climgrid` to `inspect_consolidated_runoff.ipynb`
+
+**Files:**
+- Modify: `notebooks/inspect_consolidated_runoff.ipynb`
+
+This notebook's "configure source paths" cell holds a list-of-dicts
+keyed by source. Each entry has a `path` (datastore NC) and a `var`
+(variable name) and is iterated by the rest of the notebook.
+
+- [ ] **Step 1: Locate the source-list cell**
+
+Open `notebooks/inspect_consolidated_runoff.ipynb` in Jupyter (or
+inspect via `jq '.cells[] | select(.source | join("") | contains("\"path\":"))' notebook.ipynb`).
+
+Identify the cell containing the existing entries:
+
+```python
+        "path": DATASTORE / "era5_land" / "monthly" / f"era5_land_monthly_{TARGET_YEAR}.nc",
+        ...
+        "path": DATASTORE / "gldas_noah_v21_monthly" / "gldas_noah_v21_monthly.nc",
+```
+
+- [ ] **Step 2: Add the MWBM entry**
+
+Append a third entry to the source list, immediately after the GLDAS
+entry. The exact key shape mirrors what's already there (label/path/var
+as established in the notebook); the addition is one block:
+
+```python
+    {
+        "label": "MWBM (ClimGrid, runoff)",
+        "path": DATASTORE / "mwbm_climgrid" / "ClimGrid_WBM.nc",
+        "var": "runoff",
+        "convert_to_mm_per_month": lambda da: da,  # native mm/month, no-op
+    },
+```
+
+If the notebook's iteration cells inspect a different key shape than
+the literal above (e.g. `"raw_units"` or `"description"`), follow the
+exact key shape used for the GLDAS entry rather than improvising —
+the iteration code will only see what it expects.
+
+- [ ] **Step 3: Update the markdown intro cell**
+
+Find the markdown cell near the top of the notebook that lists
+sources. Add a third bullet:
+
+```
+- MWBM (Wieczorek et al. 2024, `runoff`, mm/month) — accessed from
+  ScienceBase as a single CF-conformant NetCDF; native mm/month with
+  `cell_methods: time: sum`. No conversion before plotting or
+  comparison.
+```
+
+- [ ] **Step 4: Strip outputs and IDs-stable**
+
+Run: `pixi run nbstripout --keep-id notebooks/inspect_consolidated_runoff.ipynb`
+Expected: Outputs cleared, cell IDs preserved (per `reference_nbstripout_keep_id`).
+
+- [ ] **Step 5: Quick render check (optional but recommended)**
+
+Run: `pixi run -e dev python -c "import nbformat; nbformat.read('notebooks/inspect_consolidated_runoff.ipynb', as_version=4)"`
+Expected: No exception (notebook is parseable; cell structure intact).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add notebooks/inspect_consolidated_runoff.ipynb
+pixi run git commit -m "$(cat <<'EOF'
+docs(notebooks): add mwbm_climgrid to inspect_consolidated_runoff
+
+Third source alongside ERA5-Land and GLDAS-2.1; native mm/month so
+no unit conversion needed.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
+
+## Task 13: Add `mwbm_climgrid` to `inspect_aggregated_runoff.ipynb`
+
+**Files:**
+- Modify: `notebooks/inspect_aggregated/inspect_aggregated_runoff.ipynb`
+
+This notebook uses the shared `_helpers.discover_aggregated` to find
+per-year NCs at `<project>/data/aggregated/<source_key>/<source_key>_<YYYY>_agg.nc`.
+Adding a source means: (a) extend `SOURCES`, (b) extend any per-source
+unit-conversion branch, (c) the helper's missing-files behavior
+gracefully degrades if the user hasn't run `agg mwbm-climgrid` yet.
+
+- [ ] **Step 1: Locate the SOURCES dict**
+
+Open the notebook and find the cell containing:
+
+```python
+SOURCES = {
+    "era5_land": {"label": "ERA5-Land (ro)", "var": "ro"},
+    "gldas_noah_v21_monthly": {"label": "GLDAS-2.1 NOAH (runoff_total)", "var": "runoff_total"},
+}
+```
+
+- [ ] **Step 2: Add MWBM to SOURCES**
+
+Append:
+
+```python
+    "mwbm_climgrid": {"label": "MWBM (ClimGrid, runoff)", "var": "runoff"},
+```
+
+inside the `SOURCES` dict literal.
+
+- [ ] **Step 3: Extend the per-source unit-conversion branch (if present)**
+
+Search the notebook for `if source_key == "era5_land"` (or the
+notebook's mm/month conversion helper). If the helper is structured
+as an `if/elif` chain like:
+
+```python
+if source_key == "era5_land":
+    da_mm = da * 1000.0  # m → mm
+elif source_key == "gldas_noah_v21_monthly":
+    da_mm = da * 8.0 * da["time"].dt.days_in_month
+```
+
+append:
+
+```python
+elif source_key == "mwbm_climgrid":
+    da_mm = da  # native mm/month, no conversion
+```
+
+If the helper is structured around the central `_to_mm_per_month`
+function (matching the AET notebook's pattern), add the same
+no-op branch there.
+
+- [ ] **Step 4: Update the markdown intro cell**
+
+Find the markdown cell that introduces sources. Add a third bullet:
+
+```
+- MWBM (ClimGrid, `runoff`, mm/month) — Wieczorek et al. 2024;
+  CONUS-wide MWBM forced by ClimGrid; aggregated to HRU polygons
+  per year. Native mm/month — pass-through in the unit helper.
+```
+
+- [ ] **Step 5: Strip outputs**
+
+Run: `pixi run nbstripout --keep-id notebooks/inspect_aggregated/inspect_aggregated_runoff.ipynb`
+
+- [ ] **Step 6: Quick render check**
+
+Run: `pixi run -e dev python -c "import nbformat; nbformat.read('notebooks/inspect_aggregated/inspect_aggregated_runoff.ipynb', as_version=4)"`
+Expected: No exception.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add notebooks/inspect_aggregated/inspect_aggregated_runoff.ipynb
+pixi run git commit -m "$(cat <<'EOF'
+docs(notebooks): add mwbm_climgrid to inspect_aggregated_runoff
+
+discover_aggregated handles missing files gracefully; the unit helper
+passes MWBM runoff through unchanged (mm/month native).
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
+
+## Task 14: Add `mwbm_climgrid` to `inspect_consolidated_aet.ipynb`
+
+**Files:**
+- Modify: `notebooks/inspect_consolidated_aet.ipynb`
+
+Same shape as Task 12, but for AET (`aet` variable) instead of
+runoff. Native mm/month with `cell_methods: time: sum`.
+
+- [ ] **Step 1: Locate the source-list cell**
+
+Find the cell containing the existing SSEBop and MOD16A2 path
+entries (search for `mod16a2_v061_{TARGET_YEAR}_consolidated.nc`).
+
+- [ ] **Step 2: Add the MWBM entry**
+
+Append a third entry to the source list, mirroring the SSEBop entry's
+key shape:
+
+```python
+    {
+        "label": "MWBM (ClimGrid, aet)",
+        "path": DATASTORE / "mwbm_climgrid" / "ClimGrid_WBM.nc",
+        "var": "aet",
+        "convert_to_mm_per_month": lambda da: da,  # native mm/month, no-op
+    },
+```
+
+- [ ] **Step 3: Update the markdown intro cell**
+
+Find the markdown cell that lists sources. Add a third bullet:
+
+```
+- MWBM (Wieczorek et al. 2024, `aet`, mm/month) — accessed from
+  ScienceBase as a single CF-conformant NetCDF; native mm/month
+  with `cell_methods: time: sum`. No conversion before comparison.
+```
+
+- [ ] **Step 4: Strip outputs**
+
+Run: `pixi run nbstripout --keep-id notebooks/inspect_consolidated_aet.ipynb`
+
+- [ ] **Step 5: Quick render check**
+
+Run: `pixi run -e dev python -c "import nbformat; nbformat.read('notebooks/inspect_consolidated_aet.ipynb', as_version=4)"`
+Expected: No exception.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add notebooks/inspect_consolidated_aet.ipynb
+pixi run git commit -m "$(cat <<'EOF'
+docs(notebooks): add mwbm_climgrid to inspect_consolidated_aet
+
+Third AET source alongside SSEBop and MOD16A2 v061; native mm/month.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
+
+## Task 15: Add `mwbm_climgrid` to `inspect_aggregated_aet.ipynb`
+
+**Files:**
+- Modify: `notebooks/inspect_aggregated/inspect_aggregated_aet.ipynb`
+
+Mirrors Task 13 but for AET. The notebook's `_to_mm_per_month`
+helper already has `if source_key == "ssebop"` (pass-through) and
+`if source_key == "mod16a2_v061"` (scale + composite handling). We
+add a third no-op branch.
+
+- [ ] **Step 1: Locate the SOURCES dict**
+
+Open the notebook and find the cell containing:
+
+```python
+SOURCES = {
+    "ssebop": {"label": "SSEBop (et)", "var": "et"},
+    "mod16a2_v061": {"label": "MOD16A2 v061 (ET_500m)", "var": "ET_500m"},
+}
+```
+
+- [ ] **Step 2: Add MWBM to SOURCES**
+
+Append:
+
+```python
+    "mwbm_climgrid": {"label": "MWBM (ClimGrid, aet)", "var": "aet"},
+```
+
+inside the `SOURCES` dict literal.
+
+- [ ] **Step 3: Extend the `_to_mm_per_month` helper**
+
+Search for `def _to_mm_per_month(`. The current shape is:
+
+```python
+def _to_mm_per_month(da: xr.DataArray, source_key: str) -> xr.DataArray:
+    if source_key == "ssebop":
+        return da
+    if source_key == "mod16a2_v061":
+        return da * 0.1  # scale_factor → mm per composite, treated as mm/month
+    raise ValueError(f"No mm/month conversion for {source_key}")
+```
+
+Add a third branch before the `raise`:
+
+```python
+    if source_key == "mwbm_climgrid":
+        return da  # native mm/month, no conversion
+```
+
+- [ ] **Step 4: Update the markdown intro cell**
+
+Find the markdown cell that introduces sources. Add a third bullet:
+
+```
+- MWBM (Wieczorek et al. 2024, `aet`, mm/month) — CONUS-wide MWBM
+  forced by ClimGrid; aggregated to HRU polygons per year. Native
+  mm/month — pass-through in the `_to_mm_per_month` helper.
+```
+
+- [ ] **Step 5: Strip outputs**
+
+Run: `pixi run nbstripout --keep-id notebooks/inspect_aggregated/inspect_aggregated_aet.ipynb`
+
+- [ ] **Step 6: Quick render check**
+
+Run: `pixi run -e dev python -c "import nbformat; nbformat.read('notebooks/inspect_aggregated/inspect_aggregated_aet.ipynb', as_version=4)"`
+Expected: No exception.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add notebooks/inspect_aggregated/inspect_aggregated_aet.ipynb
+pixi run git commit -m "$(cat <<'EOF'
+docs(notebooks): add mwbm_climgrid to inspect_aggregated_aet
+
+Third source in the AET inspection notebook; pass-through in the
+mm/month helper since MWBM aet is native.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
+
+## Task 16: Final fmt + lint + full test pass
 
 **Files:** none directly; this is the project quality gate.
 
