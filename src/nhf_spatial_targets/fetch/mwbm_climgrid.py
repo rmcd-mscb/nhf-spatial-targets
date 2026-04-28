@@ -15,7 +15,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-import xarray as xr  # noqa: F401 — used in Tasks 6-8
+import xarray as xr
 
 import nhf_spatial_targets.catalog as _catalog
 from nhf_spatial_targets.fetch._period import parse_period, years_in_period
@@ -47,6 +47,47 @@ def _read_manifest_entry(workdir: Path) -> dict | None:
     except json.JSONDecodeError:
         return None
     return manifest.get("sources", {}).get(_SOURCE_KEY)
+
+
+def _validate_downloaded_nc(nc_path: Path, meta: dict) -> None:
+    """Verify variable presence and cell_methods match the catalog declaration.
+
+    Raises RuntimeError with a clear message if the publisher-distributed
+    file diverges from what the catalog declares, so downstream targets
+    don't silently consume mis-aggregated data.
+    """
+    declared = {v["name"]: v.get("cell_methods") for v in meta["variables"]}
+    try:
+        ds = xr.open_dataset(nc_path, decode_times=False)
+        try:
+            present = set(ds.data_vars)
+            missing = set(declared) - present
+            if missing:
+                raise RuntimeError(
+                    f"{nc_path.name} is missing variables {sorted(missing)}. "
+                    f"Catalog declares {sorted(declared)} but file only "
+                    f"contains {sorted(present)}. Publisher may have "
+                    f"reorganized the dataset; check the ScienceBase page."
+                )
+            for name, expected in declared.items():
+                if expected is None:
+                    continue
+                actual = ds[name].attrs.get("cell_methods")
+                if actual != expected:
+                    raise RuntimeError(
+                        f"{nc_path.name}: variable {name!r} has "
+                        f"cell_methods={actual!r}, catalog declares "
+                        f"{expected!r}. Publisher metadata diverged from "
+                        f"this catalog version; do not trust this file "
+                        f"for aggregation until the catalog is updated."
+                    )
+        finally:
+            ds.close()
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(
+            f"Cannot open downloaded NetCDF {nc_path}: {exc}. "
+            f"The file may be truncated; delete it and re-run."
+        ) from exc
 
 
 def fetch_mwbm_climgrid(workdir: Path, period: str) -> dict:
@@ -134,6 +175,7 @@ def fetch_mwbm_climgrid(workdir: Path, period: str) -> dict:
                 f"re-run to download fresh."
             )
         sha_hex = _hash_file(nc_path)
+        _validate_downloaded_nc(nc_path, meta)
         now_utc = datetime.now(timezone.utc).isoformat()
         file_record = {
             "path": str(nc_path),
@@ -202,6 +244,7 @@ def fetch_mwbm_climgrid(workdir: Path, period: str) -> dict:
         )
 
     sha_hex = _hash_file(nc_path)
+    _validate_downloaded_nc(nc_path, meta)
 
     file_record = {
         "path": str(nc_path),

@@ -210,3 +210,127 @@ def test_fetch_repairs_missing_manifest(tmp_path):
     assert result["file"]["sha256"] == expected_sha
     manifest = json.loads((workdir / "manifest.json").read_text())
     assert manifest["sources"]["mwbm_climgrid"]["file"]["sha256"] == expected_sha
+
+
+def _write_dummy_nc_with_bad_cell_methods(path: Path) -> None:
+    """Like _write_dummy_nc but flips runoff cell_methods to 'time: point'."""
+    import pandas as pd
+
+    times = pd.date_range("1900-01-01", periods=2, freq="MS")
+    lats = np.array([40.0, 40.5], dtype=np.float64)
+    lons = np.array([-105.0, -104.5], dtype=np.float64)
+    rng = np.random.default_rng(0)
+    ds = xr.Dataset(
+        data_vars={
+            "runoff": (
+                ("time", "latitude", "longitude"),
+                rng.random((2, 2, 2)),
+                {"units": "mm", "cell_methods": "time: point"},  # WRONG
+            ),
+            "aet": (
+                ("time", "latitude", "longitude"),
+                rng.random((2, 2, 2)),
+                {"units": "mm", "cell_methods": "time: sum"},
+            ),
+            "soilstorage": (
+                ("time", "latitude", "longitude"),
+                rng.random((2, 2, 2)),
+                {"units": "mm", "cell_methods": "time: point"},
+            ),
+            "swe": (
+                ("time", "latitude", "longitude"),
+                rng.random((2, 2, 2)),
+                {"units": "mm", "cell_methods": "time: point"},
+            ),
+        },
+        coords={
+            "time": ("time", times),
+            "latitude": ("latitude", lats, {"units": "degrees_north", "axis": "Y"}),
+            "longitude": ("longitude", lons, {"units": "degrees_east", "axis": "X"}),
+        },
+    )
+    ds["time"].attrs.update({"axis": "T", "standard_name": "time"})
+    ds.to_netcdf(path)
+    ds.close()
+
+
+def test_fetch_rejects_mismatched_cell_methods(tmp_path):
+    """Publisher metadata divergence from catalog raises a clear error."""
+    workdir = _make_project(tmp_path)
+
+    # Adapt the existing helper inline: write a BAD dummy NC instead of good
+    fake_session = MagicMock()
+    fake_session.get_item.return_value = {"id": "x"}
+    fake_session.get_item_file_info.return_value = [
+        {"name": "ClimGrid_WBM.nc", "url": "x", "size": 0}
+    ]
+
+    def _bad_download(url, name, dest_dir):
+        out = Path(dest_dir) / name
+        _write_dummy_nc_with_bad_cell_methods(out)
+        fake_session.get_item_file_info.return_value[0]["size"] = out.stat().st_size
+
+    fake_session.download_file.side_effect = _bad_download
+
+    fake_module = types.ModuleType("sciencebasepy")
+    fake_module.SbSession = MagicMock(return_value=fake_session)
+    original = sys.modules.get("sciencebasepy")
+    sys.modules["sciencebasepy"] = fake_module
+    try:
+        with pytest.raises(RuntimeError, match="cell_methods"):
+            fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
+    finally:
+        if original is not None:
+            sys.modules["sciencebasepy"] = original
+        else:
+            sys.modules.pop("sciencebasepy", None)
+
+
+def test_fetch_rejects_missing_variable(tmp_path):
+    """Publisher dropping a variable raises before manifest is written."""
+    import pandas as pd
+
+    workdir = _make_project(tmp_path)
+
+    fake_session = MagicMock()
+    fake_session.get_item.return_value = {"id": "x"}
+    fake_session.get_item_file_info.return_value = [
+        {"name": "ClimGrid_WBM.nc", "url": "x", "size": 0}
+    ]
+
+    def _missing_var_download(url, name, dest_dir):
+        out = Path(dest_dir) / name
+        ds = xr.Dataset(
+            data_vars={
+                "runoff": (
+                    ("time", "latitude", "longitude"),
+                    np.zeros((1, 1, 1)),
+                    {"units": "mm", "cell_methods": "time: sum"},
+                ),
+                # aet, soilstorage, swe missing
+            },
+            coords={
+                "time": ("time", pd.date_range("1900-01-01", periods=1, freq="MS")),
+                "latitude": ("latitude", [40.0], {"axis": "Y"}),
+                "longitude": ("longitude", [-105.0], {"axis": "X"}),
+            },
+        )
+        ds["time"].attrs.update({"axis": "T", "standard_name": "time"})
+        ds.to_netcdf(out)
+        ds.close()
+        fake_session.get_item_file_info.return_value[0]["size"] = out.stat().st_size
+
+    fake_session.download_file.side_effect = _missing_var_download
+
+    fake_module = types.ModuleType("sciencebasepy")
+    fake_module.SbSession = MagicMock(return_value=fake_session)
+    original = sys.modules.get("sciencebasepy")
+    sys.modules["sciencebasepy"] = fake_module
+    try:
+        with pytest.raises(RuntimeError, match="missing variables"):
+            fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
+    finally:
+        if original is not None:
+            sys.modules["sciencebasepy"] = original
+        else:
+            sys.modules.pop("sciencebasepy", None)
