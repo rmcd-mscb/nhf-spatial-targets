@@ -27,6 +27,28 @@ _SOURCE_KEY = "mwbm_climgrid"
 _DATA_PERIOD = (1900, 2020)  # publisher's usable window; 1895-1899 is spinup
 
 
+def _hash_file(path: Path) -> str:
+    """sha256 of `path`, streamed in 8 MB chunks."""
+    sha = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(8 * 1024 * 1024), b""):
+            sha.update(chunk)
+    return sha.hexdigest()
+
+
+def _read_manifest_entry(workdir: Path) -> dict | None:
+    """Return the mwbm_climgrid entry from manifest.json, or None if absent."""
+    ws = _load_project(workdir)
+    manifest_path = ws.manifest_path
+    if not manifest_path.exists():
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except json.JSONDecodeError:
+        return None
+    return manifest.get("sources", {}).get(_SOURCE_KEY)
+
+
 def fetch_mwbm_climgrid(workdir: Path, period: str) -> dict:
     """Download ClimGrid_WBM.nc to <datastore>/mwbm_climgrid/.
 
@@ -70,10 +92,38 @@ def fetch_mwbm_climgrid(workdir: Path, period: str) -> dict:
     output_dir = ws.raw_dir(_SOURCE_KEY)
     output_dir.mkdir(parents=True, exist_ok=True)
     nc_path = output_dir / filename
+
+    # Fast-path: file present, manifest agrees on size + sha256 → no-op.
+    manifest_entry = _read_manifest_entry(workdir)
+    if nc_path.exists() and manifest_entry is not None:
+        recorded = manifest_entry.get("file", {})
+        if recorded.get("size_bytes") == nc_path.stat().st_size and recorded.get(
+            "sha256"
+        ):
+            actual_sha = _hash_file(nc_path)
+            if actual_sha == recorded["sha256"]:
+                logger.info(
+                    "mwbm_climgrid: file matches manifest (size + sha256); "
+                    "skipping download."
+                )
+                return {
+                    "source_key": _SOURCE_KEY,
+                    "access_url": access["url"],
+                    "doi": meta["doi"],
+                    "license": license_str,
+                    "variables": [v["name"] for v in meta["variables"]],
+                    "period": period,
+                    "spatial_extent": meta.get("spatial_extent", "CONUS"),
+                    "download_timestamp": recorded.get("downloaded_utc"),
+                    "file": recorded,
+                }
+            logger.warning(
+                "mwbm_climgrid: file size matches manifest but sha256 "
+                "does not. Re-downloading."
+            )
+
     now_utc = datetime.now(timezone.utc).isoformat()
 
-    # Idempotency + repair branches land in Tasks 6-7. For now: always
-    # download, hash, validate.
     from sciencebasepy import SbSession
 
     logger.info("Connecting to ScienceBase (item %s)...", item_id)
@@ -118,11 +168,7 @@ def fetch_mwbm_climgrid(workdir: Path, period: str) -> dict:
             f"been truncated; re-run."
         )
 
-    sha = hashlib.sha256()
-    with nc_path.open("rb") as f:
-        for chunk in iter(lambda: f.read(8 * 1024 * 1024), b""):
-            sha.update(chunk)
-    sha_hex = sha.hexdigest()
+    sha_hex = _hash_file(nc_path)
 
     file_record = {
         "path": str(nc_path),

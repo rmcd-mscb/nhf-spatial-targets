@@ -147,3 +147,41 @@ def test_fetch_downloads_and_writes_manifest(tmp_path):
     entry = manifest["sources"]["mwbm_climgrid"]
     assert entry["file"]["sha256"] == expected_sha
     assert entry["file"]["path"] == str(nc_path)
+
+
+def test_fetch_idempotent_when_manifest_matches(tmp_path):
+    """Pre-seed file + manifest with matching sha256/size; fetch is a no-op."""
+    import json
+
+    workdir = _make_project(tmp_path)
+    datastore = workdir / "datastore"
+    nc_dir = datastore / "mwbm_climgrid"
+    nc_dir.mkdir(parents=True)
+    nc_path = nc_dir / "ClimGrid_WBM.nc"
+    _write_dummy_nc(nc_path)
+
+    sha = hashlib.sha256(nc_path.read_bytes()).hexdigest()
+    size = nc_path.stat().st_size
+    manifest = {
+        "sources": {
+            "mwbm_climgrid": {
+                "source_key": "mwbm_climgrid",
+                "file": {
+                    "path": str(nc_path),
+                    "size_bytes": size,
+                    "sha256": sha,
+                    "downloaded_utc": "2026-04-28T00:00:00+00:00",
+                },
+            }
+        }
+    }
+    (workdir / "manifest.json").write_text(json.dumps(manifest))
+
+    with _patch_sbsession_to_emit(datastore) as fake_session:
+        result = fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
+        # No download/network call should have happened
+        fake_session.download_file.assert_not_called()
+        fake_session.get_item.assert_not_called()
+
+    assert result["file"]["sha256"] == sha
+    assert result["file"]["size_bytes"] == size
