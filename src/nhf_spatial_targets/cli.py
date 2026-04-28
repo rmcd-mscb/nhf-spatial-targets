@@ -374,6 +374,7 @@ def fetch_all_cmd(
     from nhf_spatial_targets.fetch.gldas import fetch_gldas
     from nhf_spatial_targets.fetch.merra2 import fetch_merra2
     from nhf_spatial_targets.fetch.modis import fetch_mod10c1, fetch_mod16a2
+    from nhf_spatial_targets.fetch.mwbm_climgrid import fetch_mwbm_climgrid
     from nhf_spatial_targets.fetch.ncep_ncar import fetch_ncep_ncar
     from nhf_spatial_targets.fetch.nldas import fetch_nldas_mosaic, fetch_nldas_noah
     from nhf_spatial_targets.fetch.pangaea import fetch_watergap22d
@@ -391,6 +392,7 @@ def fetch_all_cmd(
         ("mod10c1", "mod10c1_v061", fetch_mod10c1),
         ("watergap22d", "watergap22d", fetch_watergap22d),
         ("reitz2017", "reitz2017", fetch_reitz2017),
+        ("mwbm-climgrid", "mwbm_climgrid", fetch_mwbm_climgrid),
     ]
 
     results = {}
@@ -915,6 +917,51 @@ def fetch_reitz2017_cmd(
         sys.exit(1)
 
     console.print("[green]Reitz 2017: downloaded to datastore[/green]")
+    console.print(json_mod.dumps(result, indent=2))
+
+
+@fetch_app.command(name="mwbm-climgrid")
+def fetch_mwbm_climgrid_cmd(
+    workdir: Annotated[
+        Path,
+        Parameter(
+            name=["--project-dir"],
+            help="Project created by 'nhf-targets init'.",
+        ),
+    ],
+    period: Annotated[
+        str,
+        Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
+    ],
+):
+    """Download USGS MWBM (ClimGrid-forced) monthly outputs from ScienceBase."""
+    import json as json_mod
+
+    from rich.console import Console
+
+    from nhf_spatial_targets.fetch.mwbm_climgrid import fetch_mwbm_climgrid
+
+    if not workdir.exists():
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
+        sys.exit(2)
+
+    console = Console()
+    console.print(f"[bold]Fetching MWBM ClimGrid (~7.5 GB, period {period})...[/bold]")
+
+    try:
+        result = fetch_mwbm_climgrid(workdir=workdir, period=period)
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        _logger.exception("Unexpected error during MWBM ClimGrid fetch")
+        print(
+            f"Unexpected error ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    console.print("[green]MWBM ClimGrid: downloaded to datastore[/green]")
     console.print(json_mod.dumps(result, indent=2))
 
 
