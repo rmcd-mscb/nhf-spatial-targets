@@ -236,6 +236,63 @@ sources:
     license: public domain (USGS)
     status: current
 
+  # ---------------------------------------------------------------------------
+  # INTEGRATED WATER BALANCE
+  # ---------------------------------------------------------------------------
+  mwbm_climgrid:
+    name: USGS Monthly Water Balance Model (ClimGrid-forced, 2024)
+    description: >
+      USGS Monthly Water Balance Model (McCabe and Wolock 2011) outputs
+      forced by NOAA ClimGrid temperature and precipitation, published
+      by Wieczorek et al. (2024). Successor to the retired NHM-MWBM
+      (Bock et al. 2017) decommissioned in issue #41. Distributed as a
+      single CF-conformant NetCDF covering 1895-01 to 2020-12 monthly,
+      CONUS at 2.5 arcminute (~0.042 degree). The 1895-1899 period is
+      treated as arbitrary spinup and excluded from `period`.
+
+      Available in the source file but not aggregated by default:
+      `pet`, `tmean`, `prcp`, `rain`, `snow`. Add to the `variables:`
+      block below and re-run `agg mwbm-climgrid` if needed.
+    citations:
+      - "Wieczorek, M.E., Signell, R.P., McCabe, G.J., Wolock, D.M., and Norton, P.A., 2024, doi:10.5066/P9QCLGKM"
+      - "McCabe, G.J., and Wolock, D.M., 2011 (model)"
+    doi: "10.5066/P9QCLGKM"
+    access:
+      type: sciencebase
+      item_id: "64c948dbd34e70357a34c11e"
+      url: https://www.sciencebase.gov/catalog/item/64c948dbd34e70357a34c11e
+      filename: ClimGrid_WBM.nc
+      notes: >
+        Single ~7.5 GB NetCDF-4 file, int16-packed with scale_factor /
+        add_offset (xarray decodes automatically on open). Downloaded
+        via sciencebasepy.SbSession; integrity verified by size + sha256
+        recorded in manifest.json. CONUS bounding box; no spatial
+        subsetting at fetch time.
+    variables:
+      - name: runoff
+        long_name: streamflow per unit area (MWBM)
+        cf_units: "mm"
+        cell_methods: "time: sum"
+      - name: aet
+        long_name: actual evapotranspiration (MWBM)
+        cf_units: "mm"
+        cell_methods: "time: sum"
+      - name: soilstorage
+        long_name: liquid water content of soil layer (MWBM)
+        cf_units: "mm"
+        cell_methods: "time: point"
+      - name: swe
+        long_name: liquid water equivalent of snowpack (MWBM)
+        cf_units: "mm"
+        cell_methods: "time: point"
+    time_step: monthly
+    period: "1900/2020"
+    spatial_extent: CONUS
+    spatial_resolution: 2.5 arcmin (~0.042 degree)
+    units: "mm (tmean: degC; not aggregated)"
+    license: public domain (USGS)
+    status: current
+
   watergap22a:
     name: WaterGAP 2.2a Global Hydrological Model
     description: >
