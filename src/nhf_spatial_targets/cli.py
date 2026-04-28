@@ -19,6 +19,7 @@ from nhf_spatial_targets.aggregate.gldas import aggregate_gldas
 from nhf_spatial_targets.aggregate.merra2 import aggregate_merra2
 from nhf_spatial_targets.aggregate.mod10c1 import aggregate_mod10c1
 from nhf_spatial_targets.aggregate.mod16a2 import aggregate_mod16a2
+from nhf_spatial_targets.aggregate.mwbm_climgrid import aggregate_mwbm_climgrid
 from nhf_spatial_targets.aggregate.ncep_ncar import aggregate_ncep_ncar
 from nhf_spatial_targets.aggregate.nldas_mosaic import aggregate_nldas_mosaic
 from nhf_spatial_targets.aggregate.nldas_noah import aggregate_nldas_noah
@@ -1160,6 +1161,15 @@ def agg_mod10c1_cmd(
     _run_tier_agg(aggregate_mod10c1, "MOD10C1", workdir, batch_size)
 
 
+@agg_app.command(name="mwbm-climgrid")
+def agg_mwbm_climgrid_cmd(
+    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    batch_size: Annotated[int, Parameter(name="--batch-size")] = 500,
+):
+    """Aggregate USGS MWBM (ClimGrid-forced) monthly outputs to HRU polygons."""
+    _run_tier_agg(aggregate_mwbm_climgrid, "MWBM (ClimGrid)", workdir, batch_size)
+
+
 @agg_app.command(name="all")
 def agg_all_cmd(
     workdir: Annotated[
@@ -1196,6 +1206,7 @@ def agg_all_cmd(
         ("reitz2017", aggregate_reitz2017),
         ("mod16a2", aggregate_mod16a2),
         ("mod10c1", aggregate_mod10c1),
+        ("mwbm-climgrid", aggregate_mwbm_climgrid),
     ]
     for label, fn in sources:
         console.print(f"\n[bold]{'─' * 60}[/bold]")

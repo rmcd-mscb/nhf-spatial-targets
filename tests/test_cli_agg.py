@@ -20,6 +20,7 @@ import pytest
         ("reitz2017", "nhf_spatial_targets.cli.aggregate_reitz2017"),
         ("mod16a2", "nhf_spatial_targets.cli.aggregate_mod16a2"),
         ("mod10c1", "nhf_spatial_targets.cli.aggregate_mod10c1"),
+        ("mwbm-climgrid", "nhf_spatial_targets.cli.aggregate_mwbm_climgrid"),
     ],
 )
 def test_agg_subcommand_dispatches(subcommand, target_fn, tmp_path, monkeypatch):
@@ -77,6 +78,7 @@ def test_agg_all_runs_every_source(tmp_path):
         "nhf_spatial_targets.cli.aggregate_reitz2017",
         "nhf_spatial_targets.cli.aggregate_mod16a2",
         "nhf_spatial_targets.cli.aggregate_mod10c1",
+        "nhf_spatial_targets.cli.aggregate_mwbm_climgrid",
     ]
     with ExitStack() as stack:
         mocks = [stack.enter_context(patch(fn)) for fn in target_fns]
