@@ -122,6 +122,39 @@ def fetch_mwbm_climgrid(workdir: Path, period: str) -> dict:
                 "does not. Re-downloading."
             )
 
+    elif nc_path.exists() and manifest_entry is None:
+        logger.info(
+            "mwbm_climgrid: file present but no manifest entry. "
+            "Hashing existing file to reconstruct provenance."
+        )
+        size_bytes = nc_path.stat().st_size
+        if size_bytes == 0:
+            raise RuntimeError(
+                f"Existing file {nc_path} is zero bytes. Delete it and "
+                f"re-run to download fresh."
+            )
+        sha_hex = _hash_file(nc_path)
+        now_utc = datetime.now(timezone.utc).isoformat()
+        file_record = {
+            "path": str(nc_path),
+            "size_bytes": size_bytes,
+            "sha256": sha_hex,
+            "downloaded_utc": now_utc,
+            "reconstructed": True,
+        }
+        _update_manifest(workdir, period, meta, license_str, file_record)
+        return {
+            "source_key": _SOURCE_KEY,
+            "access_url": access["url"],
+            "doi": meta["doi"],
+            "license": license_str,
+            "variables": [v["name"] for v in meta["variables"]],
+            "period": period,
+            "spatial_extent": meta.get("spatial_extent", "CONUS"),
+            "download_timestamp": now_utc,
+            "file": file_record,
+        }
+
     now_utc = datetime.now(timezone.utc).isoformat()
 
     from sciencebasepy import SbSession

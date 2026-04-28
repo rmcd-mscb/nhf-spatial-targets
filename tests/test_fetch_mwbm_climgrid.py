@@ -185,3 +185,28 @@ def test_fetch_idempotent_when_manifest_matches(tmp_path):
 
     assert result["file"]["sha256"] == sha
     assert result["file"]["size_bytes"] == size
+
+
+def test_fetch_repairs_missing_manifest(tmp_path):
+    """File present, no manifest entry → hash + write manifest, skip download."""
+    import json
+
+    workdir = _make_project(tmp_path)
+    datastore = workdir / "datastore"
+    nc_dir = datastore / "mwbm_climgrid"
+    nc_dir.mkdir(parents=True)
+    nc_path = nc_dir / "ClimGrid_WBM.nc"
+    _write_dummy_nc(nc_path)
+    expected_sha = hashlib.sha256(nc_path.read_bytes()).hexdigest()
+
+    # No manifest.json yet
+    assert not (workdir / "manifest.json").exists()
+
+    with _patch_sbsession_to_emit(datastore) as fake_session:
+        result = fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
+        fake_session.download_file.assert_not_called()
+        fake_session.get_item.assert_not_called()
+
+    assert result["file"]["sha256"] == expected_sha
+    manifest = json.loads((workdir / "manifest.json").read_text())
+    assert manifest["sources"]["mwbm_climgrid"]["file"]["sha256"] == expected_sha
