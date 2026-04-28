@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import sys
 import types
 from contextlib import contextmanager
@@ -13,7 +14,20 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from nhf_spatial_targets.fetch import mwbm_climgrid as _mwbm_module
 from nhf_spatial_targets.fetch.mwbm_climgrid import fetch_mwbm_climgrid
+
+
+@pytest.fixture(autouse=True)
+def _short_repair_stability(monkeypatch):
+    """Shrink the repair-branch stability window to keep the suite fast.
+
+    The production default is 0.5s per repair invocation; tests don't
+    need to wait. The dedicated concurrent-writer test below patches
+    this back manually to a value that the test's mtime-bump trigger
+    can race within.
+    """
+    monkeypatch.setattr(_mwbm_module, "_REPAIR_STABILITY_SECONDS", 0.0)
 
 
 def _make_project(tmp_path: Path) -> Path:
@@ -463,6 +477,77 @@ def test_fetch_raises_on_corrupt_manifest(tmp_path):
 
     with pytest.raises(ValueError, match="manifest.json.*corrupt"):
         fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
+
+
+def test_verify_file_stable_detects_mtime_change(tmp_path, monkeypatch):
+    """The stability helper raises if mtime changes during the window.
+
+    Patches `time.sleep` to bump the file's mtime instead of waiting,
+    so the test is deterministic and fast.
+    """
+    p = tmp_path / "in_progress.nc"
+    p.write_bytes(b"some bytes")
+
+    def _bump_mtime_during_sleep(_seconds):
+        new_mtime = p.stat().st_mtime + 10
+        os.utime(p, (new_mtime, new_mtime))
+
+    monkeypatch.setattr(_mwbm_module.time, "sleep", _bump_mtime_during_sleep)
+
+    with pytest.raises(RuntimeError, match="modified concurrently"):
+        _mwbm_module._verify_file_stable(p)
+
+
+def test_verify_file_stable_detects_size_change(tmp_path, monkeypatch):
+    """The stability helper raises if size changes during the window."""
+    p = tmp_path / "growing.nc"
+    p.write_bytes(b"initial")
+
+    def _grow_during_sleep(_seconds):
+        with p.open("ab") as f:
+            f.write(b"...more bytes from a concurrent writer...")
+
+    monkeypatch.setattr(_mwbm_module.time, "sleep", _grow_during_sleep)
+
+    with pytest.raises(RuntimeError, match="modified concurrently"):
+        _mwbm_module._verify_file_stable(p)
+
+
+def test_verify_file_stable_passes_when_quiescent(tmp_path):
+    """Stable file (no concurrent writer) passes the stability check."""
+    p = tmp_path / "quiet.nc"
+    p.write_bytes(b"stable content")
+    # autouse fixture sets _REPAIR_STABILITY_SECONDS = 0.0; the helper
+    # should still pass because both stat() calls see identical state.
+    _mwbm_module._verify_file_stable(p)  # no exception
+
+
+def test_fetch_repair_rejects_concurrent_writer(tmp_path, monkeypatch):
+    """Repair branch refuses to fingerprint a file being written.
+
+    Simulates an in-progress operator copy by mutating the file via
+    os.utime while the repair branch is in its stability window.
+    """
+    workdir = _make_project(tmp_path)
+    datastore = workdir / "datastore"
+    nc_dir = datastore / "mwbm_climgrid"
+    nc_dir.mkdir(parents=True)
+    nc_path = nc_dir / "ClimGrid_WBM.nc"
+    _write_dummy_nc(nc_path)
+    assert not (workdir / "manifest.json").exists()
+
+    def _bump_mtime_during_sleep(_seconds):
+        new_mtime = nc_path.stat().st_mtime + 10
+        os.utime(nc_path, (new_mtime, new_mtime))
+
+    monkeypatch.setattr(_mwbm_module.time, "sleep", _bump_mtime_during_sleep)
+
+    with pytest.raises(RuntimeError, match="modified concurrently"):
+        fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
+
+    # Manifest must NOT have been written — the bad-state fingerprint
+    # would corrupt subsequent idempotency checks.
+    assert not (workdir / "manifest.json").exists()
 
 
 def test_fetch_raises_when_file_not_in_sciencebase_item(tmp_path):

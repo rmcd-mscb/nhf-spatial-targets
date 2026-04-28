@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,6 +26,35 @@ logger = logging.getLogger(__name__)
 
 _SOURCE_KEY = "mwbm_climgrid"
 _DATA_PERIOD = (1900, 2020)  # publisher's usable window; 1895-1899 is spinup
+# Stability-window seconds for the repair branch: stat the file, sleep,
+# stat again. If size or mtime changed, something is writing to it and
+# we refuse to fingerprint a mid-copy file. Tunable for tests.
+_REPAIR_STABILITY_SECONDS = 0.5
+
+
+def _verify_file_stable(path: Path) -> None:
+    """Raise RuntimeError if the file is being modified concurrently.
+
+    Stats the file twice across `_REPAIR_STABILITY_SECONDS`; if size or
+    mtime changed in that window, another process is writing to it and
+    we must not fingerprint a half-written copy.
+
+    Used by the repair branch (where the file came from operator action,
+    not our own download) to defend against in-flight rsync/cp. The
+    download path doesn't need this — sciencebasepy completes the write
+    before we hash, and there is no other writer in the single-threaded
+    CLI.
+    """
+    s_initial = path.stat()
+    time.sleep(_REPAIR_STABILITY_SECONDS)
+    s_after = path.stat()
+    if s_after.st_size != s_initial.st_size or s_after.st_mtime != s_initial.st_mtime:
+        raise RuntimeError(
+            f"{path} is being modified concurrently (size or mtime "
+            f"changed during the {_REPAIR_STABILITY_SECONDS:.2f}s "
+            f"stability window). Wait for the writer to finish, then "
+            f"re-run."
+        )
 
 
 def _hash_file(path: Path) -> str:
@@ -201,6 +231,11 @@ def fetch_mwbm_climgrid(workdir: Path, period: str) -> dict:
                 f"Existing file {nc_path} is zero bytes. Delete it and "
                 f"re-run to download fresh."
             )
+        # Guard against an in-progress rsync/cp/operator writer: the
+        # repair branch fingerprints whatever is on disk, so we must
+        # ensure it isn't being mutated underneath us before trusting
+        # the hash.
+        _verify_file_stable(nc_path)
         sha_hex = _hash_file(nc_path)
         _validate_downloaded_nc(nc_path, meta)
         now_utc = datetime.now(timezone.utc).isoformat()
