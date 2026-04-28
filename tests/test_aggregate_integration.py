@@ -56,6 +56,18 @@ def test_aggregate_reitz2017_end_to_end():
 
 
 @pytest.mark.skip(reason="fixture datastore + mini-fabric not yet checked in")
+def test_aggregate_mwbm_climgrid_end_to_end():
+    """aggregate_mwbm_climgrid writes per-year NCs with runoff, aet, soilstorage, swe.
+
+    Exercises the full path: ClimGrid_WBM.nc in <datastore>/mwbm_climgrid/
+    -> per-year aggregation -> <project>/data/aggregated/mwbm_climgrid/<YYYY>/...
+    Each per-year output should contain all four variables on the
+    HRU dimension and 12 monthly time steps (or fewer for partial years).
+    """
+    raise NotImplementedError
+
+
+@pytest.mark.skip(reason="fixture datastore + mini-fabric not yet checked in")
 def test_aggregate_mod16a2_end_to_end():
     raise NotImplementedError
 
