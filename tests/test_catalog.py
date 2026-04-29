@@ -79,7 +79,7 @@ def test_runoff_uses_era5_and_gldas():
     from nhf_spatial_targets import catalog
 
     v = catalog.variable("runoff")
-    assert v["sources"] == ["era5_land", "gldas_noah_v21_monthly"]
+    assert v["sources"] == ["era5_land", "gldas_noah_v21_monthly", "mwbm_climgrid"]
     assert v["range_method"] == "multi_source_minmax"
 
 
@@ -103,3 +103,33 @@ def test_every_current_source_has_status_field():
         assert src.get("status") == "current", (
             f"Source {key!r} is missing 'status: current'"
         )
+
+
+def test_mwbm_climgrid_source():
+    """mwbm_climgrid is the modern ClimGrid-forced MWBM (Wieczorek 2024)."""
+    s = source("mwbm_climgrid")
+    assert s["status"] == "current"
+    assert s["doi"] == "10.5066/P9QCLGKM"
+    assert s["access"]["type"] == "sciencebase_manual"
+    assert s["access"]["item_id"] == "64c948dbd34e70357a34c11e"
+    assert s["access"]["filename"] == "ClimGrid_WBM.nc"
+    assert s["period"] == "1900/2020"
+    assert s["spatial_extent"] == "CONUS"
+    var_names = {v["name"] for v in s["variables"]}
+    assert var_names == {"runoff", "aet", "soilstorage", "swe"}
+
+
+def test_runoff_lists_mwbm_climgrid():
+    v = variable("runoff")
+    assert "mwbm_climgrid" in v["sources"]
+    # Existing sources still present
+    assert "era5_land" in v["sources"]
+    assert "gldas_noah_v21_monthly" in v["sources"]
+
+
+def test_aet_lists_mwbm_climgrid():
+    v = variable("aet")
+    assert "mwbm_climgrid" in v["sources"]
+    # Existing sources still present
+    assert "mod16a2_v061" in v["sources"]
+    assert "ssebop" in v["sources"]

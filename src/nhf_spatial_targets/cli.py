@@ -19,6 +19,7 @@ from nhf_spatial_targets.aggregate.gldas import aggregate_gldas
 from nhf_spatial_targets.aggregate.merra2 import aggregate_merra2
 from nhf_spatial_targets.aggregate.mod10c1 import aggregate_mod10c1
 from nhf_spatial_targets.aggregate.mod16a2 import aggregate_mod16a2
+from nhf_spatial_targets.aggregate.mwbm_climgrid import aggregate_mwbm_climgrid
 from nhf_spatial_targets.aggregate.ncep_ncar import aggregate_ncep_ncar
 from nhf_spatial_targets.aggregate.nldas_mosaic import aggregate_nldas_mosaic
 from nhf_spatial_targets.aggregate.nldas_noah import aggregate_nldas_noah
@@ -373,6 +374,7 @@ def fetch_all_cmd(
     from nhf_spatial_targets.fetch.gldas import fetch_gldas
     from nhf_spatial_targets.fetch.merra2 import fetch_merra2
     from nhf_spatial_targets.fetch.modis import fetch_mod10c1, fetch_mod16a2
+    from nhf_spatial_targets.fetch.mwbm_climgrid import fetch_mwbm_climgrid
     from nhf_spatial_targets.fetch.ncep_ncar import fetch_ncep_ncar
     from nhf_spatial_targets.fetch.nldas import fetch_nldas_mosaic, fetch_nldas_noah
     from nhf_spatial_targets.fetch.pangaea import fetch_watergap22d
@@ -390,6 +392,7 @@ def fetch_all_cmd(
         ("mod10c1", "mod10c1_v061", fetch_mod10c1),
         ("watergap22d", "watergap22d", fetch_watergap22d),
         ("reitz2017", "reitz2017", fetch_reitz2017),
+        ("mwbm-climgrid", "mwbm_climgrid", fetch_mwbm_climgrid),
     ]
 
     results = {}
@@ -420,7 +423,20 @@ def fetch_all_cmd(
             result = fetch_fn(workdir=workdir, period=clamped)
             results[name] = result
             console.print(f"[green]{name}: downloaded to datastore[/green]")
-        except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        except FileNotFoundError as exc:
+            # mwbm-climgrid requires a manual (CAPTCHA-gated) download;
+            # treat its absence as a skip rather than a fatal error so
+            # the rest of the pipeline can still run when the operator
+            # hasn't placed the file yet.
+            if name == "mwbm-climgrid":
+                console.print(
+                    f"[yellow]{name}: skipped (manual download not yet "
+                    f"placed; see docs/sources/mwbm_climgrid.md)[/yellow]"
+                )
+                continue
+            print(f"Error fetching {name}: {exc}", file=sys.stderr)
+            sys.exit(1)
+        except (ValueError, RuntimeError) as exc:
             print(f"Error fetching {name}: {exc}", file=sys.stderr)
             sys.exit(1)
         except Exception as exc:
@@ -917,6 +933,59 @@ def fetch_reitz2017_cmd(
     console.print(json_mod.dumps(result, indent=2))
 
 
+@fetch_app.command(name="mwbm-climgrid")
+def fetch_mwbm_climgrid_cmd(
+    workdir: Annotated[
+        Path,
+        Parameter(
+            name=["--project-dir"],
+            help="Project created by 'nhf-targets init'.",
+        ),
+    ],
+    period: Annotated[
+        str,
+        Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
+    ],
+):
+    """Register a manually-placed USGS MWBM (ClimGrid-forced) NetCDF.
+
+    The ScienceBase distribution is gated by a CAPTCHA, so the ~7.5 GB
+    ClimGrid_WBM.nc cannot be retrieved automatically. Download it via
+    a browser and place it at <datastore>/mwbm_climgrid/ClimGrid_WBM.nc
+    before invoking this command — see docs/sources/mwbm_climgrid.md
+    for the procedure. This command then fingerprints the file and
+    writes its provenance to manifest.json.
+    """
+    import json as json_mod
+
+    from rich.console import Console
+
+    from nhf_spatial_targets.fetch.mwbm_climgrid import fetch_mwbm_climgrid
+
+    if not workdir.exists():
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
+        sys.exit(2)
+
+    console = Console()
+    console.print(f"[bold]Registering MWBM ClimGrid (period {period})...[/bold]")
+
+    try:
+        result = fetch_mwbm_climgrid(workdir=workdir, period=period)
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        _logger.exception("Unexpected error during MWBM ClimGrid registration")
+        print(
+            f"Unexpected error ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    console.print("[green]MWBM ClimGrid: registered in manifest[/green]")
+    console.print(json_mod.dumps(result, indent=2))
+
+
 @agg_app.command(name="ssebop")
 def agg_ssebop_cmd(
     workdir: Annotated[
@@ -1160,6 +1229,15 @@ def agg_mod10c1_cmd(
     _run_tier_agg(aggregate_mod10c1, "MOD10C1", workdir, batch_size)
 
 
+@agg_app.command(name="mwbm-climgrid")
+def agg_mwbm_climgrid_cmd(
+    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    batch_size: Annotated[int, Parameter(name="--batch-size")] = 500,
+):
+    """Aggregate USGS MWBM (ClimGrid-forced) monthly outputs to HRU polygons."""
+    _run_tier_agg(aggregate_mwbm_climgrid, "MWBM (ClimGrid)", workdir, batch_size)
+
+
 @agg_app.command(name="all")
 def agg_all_cmd(
     workdir: Annotated[
@@ -1196,6 +1274,7 @@ def agg_all_cmd(
         ("reitz2017", aggregate_reitz2017),
         ("mod16a2", aggregate_mod16a2),
         ("mod10c1", aggregate_mod10c1),
+        ("mwbm-climgrid", aggregate_mwbm_climgrid),
     ]
     for label, fn in sources:
         console.print(f"\n[bold]{'─' * 60}[/bold]")

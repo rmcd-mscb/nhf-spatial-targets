@@ -401,6 +401,26 @@ def test_fetch_reitz2017_calls_fetch(mock_fetch, tmp_path):
     mock_fetch.assert_called_once_with(workdir=workdir, period="2000/2009")
 
 
+# ---- fetch mwbm-climgrid command -----------------------------------------------
+
+
+@patch("nhf_spatial_targets.fetch.mwbm_climgrid.fetch_mwbm_climgrid")
+def test_fetch_mwbm_climgrid_calls_fetch(mock_fetch, tmp_path):
+    """CLI wires --project-dir and --period to fetch_mwbm_climgrid()."""
+    mock_fetch.return_value = {"files": []}
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    _run(
+        "fetch",
+        "mwbm-climgrid",
+        "--project-dir",
+        str(workdir),
+        "--period",
+        "1980/2015",
+    )
+    mock_fetch.assert_called_once_with(workdir=workdir, period="1980/2015")
+
+
 # ---- agg ssebop command ----------------------------------------------------
 
 
