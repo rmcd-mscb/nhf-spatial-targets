@@ -95,6 +95,50 @@ tests/
 - When adding a new source, add it to `catalog/sources.yml` first, then write the fetch module
 - Mark superseded sources with `superseded_by:` key and `status: superseded`
 
+## Aggregation Transformation Policy
+
+Where to put a transformation depends on the spatial scale at which it is
+defined. Aggregation (gdptools area-weighted mean) is a one-way information
+bottleneck — pixel-defined operations must run pre-aggregation, HRU-defined
+operations must run post-aggregation, linear operations commute and live
+downstream by convention.
+
+Full architectural reference: `docs/architecture/transformation-pipeline.md`.
+
+**Quick rules for new source / target / normalize modules:**
+
+- **Pre-aggregation (`aggregate/<src>.py` `pre_aggregate_hook`):** flag-value
+  masks, sums-of-accumulations needed to produce a single var to aggregate,
+  per-pixel quality gates (e.g. CI > 70 in MOD10C1). These do not commute
+  with area-weighted mean.
+- **Post-aggregation cosmetic (`aggregate/<src>.py` `post_aggregate_hook`):**
+  rename auxiliary diagnostic variables (e.g. `valid_mask` →
+  `valid_area_fraction` after the per-pixel 0/1 mask becomes an HRU
+  fraction), attach attrs. Do not modify aggregated source values.
+- **Per-HRU transforms (`normalize/methods.py`):** 0–1 normalization,
+  multi-source min/max, NN-fill of NaN HRUs from partial coverage. Defined at
+  HRU scale, must run post-aggregation.
+- **Linear unit conversions (`targets/<tgt>.py`):** `× 1000`, `÷ 100`,
+  `× 8 × days_in_month`, mm/month → cfs, etc. These commute with
+  aggregation; we put them downstream so the aggregated NC stays in native
+  units (easier to spot a missed conversion factor).
+- **Multi-source combination (`targets/<tgt>.py`):** must be post-aggregation
+  by definition (different sources have different grids).
+
+**The aggregated NC at `<project>/data/aggregated/<source_key>/...`
+therefore carries the source's NATIVE variable names and NATIVE units**,
+with flag-masked and quality-gated values. Inspect notebooks in
+`notebooks/inspect_aggregated/` apply the same `÷ 100` / `× 1000` / etc.
+conversions inline, mirroring `targets/`, so they should produce
+order-of-magnitude-matching results when validated against gridded means.
+
+**Why ordering matters (the gotcha):** post-aggregation gating of a
+per-pixel quality field gives a different answer than pre-aggregation
+gating, because the area-weighted mean has already mixed high- and low-
+confidence pixels. An HRU with 50% high-CI snowy and 50% low-CI cloud
+pixels gives different results pre- vs post-gating. See the worked example
+in `transformation-pipeline.md`.
+
 ## Projects & Datastore
 
 The pipeline separates **projects** (fabric-specific) from the **datastore** (shared raw data, fabric-independent). Multiple projects can share one datastore — if data has already been fetched for one project, another project pointing to the same datastore will find and reuse it.

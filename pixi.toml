@@ -114,3 +114,9 @@ test-integration = { cmd = "pytest tests/ -v -m integration", description = "Run
 lint  = { cmd = "ruff check src/ tests/", description = "Lint source" }
 fmt   = { cmd = "ruff format src/ tests/", description = "Format source" }
 fmt-check = { cmd = "ruff format --check src/ tests/", description = "Check formatting without modifying" }
+
+# Register a Jupyter kernel pointing at the pixi dev env so VSCode /
+# JupyterLab can select it. Matches the kernelspec name embedded in
+# notebooks/inspect_aggregated/*.ipynb. Run once per machine:
+#   pixi run -e dev install-kernel
+install-kernel = { cmd = "python -m ipykernel install --user --name nhf-spatial-targets --display-name 'Python (nhf-spatial-targets)'", description = "Register Jupyter kernel for the pixi dev env (use with -e dev)" }
