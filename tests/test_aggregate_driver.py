@@ -356,12 +356,16 @@ def test_source_adapter_raw_grid_variable_can_differ_from_declared_vars():
 
 
 def test_mod10c1_adapter_declares_raw_grid_variable():
-    """Regression: MOD10C1 must set raw_grid_variable so the grid-drift check
-    is not silently skipped (it used to short-circuit on ``sca not in raw``)."""
+    """MOD10C1 must set raw_grid_variable so the grid-drift check is not
+    silently skipped. Under the A2 transformation policy the pre-hook
+    preserves native variable names, so raw_grid_variable also appears
+    in ADAPTER.variables — that's expected and not a defect."""
     from nhf_spatial_targets.aggregate.mod10c1 import ADAPTER
 
     assert ADAPTER.raw_grid_variable == "Day_CMG_Snow_Cover"
-    assert ADAPTER.raw_grid_variable not in ADAPTER.variables
+    # raw_grid_variable must be a real source-NC variable name; under A2
+    # it equals grid_variable (the policy preserves native names).
+    assert ADAPTER.raw_grid_variable == ADAPTER.grid_variable
 
 
 def test_source_adapter_coerces_list_to_tuple():
