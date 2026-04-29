@@ -610,6 +610,7 @@ def aggregate_source(
     id_col: str,
     workdir: Path,
     batch_size: int = 500,
+    period: str | None = None,
 ) -> None:
     """Aggregate a source to fabric HRU polygons; emit per-year NCs.
 
@@ -688,6 +689,31 @@ def aggregate_source(
                 )
 
     year_files = enumerate_years(files)
+    if period is not None:
+        # Filter year_files to the operator-requested window. Useful for
+        # monolithic single-file sources (mwbm_climgrid: 1895-2020 in one
+        # NC) where the fetch period is provenance-only and can't subset
+        # bytes — the operator clips here at agg time instead.
+        from nhf_spatial_targets.fetch._period import parse_period
+
+        parse_period(period)  # validate format
+        start_year, end_year = (int(p) for p in period.split("/"))
+        before = len(year_files)
+        all_years = [y for y, _ in year_files]
+        year_files = [(y, p) for y, p in year_files if start_year <= y <= end_year]
+        if not year_files:
+            raise ValueError(
+                f"{adapter.source_key}: --period {period!r} excludes every "
+                f"year in the source files. Source covers "
+                f"{min(all_years)}-{max(all_years)}."
+            )
+        logger.info(
+            "%s: --period %s clipped %d → %d years",
+            adapter.source_key,
+            period,
+            before,
+            len(year_files),
+        )
     fabric_batched = load_and_batch_fabric(fabric_path, batch_size=batch_size)
     n_batches = int(fabric_batched["batch_id"].nunique())
     logger.info(
