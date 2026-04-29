@@ -288,7 +288,7 @@ def _write_dummy_nc_with_bad_cell_methods(path: Path) -> None:
 
 
 def test_rejects_mismatched_cell_methods(tmp_path):
-    """Publisher metadata divergence from catalog raises a clear error."""
+    """Non-None publisher cell_methods that disagrees with catalog raises."""
     workdir = _make_project(tmp_path)
     nc_dir = workdir / "datastore" / "mwbm_climgrid"
     nc_dir.mkdir(parents=True)
@@ -298,6 +298,82 @@ def test_rejects_mismatched_cell_methods(tmp_path):
         fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
     # Manifest must NOT exist — failed validation must not write provenance.
     assert not (workdir / "manifest.json").exists()
+
+
+def _write_dummy_nc_without_cell_methods(path: Path) -> None:
+    """Like _write_dummy_nc but strips cell_methods on every variable.
+
+    Mirrors the real ClimGrid_WBM.nc, where the publisher ships units /
+    standard_name / long_name but omits cell_methods.
+    """
+    import pandas as pd
+
+    times = pd.date_range("1900-01-01", periods=2, freq="MS")
+    lats = np.array([40.0, 40.5], dtype=np.float64)
+    lons = np.array([-105.0, -104.5], dtype=np.float64)
+    rng = np.random.default_rng(0)
+    attrs_no_cm = {"units": "mm", "long_name": "x", "standard_name": "x"}
+    ds = xr.Dataset(
+        data_vars={
+            "runoff": (
+                ("time", "latitude", "longitude"),
+                rng.random((2, 2, 2)),
+                attrs_no_cm,
+            ),
+            "aet": (
+                ("time", "latitude", "longitude"),
+                rng.random((2, 2, 2)),
+                attrs_no_cm,
+            ),
+            "soilstorage": (
+                ("time", "latitude", "longitude"),
+                rng.random((2, 2, 2)),
+                attrs_no_cm,
+            ),
+            "swe": (
+                ("time", "latitude", "longitude"),
+                rng.random((2, 2, 2)),
+                attrs_no_cm,
+            ),
+        },
+        coords={
+            "time": ("time", times),
+            "latitude": ("latitude", lats, {"units": "degrees_north", "axis": "Y"}),
+            "longitude": ("longitude", lons, {"units": "degrees_east", "axis": "X"}),
+        },
+    )
+    ds["time"].attrs.update({"axis": "T", "standard_name": "time"})
+    ds.to_netcdf(path)
+    ds.close()
+
+
+def test_missing_cell_methods_warns_does_not_raise(tmp_path, caplog):
+    """Silent cell_methods (publisher gap) → warn + register, do NOT raise.
+
+    Mirrors the real ClimGrid_WBM.nc: the publisher ships units and
+    standard_name but no cell_methods. The catalog declaration of
+    `time: sum` etc. is documented provenance, not a hard claim about
+    file attrs, so a silent file is acceptable as long as variables
+    and units check out.
+    """
+    workdir = _make_project(tmp_path)
+    nc_dir = workdir / "datastore" / "mwbm_climgrid"
+    nc_dir.mkdir(parents=True)
+    nc_path = nc_dir / "ClimGrid_WBM.nc"
+    _write_dummy_nc_without_cell_methods(nc_path)
+
+    with caplog.at_level("WARNING", logger="nhf_spatial_targets.fetch.mwbm_climgrid"):
+        result = fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
+
+    # Manifest WAS written — the file is acceptable.
+    assert (workdir / "manifest.json").exists()
+    assert result["file"]["sha256"]
+
+    # Each declared variable that lost its cell_methods got a warning.
+    warning_text = "\n".join(r.getMessage() for r in caplog.records)
+    for var in ("runoff", "aet", "soilstorage", "swe"):
+        assert var in warning_text, f"missing warning for {var!r}"
+    assert "no cell_methods attribute" in warning_text
 
 
 def test_rejects_missing_variable(tmp_path):
