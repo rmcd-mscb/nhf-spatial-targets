@@ -82,6 +82,38 @@ def test_build_masked_source_strict_threshold_at_70():
     assert out["valid_mask"].isel(time=0).values[0, 0] == 0.0
 
 
+def test_build_masked_source_ci_just_above_threshold_passes():
+    """Symmetric to the CI=70 test: CI=71 must pass. Catches a `>=` slip
+    that would change the keep-side semantics on integer CI inputs."""
+    times = pd.date_range("2000-01-01", periods=1, freq="D")
+    snow = np.array([[[50.0]]])
+    ci = np.array([[[71.0]]])  # just above threshold -> keep
+    ds = xr.Dataset(
+        {
+            "Day_CMG_Snow_Cover": (["time", "lat", "lon"], snow),
+            "Day_CMG_Clear_Index": (["time", "lat", "lon"], ci),
+        },
+        coords={"time": times, "lat": [0.25], "lon": [0.5]},
+    )
+    out = build_masked_source(ds)
+    assert np.isclose(out["Day_CMG_Snow_Cover"].isel(time=0).values[0, 0], 50.0)
+    assert out["valid_mask"].isel(time=0).values[0, 0] == 1.0
+
+
+def test_build_masked_source_raises_on_missing_input_variable():
+    """If the raw NC is missing the expected variable (e.g. a future
+    product rename like v006 → v061), the pre-hook must raise with
+    source-key context — not let xarray's bare KeyError surface from
+    deep inside the per-year aggregation loop."""
+    times = pd.date_range("2000-01-01", periods=1, freq="D")
+    ds = xr.Dataset(
+        {"Day_CMG_Snow_Cover": (["time", "lat", "lon"], np.zeros((1, 1, 1)))},
+        coords={"time": times, "lat": [0.25], "lon": [0.5]},
+    )
+    with pytest.raises(KeyError, match="mod10c1_v061.*Day_CMG_Clear_Index"):
+        build_masked_source(ds)
+
+
 def test_build_masked_source_day_with_all_low_ci_yields_all_nan_snow_cover():
     """If every cell fails the CI filter, Day_CMG_Snow_Cover is entirely NaN
     and valid_mask is 0."""
