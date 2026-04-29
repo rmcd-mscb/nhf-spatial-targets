@@ -1,4 +1,11 @@
-"""Tests for MOD10C1 tier-2 aggregator (CI masking)."""
+"""Tests for MOD10C1 tier-2 aggregator (CI masking).
+
+The aggregator follows the A2 transformation policy
+(``docs/architecture/transformation-pipeline.md``): native variable
+names and units pass through, pixel-defined operations (flag masking,
+CI gating) happen pre-aggregation, ``÷ 100`` and other linear rescales
+live downstream in ``targets/`` / ``normalize/``.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +21,7 @@ from nhf_spatial_targets.aggregate.mod10c1 import build_masked_source
 def raw_mod10c1():
     times = pd.date_range("2000-01-01", periods=1, freq="D")
     snow = np.array([[[50.0, 50.0], [50.0, 50.0]]])  # day, y, x
-    ci = np.array([[[80.0, 60.0], [30.0, 100.0]]])  # CI in percent
+    ci = np.array([[[80.0, 60.0], [30.0, 100.0]]])  # CI in native 0–100 scale
     return xr.Dataset(
         {
             "Day_CMG_Snow_Cover": (["time", "lat", "lon"], snow),
@@ -26,25 +33,29 @@ def raw_mod10c1():
 
 def test_build_masked_source_variables_present(raw_mod10c1):
     out = build_masked_source(raw_mod10c1)
-    assert set(["sca", "ci", "valid_mask"]).issubset(out.data_vars)
+    assert {"Day_CMG_Snow_Cover", "Day_CMG_Clear_Index", "valid_mask"}.issubset(
+        out.data_vars
+    )
 
 
-def test_sca_is_nan_where_ci_below_threshold(raw_mod10c1):
+def test_snow_cover_nan_where_ci_below_threshold(raw_mod10c1):
+    """A2: pixel-level CI gate sets Day_CMG_Snow_Cover to NaN where CI ≤ 70.
+    Native 0–100 scale is preserved (no ÷ 100 in the aggregator)."""
     out = build_masked_source(raw_mod10c1)
-    sca = out["sca"].isel(time=0).values
+    snow = out["Day_CMG_Snow_Cover"].isel(time=0).values
     # Cells with CI 80, 100 pass (>70); CI 60, 30 fail.
-    assert np.isclose(sca[0, 0], 0.5)  # CI=80  -> keep, 50/100=0.5
-    assert np.isnan(sca[0, 1])  # CI=60  -> drop
-    assert np.isnan(sca[1, 0])  # CI=30  -> drop
-    assert np.isclose(sca[1, 1], 0.5)  # CI=100 -> keep
+    assert np.isclose(snow[0, 0], 50.0)  # CI=80  -> keep, native 50
+    assert np.isnan(snow[0, 1])  # CI=60  -> drop
+    assert np.isnan(snow[1, 0])  # CI=30  -> drop
+    assert np.isclose(snow[1, 1], 50.0)  # CI=100 -> keep
 
 
-def test_ci_passes_through_unmasked_below_threshold(raw_mod10c1):
+def test_clear_index_passes_through_unmasked_below_threshold(raw_mod10c1):
+    """A2: Day_CMG_Clear_Index is only flag-masked, not CI-gated.
+    Cells where snow was masked still carry their native CI value."""
     out = build_masked_source(raw_mod10c1)
-    ci = out["ci"].isel(time=0).values
-    # ci = Day_CMG_Clear_Index / 100; not gated on the 0.70 threshold,
-    # so cells where SCA was masked still carry their fractional CI.
-    np.testing.assert_allclose(ci, np.array([[0.8, 0.6], [0.3, 1.0]]))
+    ci = out["Day_CMG_Clear_Index"].isel(time=0).values
+    np.testing.assert_allclose(ci, np.array([[80.0, 60.0], [30.0, 100.0]]))
 
 
 def test_valid_mask_is_zero_one_float(raw_mod10c1):
@@ -54,11 +65,11 @@ def test_valid_mask_is_zero_one_float(raw_mod10c1):
     assert out["valid_mask"].dtype.kind == "f"
 
 
-def test_build_masked_source_strict_threshold_at_0_70():
-    """CI exactly at 0.70 must fail the filter (strict >, not >=)."""
+def test_build_masked_source_strict_threshold_at_70():
+    """CI exactly at 70 must fail the filter (strict >, not >=)."""
     times = pd.date_range("2000-01-01", periods=1, freq="D")
     snow = np.array([[[50.0]]])
-    ci = np.array([[[70.0]]])  # exactly 70% -> ci == 0.70 -> fail
+    ci = np.array([[[70.0]]])  # exactly 70 -> fail
     ds = xr.Dataset(
         {
             "Day_CMG_Snow_Cover": (["time", "lat", "lon"], snow),
@@ -67,15 +78,16 @@ def test_build_masked_source_strict_threshold_at_0_70():
         coords={"time": times, "lat": [0.25], "lon": [0.5]},
     )
     out = build_masked_source(ds)
-    assert np.isnan(out["sca"].isel(time=0).values[0, 0])
+    assert np.isnan(out["Day_CMG_Snow_Cover"].isel(time=0).values[0, 0])
     assert out["valid_mask"].isel(time=0).values[0, 0] == 0.0
 
 
-def test_build_masked_source_day_with_all_low_ci_yields_all_nan_sca():
-    """If every cell fails the CI filter, sca is entirely NaN and valid_mask is 0."""
+def test_build_masked_source_day_with_all_low_ci_yields_all_nan_snow_cover():
+    """If every cell fails the CI filter, Day_CMG_Snow_Cover is entirely NaN
+    and valid_mask is 0."""
     times = pd.date_range("2000-01-01", periods=1, freq="D")
     snow = np.ones((1, 2, 2)) * 80.0
-    ci = np.ones((1, 2, 2)) * 50.0  # CI=0.5 everywhere, all fail
+    ci = np.ones((1, 2, 2)) * 50.0  # CI=50 everywhere, all fail
     ds = xr.Dataset(
         {
             "Day_CMG_Snow_Cover": (["time", "lat", "lon"], snow),
@@ -84,13 +96,13 @@ def test_build_masked_source_day_with_all_low_ci_yields_all_nan_sca():
         coords={"time": times, "lat": [0.25, 0.75], "lon": [0.5, 1.5]},
     )
     out = build_masked_source(ds)
-    assert np.isnan(out["sca"].values).all()
+    assert np.isnan(out["Day_CMG_Snow_Cover"].values).all()
     np.testing.assert_array_equal(out["valid_mask"].values, np.zeros((1, 2, 2)))
 
 
 def test_build_masked_source_masks_snow_flag_values():
     """Day_CMG_Snow_Cover values >100 (107=lake, 237=water, 239=ocean, etc.)
-    must be masked to NaN before scaling so they don't contaminate the
+    must be masked to NaN before aggregation so they don't contaminate the
     weighted mean even when their CI happens to pass the filter.
     """
     times = pd.date_range("2000-01-01", periods=1, freq="D")
@@ -105,11 +117,11 @@ def test_build_masked_source_masks_snow_flag_values():
         coords={"time": times, "lat": [0.25, 0.75], "lon": [0.5, 1.5]},
     )
     out = build_masked_source(ds)
-    sca = out["sca"].isel(time=0).values
-    assert np.isclose(sca[0, 0], 0.5)  # 50 -> 0.5, valid
-    assert np.isnan(sca[0, 1])  # 107 (lake ice flag)
-    assert np.isnan(sca[1, 0])  # 239 (ocean flag)
-    assert np.isnan(sca[1, 1])  # 253 (not mapped flag)
+    snow = out["Day_CMG_Snow_Cover"].isel(time=0).values
+    assert np.isclose(snow[0, 0], 50.0)  # 50 -> kept, native scale preserved
+    assert np.isnan(snow[0, 1])  # 107 (lake ice flag)
+    assert np.isnan(snow[1, 0])  # 239 (ocean flag)
+    assert np.isnan(snow[1, 1])  # 253 (not mapped flag)
 
 
 def test_build_masked_source_masks_ci_flag_values():
@@ -127,11 +139,37 @@ def test_build_masked_source_masks_ci_flag_values():
         coords={"time": times, "lat": [0.25, 0.75], "lon": [0.5, 1.5]},
     )
     out = build_masked_source(ds)
-    sca = out["sca"].isel(time=0).values
-    assert np.isclose(sca[0, 0], 0.5)  # CI=100 passes
-    assert np.isnan(sca[0, 1])  # CI=239 -> NaN -> fails
-    assert np.isnan(sca[1, 0])  # CI=255 -> NaN -> fails
-    assert np.isclose(sca[1, 1], 0.5)  # CI=80 passes
+    snow = out["Day_CMG_Snow_Cover"].isel(time=0).values
+    assert np.isclose(snow[0, 0], 50.0)  # CI=100 passes
+    assert np.isnan(snow[0, 1])  # CI=239 -> flag -> NaN -> fails
+    assert np.isnan(snow[1, 0])  # CI=255 -> flag -> NaN -> fails
+    assert np.isclose(snow[1, 1], 50.0)  # CI=80 passes
+
+
+def test_native_units_preserved_no_division_by_100():
+    """A2 contract: aggregator must preserve the source's native 0–100
+    integer scale. Any value at the input must round-trip unchanged through
+    the pre-hook for cells that pass the filter (the ÷100 rescale is the
+    target builder's responsibility)."""
+    times = pd.date_range("2000-01-01", periods=1, freq="D")
+    snow = np.array([[[1.0, 25.0, 73.0, 99.0]]])  # day, y, x — y has 1 row
+    ci = np.ones((1, 1, 4)) * 100.0  # all pass
+    ds = xr.Dataset(
+        {
+            "Day_CMG_Snow_Cover": (["time", "lat", "lon"], snow),
+            "Day_CMG_Clear_Index": (["time", "lat", "lon"], ci),
+        },
+        coords={"time": times, "lat": [0.25], "lon": [0.5, 1.5, 2.5, 3.5]},
+    )
+    out = build_masked_source(ds)
+    np.testing.assert_allclose(
+        out["Day_CMG_Snow_Cover"].isel(time=0).values[0],
+        np.array([1.0, 25.0, 73.0, 99.0]),
+    )
+    np.testing.assert_allclose(
+        out["Day_CMG_Clear_Index"].isel(time=0).values[0],
+        np.array([100.0, 100.0, 100.0, 100.0]),
+    )
 
 
 def test_log_low_valid_coverage_warns_above_threshold(caplog):
@@ -180,7 +218,12 @@ def test_mod10c1_adapter_wires_hooks_and_variables():
 
     assert ADAPTER.source_key == "mod10c1_v061"
     assert ADAPTER.output_name == "mod10c1_agg.nc"
-    assert set(ADAPTER.variables) == {"sca", "ci", "valid_mask"}
-    assert ADAPTER.grid_variable == "sca"
+    assert set(ADAPTER.variables) == {
+        "Day_CMG_Snow_Cover",
+        "Day_CMG_Clear_Index",
+        "valid_mask",
+    }
+    assert ADAPTER.grid_variable == "Day_CMG_Snow_Cover"
+    assert ADAPTER.raw_grid_variable == "Day_CMG_Snow_Cover"
     assert ADAPTER.pre_aggregate_hook is build_masked_source
     assert ADAPTER.post_aggregate_hook is not None
