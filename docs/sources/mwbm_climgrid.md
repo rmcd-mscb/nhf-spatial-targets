@@ -43,11 +43,22 @@ provenance in `manifest.json`.
    `mwbm_climgrid` entry to `manifest.json`. Subsequent invocations
    re-verify the fingerprint and short-circuit if it matches.
 
-6. Aggregate to the HRU fabric as usual:
+6. Aggregate to the HRU fabric. The publisher distributes a single
+   1895–2020 NetCDF, so the aggregator processes every year in the
+   file by default. Pass `--period` to clip the per-year output to the
+   window you actually want (e.g. drop the publisher's 1895–1899
+   spinup and anything outside the NHM run window):
 
    ```bash
-   pixi run nhf-targets agg mwbm-climgrid --project-dir /data/nhf-runs/my-run
+   pixi run nhf-targets agg mwbm-climgrid \
+       --project-dir /data/nhf-runs/my-run \
+       --period 1979/2020
    ```
+
+   Without `--period`, ~125 per-year aggregated NetCDFs are written
+   (1895/96 through 2020). The HPC SLURM script `agg_all.slurm`
+   passes `1979/2020` for the mwbm-climgrid task by default; edit
+   `AGG_PERIODS[10]` to change it.
 
 ## Sharing across projects
 

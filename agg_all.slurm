@@ -61,17 +61,41 @@ AGG_TASKS=(
     "agg-mwbm-climgrid" # 10 — USGS MWBM (ClimGrid) (2.5 arcmin monthly, 4 vars)
 )
 
+# Optional --period override per task. Empty string means "no clip"; the
+# aggregator iterates every year present in the source files. Used by
+# monolithic single-file sources (mwbm-climgrid: 1895-2020 in one NC)
+# where the fetch period is provenance-only and can't subset bytes —
+# clip at agg time instead. Indices align with AGG_TASKS.
+AGG_PERIODS=(
+    ""              # 0  era5-land
+    ""              # 1  gldas
+    ""              # 2  merra2
+    ""              # 3  ncep-ncar
+    ""              # 4  nldas-mosaic
+    ""              # 5  nldas-noah
+    ""              # 6  watergap22d
+    ""              # 7  reitz2017
+    ""              # 8  mod16a2
+    ""              # 9  mod10c1
+    "1979/2020"     # 10 mwbm-climgrid (publisher: 1895-2020; clip to NHM window, drop spinup)
+)
+
 if (( SLURM_ARRAY_TASK_ID < 0 || SLURM_ARRAY_TASK_ID >= ${#AGG_TASKS[@]} )); then
     echo "ERROR: SLURM_ARRAY_TASK_ID=$SLURM_ARRAY_TASK_ID out of range [0, ${#AGG_TASKS[@]})" >&2
     exit 2
 fi
 
 TASK="${AGG_TASKS[$SLURM_ARRAY_TASK_ID]}"
-echo "=== Array task $SLURM_ARRAY_TASK_ID: $TASK  batch_size=$BATCH_SIZE ==="
+PERIOD="${AGG_PERIODS[$SLURM_ARRAY_TASK_ID]}"
+echo "=== Array task $SLURM_ARRAY_TASK_ID: $TASK  batch_size=$BATCH_SIZE  period=${PERIOD:-<none>} ==="
 echo "=== Project: $PROJECT_DIR ==="
 echo "=== Start:   $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 echo "=== Host:    $(hostname) ==="
 
-pixi run "$TASK" -- --project-dir "$PROJECT_DIR" --batch-size "$BATCH_SIZE"
+if [ -n "$PERIOD" ]; then
+    pixi run "$TASK" -- --project-dir "$PROJECT_DIR" --batch-size "$BATCH_SIZE" --period "$PERIOD"
+else
+    pixi run "$TASK" -- --project-dir "$PROJECT_DIR" --batch-size "$BATCH_SIZE"
+fi
 
 echo "=== Done:  $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="

@@ -1091,8 +1091,14 @@ def _run_tier_agg(
     label: str,
     workdir: Path,
     batch_size: int,
+    period: str | None = None,
 ) -> None:
-    """Common boilerplate for tier-1/tier-2 aggregator CLI wrappers."""
+    """Common boilerplate for tier-1/tier-2 aggregator CLI wrappers.
+
+    ``period`` is forwarded to ``aggregate_fn`` only when set, so
+    aggregators that don't accept it (most sources, where fetch already
+    clips by file) are unaffected.
+    """
     from rich.console import Console
 
     if not workdir.exists():
@@ -1115,14 +1121,20 @@ def _run_tier_agg(
     id_col = cfg["fabric"].get("id_col", "nhm_id")
 
     console = Console()
-    console.print(f"[bold]Aggregating {label} (batch_size={batch_size})...[/bold]")
+    period_suffix = f", period={period}" if period is not None else ""
+    console.print(
+        f"[bold]Aggregating {label} (batch_size={batch_size}{period_suffix})...[/bold]"
+    )
     try:
-        aggregate_fn(
-            fabric_path=fabric_path,
-            id_col=id_col,
-            workdir=workdir,
-            batch_size=batch_size,
-        )
+        kwargs = {
+            "fabric_path": fabric_path,
+            "id_col": id_col,
+            "workdir": workdir,
+            "batch_size": batch_size,
+        }
+        if period is not None:
+            kwargs["period"] = period
+        aggregate_fn(**kwargs)
     except (ValueError, FileNotFoundError, RuntimeError) as exc:
         print(f"Error ({type(exc).__name__}): {exc}", file=sys.stderr)
         sys.exit(1)
@@ -1233,9 +1245,28 @@ def agg_mod10c1_cmd(
 def agg_mwbm_climgrid_cmd(
     workdir: Annotated[Path, Parameter(name=["--project-dir"])],
     batch_size: Annotated[int, Parameter(name="--batch-size")] = 500,
+    period: Annotated[
+        str | None,
+        Parameter(
+            name=["--period", "-p"],
+            help=(
+                "Optional 'YYYY/YYYY' clip applied to the per-year output. "
+                "ClimGrid_WBM.nc spans 1895-2020 in a single file; pass e.g. "
+                "'1979/2020' to skip the publisher's spinup years and "
+                "anything outside the NHM run window. Omit to aggregate "
+                "every year in the file."
+            ),
+        ),
+    ] = None,
 ):
     """Aggregate USGS MWBM (ClimGrid-forced) monthly outputs to HRU polygons."""
-    _run_tier_agg(aggregate_mwbm_climgrid, "MWBM (ClimGrid)", workdir, batch_size)
+    _run_tier_agg(
+        aggregate_mwbm_climgrid,
+        "MWBM (ClimGrid)",
+        workdir,
+        batch_size,
+        period=period,
+    )
 
 
 @agg_app.command(name="all")

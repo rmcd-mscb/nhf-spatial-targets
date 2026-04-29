@@ -262,6 +262,150 @@ def test_aggregate_source_writes_multi_var_nc_and_manifest(tmp_path, tiny_fabric
     ]
 
 
+def test_aggregate_source_period_filter_clips_year_files(tmp_path, tiny_fabric):
+    """`period` filters multi-year sources to the requested window only.
+
+    Pins the contract for monolithic single-file sources (mwbm_climgrid:
+    1895-2020 in one NC) where the operator clips at agg time.
+    """
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import aggregate_source
+
+    datastore = tmp_path / "datastore"
+    (datastore / "merra2").mkdir(parents=True)
+    src_nc = datastore / "merra2" / "merra2_consolidated.nc"
+    # 4 years × 12 months: 2000-2003.
+    times = pd.date_range("2000-01-01", periods=48, freq="MS")
+    xr.Dataset(
+        {"a": (["time", "lat", "lon"], np.ones((48, 2, 2)))},
+        coords={
+            "time": ("time", times, {"standard_name": "time"}),
+            "lat": ("lat", [0.25, 0.75], {"standard_name": "latitude"}),
+            "lon": ("lon", [0.5, 1.5], {"standard_name": "longitude"}),
+        },
+    ).to_netcdf(src_nc)
+
+    (tmp_path / "config.yml").write_text(
+        yaml.dump(
+            {
+                "fabric": {"path": str(tiny_fabric), "id_col": "hru_id"},
+                "datastore": str(datastore),
+            }
+        )
+    )
+    (tmp_path / "fabric.json").write_text(json.dumps({"sha256": "f00"}))
+    (tmp_path / "manifest.json").write_text(json.dumps({"sources": {}, "steps": []}))
+    (tmp_path / "data" / "aggregated").mkdir(parents=True)
+    (tmp_path / "weights").mkdir()
+
+    adapter = SourceAdapter(
+        source_key="merra2", output_name="merra2_agg.nc", variables=["a"]
+    )
+    fake_meta = {"access": {"type": "local_nc"}}
+
+    def _make_year_ds(year: int) -> xr.Dataset:
+        yt = pd.date_range(f"{year}-01-01", periods=12, freq="MS")
+        return xr.Dataset(
+            {"a": (["time", "hru_id"], np.ones((12, 4)))},
+            coords={
+                "time": ("time", yt, {"standard_name": "time"}),
+                "hru_id": [0, 1, 2, 3],
+            },
+        )
+
+    # Side-effect: each call to aggregate_variables_for_batch returns the
+    # year-appropriate Dataset, keyed off the year embedded in the time
+    # axis the driver passes through.
+    call_years: list[int] = []
+
+    def _fake_agg(*_args, **kwargs):
+        # The year-specific time slice is built upstream; recover the
+        # year from the slice the driver opens. Easier: peek the file
+        # the driver passed and report the year via the recorded list.
+        # We rely on the year being threaded via the call ordering
+        # established by enumerate_years (sorted ascending).
+        year = 2000 + len(call_years)
+        call_years.append(year)
+        return _make_year_ds(year)
+
+    with (
+        patch(
+            "nhf_spatial_targets.aggregate._driver.catalog_source",
+            return_value=fake_meta,
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.compute_or_load_weights",
+            return_value=_fake_weights(),
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.aggregate_variables_for_batch",
+            side_effect=_fake_agg,
+        ),
+    ):
+        aggregate_source(
+            adapter,
+            fabric_path=tiny_fabric,
+            id_col="hru_id",
+            workdir=tmp_path,
+            batch_size=500,
+            period="2001/2002",
+        )
+
+    per_source_dir = tmp_path / "data" / "aggregated" / "merra2"
+    written = sorted(p.name for p in per_source_dir.glob("merra2_*_agg.nc"))
+    # 2000 and 2003 must be excluded; 2001 and 2002 must be present.
+    assert written == ["merra2_2001_agg.nc", "merra2_2002_agg.nc"]
+
+
+def test_aggregate_source_period_filter_excludes_all_raises(tmp_path, tiny_fabric):
+    """`period` outside the file's coverage raises rather than silently no-op."""
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import aggregate_source
+
+    datastore = tmp_path / "datastore"
+    (datastore / "merra2").mkdir(parents=True)
+    src_nc = datastore / "merra2" / "merra2_consolidated.nc"
+    times = pd.date_range("2000-01-01", periods=12, freq="MS")
+    xr.Dataset(
+        {"a": (["time", "lat", "lon"], np.ones((12, 2, 2)))},
+        coords={
+            "time": ("time", times, {"standard_name": "time"}),
+            "lat": ("lat", [0.25, 0.75], {"standard_name": "latitude"}),
+            "lon": ("lon", [0.5, 1.5], {"standard_name": "longitude"}),
+        },
+    ).to_netcdf(src_nc)
+
+    (tmp_path / "config.yml").write_text(
+        yaml.dump(
+            {
+                "fabric": {"path": str(tiny_fabric), "id_col": "hru_id"},
+                "datastore": str(datastore),
+            }
+        )
+    )
+    (tmp_path / "fabric.json").write_text(json.dumps({"sha256": "f00"}))
+    (tmp_path / "manifest.json").write_text(json.dumps({"sources": {}, "steps": []}))
+    (tmp_path / "data" / "aggregated").mkdir(parents=True)
+    (tmp_path / "weights").mkdir()
+
+    adapter = SourceAdapter(
+        source_key="merra2", output_name="merra2_agg.nc", variables=["a"]
+    )
+    with patch(
+        "nhf_spatial_targets.aggregate._driver.catalog_source",
+        return_value={"access": {"type": "local_nc"}},
+    ):
+        with pytest.raises(ValueError, match="excludes every year"):
+            aggregate_source(
+                adapter,
+                fabric_path=tiny_fabric,
+                id_col="hru_id",
+                workdir=tmp_path,
+                batch_size=500,
+                period="2010/2011",
+            )
+
+
 def test_source_adapter_rejects_empty_variables():
     from nhf_spatial_targets.aggregate._adapter import SourceAdapter
 
