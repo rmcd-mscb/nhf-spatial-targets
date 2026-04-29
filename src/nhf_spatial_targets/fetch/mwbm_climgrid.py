@@ -130,6 +130,23 @@ def _validate_nc(nc_path: Path, meta: dict) -> None:
             if expected is None:
                 continue
             actual = ds[name].attrs.get("cell_methods")
+            if actual is None:
+                # Publisher omitted the attr (confirmed for ClimGrid_WBM.nc:
+                # all four variables ship with units / long_name /
+                # standard_name but no cell_methods). The catalog
+                # declaration stands as documented provenance — MWBM
+                # runoff IS a monthly sum — but we don't enforce against
+                # a silent file.
+                logger.warning(
+                    "%s: variable %r has no cell_methods attribute; "
+                    "catalog declares %r. Treating catalog as "
+                    "authoritative provenance (publisher metadata gap, "
+                    "not a contradiction).",
+                    nc_path.name,
+                    name,
+                    expected,
+                )
+                continue
             if actual != expected:
                 raise RuntimeError(
                     f"{nc_path.name}: variable {name!r} has "
