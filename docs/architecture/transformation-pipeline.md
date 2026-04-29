@@ -85,18 +85,30 @@ aggregation is a different operation:
   high- and low-confidence pixels, and you can't recover the
   high-confidence-only mean from the result.
 
-Worked example: HRU with 50% high-CI snowy pixels (snow=80, ci=0.9) and 50%
-low-CI cloud pixels (snow=20, ci=0.3):
+Worked example (CI in native 0–100 scale, threshold > 70): HRU with 50%
+high-CI snowy pixels (snow=80, ci=90) and 50% low-CI cloud pixels (snow=20,
+ci=30):
 
 - Pre-aggregation gating: only high-CI pixels survive, mean snow = 80,
-  mean ci = 0.9. ✅ The half of the HRU we can see is snowy.
-- Post-aggregation gating with threshold ci > 0.70: HRU-mean snow = 50,
-  HRU-mean ci = 0.6 → masked NaN. ❌ We've thrown away the trustworthy
+  mean ci = 90. ✅ The half of the HRU we can see is snowy.
+- Post-aggregation gating with threshold ci > 70: HRU-mean snow = 50,
+  HRU-mean ci = 60 → masked NaN. ❌ We've thrown away the trustworthy
   half *and* the untrustworthy half.
 
 The information loss is asymmetric: pre-aggregation gating preserves the
 valid signal even when an HRU is partly contaminated; post-aggregation
 gating either contaminates the mean or discards the whole HRU.
+
+**Anti-pattern to watch for.** Once `valid_area_fraction` exists in the
+aggregated NC, it is tempting to use it as a downstream gate
+(`drop HRUs where valid_area_fraction < 0.7`) on the assumption that this
+is equivalent to the pre-aggregation per-pixel gate. It is not. The
+per-pixel gate has already run, so `valid_area_fraction` reports how
+much of the HRU's source-grid area passed CI > 70 — gating on it again
+discards trustworthy partial-coverage HRUs that the pre-gate already
+selected for. Treat `valid_area_fraction` as a coverage diagnostic, not
+a re-applied threshold. If you need to handle low-coverage HRUs, the
+intended path is `normalize/methods.py` NN-fill.
 
 Concrete cases in this repo:
 

@@ -66,10 +66,22 @@ def build_masked_source(ds: xr.Dataset) -> xr.Dataset:
       values *or* where pixel CI ≤ 70.
     - ``Day_CMG_Clear_Index`` — native 0–100 integer scale, NaN at flag
       values only.
-    - ``valid_mask`` — 1.0 where pixel CI > 70, else 0.0. After
-      area-weighted aggregation this becomes ``valid_area_fraction``,
-      the HRU fraction with valid CI-passing observations.
+    - ``valid_mask`` — 1.0 where pixel CI > 70, else 0.0 (including
+      flag-coded and fill cells, since ``NaN > 70`` is False). After
+      area-weighted aggregation this becomes ``valid_area_fraction``:
+      the fraction of the HRU's source-grid area whose pixels passed
+      the CI gate, counting unobserved (flag/fill/ocean) cells as
+      failing. Downstream NN-fill in ``normalize/methods.py`` is the
+      intended path for handling HRUs where this is too low.
     """
+    for var in ("Day_CMG_Snow_Cover", "Day_CMG_Clear_Index"):
+        if var not in ds.data_vars:
+            raise KeyError(
+                f"{_SOURCE_KEY}: pre_aggregate_hook expected raw variable "
+                f"{var!r}, found {list(ds.data_vars)}. The v006 → v061 "
+                f"rename is the most likely cause; check the consolidated "
+                f"NC layer in <datastore>/{_SOURCE_KEY}/."
+            )
     snow_masked = ds["Day_CMG_Snow_Cover"].where(ds["Day_CMG_Snow_Cover"] <= 100)
     ci_masked = ds["Day_CMG_Clear_Index"].where(ds["Day_CMG_Clear_Index"] <= 100)
     pass_mask = ci_masked > _CI_THRESHOLD_NATIVE
@@ -121,8 +133,12 @@ def _rename_valid_mask(year_ds: xr.Dataset) -> xr.Dataset:
 
     After area-weighted aggregation, the per-pixel 0/1 ``valid_mask``
     becomes a per-HRU fraction in [0, 1] — the share of HRU area whose
-    pixels passed the CI filter. The rename makes the post-aggregation
-    semantic explicit.
+    pixels passed the CI filter. Unobserved cells (flag/fill/ocean) are
+    counted as failing, so a partly-ocean HRU and a fully-cloudy HRU
+    can present the same low ``valid_area_fraction``; the downstream
+    NN-fill step in ``normalize/methods.py`` is the path that
+    distinguishes them. The rename makes the post-aggregation semantic
+    explicit.
     """
     year_ds = year_ds.rename({"valid_mask": "valid_area_fraction"})
     year_ds["valid_area_fraction"].attrs = {

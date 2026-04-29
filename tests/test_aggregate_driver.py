@@ -368,6 +368,50 @@ def test_mod10c1_adapter_declares_raw_grid_variable():
     assert ADAPTER.raw_grid_variable == ADAPTER.grid_variable
 
 
+def test_mod10c1_adapter_triggers_grid_drift_on_shape_mismatch(tmp_path, tiny_fabric):
+    """Behavioral teeth for the MOD10C1 ADAPTER: under A2 the pre-hook
+    runs and ``raw_grid_variable`` overlaps ``variables``. The unit-level
+    relaxed assertion above pins the wiring; this integration check
+    proves the wiring actually reaches the cross-year drift check."""
+    from nhf_spatial_targets.aggregate._driver import aggregate_source
+    from nhf_spatial_targets.aggregate.mod10c1 import ADAPTER
+
+    src_dir = _setup_aggregate_source_project(tmp_path, tiny_fabric, "mod10c1_v061")
+    t0 = pd.date_range("2000-01-01", periods=2, freq="D")
+    t1 = pd.date_range("2001-01-01", periods=2, freq="D")
+    xr.Dataset(
+        {
+            "Day_CMG_Snow_Cover": (["time", "lat", "lon"], np.zeros((2, 2, 2))),
+            "Day_CMG_Clear_Index": (["time", "lat", "lon"], np.ones((2, 2, 2)) * 100),
+        },
+        coords={
+            "time": ("time", t0, {"standard_name": "time"}),
+            "lat": ("lat", [0.25, 0.75], {"standard_name": "latitude"}),
+            "lon": ("lon", [0.5, 1.5], {"standard_name": "longitude"}),
+        },
+    ).to_netcdf(src_dir / "mod10c1_2000_consolidated.nc")
+    xr.Dataset(
+        {
+            "Day_CMG_Snow_Cover": (["time", "lat", "lon"], np.zeros((2, 3, 3))),
+            "Day_CMG_Clear_Index": (["time", "lat", "lon"], np.ones((2, 3, 3)) * 100),
+        },
+        coords={
+            "time": ("time", t1, {"standard_name": "time"}),
+            "lat": ("lat", [0.2, 0.5, 0.8], {"standard_name": "latitude"}),
+            "lon": ("lon", [0.2, 0.5, 0.8], {"standard_name": "longitude"}),
+        },
+    ).to_netcdf(src_dir / "mod10c1_2001_consolidated.nc")
+
+    with patch(
+        "nhf_spatial_targets.aggregate._driver.catalog_source",
+        return_value={"access": {"type": "local_nc"}},
+    ):
+        with pytest.raises(ValueError, match="grid shape drift"):
+            aggregate_source(
+                ADAPTER, fabric_path=tiny_fabric, id_col="hru_id", workdir=tmp_path
+            )
+
+
 def test_source_adapter_coerces_list_to_tuple():
     from nhf_spatial_targets.aggregate._adapter import SourceAdapter
 
