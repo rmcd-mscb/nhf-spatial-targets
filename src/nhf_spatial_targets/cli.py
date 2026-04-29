@@ -423,7 +423,20 @@ def fetch_all_cmd(
             result = fetch_fn(workdir=workdir, period=clamped)
             results[name] = result
             console.print(f"[green]{name}: downloaded to datastore[/green]")
-        except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        except FileNotFoundError as exc:
+            # mwbm-climgrid requires a manual (CAPTCHA-gated) download;
+            # treat its absence as a skip rather than a fatal error so
+            # the rest of the pipeline can still run when the operator
+            # hasn't placed the file yet.
+            if name == "mwbm-climgrid":
+                console.print(
+                    f"[yellow]{name}: skipped (manual download not yet "
+                    f"placed; see docs/sources/mwbm_climgrid.md)[/yellow]"
+                )
+                continue
+            print(f"Error fetching {name}: {exc}", file=sys.stderr)
+            sys.exit(1)
+        except (ValueError, RuntimeError) as exc:
             print(f"Error fetching {name}: {exc}", file=sys.stderr)
             sys.exit(1)
         except Exception as exc:
@@ -934,7 +947,15 @@ def fetch_mwbm_climgrid_cmd(
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
     ],
 ):
-    """Download USGS MWBM (ClimGrid-forced) monthly outputs from ScienceBase."""
+    """Register a manually-placed USGS MWBM (ClimGrid-forced) NetCDF.
+
+    The ScienceBase distribution is gated by a CAPTCHA, so the ~7.5 GB
+    ClimGrid_WBM.nc cannot be retrieved automatically. Download it via
+    a browser and place it at <datastore>/mwbm_climgrid/ClimGrid_WBM.nc
+    before invoking this command — see docs/sources/mwbm_climgrid.md
+    for the procedure. This command then fingerprints the file and
+    writes its provenance to manifest.json.
+    """
     import json as json_mod
 
     from rich.console import Console
@@ -946,7 +967,7 @@ def fetch_mwbm_climgrid_cmd(
         sys.exit(2)
 
     console = Console()
-    console.print(f"[bold]Fetching MWBM ClimGrid (~7.5 GB, period {period})...[/bold]")
+    console.print(f"[bold]Registering MWBM ClimGrid (period {period})...[/bold]")
 
     try:
         result = fetch_mwbm_climgrid(workdir=workdir, period=period)
@@ -954,14 +975,14 @@ def fetch_mwbm_climgrid_cmd(
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
     except Exception as exc:
-        _logger.exception("Unexpected error during MWBM ClimGrid fetch")
+        _logger.exception("Unexpected error during MWBM ClimGrid registration")
         print(
             f"Unexpected error ({type(exc).__name__}): {exc}",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    console.print("[green]MWBM ClimGrid: downloaded to datastore[/green]")
+    console.print("[green]MWBM ClimGrid: registered in manifest[/green]")
     console.print(json_mod.dumps(result, indent=2))
 
 

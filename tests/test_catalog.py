@@ -110,7 +110,7 @@ def test_mwbm_climgrid_source():
     s = source("mwbm_climgrid")
     assert s["status"] == "current"
     assert s["doi"] == "10.5066/P9QCLGKM"
-    assert s["access"]["type"] == "sciencebase"
+    assert s["access"]["type"] == "sciencebase_manual"
     assert s["access"]["item_id"] == "64c948dbd34e70357a34c11e"
     assert s["access"]["filename"] == "ClimGrid_WBM.nc"
     assert s["period"] == "1900/2020"

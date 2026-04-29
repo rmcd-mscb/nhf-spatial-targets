@@ -45,7 +45,7 @@ FETCH_TASKS=(
     "fetch-reitz2017"      # 7  — 2000–2013 at 800m, annual (ScienceBase) — ends 2013
     "fetch-mod16a2"        # 8  — 2000–present at 500m, 8-day (LP DAAC/earthaccess)
     "fetch-mod10c1"        # 9  — 2000–present at 0.05°, daily (NSIDC/earthaccess)
-    "fetch-mwbm-climgrid"  # 10 — 1900–2020 at 2.5 arcmin, monthly (ScienceBase) — ends 2020
+    "fetch-mwbm-climgrid"  # 10 — 1900–2020 at 2.5 arcmin, monthly (ScienceBase, MANUAL DOWNLOAD; see docs/sources/mwbm_climgrid.md) — ends 2020
 )
 
 # Map array index → fetch period (YYYY/YYYY)

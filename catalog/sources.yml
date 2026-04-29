@@ -258,16 +258,21 @@ sources:
       - "McCabe, G.J., and Wolock, D.M., 2011 (model)"
     doi: "10.5066/P9QCLGKM"
     access:
-      type: sciencebase
+      type: sciencebase_manual
       item_id: "64c948dbd34e70357a34c11e"
       url: https://www.sciencebase.gov/catalog/item/64c948dbd34e70357a34c11e
       filename: ClimGrid_WBM.nc
       notes: >
         Single ~7.5 GB NetCDF-4 file, int16-packed with scale_factor /
-        add_offset (xarray decodes automatically on open). Downloaded
-        via sciencebasepy.SbSession; integrity verified by size + sha256
-        recorded in manifest.json. CONUS bounding box; no spatial
-        subsetting at fetch time.
+        add_offset (xarray decodes automatically on open). The
+        ScienceBase distribution is gated by a CAPTCHA, so automated
+        retrieval via sciencebasepy is not possible — the operator
+        must download the file via a browser and place it at
+        <datastore>/mwbm_climgrid/ClimGrid_WBM.nc before invoking
+        `nhf-targets fetch mwbm-climgrid`, which fingerprints the file
+        (size + sha256), validates CF metadata, and records provenance
+        in manifest.json. See docs/sources/mwbm_climgrid.md for the
+        full procedure. CONUS bounding box; no spatial subsetting.
     variables:
       - name: runoff
         long_name: streamflow per unit area (MWBM)

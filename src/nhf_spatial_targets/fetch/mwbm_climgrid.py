@@ -1,8 +1,15 @@
-"""Fetch USGS MWBM (ClimGrid-forced) monthly outputs from ScienceBase.
+"""Register a manually-placed USGS MWBM (ClimGrid-forced) NetCDF.
 
-Single ~7.5 GB CF-conformant NetCDF (ClimGrid_WBM.nc); the fetch is
-purely a download — no consolidation step. sha256 + size are persisted
-in manifest.json for idempotency and corruption detection.
+The publisher (ScienceBase item 64c948dbd34e70357a34c11e) gates the
+~7.5 GB ``ClimGrid_WBM.nc`` download behind a CAPTCHA / "I'm not a
+robot" check, so automated retrieval via ``sciencebasepy`` is not
+viable. Instead, the operator downloads the file once via a browser
+and drops it into the project's datastore; this module fingerprints
+the file (sha256 + size), validates CF metadata, and writes a manifest
+entry for downstream provenance.
+
+See ``docs/sources/mwbm_climgrid.md`` for the manual-download
+procedure that this module assumes has already been completed.
 """
 
 from __future__ import annotations
@@ -26,32 +33,27 @@ logger = logging.getLogger(__name__)
 
 _SOURCE_KEY = "mwbm_climgrid"
 _DATA_PERIOD = (1900, 2020)  # publisher's usable window; 1895-1899 is spinup
-# Stability-window seconds for the repair branch: stat the file, sleep,
-# stat again. If size or mtime changed, something is writing to it and
-# we refuse to fingerprint a mid-copy file. Tunable for tests.
-_REPAIR_STABILITY_SECONDS = 0.5
+# Stability-window seconds: stat the file, sleep, stat again. If size
+# or mtime changed, an operator rsync/cp is still in flight and we
+# refuse to fingerprint a half-written copy. Tunable for tests.
+_STABILITY_SECONDS = 0.5
 
 
 def _verify_file_stable(path: Path) -> None:
     """Raise RuntimeError if the file is being modified concurrently.
 
-    Stats the file twice across `_REPAIR_STABILITY_SECONDS`; if size or
+    Stats the file twice across `_STABILITY_SECONDS`; if size or
     mtime changed in that window, another process is writing to it and
-    we must not fingerprint a half-written copy.
-
-    Used by the repair branch (where the file came from operator action,
-    not our own download) to defend against in-flight rsync/cp. The
-    download path doesn't need this — sciencebasepy completes the write
-    before we hash, and there is no other writer in the single-threaded
-    CLI.
+    we must not fingerprint a half-written copy. Defends against an
+    in-progress operator rsync/cp/browser-download finalize.
     """
     s_initial = path.stat()
-    time.sleep(_REPAIR_STABILITY_SECONDS)
+    time.sleep(_STABILITY_SECONDS)
     s_after = path.stat()
     if s_after.st_size != s_initial.st_size or s_after.st_mtime != s_initial.st_mtime:
         raise RuntimeError(
             f"{path} is being modified concurrently (size or mtime "
-            f"changed during the {_REPAIR_STABILITY_SECONDS:.2f}s "
+            f"changed during the {_STABILITY_SECONDS:.2f}s "
             f"stability window). Wait for the writer to finish, then "
             f"re-run."
         )
@@ -88,14 +90,14 @@ def _read_manifest_entry(workdir: Path) -> dict | None:
     return manifest.get("sources", {}).get(_SOURCE_KEY)
 
 
-def _validate_downloaded_nc(nc_path: Path, meta: dict) -> None:
+def _validate_nc(nc_path: Path, meta: dict) -> None:
     """Verify variable presence and cell_methods match the catalog declaration.
 
-    Raises RuntimeError with a clear message if the publisher-distributed
-    file diverges from what the catalog declares, so downstream targets
-    don't silently consume mis-aggregated data. Validation failures leave
-    the file on disk for inspection; every error message tells the user
-    to delete the file before re-running so the next fetch invocation
+    Raises RuntimeError with a clear message if the placed file diverges
+    from what the catalog declares, so downstream targets don't silently
+    consume mis-aggregated data. Validation failures leave the file on
+    disk for inspection; every error message tells the user to delete
+    the file and re-download before re-running so the next invocation
     doesn't loop on the same divergence.
     """
     declared = {v["name"]: v.get("cell_methods") for v in meta["variables"]}
@@ -108,8 +110,9 @@ def _validate_downloaded_nc(nc_path: Path, meta: dict) -> None:
         ds = xr.open_dataset(nc_path, decode_times=False)
     except Exception as exc:
         raise RuntimeError(
-            f"Cannot open downloaded NetCDF {nc_path}: {exc}. "
-            f"The file may be truncated or corrupt; delete it and re-run."
+            f"Cannot open {nc_path}: {exc}. The file may be truncated "
+            f"or corrupt; delete it and re-download from ScienceBase "
+            f"(see docs/sources/mwbm_climgrid.md)."
         ) from exc
     try:
         present = set(ds.data_vars)
@@ -142,16 +145,19 @@ def _validate_downloaded_nc(nc_path: Path, meta: dict) -> None:
 
 
 def fetch_mwbm_climgrid(workdir: Path, period: str) -> dict:
-    """Download ClimGrid_WBM.nc to <datastore>/mwbm_climgrid/.
+    """Register a manually-placed ClimGrid_WBM.nc in manifest.json.
 
-    Idempotent: skips download if the file is present AND its size +
-    sha256 match the values recorded in manifest.json. After download
-    (or on a manifest-repair pass over an existing file), sha256 is
-    computed by streaming the saved file in 8 MB chunks and persisted
-    to manifest.json alongside the file size. Subsequent runs use the
-    same streaming hash to verify the file before trusting the
-    manifest. Validates expected variables and CF metadata after
-    download.
+    The ScienceBase distribution is gated by a CAPTCHA, so this function
+    does **not** download. The operator must manually download
+    ``ClimGrid_WBM.nc`` from the publisher (see
+    ``docs/sources/mwbm_climgrid.md``) and place it at
+    ``<datastore>/mwbm_climgrid/ClimGrid_WBM.nc`` before invoking this.
+
+    Idempotent: if the manifest already records a matching size + sha256
+    for the file on disk, returns immediately without re-hashing past
+    the size check. Otherwise stability-checks, hashes, validates CF
+    metadata, and writes a fresh manifest entry. Raises FileNotFoundError
+    with download instructions if the file is absent.
 
     Parameters
     ----------
@@ -162,13 +168,25 @@ def fetch_mwbm_climgrid(workdir: Path, period: str) -> dict:
         publisher-usable window (1900-2020) and recorded in the
         manifest entry. The publisher distributes a single file
         covering all years, so `period` does not select a subset of
-        bytes to download; it gates the call (rejecting out-of-window
-        years before any network I/O) and provides provenance.
+        bytes; it gates the call (rejecting out-of-window years before
+        any work) and provides provenance.
 
     Returns
     -------
     dict
         Provenance record for manifest.json.
+
+    Raises
+    ------
+    FileNotFoundError
+        The expected file is not present in the datastore.
+    ValueError
+        The requested period falls outside the publisher-usable range
+        or manifest.json is corrupt.
+    RuntimeError
+        The file is concurrently being written, is zero bytes, fails
+        to open as a NetCDF, or its CF metadata diverges from the
+        catalog declaration.
     """
     parse_period(period)
     requested_years = years_in_period(period)
@@ -183,7 +201,6 @@ def fetch_mwbm_climgrid(workdir: Path, period: str) -> dict:
     ws = _load_project(workdir)
     meta = _catalog.source(_SOURCE_KEY)
     access = meta["access"]
-    item_id = access["item_id"]
     filename = access["filename"]
     license_str = meta.get("license", "unknown")
 
@@ -191,131 +208,72 @@ def fetch_mwbm_climgrid(workdir: Path, period: str) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     nc_path = output_dir / filename
 
-    # Fast-path: file present, manifest agrees on size + sha256 → no-op.
-    manifest_entry = _read_manifest_entry(workdir)
-    if nc_path.exists() and manifest_entry is not None:
-        recorded = manifest_entry.get("file", {})
-        if recorded.get("size_bytes") == nc_path.stat().st_size and recorded.get(
-            "sha256"
-        ):
-            actual_sha = _hash_file(nc_path)
-            if actual_sha == recorded["sha256"]:
-                logger.info(
-                    "mwbm_climgrid: file matches manifest (size + sha256); "
-                    "skipping download."
-                )
-                return {
-                    "source_key": _SOURCE_KEY,
-                    "access_url": access["url"],
-                    "doi": meta["doi"],
-                    "license": license_str,
-                    "variables": [v["name"] for v in meta["variables"]],
-                    "period": period,
-                    "spatial_extent": meta.get("spatial_extent", "CONUS"),
-                    "download_timestamp": recorded.get("downloaded_utc"),
-                    "file": recorded,
-                }
-            logger.warning(
-                "mwbm_climgrid: file size matches manifest but sha256 "
-                "does not. Re-downloading."
-            )
-
-    elif nc_path.exists() and manifest_entry is None:
-        logger.info(
-            "mwbm_climgrid: file present but no manifest entry. "
-            "Hashing existing file to reconstruct provenance."
-        )
-        size_bytes = nc_path.stat().st_size
-        if size_bytes == 0:
-            raise RuntimeError(
-                f"Existing file {nc_path} is zero bytes. Delete it and "
-                f"re-run to download fresh."
-            )
-        # Guard against an in-progress rsync/cp/operator writer: the
-        # repair branch fingerprints whatever is on disk, so we must
-        # ensure it isn't being mutated underneath us before trusting
-        # the hash.
-        _verify_file_stable(nc_path)
-        sha_hex = _hash_file(nc_path)
-        _validate_downloaded_nc(nc_path, meta)
-        now_utc = datetime.now(timezone.utc).isoformat()
-        file_record = {
-            "path": str(nc_path),
-            "size_bytes": size_bytes,
-            "sha256": sha_hex,
-            "downloaded_utc": now_utc,
-            "reconstructed": True,
-        }
-        _update_manifest(workdir, period, meta, license_str, file_record)
-        return {
-            "source_key": _SOURCE_KEY,
-            "access_url": access["url"],
-            "doi": meta["doi"],
-            "license": license_str,
-            "variables": [v["name"] for v in meta["variables"]],
-            "period": period,
-            "spatial_extent": meta.get("spatial_extent", "CONUS"),
-            "download_timestamp": now_utc,
-            "file": file_record,
-        }
-
-    now_utc = datetime.now(timezone.utc).isoformat()
-
-    from sciencebasepy import SbSession
-
-    logger.info("Connecting to ScienceBase (item %s)...", item_id)
-    sb = SbSession()
-    item = sb.get_item(item_id)
-    if not item or "id" not in item:
-        raise RuntimeError(
-            f"ScienceBase item {item_id} returned an invalid response. "
-            f"The item may have been deleted or moved."
-        )
-
-    file_infos = sb.get_item_file_info(item)
-    file_info_record = next((fi for fi in file_infos if fi["name"] == filename), None)
-    if file_info_record is None:
-        raise RuntimeError(
-            f"File {filename!r} not found in ScienceBase item {item_id}. "
-            f"Available files: {sorted(fi['name'] for fi in file_infos)}"
-        )
-
-    try:
-        sb.download_file(file_info_record["url"], filename, str(output_dir))
-    except Exception as exc:
-        nc_path.unlink(missing_ok=True)
-        raise RuntimeError(
-            f"ScienceBase download failed for {filename!r}: {exc}"
-        ) from exc
-
-    if not nc_path.exists() or nc_path.stat().st_size == 0:
-        nc_path.unlink(missing_ok=True)
-        raise RuntimeError(
-            f"Download of {filename!r} produced no file or a zero-byte "
-            f"file. ScienceBase may be experiencing issues. Try again later."
+    if not nc_path.exists():
+        raise FileNotFoundError(
+            f"Expected manually-placed file not found: {nc_path}\n\n"
+            f"ScienceBase gates this ~7.5 GB download behind a CAPTCHA, "
+            f"so automated retrieval is not possible. Download "
+            f"{filename!r} from {access['url']} via a browser, then "
+            f"place it at the path above and re-run.\n\n"
+            f"See docs/sources/mwbm_climgrid.md for full instructions."
         )
 
     size_bytes = nc_path.stat().st_size
-    publisher_size = file_info_record.get("size", 0)
-    if publisher_size and size_bytes != publisher_size:
-        nc_path.unlink(missing_ok=True)
+    if size_bytes == 0:
         raise RuntimeError(
-            f"Download size mismatch for {filename!r}: got {size_bytes}, "
-            f"publisher reported {publisher_size}. The download may have "
-            f"been truncated; re-run."
+            f"{nc_path} is zero bytes. The download likely failed or "
+            f"is still in progress. Delete it and re-download from "
+            f"ScienceBase (see docs/sources/mwbm_climgrid.md)."
         )
 
-    sha_hex = _hash_file(nc_path)
-    _validate_downloaded_nc(nc_path, meta)
+    # Fast path: manifest agrees on size + sha256 → no-op (skip the
+    # 7.5 GB rehash). The size check uses cheap stat data only; the
+    # full hash is computed lazily and only when sizes match, so a
+    # tampered file with a different size is detected without paying
+    # the streaming-hash cost on every invocation.
+    manifest_entry = _read_manifest_entry(workdir)
+    if manifest_entry is not None:
+        recorded = manifest_entry.get("file", {})
+        if (
+            recorded.get("size_bytes") == size_bytes
+            and recorded.get("sha256")
+            and _hash_file(nc_path) == recorded["sha256"]
+        ):
+            logger.info(
+                "mwbm_climgrid: file matches manifest (size + sha256); "
+                "skipping re-fingerprint."
+            )
+            return {
+                "source_key": _SOURCE_KEY,
+                "access_url": access["url"],
+                "doi": meta["doi"],
+                "license": license_str,
+                "variables": [v["name"] for v in meta["variables"]],
+                "period": period,
+                "spatial_extent": meta.get("spatial_extent", "CONUS"),
+                "download_timestamp": recorded.get("downloaded_utc"),
+                "file": recorded,
+            }
+        logger.info(
+            "mwbm_climgrid: file size or sha256 differs from manifest; "
+            "re-fingerprinting."
+        )
 
+    # File exists but either has no manifest entry, or its fingerprint
+    # disagrees with the recorded one (operator replaced the file).
+    # Verify it isn't currently being written, then hash + validate.
+    _verify_file_stable(nc_path)
+    sha_hex = _hash_file(nc_path)
+    _validate_nc(nc_path, meta)
+    now_utc = datetime.now(timezone.utc).isoformat()
     file_record = {
         "path": str(nc_path),
         "size_bytes": size_bytes,
         "sha256": sha_hex,
-        "downloaded_utc": now_utc,
+        "registered_utc": now_utc,
+        "manual_download": True,
     }
     _update_manifest(workdir, period, meta, license_str, file_record)
-
     return {
         "source_key": _SOURCE_KEY,
         "access_url": access["url"],

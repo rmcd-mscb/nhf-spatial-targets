@@ -1,14 +1,19 @@
-"""Tests for MWBM ClimGrid-forced fetch module."""
+"""Tests for MWBM ClimGrid manual-placement registration.
+
+The ScienceBase publisher gates ClimGrid_WBM.nc behind a CAPTCHA, so
+``fetch_mwbm_climgrid`` does not download — it fingerprints and
+validates whatever the operator has placed at the expected path. These
+tests cover the registration paths (initial fingerprint, idempotent
+no-op, re-fingerprint after replacement), the validation paths
+(missing variable, wrong cell_methods, corrupt NetCDF, zero-byte
+file), the period-validation gate, and the concurrent-writer guard.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import os
-import sys
-import types
-from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -19,20 +24,20 @@ from nhf_spatial_targets.fetch.mwbm_climgrid import fetch_mwbm_climgrid
 
 
 @pytest.fixture(autouse=True)
-def _short_repair_stability(monkeypatch):
-    """Shrink the repair-branch stability window to keep the suite fast.
+def _short_stability_window(monkeypatch):
+    """Shrink the stability window to keep the suite fast.
 
-    The production default is 0.5s per repair invocation; tests don't
-    need to wait. The dedicated concurrent-writer test below patches
-    this back manually to a value that the test's mtime-bump trigger
-    can race within.
+    Production default is 0.5s per invocation. Tests don't need to
+    wait. The dedicated concurrent-writer test patches `time.sleep`
+    directly to a value its mtime-bump trigger can race within.
     """
-    monkeypatch.setattr(_mwbm_module, "_REPAIR_STABILITY_SECONDS", 0.0)
+    monkeypatch.setattr(_mwbm_module, "_STABILITY_SECONDS", 0.0)
 
 
 def _make_project(tmp_path: Path) -> Path:
     """Materialize a minimal valid project directory."""
     import json
+
     import yaml
 
     datastore = tmp_path / "datastore"
@@ -94,44 +99,22 @@ def _write_dummy_nc(path: Path) -> None:
     ds.close()
 
 
-@contextmanager
-def _patch_sbsession_to_emit(target_dir: Path, filename: str = "ClimGrid_WBM.nc"):
-    """Context manager that injects a fake sciencebasepy into sys.modules.
+def _place_file(workdir: Path) -> Path:
+    """Materialize a valid dummy NetCDF at the canonical datastore path."""
+    nc_dir = workdir / "datastore" / "mwbm_climgrid"
+    nc_dir.mkdir(parents=True)
+    nc_path = nc_dir / "ClimGrid_WBM.nc"
+    _write_dummy_nc(nc_path)
+    return nc_path
 
-    Uses sys.modules injection (same pattern as test_reitz2017.py) so the
-    lazy ``from sciencebasepy import SbSession`` inside fetch_mwbm_climgrid
-    resolves to the mock rather than the real network client.
-    """
-    fake_session = MagicMock()
-    fake_session.get_item.return_value = {"id": "64c948dbd34e70357a34c11e"}
-    fake_session.get_item_file_info.return_value = [
-        {"name": filename, "url": "https://example/fake", "size": 0}
-    ]
 
-    def _fake_download(url, name, dest_dir):
-        out = Path(dest_dir) / name
-        _write_dummy_nc(out)
-        # Backfill the publisher size on the file_info record so the
-        # post-download size check has the real number to compare.
-        fake_session.get_item_file_info.return_value[0]["size"] = out.stat().st_size
-
-    fake_session.download_file.side_effect = _fake_download
-
-    fake_module = types.ModuleType("sciencebasepy")
-    fake_module.SbSession = MagicMock(return_value=fake_session)
-    original = sys.modules.get("sciencebasepy")
-    sys.modules["sciencebasepy"] = fake_module
-    try:
-        yield fake_session
-    finally:
-        if original is not None:
-            sys.modules["sciencebasepy"] = original
-        else:
-            sys.modules.pop("sciencebasepy", None)
+# ---------------------------------------------------------------------------
+# Period gate
+# ---------------------------------------------------------------------------
 
 
 def test_period_outside_data_range_rejected(tmp_path):
-    """Periods outside 1900/2020 raise ValueError before any download."""
+    """Periods outside 1900/2020 raise ValueError before touching the file."""
     workdir = _make_project(tmp_path)
     with pytest.raises(ValueError, match="outside the MWBM-ClimGrid data range"):
         fetch_mwbm_climgrid(workdir=workdir, period="1850/1900")
@@ -139,21 +122,69 @@ def test_period_outside_data_range_rejected(tmp_path):
         fetch_mwbm_climgrid(workdir=workdir, period="2000/2025")
 
 
-def test_fetch_downloads_and_writes_manifest(tmp_path):
+@pytest.mark.parametrize("period", ["1900/1900", "2020/2020", "1900/2020"])
+def test_period_boundary_inclusive(tmp_path, period):
+    """The publisher-usable window is inclusive at both ends."""
+    workdir = _make_project(tmp_path)
+    _place_file(workdir)
+    result = fetch_mwbm_climgrid(workdir=workdir, period=period)
+    assert result["period"] == period
+
+
+@pytest.mark.parametrize("period", ["1899/1900", "2020/2021"])
+def test_period_boundary_off_by_one_rejected(tmp_path, period):
+    """A single year outside the inclusive window still raises ValueError."""
+    workdir = _make_project(tmp_path)
+    with pytest.raises(ValueError, match="outside the MWBM-ClimGrid data range"):
+        fetch_mwbm_climgrid(workdir=workdir, period=period)
+
+
+# ---------------------------------------------------------------------------
+# Missing-file handling — the headline of the manual-placement design.
+# ---------------------------------------------------------------------------
+
+
+def test_missing_file_raises_with_download_instructions(tmp_path):
+    """Operator hasn't placed the file → FileNotFoundError pointing at docs."""
+    workdir = _make_project(tmp_path)
+    with pytest.raises(FileNotFoundError) as exc_info:
+        fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
+    msg = str(exc_info.value)
+    assert "ClimGrid_WBM.nc" in msg
+    assert "sciencebase.gov" in msg.lower() or "ScienceBase" in msg
+    assert "docs/sources/mwbm_climgrid.md" in msg
+
+
+def test_zero_byte_file_rejected(tmp_path):
+    """A zero-byte file (interrupted browser download) raises RuntimeError."""
+    workdir = _make_project(tmp_path)
+    nc_dir = workdir / "datastore" / "mwbm_climgrid"
+    nc_dir.mkdir(parents=True)
+    (nc_dir / "ClimGrid_WBM.nc").touch()
+    with pytest.raises(RuntimeError, match="zero bytes"):
+        fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
+
+
+# ---------------------------------------------------------------------------
+# Registration paths
+# ---------------------------------------------------------------------------
+
+
+def test_initial_registration_writes_manifest(tmp_path):
+    """First call after manual placement → fingerprint + manifest write."""
     import json
 
     workdir = _make_project(tmp_path)
-    datastore = workdir / "datastore"
-
-    with _patch_sbsession_to_emit(datastore):
-        result = fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
-
-    nc_path = datastore / "mwbm_climgrid" / "ClimGrid_WBM.nc"
-    assert nc_path.exists(), "downloaded file should land in datastore"
-
+    nc_path = _place_file(workdir)
     expected_sha = hashlib.sha256(nc_path.read_bytes()).hexdigest()
+
+    assert not (workdir / "manifest.json").exists()
+
+    result = fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
+
     assert result["file"]["sha256"] == expected_sha
     assert result["file"]["size_bytes"] == nc_path.stat().st_size
+    assert result["file"]["manual_download"] is True
     assert result["doi"] == "10.5066/P9QCLGKM"
     assert result["source_key"] == "mwbm_climgrid"
 
@@ -163,67 +194,55 @@ def test_fetch_downloads_and_writes_manifest(tmp_path):
     assert entry["file"]["path"] == str(nc_path)
 
 
-def test_fetch_idempotent_when_manifest_matches(tmp_path):
-    """Pre-seed file + manifest with matching sha256/size; fetch is a no-op."""
-    import json
-
+def test_idempotent_when_manifest_matches(tmp_path):
+    """File + manifest agree on size and sha256 → no rewrite of manifest."""
     workdir = _make_project(tmp_path)
-    datastore = workdir / "datastore"
-    nc_dir = datastore / "mwbm_climgrid"
-    nc_dir.mkdir(parents=True)
-    nc_path = nc_dir / "ClimGrid_WBM.nc"
-    _write_dummy_nc(nc_path)
+    nc_path = _place_file(workdir)
+
+    # First call seeds the manifest.
+    fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
+    manifest_path = workdir / "manifest.json"
+    first_mtime = manifest_path.stat().st_mtime
+    first_contents = manifest_path.read_text()
+
+    # Second call sees a matching fingerprint and skips the manifest
+    # rewrite. We can't directly assert "no write happened" without
+    # patching, but we can assert the content didn't change and the
+    # returned record reuses the recorded download_timestamp.
+    result = fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
+    assert manifest_path.read_text() == first_contents
+    assert manifest_path.stat().st_mtime == first_mtime
 
     sha = hashlib.sha256(nc_path.read_bytes()).hexdigest()
-    size = nc_path.stat().st_size
-    manifest = {
-        "sources": {
-            "mwbm_climgrid": {
-                "source_key": "mwbm_climgrid",
-                "file": {
-                    "path": str(nc_path),
-                    "size_bytes": size,
-                    "sha256": sha,
-                    "downloaded_utc": "2026-04-28T00:00:00+00:00",
-                },
-            }
-        }
-    }
-    (workdir / "manifest.json").write_text(json.dumps(manifest))
-
-    with _patch_sbsession_to_emit(datastore) as fake_session:
-        result = fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
-        # No download/network call should have happened
-        fake_session.download_file.assert_not_called()
-        fake_session.get_item.assert_not_called()
-
     assert result["file"]["sha256"] == sha
-    assert result["file"]["size_bytes"] == size
 
 
-def test_fetch_repairs_missing_manifest(tmp_path):
-    """File present, no manifest entry → hash + write manifest, skip download."""
+def test_rerun_after_replacement_rewrites_manifest(tmp_path):
+    """Operator drops in a new file → fingerprint changes → manifest updates."""
     import json
 
     workdir = _make_project(tmp_path)
-    datastore = workdir / "datastore"
-    nc_dir = datastore / "mwbm_climgrid"
-    nc_dir.mkdir(parents=True)
-    nc_path = nc_dir / "ClimGrid_WBM.nc"
+    nc_path = _place_file(workdir)
+    fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
+    first_manifest = json.loads((workdir / "manifest.json").read_text())
+    first_sha = first_manifest["sources"]["mwbm_climgrid"]["file"]["sha256"]
+
+    # Replace the file with different content (different bytes → different sha).
+    nc_path.unlink()
     _write_dummy_nc(nc_path)
-    expected_sha = hashlib.sha256(nc_path.read_bytes()).hexdigest()
+    # Touch to simulate a fresh placement; force at least 1 byte difference.
+    with nc_path.open("ab") as f:
+        f.write(b"\0")
 
-    # No manifest.json yet
-    assert not (workdir / "manifest.json").exists()
+    fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
+    second_manifest = json.loads((workdir / "manifest.json").read_text())
+    second_sha = second_manifest["sources"]["mwbm_climgrid"]["file"]["sha256"]
+    assert second_sha != first_sha
 
-    with _patch_sbsession_to_emit(datastore) as fake_session:
-        result = fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
-        fake_session.download_file.assert_not_called()
-        fake_session.get_item.assert_not_called()
 
-    assert result["file"]["sha256"] == expected_sha
-    manifest = json.loads((workdir / "manifest.json").read_text())
-    assert manifest["sources"]["mwbm_climgrid"]["file"]["sha256"] == expected_sha
+# ---------------------------------------------------------------------------
+# CF-metadata validation
+# ---------------------------------------------------------------------------
 
 
 def _write_dummy_nc_with_bad_cell_methods(path: Path) -> None:
@@ -268,215 +287,81 @@ def _write_dummy_nc_with_bad_cell_methods(path: Path) -> None:
     ds.close()
 
 
-def test_fetch_rejects_mismatched_cell_methods(tmp_path):
+def test_rejects_mismatched_cell_methods(tmp_path):
     """Publisher metadata divergence from catalog raises a clear error."""
     workdir = _make_project(tmp_path)
+    nc_dir = workdir / "datastore" / "mwbm_climgrid"
+    nc_dir.mkdir(parents=True)
+    _write_dummy_nc_with_bad_cell_methods(nc_dir / "ClimGrid_WBM.nc")
 
-    # Adapt the existing helper inline: write a BAD dummy NC instead of good
-    fake_session = MagicMock()
-    fake_session.get_item.return_value = {"id": "x"}
-    fake_session.get_item_file_info.return_value = [
-        {"name": "ClimGrid_WBM.nc", "url": "x", "size": 0}
-    ]
-
-    def _bad_download(url, name, dest_dir):
-        out = Path(dest_dir) / name
-        _write_dummy_nc_with_bad_cell_methods(out)
-        fake_session.get_item_file_info.return_value[0]["size"] = out.stat().st_size
-
-    fake_session.download_file.side_effect = _bad_download
-
-    fake_module = types.ModuleType("sciencebasepy")
-    fake_module.SbSession = MagicMock(return_value=fake_session)
-    original = sys.modules.get("sciencebasepy")
-    sys.modules["sciencebasepy"] = fake_module
-    try:
-        with pytest.raises(RuntimeError, match="cell_methods"):
-            fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
-    finally:
-        if original is not None:
-            sys.modules["sciencebasepy"] = original
-        else:
-            sys.modules.pop("sciencebasepy", None)
+    with pytest.raises(RuntimeError, match="cell_methods"):
+        fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
+    # Manifest must NOT exist — failed validation must not write provenance.
+    assert not (workdir / "manifest.json").exists()
 
 
-def test_fetch_rejects_missing_variable(tmp_path):
+def test_rejects_missing_variable(tmp_path):
     """Publisher dropping a variable raises before manifest is written."""
     import pandas as pd
 
     workdir = _make_project(tmp_path)
-
-    fake_session = MagicMock()
-    fake_session.get_item.return_value = {"id": "x"}
-    fake_session.get_item_file_info.return_value = [
-        {"name": "ClimGrid_WBM.nc", "url": "x", "size": 0}
-    ]
-
-    def _missing_var_download(url, name, dest_dir):
-        out = Path(dest_dir) / name
-        ds = xr.Dataset(
-            data_vars={
-                "runoff": (
-                    ("time", "latitude", "longitude"),
-                    np.zeros((1, 1, 1)),
-                    {"units": "mm", "cell_methods": "time: sum"},
-                ),
-                # aet, soilstorage, swe missing
-            },
-            coords={
-                "time": ("time", pd.date_range("1900-01-01", periods=1, freq="MS")),
-                "latitude": ("latitude", [40.0], {"axis": "Y"}),
-                "longitude": ("longitude", [-105.0], {"axis": "X"}),
-            },
-        )
-        ds["time"].attrs.update({"axis": "T", "standard_name": "time"})
-        ds.to_netcdf(out)
-        ds.close()
-        fake_session.get_item_file_info.return_value[0]["size"] = out.stat().st_size
-
-    fake_session.download_file.side_effect = _missing_var_download
-
-    fake_module = types.ModuleType("sciencebasepy")
-    fake_module.SbSession = MagicMock(return_value=fake_session)
-    original = sys.modules.get("sciencebasepy")
-    sys.modules["sciencebasepy"] = fake_module
-    try:
-        with pytest.raises(RuntimeError, match="missing variables"):
-            fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
-    finally:
-        if original is not None:
-            sys.modules["sciencebasepy"] = original
-        else:
-            sys.modules.pop("sciencebasepy", None)
-
-
-# ---------------------------------------------------------------------------
-# Polished-tier coverage: gaps surfaced by PR #76 review (test analyzer +
-# silent-failure-hunter). Each test pins a specific failure or boundary.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("period", ["1900/1900", "2020/2020", "1900/2020"])
-def test_period_boundary_inclusive(tmp_path, period):
-    """The publisher-usable window is inclusive at both ends."""
-    workdir = _make_project(tmp_path)
-    datastore = workdir / "datastore"
-    with _patch_sbsession_to_emit(datastore):
-        result = fetch_mwbm_climgrid(workdir=workdir, period=period)
-    assert result["period"] == period
-
-
-@pytest.mark.parametrize("period", ["1899/1900", "2020/2021"])
-def test_period_boundary_off_by_one_rejected(tmp_path, period):
-    """A single year outside the inclusive window still raises ValueError."""
-    workdir = _make_project(tmp_path)
-    with pytest.raises(ValueError, match="outside the MWBM-ClimGrid data range"):
-        fetch_mwbm_climgrid(workdir=workdir, period=period)
-
-
-def test_fetch_redownloads_when_sha256_mismatch(tmp_path):
-    """File present + manifest size matches but sha256 does NOT → re-download."""
-    import json
-
-    workdir = _make_project(tmp_path)
-    datastore = workdir / "datastore"
-    nc_dir = datastore / "mwbm_climgrid"
+    nc_dir = workdir / "datastore" / "mwbm_climgrid"
     nc_dir.mkdir(parents=True)
     nc_path = nc_dir / "ClimGrid_WBM.nc"
-    _write_dummy_nc(nc_path)
 
-    # Manifest claims same size but a deliberately wrong sha256.
-    size = nc_path.stat().st_size
-    bogus_sha = "0" * 64
-    actual_sha = hashlib.sha256(nc_path.read_bytes()).hexdigest()
-    assert bogus_sha != actual_sha
-    (workdir / "manifest.json").write_text(
-        json.dumps(
-            {
-                "sources": {
-                    "mwbm_climgrid": {
-                        "source_key": "mwbm_climgrid",
-                        "file": {
-                            "path": str(nc_path),
-                            "size_bytes": size,
-                            "sha256": bogus_sha,
-                            "downloaded_utc": "2026-04-28T00:00:00+00:00",
-                        },
-                    }
-                }
-            }
-        )
+    ds = xr.Dataset(
+        data_vars={
+            "runoff": (
+                ("time", "latitude", "longitude"),
+                np.zeros((1, 1, 1)),
+                {"units": "mm", "cell_methods": "time: sum"},
+            ),
+            # aet, soilstorage, swe missing
+        },
+        coords={
+            "time": ("time", pd.date_range("1900-01-01", periods=1, freq="MS")),
+            "latitude": ("latitude", [40.0], {"axis": "Y"}),
+            "longitude": ("longitude", [-105.0], {"axis": "X"}),
+        },
     )
+    ds["time"].attrs.update({"axis": "T", "standard_name": "time"})
+    ds.to_netcdf(nc_path)
+    ds.close()
 
-    with _patch_sbsession_to_emit(datastore) as fake_session:
-        result = fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
-        # Re-download path was taken.
-        fake_session.download_file.assert_called_once()
-
-    # New manifest carries the real sha (post-redownload), not the bogus one.
-    manifest = json.loads((workdir / "manifest.json").read_text())
-    written_sha = manifest["sources"]["mwbm_climgrid"]["file"]["sha256"]
-    assert written_sha != bogus_sha
-    assert result["file"]["sha256"] == written_sha
-
-
-def test_fetch_rejects_corrupt_netcdf_file(tmp_path):
-    """A non-NetCDF file (truncated/corrupt download) raises RuntimeError."""
-    workdir = _make_project(tmp_path)
-
-    fake_session = MagicMock()
-    fake_session.get_item.return_value = {"id": "x"}
-    fake_session.get_item_file_info.return_value = [
-        {"name": "ClimGrid_WBM.nc", "url": "x", "size": 0}
-    ]
-
-    def _corrupt_download(url, name, dest_dir):
-        out = Path(dest_dir) / name
-        out.write_bytes(b"not-a-netcdf-file-just-some-bytes")
-        fake_session.get_item_file_info.return_value[0]["size"] = out.stat().st_size
-
-    fake_session.download_file.side_effect = _corrupt_download
-
-    fake_module = types.ModuleType("sciencebasepy")
-    fake_module.SbSession = MagicMock(return_value=fake_session)
-    original = sys.modules.get("sciencebasepy")
-    sys.modules["sciencebasepy"] = fake_module
-    try:
-        with pytest.raises(RuntimeError, match="Cannot open downloaded NetCDF"):
-            fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
-    finally:
-        if original is not None:
-            sys.modules["sciencebasepy"] = original
-        else:
-            sys.modules.pop("sciencebasepy", None)
-
-
-def test_fetch_repair_rejects_zero_byte_file(tmp_path):
-    """File present + zero bytes + no manifest → repair branch raises."""
-    workdir = _make_project(tmp_path)
-    datastore = workdir / "datastore"
-    nc_dir = datastore / "mwbm_climgrid"
-    nc_dir.mkdir(parents=True)
-    nc_path = nc_dir / "ClimGrid_WBM.nc"
-    nc_path.touch()  # zero bytes
-    assert nc_path.stat().st_size == 0
+    with pytest.raises(RuntimeError, match="missing variables"):
+        fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
     assert not (workdir / "manifest.json").exists()
 
-    with pytest.raises(RuntimeError, match="zero bytes"):
+
+def test_rejects_corrupt_netcdf_file(tmp_path):
+    """A non-NetCDF file (truncated browser download) raises RuntimeError."""
+    workdir = _make_project(tmp_path)
+    nc_dir = workdir / "datastore" / "mwbm_climgrid"
+    nc_dir.mkdir(parents=True)
+    (nc_dir / "ClimGrid_WBM.nc").write_bytes(b"not-a-netcdf-file-just-some-bytes")
+
+    with pytest.raises(RuntimeError, match="Cannot open"):
         fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
 
 
-def test_fetch_raises_on_corrupt_manifest(tmp_path):
+# ---------------------------------------------------------------------------
+# Manifest hardening
+# ---------------------------------------------------------------------------
+
+
+def test_raises_on_corrupt_manifest(tmp_path):
     """A manifest.json that doesn't parse as JSON fails fast (no wasted rehash)."""
     workdir = _make_project(tmp_path)
-    datastore = workdir / "datastore"
-    nc_dir = datastore / "mwbm_climgrid"
-    nc_dir.mkdir(parents=True)
-    _write_dummy_nc(nc_dir / "ClimGrid_WBM.nc")
+    _place_file(workdir)
     (workdir / "manifest.json").write_text("{not valid json")
 
     with pytest.raises(ValueError, match="manifest.json.*corrupt"):
         fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
+
+
+# ---------------------------------------------------------------------------
+# Stability / concurrent-writer guard
+# ---------------------------------------------------------------------------
 
 
 def test_verify_file_stable_detects_mtime_change(tmp_path, monkeypatch):
@@ -517,23 +402,13 @@ def test_verify_file_stable_passes_when_quiescent(tmp_path):
     """Stable file (no concurrent writer) passes the stability check."""
     p = tmp_path / "quiet.nc"
     p.write_bytes(b"stable content")
-    # autouse fixture sets _REPAIR_STABILITY_SECONDS = 0.0; the helper
-    # should still pass because both stat() calls see identical state.
     _mwbm_module._verify_file_stable(p)  # no exception
 
 
-def test_fetch_repair_rejects_concurrent_writer(tmp_path, monkeypatch):
-    """Repair branch refuses to fingerprint a file being written.
-
-    Simulates an in-progress operator copy by mutating the file via
-    os.utime while the repair branch is in its stability window.
-    """
+def test_rejects_concurrent_writer(tmp_path, monkeypatch):
+    """Initial registration refuses to fingerprint a file being written."""
     workdir = _make_project(tmp_path)
-    datastore = workdir / "datastore"
-    nc_dir = datastore / "mwbm_climgrid"
-    nc_dir.mkdir(parents=True)
-    nc_path = nc_dir / "ClimGrid_WBM.nc"
-    _write_dummy_nc(nc_path)
+    nc_path = _place_file(workdir)
     assert not (workdir / "manifest.json").exists()
 
     def _bump_mtime_during_sleep(_seconds):
@@ -545,31 +420,6 @@ def test_fetch_repair_rejects_concurrent_writer(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="modified concurrently"):
         fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
 
-    # Manifest must NOT have been written — the bad-state fingerprint
-    # would corrupt subsequent idempotency checks.
+    # Manifest must NOT have been written — a bad-state fingerprint would
+    # corrupt subsequent idempotency checks.
     assert not (workdir / "manifest.json").exists()
-
-
-def test_fetch_raises_when_file_not_in_sciencebase_item(tmp_path):
-    """If the publisher renames the file, the lookup miss is reported clearly."""
-    workdir = _make_project(tmp_path)
-
-    fake_session = MagicMock()
-    fake_session.get_item.return_value = {"id": "64c948dbd34e70357a34c11e"}
-    # Item exists but has a different filename than the catalog declares.
-    fake_session.get_item_file_info.return_value = [
-        {"name": "different_name.nc", "url": "x", "size": 1234}
-    ]
-
-    fake_module = types.ModuleType("sciencebasepy")
-    fake_module.SbSession = MagicMock(return_value=fake_session)
-    original = sys.modules.get("sciencebasepy")
-    sys.modules["sciencebasepy"] = fake_module
-    try:
-        with pytest.raises(RuntimeError, match="not found in ScienceBase item"):
-            fetch_mwbm_climgrid(workdir=workdir, period="1900/1900")
-    finally:
-        if original is not None:
-            sys.modules["sciencebasepy"] = original
-        else:
-            sys.modules.pop("sciencebasepy", None)
