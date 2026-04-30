@@ -488,6 +488,36 @@ def consolidate_year(
     return daily_path, monthly_path
 
 
+def _assign_worker_years(
+    all_years: list[int],
+    completed: set[int],
+    worker_index: int,
+    n_workers: int,
+) -> tuple[list[int], list[int]]:
+    """Return ``(assigned, skipped)`` years for one worker.
+
+    Each worker takes a deterministic round-robin slice of ``all_years``
+    keyed by ``worker_index``, then filters out years already recorded in
+    ``completed``. ``assigned`` is the years to download; ``skipped`` is
+    the subset of the slice that's already manifest-complete (returned
+    for logging).
+
+    The earlier implementation computed ``remaining = all_years -
+    completed`` first, then sliced ``remaining`` round-robin. Because the
+    manifest is shared across parallel workers and updated as each
+    worker's downloads finish, sibling workers each saw a different
+    ``remaining`` list. Round-robin slicing of differing lists left
+    coverage gaps — in production, 9 of 47 years (including 2022) were
+    silently dropped because no worker's slice covered them. Slicing
+    ``all_years`` first makes each worker's assignment independent of
+    sibling progress.
+    """
+    my_slice = all_years[worker_index::n_workers]
+    assigned = [y for y in my_slice if y not in completed]
+    skipped = [y for y in my_slice if y in completed]
+    return assigned, skipped
+
+
 def _completed_years_from_manifest(workdir: Path) -> set[int]:
     """Return the set of years fully recorded in ``manifest.json``.
 
@@ -580,25 +610,23 @@ def fetch_era5_land(
 
     all_years = years_in_period(period)
 
-    # Skip years already fully recorded in the manifest (both daily and monthly
-    # output files confirmed present on disk).  This is an optimistic fast-path:
-    # file-level idempotency inside download_year_variable / consolidate_year
-    # handles partially-complete years correctly regardless.
+    # Skip years already fully recorded in the manifest. This is an
+    # optimistic fast-path; file-level idempotency inside
+    # download_year_variable / consolidate_year handles partially-complete
+    # years correctly regardless.
     completed = _completed_years_from_manifest(workdir)
-    remaining = [y for y in all_years if y not in completed]
-    if completed:
-        skipped = sorted(y for y in all_years if y in completed)
+    my_years, skipped_in_slice = _assign_worker_years(
+        all_years, completed, worker_index, n_workers
+    )
+    if skipped_in_slice:
         logger.info(
-            "Worker %d/%d: skipping %d manifest-completed year(s): %s",
+            "Worker %d/%d: skipping %d manifest-completed year(s) in this "
+            "worker's slice: %s",
             worker_index,
             n_workers,
-            len(skipped),
-            skipped,
+            len(skipped_in_slice),
+            skipped_in_slice,
         )
-
-    # Assign this worker's slice via round-robin so years spread evenly even
-    # when the list length is not divisible by n_workers.
-    my_years = remaining[worker_index::n_workers]
     logger.info(
         "Worker %d/%d: assigned %d year(s) to process: %s",
         worker_index,

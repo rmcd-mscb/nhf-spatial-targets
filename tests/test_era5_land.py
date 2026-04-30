@@ -336,6 +336,93 @@ def test_download_month_variable_re_fetches_existing_corrupt_chunk(
     assert set(zip(times.year.tolist(), times.month.tolist())) == {(2020, 3)}
 
 
+def test_assign_worker_years_full_coverage_with_racing_manifest():
+    """Round-robin sharding must cover every year exactly once across all
+    workers, even when the manifest grows mid-run because sibling workers
+    finish in parallel.
+
+    Regression for the production failure: with 47 years (1979-2025) and
+    4 workers, the prior logic dropped 9 of 47 years (including 2022)
+    because each worker computed ``remaining = all_years - completed``
+    and then sliced ``remaining`` round-robin — and sibling workers each
+    saw a different ``completed`` set, so the round-robin didn't tile.
+    """
+    from nhf_spatial_targets.fetch.era5_land import _assign_worker_years
+
+    all_years = list(range(1979, 2026))  # 47 years, matches production
+    n_workers = 4
+
+    # Simulate the actual race: worker 0 starts with empty manifest,
+    # processes its slice, writes those 12 years to the manifest.
+    # Workers 1-3 then start and see worker 0's outputs as completed.
+    worker_completions = {
+        0: set(),
+        1: set(all_years[0::n_workers]),
+        2: set(all_years[0::n_workers]),
+        3: set(all_years[0::n_workers]),
+    }
+
+    assigned_by_worker = {}
+    for w in range(n_workers):
+        assigned, _ = _assign_worker_years(
+            all_years, worker_completions[w], w, n_workers
+        )
+        assigned_by_worker[w] = assigned
+
+    # Worker 0 processes its slice; workers 1-3 process theirs (each
+    # filters out worker 0's outputs, but those aren't in their slices
+    # anyway under the new logic).
+    actually_processed = set()
+    for w, ys in assigned_by_worker.items():
+        actually_processed.update(ys)
+    actually_processed.update(worker_completions[1])  # worker 0's done years
+
+    assert actually_processed == set(all_years), (
+        f"missing years: {sorted(set(all_years) - actually_processed)}"
+    )
+
+    # No two workers process the same year — the slices are disjoint.
+    flat = [y for ys in assigned_by_worker.values() for y in ys]
+    assert len(flat) == len(set(flat))
+
+
+def test_assign_worker_years_2022_orphan_regression():
+    """Specific regression: with 47 years across 4 workers and worker 0's
+    outputs already manifest-completed, 2022 must still be assigned to
+    *some* worker. (Was silently dropped by the prior round-robin logic.)
+    """
+    from nhf_spatial_targets.fetch.era5_land import _assign_worker_years
+
+    all_years = list(range(1979, 2026))
+    n_workers = 4
+    completed = set(all_years[0::n_workers])  # worker 0's slice
+
+    assigned_to_someone = set()
+    for w in range(n_workers):
+        assigned, _ = _assign_worker_years(all_years, completed, w, n_workers)
+        assigned_to_someone.update(assigned)
+
+    assert 2022 in assigned_to_someone
+
+
+def test_assign_worker_years_skipped_reports_intersection_only():
+    """``skipped`` is the worker-slice ∩ completed — not the full completed set."""
+    from nhf_spatial_targets.fetch.era5_land import _assign_worker_years
+
+    all_years = [2000, 2001, 2002, 2003, 2004]
+    # Mark 2001 (worker 1's slice) and 2003 (worker 1's slice) as completed.
+    # Worker 0 should not see those in its skipped list.
+    completed = {2001, 2003}
+
+    assigned_w0, skipped_w0 = _assign_worker_years(all_years, completed, 0, 2)
+    assert assigned_w0 == [2000, 2002, 2004]  # worker 0's slice, none completed
+    assert skipped_w0 == []
+
+    assigned_w1, skipped_w1 = _assign_worker_years(all_years, completed, 1, 2)
+    assert assigned_w1 == []  # all of worker 1's slice already done
+    assert skipped_w1 == [2001, 2003]
+
+
 def test_validate_chunk_time_coord_accepts_matching(tmp_path):
     from nhf_spatial_targets.fetch.era5_land import _validate_chunk_time_coord
 
