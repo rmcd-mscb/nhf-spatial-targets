@@ -44,7 +44,7 @@ def test_unit_from_catalog_dict_variables(helpers):
 
 def test_unit_from_catalog_flat_variables(helpers):
     # ssebop has a flat variables list and a source-level units field
-    units = helpers.unit_from_catalog("ssebop", "actual_et")
+    units = helpers.unit_from_catalog("ssebop", "et")
     assert units == "mm/month"
 
 
