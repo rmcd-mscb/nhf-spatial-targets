@@ -648,8 +648,12 @@ def test_compute_or_load_weights_writes_cache_on_miss(tmp_path, tiny_fabric):
 
 
 def test_compute_or_load_weights_uses_cache_on_hit(tmp_path, tiny_fabric):
-    """Preexisting cache CSV must be loaded without invoking WeightGen."""
-    from nhf_spatial_targets.aggregate._driver import compute_or_load_weights
+    """Preexisting cache CSV plus matching fingerprint sidecar must be loaded
+    without invoking WeightGen."""
+    from nhf_spatial_targets.aggregate._driver import (
+        _batch_fingerprint,
+        compute_or_load_weights,
+    )
 
     (tmp_path / "weights").mkdir()
     batch_gdf = gpd.read_file(tiny_fabric)
@@ -664,6 +668,9 @@ def test_compute_or_load_weights_uses_cache_on_hit(tmp_path, tiny_fabric):
     cached = _fake_weights()
     cache_path = tmp_path / "weights" / "toy_batch0.csv"
     cached.to_csv(cache_path, index=False)
+    cache_path.with_suffix(".csv.meta").write_text(
+        _batch_fingerprint(batch_gdf, "hru_id")
+    )
 
     with patch("nhf_spatial_targets.aggregate._driver.WeightGen") as mock_wg:
         weights = compute_or_load_weights(
@@ -682,6 +689,114 @@ def test_compute_or_load_weights_uses_cache_on_hit(tmp_path, tiny_fabric):
         )
     assert not mock_wg.called
     pd.testing.assert_frame_equal(weights, cached)
+
+
+def test_compute_or_load_weights_invalidates_cache_when_sidecar_missing(
+    tmp_path, tiny_fabric
+):
+    """A pre-fingerprint cache (CSV without .csv.meta sidecar) must be
+    treated as untrusted and recomputed."""
+    from nhf_spatial_targets.aggregate._driver import compute_or_load_weights
+
+    (tmp_path / "weights").mkdir()
+    batch_gdf = gpd.read_file(tiny_fabric)
+    source_ds = xr.Dataset(
+        {"a": (["time", "lat", "lon"], np.ones((1, 2, 2)))},
+        coords={
+            "time": pd.date_range("2000-01-01", periods=1, freq="MS"),
+            "lat": [0.25, 0.75],
+            "lon": [0.5, 1.5],
+        },
+    )
+    # CSV present, sidecar absent (legacy cache state).
+    stale = _fake_weights()
+    cache_path = tmp_path / "weights" / "toy_batch0.csv"
+    stale.to_csv(cache_path, index=False)
+    fresh = _fake_weights()
+
+    with (
+        patch("nhf_spatial_targets.aggregate._driver.WeightGen") as mock_wg,
+        patch("nhf_spatial_targets.aggregate._driver.UserCatData"),
+    ):
+        inst = MagicMock()
+        inst.calculate_weights.return_value = fresh
+        mock_wg.return_value = inst
+        compute_or_load_weights(
+            batch_gdf=batch_gdf,
+            source_ds=source_ds,
+            source_var="a",
+            source_crs="EPSG:4326",
+            x_coord="lon",
+            y_coord="lat",
+            time_coord="time",
+            id_col="hru_id",
+            source_key="toy",
+            batch_id=0,
+            workdir=tmp_path,
+            period=("2000-01-01", "2000-02-01"),
+        )
+    assert mock_wg.called  # cache was invalidated, weights recomputed
+    assert cache_path.with_suffix(".csv.meta").exists()  # sidecar now written
+
+
+def test_compute_or_load_weights_invalidates_cache_when_fingerprint_mismatches(
+    tmp_path, tiny_fabric
+):
+    """A cache written for a different batch (different HRU id-set) must be
+    detected via fingerprint mismatch and recomputed.
+
+    Reproduces the MOD16A2 stale-cache bug: a previous run at a smaller
+    batch_size left weight files keyed only by batch_id; a subsequent run
+    at a larger batch_size loaded those files even though they covered a
+    different HRU cluster, silently producing mostly-NaN aggregates.
+    """
+    from nhf_spatial_targets.aggregate._driver import compute_or_load_weights
+
+    (tmp_path / "weights").mkdir()
+    batch_gdf = gpd.read_file(tiny_fabric)
+    source_ds = xr.Dataset(
+        {"a": (["time", "lat", "lon"], np.ones((1, 2, 2)))},
+        coords={
+            "time": pd.date_range("2000-01-01", periods=1, freq="MS"),
+            "lat": [0.25, 0.75],
+            "lon": [0.5, 1.5],
+        },
+    )
+    cache_path = tmp_path / "weights" / "toy_batch0.csv"
+    _fake_weights().to_csv(cache_path, index=False)
+    # Sidecar from a different batching scheme — fingerprint won't match
+    # the current batch_gdf's HRU id-set.
+    cache_path.with_suffix(".csv.meta").write_text("a" * 64)
+    fresh = _fake_weights()
+
+    with (
+        patch("nhf_spatial_targets.aggregate._driver.WeightGen") as mock_wg,
+        patch("nhf_spatial_targets.aggregate._driver.UserCatData"),
+    ):
+        inst = MagicMock()
+        inst.calculate_weights.return_value = fresh
+        mock_wg.return_value = inst
+        compute_or_load_weights(
+            batch_gdf=batch_gdf,
+            source_ds=source_ds,
+            source_var="a",
+            source_crs="EPSG:4326",
+            x_coord="lon",
+            y_coord="lat",
+            time_coord="time",
+            id_col="hru_id",
+            source_key="toy",
+            batch_id=0,
+            workdir=tmp_path,
+            period=("2000-01-01", "2000-02-01"),
+        )
+    assert mock_wg.called  # stale fingerprint triggered recompute
+    # Sidecar now reflects the current batch's fingerprint.
+    from nhf_spatial_targets.aggregate._driver import _batch_fingerprint
+
+    assert cache_path.with_suffix(
+        ".csv.meta"
+    ).read_text().strip() == _batch_fingerprint(batch_gdf, "hru_id")
 
 
 def test_update_manifest_raises_on_corrupt_json(project):

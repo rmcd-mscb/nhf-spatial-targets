@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -11,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 import xarray as xr
 from gdptools import AggGen, UserCatData, WeightGen
@@ -118,6 +120,23 @@ def load_and_batch_fabric(fabric_path: Path, batch_size: int = 500) -> gpd.GeoDa
 def weight_cache_path(workdir: Path, source_key: str, batch_id: int) -> Path:
     """Return the per-batch weight CSV path."""
     return Path(workdir) / "weights" / f"{source_key}_batch{batch_id}.csv"
+
+
+def _weight_cache_fingerprint_path(csv_path: Path) -> Path:
+    """Return the sidecar metadata path that records the batch HRU fingerprint."""
+    return csv_path.with_suffix(".csv.meta")
+
+
+def _batch_fingerprint(batch_gdf: gpd.GeoDataFrame, id_col: str) -> str:
+    """SHA-256 over sorted batch HRU IDs; identifies the batch unambiguously.
+
+    The fingerprint changes whenever the set of HRU IDs in the batch changes,
+    e.g. a different batch_size produced a different KD-tree partition or the
+    fabric itself was swapped. Stored alongside cached weights so a stale
+    cache from an earlier batching scheme can be detected and invalidated.
+    """
+    ids = np.sort(np.asarray(batch_gdf[id_col].values))
+    return hashlib.sha256(ids.tobytes()).hexdigest()
 
 
 def _find_time_coord_name(ds: xr.Dataset) -> str | None:
@@ -476,9 +495,33 @@ def compute_or_load_weights(
         Weight table with columns (at minimum) for grid indices and HRU ID.
     """
     wp = weight_cache_path(workdir, source_key, batch_id)
+    fp_path = _weight_cache_fingerprint_path(wp)
+    expected_fp = _batch_fingerprint(batch_gdf, id_col)
+
     if wp.exists():
-        logger.info("Batch %d: loading cached weights from %s", batch_id, wp)
-        return pd.read_csv(wp)
+        if fp_path.exists():
+            cached_fp = fp_path.read_text().strip()
+            if cached_fp == expected_fp:
+                logger.info("Batch %d: loading cached weights from %s", batch_id, wp)
+                return pd.read_csv(wp)
+            logger.warning(
+                "Batch %d: cached weights at %s have stale batch fingerprint "
+                "(cached=%s..., expected=%s...). The cache predates a "
+                "batch_size or fabric change since the weights were written. "
+                "Recomputing.",
+                batch_id,
+                wp,
+                cached_fp[:12],
+                expected_fp[:12],
+            )
+        else:
+            logger.warning(
+                "Batch %d: cached weights at %s lack a fingerprint sidecar "
+                "(written by a pre-fingerprint version of the driver). "
+                "Recomputing to guarantee they match the current batch.",
+                batch_id,
+                wp,
+            )
 
     logger.info(
         "Batch %d: computing weights (%d HRUs, source_var=%s)",
@@ -513,6 +556,7 @@ def compute_or_load_weights(
     except Exception:
         Path(tmp_path).unlink(missing_ok=True)
         raise
+    fp_path.write_text(expected_fp)
     logger.info("Batch %d: weights saved to %s", batch_id, wp)
     return weights
 
