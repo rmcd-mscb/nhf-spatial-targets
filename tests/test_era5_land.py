@@ -311,7 +311,6 @@ def test_download_month_variable_re_fetches_existing_corrupt_chunk(
     out = tmp_path / "era5_land_ro_2020_03.nc"
     # Pre-existing corrupt chunk: filename says 2020-03 but content is 2018-05.
     _write_fake_month_nc(out, year=2018, month=5)
-    corrupt_mtime = out.stat().st_mtime
 
     # Track CDS calls to confirm re-fetch happened.
     def fake_retrieve_correct(dataset, request, path):
@@ -328,12 +327,13 @@ def test_download_month_variable_re_fetches_existing_corrupt_chunk(
     fake_client.retrieve.assert_called_once()
     assert result == out
     assert out.exists()
-    # File was rewritten — validate the new content.
+    # File was rewritten — validate the new content. (`retrieve` was called
+    # exactly once above and the new content covers the requested window;
+    # an mtime-bump check is redundant and races on filesystems whose
+    # timestamp granularity is coarser than the unlink+rewrite latency.)
     with xr.open_dataset(out) as ds:
         times = pd.DatetimeIndex(ds.time.values)
     assert set(zip(times.year.tolist(), times.month.tolist())) == {(2020, 3)}
-    # mtime should be newer than the original corrupt file.
-    assert out.stat().st_mtime > corrupt_mtime
 
 
 def test_validate_chunk_time_coord_accepts_matching(tmp_path):
