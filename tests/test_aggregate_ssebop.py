@@ -256,11 +256,28 @@ def test_legacy_consolidated_file_is_removed(
     assert not legacy.exists()
 
 
+def _ssebop_batch_fingerprint(hru_ids):
+    """Compute the fingerprint ssebop._process_batch will expect for the batch.
+
+    The fingerprint is invariant under geometry, so we can build it from a
+    bare hru_id list — it must match what _batch_fingerprint produces when
+    the actual fabric batch reaches _process_batch.
+    """
+    from nhf_spatial_targets.aggregate._driver import _batch_fingerprint
+
+    bare = gpd.GeoDataFrame(
+        {"hru_id": list(hru_ids)},
+        geometry=[box(i, 0, i + 1, 1) for i in range(len(hru_ids))],
+        crs="EPSG:4326",
+    )
+    return _batch_fingerprint(bare, "hru_id")
+
+
 @patch("nhf_spatial_targets.aggregate.ssebop.get_stac_collection")
 @patch("nhf_spatial_targets.aggregate.ssebop.WeightGen")
 @patch("nhf_spatial_targets.aggregate.ssebop.AggGen")
 @patch("nhf_spatial_targets.aggregate.ssebop.NHGFStacZarrData")
-def test_cached_weights_skips_recompute(
+def test_cached_weights_with_matching_sidecar_skips_recompute(
     mock_stac_data,
     mock_agg_gen,
     mock_weight_gen,
@@ -268,13 +285,17 @@ def test_cached_weights_skips_recompute(
     workdir,
     tiny_fabric,
 ):
-    """When weight CSV exists, WeightGen should not be called."""
+    """Cache CSV + matching .csv.meta sidecar must skip WeightGen."""
     mock_get_col.return_value = MagicMock()
 
     weights_df = pd.DataFrame(
         {"src_idx": [0, 1], "tgt_idx": [0, 1], "weight": [0.5, 0.5]}
     )
-    weights_df.to_csv(workdir / "weights" / "ssebop_batch0.csv", index=False)
+    cache_csv = workdir / "weights" / "ssebop_batch0.csv"
+    weights_df.to_csv(cache_csv, index=False)
+    cache_csv.with_suffix(".csv.meta").write_text(
+        _ssebop_batch_fingerprint([0, 1, 2, 3])
+    )
 
     mock_agg_instance = MagicMock()
     mock_agg_instance.calculate_agg.return_value = _make_mock_agg_result(
@@ -290,6 +311,109 @@ def test_cached_weights_skips_recompute(
     )
 
     mock_weight_gen.assert_not_called()
+
+
+@patch("nhf_spatial_targets.aggregate.ssebop.get_stac_collection")
+@patch("nhf_spatial_targets.aggregate.ssebop.WeightGen")
+@patch("nhf_spatial_targets.aggregate.ssebop.AggGen")
+@patch("nhf_spatial_targets.aggregate.ssebop.NHGFStacZarrData")
+def test_cached_weights_without_sidecar_invalidates_cache(
+    mock_stac_data,
+    mock_agg_gen,
+    mock_weight_gen,
+    mock_get_col,
+    workdir,
+    tiny_fabric,
+):
+    """A pre-fingerprint CSV with no sidecar must trigger a recompute.
+
+    Mirrors the _driver.py behavior: a cache written by an older driver
+    that lacks a fingerprint sidecar is untrusted and rewritten so the
+    current batch's fingerprint is recorded.
+    """
+    mock_get_col.return_value = MagicMock()
+
+    cache_csv = workdir / "weights" / "ssebop_batch0.csv"
+    pd.DataFrame({"src_idx": [0, 1], "tgt_idx": [0, 1], "weight": [0.5, 0.5]}).to_csv(
+        cache_csv, index=False
+    )
+    assert not cache_csv.with_suffix(".csv.meta").exists()
+
+    mock_wg_instance = MagicMock()
+    mock_wg_instance.calculate_weights.return_value = pd.DataFrame(
+        {"src_idx": [0, 1], "tgt_idx": [0, 1], "weight": [0.5, 0.5]}
+    )
+    mock_weight_gen.return_value = mock_wg_instance
+
+    mock_agg_instance = MagicMock()
+    mock_agg_instance.calculate_agg.return_value = _make_mock_agg_result(
+        [0, 1, 2, 3], year=2000
+    )
+    mock_agg_gen.return_value = mock_agg_instance
+
+    aggregate_ssebop(
+        fabric_path=tiny_fabric,
+        id_col="hru_id",
+        period="2000/2000",
+        workdir=workdir,
+    )
+
+    assert mock_wg_instance.calculate_weights.called
+    # Sidecar now reflects the current batch's fingerprint.
+    assert cache_csv.with_suffix(
+        ".csv.meta"
+    ).read_text().strip() == _ssebop_batch_fingerprint([0, 1, 2, 3])
+
+
+@patch("nhf_spatial_targets.aggregate.ssebop.get_stac_collection")
+@patch("nhf_spatial_targets.aggregate.ssebop.WeightGen")
+@patch("nhf_spatial_targets.aggregate.ssebop.AggGen")
+@patch("nhf_spatial_targets.aggregate.ssebop.NHGFStacZarrData")
+def test_cached_weights_with_stale_fingerprint_invalidates_cache(
+    mock_stac_data,
+    mock_agg_gen,
+    mock_weight_gen,
+    mock_get_col,
+    workdir,
+    tiny_fabric,
+):
+    """Stale fingerprint (from a different batch_size or fabric) → recompute.
+
+    Without this, a `--batch-size` change between runs would silently map
+    cached weights to a different HRU partition — the same MOD16A2-class
+    bug the _driver fingerprint sidecar was added to prevent.
+    """
+    mock_get_col.return_value = MagicMock()
+
+    cache_csv = workdir / "weights" / "ssebop_batch0.csv"
+    pd.DataFrame({"src_idx": [0, 1], "tgt_idx": [0, 1], "weight": [0.5, 0.5]}).to_csv(
+        cache_csv, index=False
+    )
+    cache_csv.with_suffix(".csv.meta").write_text("a" * 64)
+
+    mock_wg_instance = MagicMock()
+    mock_wg_instance.calculate_weights.return_value = pd.DataFrame(
+        {"src_idx": [0, 1], "tgt_idx": [0, 1], "weight": [0.5, 0.5]}
+    )
+    mock_weight_gen.return_value = mock_wg_instance
+
+    mock_agg_instance = MagicMock()
+    mock_agg_instance.calculate_agg.return_value = _make_mock_agg_result(
+        [0, 1, 2, 3], year=2000
+    )
+    mock_agg_gen.return_value = mock_agg_instance
+
+    aggregate_ssebop(
+        fabric_path=tiny_fabric,
+        id_col="hru_id",
+        period="2000/2000",
+        workdir=workdir,
+    )
+
+    assert mock_wg_instance.calculate_weights.called
+    assert cache_csv.with_suffix(
+        ".csv.meta"
+    ).read_text().strip() == _ssebop_batch_fingerprint([0, 1, 2, 3])
 
 
 @patch("nhf_spatial_targets.aggregate.ssebop.get_stac_collection")

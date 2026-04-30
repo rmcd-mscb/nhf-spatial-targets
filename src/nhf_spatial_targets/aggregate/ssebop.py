@@ -23,8 +23,10 @@ from nhf_spatial_targets.aggregate._driver import (
     WEIGHT_GEN_CRS,
     _atomic_write_netcdf,
     _attach_cf_global_attrs,
+    _batch_fingerprint,
     _migrate_legacy_layout,
     _verify_year_coverage,
+    _weight_cache_fingerprint_path,
     load_and_batch_fabric,
     per_year_output_path,
     update_manifest,
@@ -52,14 +54,44 @@ def _process_batch(
     """Compute weights (or load cache) and aggregate one batch for one year.
 
     Weights are cached on disk per batch and reused across years because
-    the SSEBop source grid is invariant across the archive.
+    the SSEBop source grid is invariant across the archive. A ``.csv.meta``
+    sidecar records the batch HRU fingerprint so a different ``--batch-size``
+    or fabric swap invalidates the cache instead of silently mapping stale
+    weights to the wrong HRU partition (mirror of ``_driver.py``'s
+    ``compute_or_load_weights``).
     """
     wp = _weight_path(workdir, batch_id)
+    fp_path = _weight_cache_fingerprint_path(wp)
+    expected_fp = _batch_fingerprint(batch_gdf, id_col)
 
+    weights: pd.DataFrame | None = None
     if wp.exists():
-        logger.info("Batch %d: loading cached weights from %s", batch_id, wp)
-        weights = pd.read_csv(wp)
-    else:
+        if fp_path.exists():
+            cached_fp = fp_path.read_text().strip()
+            if cached_fp == expected_fp:
+                logger.info("Batch %d: loading cached weights from %s", batch_id, wp)
+                weights = pd.read_csv(wp)
+            else:
+                logger.warning(
+                    "Batch %d: cached weights at %s have stale batch "
+                    "fingerprint (cached=%s..., expected=%s...). The cache "
+                    "predates a batch_size or fabric change since the "
+                    "weights were written. Recomputing.",
+                    batch_id,
+                    wp,
+                    cached_fp[:12],
+                    expected_fp[:12],
+                )
+        else:
+            logger.warning(
+                "Batch %d: cached weights at %s lack a fingerprint sidecar "
+                "(written by a pre-fingerprint version of the driver). "
+                "Recomputing to guarantee they match the current batch.",
+                batch_id,
+                wp,
+            )
+
+    if weights is None:
         logger.info("Batch %d: computing weights (%d HRUs)", batch_id, len(batch_gdf))
         stac_data = NHGFStacZarrData(
             source_collection=collection,
@@ -86,6 +118,7 @@ def _process_batch(
         except Exception:
             Path(tmp_path).unlink(missing_ok=True)
             raise
+        fp_path.write_text(expected_fp)
         logger.info("Batch %d: weights saved to %s", batch_id, wp)
 
     stac_data = NHGFStacZarrData(
@@ -244,7 +277,12 @@ def aggregate_ssebop(
         per_year_paths.append(out_path)
 
     per_source_dir = project.aggregated_dir() / _SOURCE_KEY
-    _verify_year_coverage(per_source_dir, _SOURCE_KEY)
+    # Scope the contiguity check to the requested window so a later run
+    # with a disjoint --period (e.g. 2010/2012 after a prior 2000/2002)
+    # doesn't trip "missing 2003-2009" — the gap is intentional, not a bug.
+    _verify_year_coverage(
+        per_source_dir, _SOURCE_KEY, period=f"{start_year}/{end_year}"
+    )
 
     rel_outputs = [str(p.relative_to(project.workdir)) for p in per_year_paths]
     weight_files = [

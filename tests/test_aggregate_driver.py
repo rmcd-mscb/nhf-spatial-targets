@@ -1667,3 +1667,37 @@ def test_aggregate_source_migrates_legacy_layout_on_startup(tmp_path, tiny_fabri
     assert not stale.exists()
     canonical = tmp_path / "data" / "aggregated" / "merra2" / "merra2_2000_agg.nc"
     assert canonical.exists()
+
+
+def test_atomic_write_netcdf_cleans_up_tmp_on_failure(tmp_path):
+    """A crash mid-write must leave no canonical file and no .nc.tmp behind.
+
+    Dual of ``test_compute_or_load_weights_ignores_stray_tmp_from_crashed_run``:
+    that test verifies the *next* run cleans up; this verifies the *current*
+    run cleans up when ``to_netcdf`` raises.
+    """
+    from nhf_spatial_targets.aggregate._driver import _atomic_write_netcdf
+
+    out_dir = tmp_path / "data" / "aggregated" / "toy"
+    out_path = out_dir / "toy_2000_agg.nc"
+
+    ds = xr.Dataset(
+        {"a": (["time", "hru_id"], np.ones((1, 2)))},
+        coords={
+            "time": pd.date_range("2000-01-01", periods=1, freq="MS"),
+            "hru_id": [0, 1],
+        },
+    )
+
+    class _BoomError(RuntimeError):
+        pass
+
+    with patch.object(xr.Dataset, "to_netcdf", side_effect=_BoomError("disk full")):
+        with pytest.raises(_BoomError):
+            _atomic_write_netcdf(ds, out_path)
+
+    assert not out_path.exists(), "canonical NC must not exist after a failed write"
+    leftover_tmps = list(out_dir.glob("*.nc.tmp"))
+    assert leftover_tmps == [], (
+        f"failed write must leave no .nc.tmp sidecar; found {leftover_tmps}"
+    )
