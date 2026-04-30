@@ -204,6 +204,93 @@ def test_lookup_hrus_by_points_outside_raises(helpers):
         helpers.lookup_hrus_by_points(fabric, points)
 
 
+def _toy_sca_dataset():
+    """Build a 5-day × 4-HRU dataset that mimics MOD10C1 schema enough to
+    exercise daily_coverage_summary / find_best_day."""
+    times = pd.date_range("2010-01-15", periods=5, freq="D")
+    sca = np.array(
+        [
+            [np.nan, np.nan, np.nan, np.nan],  # day 0: all NaN
+            [10.0, 0.0, np.nan, np.nan],  # day 1: 1 above threshold, 1 zero
+            [50.0, 30.0, 20.0, np.nan],  # day 2: 3 above
+            [70.0, 60.0, 50.0, 40.0],  # day 3: 4 above (full coverage)
+            [10.0, 0.0, 0.0, 0.0],  # day 4: 1 above
+        ]
+    )
+    vaf = np.array(
+        [
+            [0.0, 0.0, 0.0, 0.0],  # day 0: no covered HRUs
+            [0.9, 0.9, 0.0, 0.0],  # day 1: 2 covered
+            [0.9, 0.5, 0.9, 0.0],  # day 2: 2 covered (HRU1 below threshold)
+            [0.9, 0.9, 0.9, 0.9],  # day 3: 4 covered (the BEST day)
+            [0.9, 0.9, 0.9, 0.9],  # day 4: 4 covered, but only 1 above threshold
+        ]
+    )
+    return xr.Dataset(
+        {
+            "sca": (["time", "hru_id"], sca),
+            "vaf": (["time", "hru_id"], vaf),
+        },
+        coords={"time": times, "hru_id": [0, 1, 2, 3]},
+    )
+
+
+def test_daily_coverage_summary_counts_finite_above_and_overlap(helpers):
+    ds = _toy_sca_dataset()
+    df = helpers.daily_coverage_summary(
+        ds, "sca", coverage_var="vaf", coverage_threshold=0.7
+    )
+    assert list(df.columns) == ["n_finite", "n_above", "n_covered", "n_overlap"]
+    assert df["n_finite"].tolist() == [0, 2, 3, 4, 4]
+    assert df["n_above"].tolist() == [0, 1, 3, 4, 1]
+    assert df["n_covered"].tolist() == [0, 2, 2, 4, 4]
+    # day 3: all 4 HRUs above threshold AND covered. Day 4: only 1 above.
+    assert df["n_overlap"].tolist() == [0, 1, 2, 4, 1]
+
+
+def test_daily_coverage_summary_omits_coverage_columns_when_no_var(helpers):
+    ds = _toy_sca_dataset()
+    df = helpers.daily_coverage_summary(ds, "sca")
+    assert list(df.columns) == ["n_finite", "n_above"]
+
+
+def test_find_best_day_picks_overlap_max(helpers):
+    ds = _toy_sca_dataset()
+    best = helpers.find_best_day(ds, "sca", coverage_var="vaf")
+    assert best == pd.Timestamp("2010-01-18")  # day 3, n_overlap=4
+
+
+def test_find_best_day_falls_back_to_n_above_without_coverage(helpers):
+    ds = _toy_sca_dataset()
+    best = helpers.find_best_day(ds, "sca")
+    # Without coverage_var, ranks by n_above. Day 3 (4) is still the max.
+    assert best == pd.Timestamp("2010-01-18")
+
+
+def test_find_best_day_respects_month_filter(helpers):
+    """Add a Feb day with smaller overlap; month filter should pick that."""
+    ds = _toy_sca_dataset()
+    feb_times = pd.date_range("2010-02-10", periods=2, freq="D")
+    feb_sca = np.array([[5.0, np.nan, np.nan, np.nan], [np.nan] * 4])
+    feb_vaf = np.array([[0.9, 0.0, 0.0, 0.0], [0.0] * 4])
+    feb_ds = xr.Dataset(
+        {
+            "sca": (["time", "hru_id"], feb_sca),
+            "vaf": (["time", "hru_id"], feb_vaf),
+        },
+        coords={"time": feb_times, "hru_id": [0, 1, 2, 3]},
+    )
+    combined = xr.concat([ds, feb_ds], dim="time")
+    best_feb = helpers.find_best_day(combined, "sca", coverage_var="vaf", month=2)
+    assert best_feb == pd.Timestamp("2010-02-10")
+
+
+def test_find_best_day_raises_when_month_has_no_data(helpers):
+    ds = _toy_sca_dataset()  # all timestamps in Jan
+    with pytest.raises(ValueError, match="month 7"):
+        helpers.find_best_day(ds, "sca", month=7)
+
+
 def test_save_figure_no_op_when_disabled(helpers, tmp_path, monkeypatch):
     import matplotlib
 
