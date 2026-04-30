@@ -163,6 +163,13 @@ def test_multi_year_emits_one_nc_per_year(
         "data/aggregated/ssebop/ssebop_2002_agg.nc",
     ]
 
+    # Weight-cache reuse: the SSEBop source grid is invariant across
+    # the archive, so all three years should share one batch's weights.
+    # WeightGen must be instantiated once (n_batches=1) and
+    # calculate_weights must run exactly once across the 3-year run.
+    assert mock_weight_gen.call_count == 1
+    assert mock_wg_instance.calculate_weights.call_count == 1
+
 
 @patch("nhf_spatial_targets.aggregate.ssebop.get_stac_collection")
 @patch("nhf_spatial_targets.aggregate.ssebop.WeightGen")
@@ -179,7 +186,6 @@ def test_existing_per_year_nc_is_skipped(
     """Per-year files that already exist should not trigger AggGen."""
     mock_get_col.return_value = MagicMock()
 
-    # Pre-seed the per-year NC for 2000.
     seeded_dir = workdir / "data" / "aggregated" / "ssebop"
     seeded_dir.mkdir(parents=True, exist_ok=True)
     _gdf, ds_seed = _make_mock_agg_result([0, 1, 2, 3], year=2000)
@@ -329,16 +335,173 @@ def test_manifest_updated(
     assert entry["output_files"] == ["data/aggregated/ssebop/ssebop_2000_agg.nc"]
 
 
-@pytest.mark.parametrize("bad", ["2000", "2000-2001", "2000/2001/2002", "abcd/efgh"])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "2000",
+        "2000-2001",
+        "2000/2001/2002",
+        "abcd/efgh",
+        "2002/2000",  # end < start
+    ],
+)
 def test_invalid_period_raises(workdir, tiny_fabric, bad):
-    """Period must be 'YYYY/YYYY'."""
-    with pytest.raises(ValueError, match="period"):
+    """Period must be 'YYYY/YYYY' with start <= end."""
+    with pytest.raises(ValueError, match="period|precedes"):
         aggregate_ssebop(
             fabric_path=tiny_fabric,
             id_col="hru_id",
             period=bad,
             workdir=workdir,
         )
+
+
+@patch("nhf_spatial_targets.aggregate.ssebop.get_stac_collection")
+@patch("nhf_spatial_targets.aggregate.ssebop.WeightGen")
+@patch("nhf_spatial_targets.aggregate.ssebop.AggGen")
+@patch("nhf_spatial_targets.aggregate.ssebop.NHGFStacZarrData")
+def test_zero_byte_stub_is_replaced(
+    mock_stac_data,
+    mock_agg_gen,
+    mock_weight_gen,
+    mock_get_col,
+    workdir,
+    tiny_fabric,
+):
+    """Zero-byte per-year file from a prior crash is unlinked + rewritten.
+
+    Pure ``out_path.exists()`` would skip the stub forever and fail at
+    the end in ``_verify_year_coverage`` with no remediation.
+    """
+    mock_get_col.return_value = MagicMock()
+
+    seeded_dir = workdir / "data" / "aggregated" / "ssebop"
+    seeded_dir.mkdir(parents=True, exist_ok=True)
+    stub = seeded_dir / "ssebop_2000_agg.nc"
+    stub.touch()
+    assert stub.stat().st_size == 0
+
+    mock_wg_instance = MagicMock()
+    mock_wg_instance.calculate_weights.return_value = pd.DataFrame(
+        {"src_idx": [0, 1], "tgt_idx": [0, 1], "weight": [0.5, 0.5]}
+    )
+    mock_weight_gen.return_value = mock_wg_instance
+
+    mock_agg_instance = MagicMock()
+    mock_agg_instance.calculate_agg.return_value = _make_mock_agg_result(
+        [0, 1, 2, 3], year=2000
+    )
+    mock_agg_gen.return_value = mock_agg_instance
+
+    aggregate_ssebop(
+        fabric_path=tiny_fabric,
+        id_col="hru_id",
+        period="2000/2000",
+        workdir=workdir,
+    )
+
+    # AggGen must have been invoked: the stub did not short-circuit.
+    mock_agg_gen.assert_called()
+    # File now non-empty.
+    assert stub.stat().st_size > 0
+
+
+@patch("nhf_spatial_targets.aggregate.ssebop.get_stac_collection")
+@patch("nhf_spatial_targets.aggregate.ssebop.WeightGen")
+@patch("nhf_spatial_targets.aggregate.ssebop.AggGen")
+@patch("nhf_spatial_targets.aggregate.ssebop.NHGFStacZarrData")
+def test_legacy_removal_is_idempotent(
+    mock_stac_data,
+    mock_agg_gen,
+    mock_weight_gen,
+    mock_get_col,
+    workdir,
+    tiny_fabric,
+):
+    """A second invocation after legacy file removal does not raise."""
+    mock_get_col.return_value = MagicMock()
+
+    legacy = workdir / "data" / "aggregated" / "ssebop_agg_aet.nc"
+    legacy.write_bytes(b"legacy")
+
+    mock_wg_instance = MagicMock()
+    mock_wg_instance.calculate_weights.return_value = pd.DataFrame(
+        {"src_idx": [0, 1], "tgt_idx": [0, 1], "weight": [0.5, 0.5]}
+    )
+    mock_weight_gen.return_value = mock_wg_instance
+
+    mock_agg_instance = MagicMock()
+    mock_agg_instance.calculate_agg.return_value = _make_mock_agg_result(
+        [0, 1, 2, 3], year=2000
+    )
+    mock_agg_gen.return_value = mock_agg_instance
+
+    aggregate_ssebop(
+        fabric_path=tiny_fabric,
+        id_col="hru_id",
+        period="2000/2000",
+        workdir=workdir,
+    )
+    assert not legacy.exists()
+
+    # Second call: legacy file already gone; must not raise.
+    aggregate_ssebop(
+        fabric_path=tiny_fabric,
+        id_col="hru_id",
+        period="2000/2000",
+        workdir=workdir,
+    )
+
+
+@patch("nhf_spatial_targets.aggregate.ssebop._verify_year_coverage")
+@patch("nhf_spatial_targets.aggregate.ssebop.get_stac_collection")
+@patch("nhf_spatial_targets.aggregate.ssebop.WeightGen")
+@patch("nhf_spatial_targets.aggregate.ssebop.AggGen")
+@patch("nhf_spatial_targets.aggregate.ssebop.NHGFStacZarrData")
+def test_year_coverage_gap_aborts_before_manifest(
+    mock_stac_data,
+    mock_agg_gen,
+    mock_weight_gen,
+    mock_get_col,
+    mock_verify,
+    workdir,
+    tiny_fabric,
+):
+    """If the post-loop coverage check fails, manifest is not written.
+
+    Pins the wiring contract: ``aggregate_ssebop`` calls
+    ``_verify_year_coverage`` AFTER the per-year loop and BEFORE
+    ``update_manifest``, so a coverage failure must leave the manifest
+    untouched. Driver-level tests cover the gap-detection logic itself.
+    """
+    mock_get_col.return_value = MagicMock()
+    mock_verify.side_effect = ValueError(
+        "ssebop: year gap(s) in per-year aggregated files: missing=[2001]"
+    )
+
+    mock_wg_instance = MagicMock()
+    mock_wg_instance.calculate_weights.return_value = pd.DataFrame(
+        {"src_idx": [0, 1], "tgt_idx": [0, 1], "weight": [0.5, 0.5]}
+    )
+    mock_weight_gen.return_value = mock_wg_instance
+
+    mock_agg_instance = MagicMock()
+    mock_agg_instance.calculate_agg.return_value = _make_mock_agg_result(
+        [0, 1, 2, 3], year=2000
+    )
+    mock_agg_gen.return_value = mock_agg_instance
+
+    with pytest.raises(ValueError, match="missing"):
+        aggregate_ssebop(
+            fabric_path=tiny_fabric,
+            id_col="hru_id",
+            period="2000/2000",
+            workdir=workdir,
+        )
+
+    mock_verify.assert_called_once()
+    manifest = json.loads((workdir / "manifest.json").read_text())
+    assert "ssebop" not in manifest.get("sources", {})
 
 
 @pytest.mark.integration

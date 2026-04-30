@@ -2,14 +2,14 @@
 
 SSEBop is read on the fly from the USGS NHGF STAC Zarr store rather than
 from a local consolidated NC, so it follows a different access path than
-file-based sources. The output layout matches the rest of the catalog:
-one NC per year under ``data/aggregated/ssebop/ssebop_<year>_agg.nc``,
-plus a manifest entry listing every per-year file.
+the file-based sources orchestrated by ``_driver.aggregate_source``.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
 from pathlib import Path
 
 import geopandas as gpd
@@ -49,10 +49,10 @@ def _process_batch(
     time_period: list[str],
     workdir: Path,
 ) -> xr.Dataset:
-    """Process a single spatial batch for one year: weights + aggregate.
+    """Compute weights (or load cache) and aggregate one batch for one year.
 
-    Weights are cached on disk per batch and reused across years (the
-    source grid is invariant across the SSEBop archive).
+    Weights are cached on disk per batch and reused across years because
+    the SSEBop source grid is invariant across the archive.
     """
     wp = _weight_path(workdir, batch_id)
 
@@ -75,7 +75,17 @@ def _process_batch(
         )
         weights = wg.calculate_weights()
         wp.parent.mkdir(parents=True, exist_ok=True)
-        weights.to_csv(wp, index=False)
+        # Atomic write: tempfile in same dir + replace, so a SIGKILL between
+        # mkstemp and replace can't leave a truncated CSV that pd.read_csv
+        # would silently load on the next run.
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=wp.parent, suffix=".csv.tmp")
+        try:
+            with os.fdopen(tmp_fd, "w") as f:
+                weights.to_csv(f, index=False)
+            Path(tmp_path).replace(wp)
+        except Exception:
+            Path(tmp_path).unlink(missing_ok=True)
+            raise
         logger.info("Batch %d: weights saved to %s", batch_id, wp)
 
     stac_data = NHGFStacZarrData(
@@ -107,7 +117,14 @@ def aggregate_ssebop(
 
     Writes ``data/aggregated/ssebop/ssebop_<year>_agg.nc`` for each year
     in ``period``. Idempotent: existing per-year NCs are left in place
-    on re-run; weight CSVs are cached per batch and reused.
+    on re-run (zero-byte stubs from a prior crash are unlinked and
+    re-written); weight CSVs are cached per batch and reused.
+
+    On a year-N failure, years <N already written are preserved on
+    disk; re-running resumes at year N. If every year writes
+    successfully but the manifest update then fails, the next run's
+    idempotency reuses the on-disk NCs and re-attempts the manifest
+    update, healing the divergence.
 
     Parameters
     ----------
@@ -122,32 +139,9 @@ def aggregate_ssebop(
     batch_size : int
         Target number of HRUs per spatial batch.
     """
-    workdir = Path(workdir)
-    fabric_path = Path(fabric_path)
-    project = _load_project(workdir)
-    meta = catalog.source(_SOURCE_KEY)
-
-    # Legacy migration: prior pipeline emitted one consolidated NC at
-    # data/aggregated/ssebop_agg_aet.nc. Per-source / per-year files are
-    # canonical now, so drop the stale single-file artifact.
-    legacy_consolidated = project.aggregated_dir() / "ssebop_agg_aet.nc"
-    if legacy_consolidated.is_file():
-        legacy_consolidated.unlink()
-        logger.info(
-            "ssebop: removed legacy consolidated file %s",
-            legacy_consolidated,
-        )
-    _migrate_legacy_layout(project, _SOURCE_KEY)
-
-    collection_id = meta["access"]["collection_id"]
-    logger.info("Resolving STAC collection: %s", collection_id)
-    collection = get_stac_collection(collection_id)
-
-    logger.info("Loading fabric: %s", fabric_path)
-    fabric_batched = load_and_batch_fabric(fabric_path, batch_size=batch_size)
-    n_batches = int(fabric_batched["batch_id"].nunique())
-    logger.info("Fabric split into %d spatial batches", n_batches)
-
+    # Validate period before any network or fabric work — a malformed
+    # `--period` should fail in milliseconds, not after a STAC round-trip
+    # and a fabric load.
     parts = period.split("/")
     if len(parts) != 2 or not all(p.isdigit() and len(p) == 4 for p in parts):
         raise ValueError(f"ssebop: --period must be 'YYYY/YYYY', got {period!r}")
@@ -156,6 +150,36 @@ def aggregate_ssebop(
         raise ValueError(
             f"ssebop: --period end year ({end_year}) precedes start ({start_year})"
         )
+
+    workdir = Path(workdir)
+    fabric_path = Path(fabric_path)
+    project = _load_project(workdir)
+    meta = catalog.source(_SOURCE_KEY)
+
+    # Legacy migration: prior pipeline emitted one consolidated NC at
+    # data/aggregated/ssebop_agg_aet.nc. _migrate_legacy_layout only
+    # handles the <source_key>_agg.nc convention, so we have to unlink
+    # this bespoke filename ourselves. missing_ok defends against a
+    # parallel agg_all.slurm task already having removed it.
+    legacy_consolidated = project.aggregated_dir() / "ssebop_agg_aet.nc"
+    legacy_consolidated.unlink(missing_ok=True)
+    _migrate_legacy_layout(project, _SOURCE_KEY)
+
+    collection_id = meta["access"]["collection_id"]
+    logger.info("Resolving STAC collection: %s", collection_id)
+    try:
+        collection = get_stac_collection(collection_id)
+    except Exception as exc:
+        exc.add_note(
+            f"ssebop: failed to resolve STAC collection {collection_id!r} "
+            f"(network or NHGF STAC endpoint may be unavailable)"
+        )
+        raise
+
+    logger.info("Loading fabric: %s", fabric_path)
+    fabric_batched = load_and_batch_fabric(fabric_path, batch_size=batch_size)
+    n_batches = int(fabric_batched["batch_id"].nunique())
+    logger.info("Fabric split into %d spatial batches", n_batches)
     years = list(range(start_year, end_year + 1))
     logger.info(
         "ssebop: %d year(s) to aggregate (%d-%d) across %d batches",
@@ -169,13 +193,27 @@ def aggregate_ssebop(
     for year in years:
         out_path = per_year_output_path(project, _SOURCE_KEY, year)
         if out_path.exists():
-            logger.info(
-                "ssebop: year %d: per-year NC exists, skipping (%s)",
-                year,
-                out_path,
-            )
-            per_year_paths.append(out_path)
-            continue
+            # A zero-byte stub is left if anything truncated the file
+            # outside the atomic-write path (e.g. a manual touch, a
+            # filesystem hiccup, or a process killed during a non-atomic
+            # write before _atomic_write_netcdf was introduced). Treat
+            # it as missing instead of skipping forever and failing
+            # later in _verify_year_coverage with no remediation.
+            if out_path.stat().st_size == 0:
+                logger.warning(
+                    "ssebop: year %d: removing zero-byte stub at %s and re-aggregating",
+                    year,
+                    out_path,
+                )
+                out_path.unlink()
+            else:
+                logger.info(
+                    "ssebop: year %d: per-year NC exists, skipping (%s)",
+                    year,
+                    out_path,
+                )
+                per_year_paths.append(out_path)
+                continue
 
         time_period = [f"{year}-01-01", f"{year}-12-31"]
         batch_datasets: list[xr.Dataset] = []
