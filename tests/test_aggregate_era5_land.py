@@ -12,4 +12,7 @@ def test_adapter_declares_runoff_vars():
 
 
 def test_adapter_uses_monthly_files_glob():
-    assert ADAPTER.files_glob == "era5_land_monthly_*.nc"
+    # Glob carries the `monthly/` subdir component because the era5_land
+    # fetch script writes consolidated monthly NCs into <datastore>/
+    # era5_land/monthly/ alongside daily/ and hourly/ subdirs.
+    assert ADAPTER.files_glob == "monthly/era5_land_monthly_*.nc"

@@ -262,6 +262,67 @@ def test_aggregate_source_writes_multi_var_nc_and_manifest(tmp_path, tiny_fabric
     ]
 
 
+def test_aggregate_source_files_glob_supports_subdirectory(tmp_path, tiny_fabric):
+    """files_glob accepts a directory component to handle multi-subdir
+    datastores.
+
+    Regression for the agg-era5-land case: the era5_land fetch script
+    writes consolidated monthly NCs to <datastore>/era5_land/monthly/
+    (alongside daily/ and hourly/ subdirs), but the aggregate adapter's
+    glob omitted the subdir so the driver looked for files directly
+    under <datastore>/era5_land/ and raised FileNotFoundError on every
+    run.
+    """
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import aggregate_source
+
+    src_dir = _setup_aggregate_source_project(tmp_path, tiny_fabric, "merra2")
+    (src_dir / "monthly").mkdir()
+    times = pd.date_range("2000-01-01", periods=12, freq="MS")
+    xr.Dataset(
+        {"a": (["time", "lat", "lon"], np.ones((12, 2, 2)))},
+        coords={
+            "time": ("time", times, {"standard_name": "time"}),
+            "lat": ("lat", [0.25, 0.75], {"standard_name": "latitude"}),
+            "lon": ("lon", [0.5, 1.5], {"standard_name": "longitude"}),
+        },
+    ).to_netcdf(src_dir / "monthly" / "merra2_monthly_2000.nc")
+
+    adapter = SourceAdapter(
+        source_key="merra2",
+        output_name="merra2_agg.nc",
+        variables=["a"],
+        files_glob="monthly/merra2_monthly_*.nc",
+    )
+    fake_year_ds = xr.Dataset(
+        {"a": (["time", "hru_id"], np.ones((12, 4)))},
+        coords={
+            "time": ("time", times, {"standard_name": "time"}),
+            "hru_id": [0, 1, 2, 3],
+        },
+    )
+
+    with (
+        patch(
+            "nhf_spatial_targets.aggregate._driver.catalog_source",
+            return_value={"access": {"type": "local_nc"}},
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.compute_or_load_weights",
+            return_value=_fake_weights(),
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.aggregate_variables_for_batch",
+            return_value=fake_year_ds,
+        ),
+    ):
+        aggregate_source(
+            adapter, fabric_path=tiny_fabric, id_col="hru_id", workdir=tmp_path
+        )
+
+    assert (tmp_path / "data" / "aggregated" / "merra2" / "merra2_2000_agg.nc").exists()
+
+
 def test_aggregate_source_period_filter_clips_year_files(tmp_path, tiny_fabric):
     """`period` filters multi-year sources to the requested window only.
 

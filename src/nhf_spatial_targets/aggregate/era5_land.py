@@ -14,7 +14,10 @@ ADAPTER = SourceAdapter(
     variables=("ro", "sro", "ssro"),
     x_coord="longitude",
     y_coord="latitude",
-    files_glob="era5_land_monthly_*.nc",
+    # The ERA5-Land fetch script writes hourly/, daily/, and monthly/
+    # subdirs under <datastore>/era5_land/. Aggregation reads the monthly
+    # consolidated NCs only, so the glob carries the subdir component.
+    files_glob="monthly/era5_land_monthly_*.nc",
 )
 
 
