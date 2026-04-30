@@ -268,8 +268,20 @@ def _parse_year_from_filename(path: Path, source_key: str) -> int | None:
     return int(m.group("year"))
 
 
-def _verify_year_coverage(per_source_dir: Path, source_key: str) -> None:
+def _verify_year_coverage(
+    per_source_dir: Path, source_key: str, period: str | None = None
+) -> None:
     """Scan the per-source dir and verify contiguous year coverage.
+
+    When ``period`` is set (``"YYYY/YYYY"``), verifies that every year in
+    the requested window is present on disk and ignores files outside
+    the window. Multi-period workflows (e.g. agg-mwbm-climgrid clipped
+    to 1979/2020 alongside a prior 1900/1945 run) can legitimately leave
+    a gap between the two windows, so without this scoping the check
+    would raise on every run that doesn't fill the union.
+
+    When ``period`` is None, verifies the full set of on-disk files
+    spans contiguously from min(year) to max(year).
 
     Filename-level check: parses ``<source_key>_<YYYY>_agg.nc`` matches and
     rejects zero-byte files (likely stale tmp artifacts from a SIGKILL/OOM
@@ -293,12 +305,21 @@ def _verify_year_coverage(per_source_dir: Path, source_key: str) -> None:
         raise ValueError(
             f"{source_key}: no per-year aggregated files found in {per_source_dir}"
         )
-    expected = set(range(min(years), max(years) + 1))
-    missing = sorted(expected - set(years))
+
+    if period is not None:
+        start_year, end_year = (int(p) for p in period.split("/"))
+        expected = set(range(start_year, end_year + 1))
+        scope = f"--period {period}"
+    else:
+        expected = set(range(min(years), max(years) + 1))
+        scope = f"covered range {min(years)}-{max(years)}"
+
+    covered = set(years)
+    missing = sorted(expected - covered)
     if missing:
         raise ValueError(
-            f"{source_key}: year gap(s) in per-year aggregated files: "
-            f"missing={missing}, covered={sorted(set(years))}"
+            f"{source_key}: year gap(s) in per-year aggregated files "
+            f"({scope}): missing={missing}, covered={sorted(covered)}"
         )
 
 
@@ -781,7 +802,7 @@ def aggregate_source(
     ]
 
     per_source_dir = project.aggregated_dir() / adapter.source_key
-    _verify_year_coverage(per_source_dir, adapter.source_key)
+    _verify_year_coverage(per_source_dir, adapter.source_key, period=period)
 
     with xr.open_dataset(per_year_paths[0]) as probe:
         time_coord = _find_time_coord_name(probe)

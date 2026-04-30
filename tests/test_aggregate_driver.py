@@ -357,6 +357,119 @@ def test_aggregate_source_period_filter_clips_year_files(tmp_path, tiny_fabric):
     assert written == ["merra2_2001_agg.nc", "merra2_2002_agg.nc"]
 
 
+def test_aggregate_source_period_verify_ignores_files_outside_window(
+    tmp_path, tiny_fabric
+):
+    """Prior runs at a different `--period` may leave per-year files outside
+    the current window. The post-aggregation coverage check must scope to
+    the requested period and ignore those orphan files; otherwise multi-
+    period workflows raise spuriously after every run.
+
+    Regression for the agg-mwbm-climgrid case: a prior run wrote 1900-1945
+    and a later run with `--period 1979/2020` was rejected by
+    _verify_year_coverage because the union (1900-1945 + 1979-2020) had a
+    gap at 1946-1978, even though every year in the requested window had
+    been written successfully.
+    """
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import aggregate_source
+
+    datastore = tmp_path / "datastore"
+    (datastore / "merra2").mkdir(parents=True)
+    src_nc = datastore / "merra2" / "merra2_consolidated.nc"
+    times = pd.date_range("2000-01-01", periods=48, freq="MS")
+    xr.Dataset(
+        {"a": (["time", "lat", "lon"], np.ones((48, 2, 2)))},
+        coords={
+            "time": ("time", times, {"standard_name": "time"}),
+            "lat": ("lat", [0.25, 0.75], {"standard_name": "latitude"}),
+            "lon": ("lon", [0.5, 1.5], {"standard_name": "longitude"}),
+        },
+    ).to_netcdf(src_nc)
+
+    (tmp_path / "config.yml").write_text(
+        yaml.dump(
+            {
+                "fabric": {"path": str(tiny_fabric), "id_col": "hru_id"},
+                "datastore": str(datastore),
+            }
+        )
+    )
+    (tmp_path / "fabric.json").write_text(json.dumps({"sha256": "f00"}))
+    (tmp_path / "manifest.json").write_text(json.dumps({"sources": {}, "steps": []}))
+    per_source_dir = tmp_path / "data" / "aggregated" / "merra2"
+    per_source_dir.mkdir(parents=True)
+    (tmp_path / "weights").mkdir()
+
+    # Pre-existing orphan from an earlier run, well outside the 2002/2003
+    # window we're about to aggregate. Must not cause a coverage gap error.
+    orphan = per_source_dir / "merra2_1999_agg.nc"
+    xr.Dataset(
+        {"a": (["time", "hru_id"], np.ones((1, 4)))},
+        coords={
+            "time": ("time", [pd.Timestamp("1999-01-01")], {"standard_name": "time"}),
+            "hru_id": [0, 1, 2, 3],
+        },
+    ).to_netcdf(orphan)
+
+    adapter = SourceAdapter(
+        source_key="merra2", output_name="merra2_agg.nc", variables=["a"]
+    )
+    fake_meta = {"access": {"type": "local_nc"}}
+
+    def _make_year_ds(year: int) -> xr.Dataset:
+        yt = pd.date_range(f"{year}-01-01", periods=12, freq="MS")
+        return xr.Dataset(
+            {"a": (["time", "hru_id"], np.ones((12, 4)))},
+            coords={
+                "time": ("time", yt, {"standard_name": "time"}),
+                "hru_id": [0, 1, 2, 3],
+            },
+        )
+
+    call_years: list[int] = []
+
+    def _fake_agg(*_args, **kwargs):
+        year = 2002 + len(call_years)
+        call_years.append(year)
+        return _make_year_ds(year)
+
+    with (
+        patch(
+            "nhf_spatial_targets.aggregate._driver.catalog_source",
+            return_value=fake_meta,
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.compute_or_load_weights",
+            return_value=_fake_weights(),
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.aggregate_variables_for_batch",
+            side_effect=_fake_agg,
+        ),
+    ):
+        # Should NOT raise even though per-source dir spans 1999..2003 with
+        # a 2000-2001 gap — we asked for 2002/2003 only.
+        aggregate_source(
+            adapter,
+            fabric_path=tiny_fabric,
+            id_col="hru_id",
+            workdir=tmp_path,
+            batch_size=500,
+            period="2002/2003",
+        )
+
+    written = sorted(p.name for p in per_source_dir.glob("merra2_*_agg.nc"))
+    assert written == [
+        "merra2_1999_agg.nc",  # untouched orphan
+        "merra2_2002_agg.nc",
+        "merra2_2003_agg.nc",
+    ]
+    # Manifest should record success (the verify check did not raise).
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    assert "merra2" in manifest["sources"]
+
+
 def test_aggregate_source_period_filter_excludes_all_raises(tmp_path, tiny_fabric):
     """`period` outside the file's coverage raises rather than silently no-op."""
     from nhf_spatial_targets.aggregate._adapter import SourceAdapter
