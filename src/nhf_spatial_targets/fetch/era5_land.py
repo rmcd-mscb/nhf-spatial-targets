@@ -115,6 +115,36 @@ def _cds_client():
     return cdsapi.Client()
 
 
+def _validate_chunk_time_coord(path: Path, year: int, month: int) -> None:
+    """Raise ValueError if ``path``'s time coord falls outside ``(year, month)``.
+
+    Defends against the rare case where a CDS request returned data for
+    a different time window than requested. Observed in production for
+    two of ~1.6k chunks; root cause unclear (parallel-fetch race, manual
+    file move, or a CDS quirk). Without this guard, the mismatched chunk
+    gets concatenated into the year file via
+    ``open_mfdataset(combine="by_coords")`` and silently inflates the
+    year file's time range — corrupting every downstream daily/monthly
+    NC and tripping the aggregator's ``enumerate_years`` overlap check.
+    """
+    with xr.open_dataset(path) as ds:
+        tdim = "valid_time" if "valid_time" in ds.dims else "time"
+        if tdim not in ds.dims:
+            raise ValueError(
+                f"{path}: no 'time' or 'valid_time' dim; got {list(ds.dims)}"
+            )
+        times = pd.DatetimeIndex(ds[tdim].values)
+    if len(times) == 0:
+        raise ValueError(f"{path}: empty time coord")
+    months = set(zip(times.year.tolist(), times.month.tolist()))
+    if months != {(year, month)}:
+        raise ValueError(
+            f"{path}: time coord covers {sorted(months)} but the chunk was "
+            f"downloaded for ({year}, {month}). The data does not match "
+            f"the requested window — refusing to persist."
+        )
+
+
 def download_month_variable(
     year: int,
     month: int,
@@ -151,8 +181,17 @@ def download_month_variable(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if output_path.exists():
-        logger.info("Skipping existing ERA5-Land file: %s", output_path)
-        return output_path
+        try:
+            _validate_chunk_time_coord(output_path, year, month)
+        except ValueError as exc:
+            logger.warning(
+                "Existing chunk failed validation (%s); deleting and re-fetching.",
+                exc,
+            )
+            output_path.unlink()
+        else:
+            logger.info("Skipping existing ERA5-Land file: %s", output_path)
+            return output_path
 
     request = {
         "variable": _VARIABLE_REQUEST_NAME[variable],
@@ -187,6 +226,10 @@ def download_month_variable(
                 extracted = tmp_path.parent / nc_names[0]
                 tmp_path.unlink()
                 extracted.rename(tmp_path)
+        # Verify the data CDS returned matches the (year, month) we asked
+        # for before committing it to the canonical filename. If not,
+        # the except clause below unlinks the tmp file.
+        _validate_chunk_time_coord(tmp_path, year, month)
         tmp_path.rename(output_path)
     except BaseException:
         tmp_path.unlink(missing_ok=True)
