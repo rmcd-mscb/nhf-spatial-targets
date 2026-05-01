@@ -12,8 +12,11 @@ ADAPTER = SourceAdapter(
     source_key="era5_land",
     output_name="era5_land_agg.nc",
     variables=("ro", "sro", "ssro"),
-    x_coord="longitude",
-    y_coord="latitude",
+    # No x_coord/y_coord overrides: the monthly NCs carry CF axis attrs
+    # (axis: X/Y, standard_name: longitude/latitude) on `lon`/`lat` dims,
+    # which detect_coords resolves automatically. Earlier overrides set
+    # "longitude"/"latitude" but the dim names are "lon"/"lat", which
+    # raised "x override 'longitude' is not a dim of 'ro'".
     # The ERA5-Land fetch script writes hourly/, daily/, and monthly/
     # subdirs under <datastore>/era5_land/. Aggregation reads the monthly
     # consolidated NCs only, so the glob carries the subdir component.
