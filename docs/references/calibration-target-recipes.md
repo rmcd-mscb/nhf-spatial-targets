@@ -107,8 +107,8 @@ Per-HRU per-month: `lower_bound = min(era5_cfs, gldas_cfs)`,
 - SSEBop: CONUS, accessed remotely via the USGS NHGF STAC catalog — no local
   consolidated NC. Aggregation reads the zarr directly.
 - MOD16A2: global tiles; we keep yearly consolidated NCs subset around CONUS+.
-- MWBM: CONUS, distributed pre-aggregated to a 1 km polygon mesh; aggregated to
-  the HRU fabric.
+- MWBM: CONUS at ~0.042° (2.5 arcminute), distributed as a single CF NetCDF
+  (`ClimGrid_WBM.nc`) covering 1895–2020 monthly; aggregated to the HRU fabric.
 
 **Combination rule (TM 6-B10 / per repo)**
 
