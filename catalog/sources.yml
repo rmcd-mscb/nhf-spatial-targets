@@ -161,6 +161,13 @@ sources:
     units: kg/m2/8day
     license: public domain (NASA)
     status: current
+    notes: >
+      July 2000 cross-check (notebooks/inspect_aggregated/inspect_aggregated_aet.ipynb)
+      shows essentially flat seasonality at both gridded and aggregated CONUS+
+      scales (Jul/Jan = 1.12x) while SSEBop and MWBM swing 6-11x as expected
+      for CONUS ET. The flatness is already in the consolidated NC, not an
+      aggregation artefact. Inclusion in the AET target is pending collaborator
+      consensus; see docs/references/lessons-learned.md (MOD16A2 v061 flat-on-CONUS+).
 
   ssebop:
     name: SSEBop Actual Evapotranspiration
