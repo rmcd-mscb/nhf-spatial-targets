@@ -262,6 +262,67 @@ def test_aggregate_source_writes_multi_var_nc_and_manifest(tmp_path, tiny_fabric
     ]
 
 
+def test_aggregate_source_files_glob_supports_subdirectory(tmp_path, tiny_fabric):
+    """files_glob accepts a directory component to handle multi-subdir
+    datastores.
+
+    Regression for the agg-era5-land case: the era5_land fetch script
+    writes consolidated monthly NCs to <datastore>/era5_land/monthly/
+    (alongside daily/ and hourly/ subdirs), but the aggregate adapter's
+    glob omitted the subdir so the driver looked for files directly
+    under <datastore>/era5_land/ and raised FileNotFoundError on every
+    run.
+    """
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import aggregate_source
+
+    src_dir = _setup_aggregate_source_project(tmp_path, tiny_fabric, "merra2")
+    (src_dir / "monthly").mkdir()
+    times = pd.date_range("2000-01-01", periods=12, freq="MS")
+    xr.Dataset(
+        {"a": (["time", "lat", "lon"], np.ones((12, 2, 2)))},
+        coords={
+            "time": ("time", times, {"standard_name": "time"}),
+            "lat": ("lat", [0.25, 0.75], {"standard_name": "latitude"}),
+            "lon": ("lon", [0.5, 1.5], {"standard_name": "longitude"}),
+        },
+    ).to_netcdf(src_dir / "monthly" / "merra2_monthly_2000.nc")
+
+    adapter = SourceAdapter(
+        source_key="merra2",
+        output_name="merra2_agg.nc",
+        variables=["a"],
+        files_glob="monthly/merra2_monthly_*.nc",
+    )
+    fake_year_ds = xr.Dataset(
+        {"a": (["time", "hru_id"], np.ones((12, 4)))},
+        coords={
+            "time": ("time", times, {"standard_name": "time"}),
+            "hru_id": [0, 1, 2, 3],
+        },
+    )
+
+    with (
+        patch(
+            "nhf_spatial_targets.aggregate._driver.catalog_source",
+            return_value={"access": {"type": "local_nc"}},
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.compute_or_load_weights",
+            return_value=_fake_weights(),
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.aggregate_variables_for_batch",
+            return_value=fake_year_ds,
+        ),
+    ):
+        aggregate_source(
+            adapter, fabric_path=tiny_fabric, id_col="hru_id", workdir=tmp_path
+        )
+
+    assert (tmp_path / "data" / "aggregated" / "merra2" / "merra2_2000_agg.nc").exists()
+
+
 def test_aggregate_source_period_filter_clips_year_files(tmp_path, tiny_fabric):
     """`period` filters multi-year sources to the requested window only.
 
@@ -355,6 +416,119 @@ def test_aggregate_source_period_filter_clips_year_files(tmp_path, tiny_fabric):
     written = sorted(p.name for p in per_source_dir.glob("merra2_*_agg.nc"))
     # 2000 and 2003 must be excluded; 2001 and 2002 must be present.
     assert written == ["merra2_2001_agg.nc", "merra2_2002_agg.nc"]
+
+
+def test_aggregate_source_period_verify_ignores_files_outside_window(
+    tmp_path, tiny_fabric
+):
+    """Prior runs at a different `--period` may leave per-year files outside
+    the current window. The post-aggregation coverage check must scope to
+    the requested period and ignore those orphan files; otherwise multi-
+    period workflows raise spuriously after every run.
+
+    Regression for the agg-mwbm-climgrid case: a prior run wrote 1900-1945
+    and a later run with `--period 1979/2020` was rejected by
+    _verify_year_coverage because the union (1900-1945 + 1979-2020) had a
+    gap at 1946-1978, even though every year in the requested window had
+    been written successfully.
+    """
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import aggregate_source
+
+    datastore = tmp_path / "datastore"
+    (datastore / "merra2").mkdir(parents=True)
+    src_nc = datastore / "merra2" / "merra2_consolidated.nc"
+    times = pd.date_range("2000-01-01", periods=48, freq="MS")
+    xr.Dataset(
+        {"a": (["time", "lat", "lon"], np.ones((48, 2, 2)))},
+        coords={
+            "time": ("time", times, {"standard_name": "time"}),
+            "lat": ("lat", [0.25, 0.75], {"standard_name": "latitude"}),
+            "lon": ("lon", [0.5, 1.5], {"standard_name": "longitude"}),
+        },
+    ).to_netcdf(src_nc)
+
+    (tmp_path / "config.yml").write_text(
+        yaml.dump(
+            {
+                "fabric": {"path": str(tiny_fabric), "id_col": "hru_id"},
+                "datastore": str(datastore),
+            }
+        )
+    )
+    (tmp_path / "fabric.json").write_text(json.dumps({"sha256": "f00"}))
+    (tmp_path / "manifest.json").write_text(json.dumps({"sources": {}, "steps": []}))
+    per_source_dir = tmp_path / "data" / "aggregated" / "merra2"
+    per_source_dir.mkdir(parents=True)
+    (tmp_path / "weights").mkdir()
+
+    # Pre-existing orphan from an earlier run, well outside the 2002/2003
+    # window we're about to aggregate. Must not cause a coverage gap error.
+    orphan = per_source_dir / "merra2_1999_agg.nc"
+    xr.Dataset(
+        {"a": (["time", "hru_id"], np.ones((1, 4)))},
+        coords={
+            "time": ("time", [pd.Timestamp("1999-01-01")], {"standard_name": "time"}),
+            "hru_id": [0, 1, 2, 3],
+        },
+    ).to_netcdf(orphan)
+
+    adapter = SourceAdapter(
+        source_key="merra2", output_name="merra2_agg.nc", variables=["a"]
+    )
+    fake_meta = {"access": {"type": "local_nc"}}
+
+    def _make_year_ds(year: int) -> xr.Dataset:
+        yt = pd.date_range(f"{year}-01-01", periods=12, freq="MS")
+        return xr.Dataset(
+            {"a": (["time", "hru_id"], np.ones((12, 4)))},
+            coords={
+                "time": ("time", yt, {"standard_name": "time"}),
+                "hru_id": [0, 1, 2, 3],
+            },
+        )
+
+    call_years: list[int] = []
+
+    def _fake_agg(*_args, **kwargs):
+        year = 2002 + len(call_years)
+        call_years.append(year)
+        return _make_year_ds(year)
+
+    with (
+        patch(
+            "nhf_spatial_targets.aggregate._driver.catalog_source",
+            return_value=fake_meta,
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.compute_or_load_weights",
+            return_value=_fake_weights(),
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.aggregate_variables_for_batch",
+            side_effect=_fake_agg,
+        ),
+    ):
+        # Should NOT raise even though per-source dir spans 1999..2003 with
+        # a 2000-2001 gap — we asked for 2002/2003 only.
+        aggregate_source(
+            adapter,
+            fabric_path=tiny_fabric,
+            id_col="hru_id",
+            workdir=tmp_path,
+            batch_size=500,
+            period="2002/2003",
+        )
+
+    written = sorted(p.name for p in per_source_dir.glob("merra2_*_agg.nc"))
+    assert written == [
+        "merra2_1999_agg.nc",  # untouched orphan
+        "merra2_2002_agg.nc",
+        "merra2_2003_agg.nc",
+    ]
+    # Manifest should record success (the verify check did not raise).
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    assert "merra2" in manifest["sources"]
 
 
 def test_aggregate_source_period_filter_excludes_all_raises(tmp_path, tiny_fabric):
@@ -648,8 +822,12 @@ def test_compute_or_load_weights_writes_cache_on_miss(tmp_path, tiny_fabric):
 
 
 def test_compute_or_load_weights_uses_cache_on_hit(tmp_path, tiny_fabric):
-    """Preexisting cache CSV must be loaded without invoking WeightGen."""
-    from nhf_spatial_targets.aggregate._driver import compute_or_load_weights
+    """Preexisting cache CSV plus matching fingerprint sidecar must be loaded
+    without invoking WeightGen."""
+    from nhf_spatial_targets.aggregate._driver import (
+        _batch_fingerprint,
+        compute_or_load_weights,
+    )
 
     (tmp_path / "weights").mkdir()
     batch_gdf = gpd.read_file(tiny_fabric)
@@ -664,6 +842,9 @@ def test_compute_or_load_weights_uses_cache_on_hit(tmp_path, tiny_fabric):
     cached = _fake_weights()
     cache_path = tmp_path / "weights" / "toy_batch0.csv"
     cached.to_csv(cache_path, index=False)
+    cache_path.with_suffix(".csv.meta").write_text(
+        _batch_fingerprint(batch_gdf, "hru_id")
+    )
 
     with patch("nhf_spatial_targets.aggregate._driver.WeightGen") as mock_wg:
         weights = compute_or_load_weights(
@@ -682,6 +863,114 @@ def test_compute_or_load_weights_uses_cache_on_hit(tmp_path, tiny_fabric):
         )
     assert not mock_wg.called
     pd.testing.assert_frame_equal(weights, cached)
+
+
+def test_compute_or_load_weights_invalidates_cache_when_sidecar_missing(
+    tmp_path, tiny_fabric
+):
+    """A pre-fingerprint cache (CSV without .csv.meta sidecar) must be
+    treated as untrusted and recomputed."""
+    from nhf_spatial_targets.aggregate._driver import compute_or_load_weights
+
+    (tmp_path / "weights").mkdir()
+    batch_gdf = gpd.read_file(tiny_fabric)
+    source_ds = xr.Dataset(
+        {"a": (["time", "lat", "lon"], np.ones((1, 2, 2)))},
+        coords={
+            "time": pd.date_range("2000-01-01", periods=1, freq="MS"),
+            "lat": [0.25, 0.75],
+            "lon": [0.5, 1.5],
+        },
+    )
+    # CSV present, sidecar absent (legacy cache state).
+    stale = _fake_weights()
+    cache_path = tmp_path / "weights" / "toy_batch0.csv"
+    stale.to_csv(cache_path, index=False)
+    fresh = _fake_weights()
+
+    with (
+        patch("nhf_spatial_targets.aggregate._driver.WeightGen") as mock_wg,
+        patch("nhf_spatial_targets.aggregate._driver.UserCatData"),
+    ):
+        inst = MagicMock()
+        inst.calculate_weights.return_value = fresh
+        mock_wg.return_value = inst
+        compute_or_load_weights(
+            batch_gdf=batch_gdf,
+            source_ds=source_ds,
+            source_var="a",
+            source_crs="EPSG:4326",
+            x_coord="lon",
+            y_coord="lat",
+            time_coord="time",
+            id_col="hru_id",
+            source_key="toy",
+            batch_id=0,
+            workdir=tmp_path,
+            period=("2000-01-01", "2000-02-01"),
+        )
+    assert mock_wg.called  # cache was invalidated, weights recomputed
+    assert cache_path.with_suffix(".csv.meta").exists()  # sidecar now written
+
+
+def test_compute_or_load_weights_invalidates_cache_when_fingerprint_mismatches(
+    tmp_path, tiny_fabric
+):
+    """A cache written for a different batch (different HRU id-set) must be
+    detected via fingerprint mismatch and recomputed.
+
+    Reproduces the MOD16A2 stale-cache bug: a previous run at a smaller
+    batch_size left weight files keyed only by batch_id; a subsequent run
+    at a larger batch_size loaded those files even though they covered a
+    different HRU cluster, silently producing mostly-NaN aggregates.
+    """
+    from nhf_spatial_targets.aggregate._driver import compute_or_load_weights
+
+    (tmp_path / "weights").mkdir()
+    batch_gdf = gpd.read_file(tiny_fabric)
+    source_ds = xr.Dataset(
+        {"a": (["time", "lat", "lon"], np.ones((1, 2, 2)))},
+        coords={
+            "time": pd.date_range("2000-01-01", periods=1, freq="MS"),
+            "lat": [0.25, 0.75],
+            "lon": [0.5, 1.5],
+        },
+    )
+    cache_path = tmp_path / "weights" / "toy_batch0.csv"
+    _fake_weights().to_csv(cache_path, index=False)
+    # Sidecar from a different batching scheme — fingerprint won't match
+    # the current batch_gdf's HRU id-set.
+    cache_path.with_suffix(".csv.meta").write_text("a" * 64)
+    fresh = _fake_weights()
+
+    with (
+        patch("nhf_spatial_targets.aggregate._driver.WeightGen") as mock_wg,
+        patch("nhf_spatial_targets.aggregate._driver.UserCatData"),
+    ):
+        inst = MagicMock()
+        inst.calculate_weights.return_value = fresh
+        mock_wg.return_value = inst
+        compute_or_load_weights(
+            batch_gdf=batch_gdf,
+            source_ds=source_ds,
+            source_var="a",
+            source_crs="EPSG:4326",
+            x_coord="lon",
+            y_coord="lat",
+            time_coord="time",
+            id_col="hru_id",
+            source_key="toy",
+            batch_id=0,
+            workdir=tmp_path,
+            period=("2000-01-01", "2000-02-01"),
+        )
+    assert mock_wg.called  # stale fingerprint triggered recompute
+    # Sidecar now reflects the current batch's fingerprint.
+    from nhf_spatial_targets.aggregate._driver import _batch_fingerprint
+
+    assert cache_path.with_suffix(
+        ".csv.meta"
+    ).read_text().strip() == _batch_fingerprint(batch_gdf, "hru_id")
 
 
 def test_update_manifest_raises_on_corrupt_json(project):
@@ -1378,3 +1667,37 @@ def test_aggregate_source_migrates_legacy_layout_on_startup(tmp_path, tiny_fabri
     assert not stale.exists()
     canonical = tmp_path / "data" / "aggregated" / "merra2" / "merra2_2000_agg.nc"
     assert canonical.exists()
+
+
+def test_atomic_write_netcdf_cleans_up_tmp_on_failure(tmp_path):
+    """A crash mid-write must leave no canonical file and no .nc.tmp behind.
+
+    Dual of ``test_compute_or_load_weights_ignores_stray_tmp_from_crashed_run``:
+    that test verifies the *next* run cleans up; this verifies the *current*
+    run cleans up when ``to_netcdf`` raises.
+    """
+    from nhf_spatial_targets.aggregate._driver import _atomic_write_netcdf
+
+    out_dir = tmp_path / "data" / "aggregated" / "toy"
+    out_path = out_dir / "toy_2000_agg.nc"
+
+    ds = xr.Dataset(
+        {"a": (["time", "hru_id"], np.ones((1, 2)))},
+        coords={
+            "time": pd.date_range("2000-01-01", periods=1, freq="MS"),
+            "hru_id": [0, 1],
+        },
+    )
+
+    class _BoomError(RuntimeError):
+        pass
+
+    with patch.object(xr.Dataset, "to_netcdf", side_effect=_BoomError("disk full")):
+        with pytest.raises(_BoomError):
+            _atomic_write_netcdf(ds, out_path)
+
+    assert not out_path.exists(), "canonical NC must not exist after a failed write"
+    leftover_tmps = list(out_dir.glob("*.nc.tmp"))
+    assert leftover_tmps == [], (
+        f"failed write must leave no .nc.tmp sidecar; found {leftover_tmps}"
+    )

@@ -177,7 +177,7 @@ sources:
       endpoint: https://usgs.osn.mghpcc.org/
       zarr_store: s3://mdmf/gdp/ssebopeta_monthly.zarr/
     variables:
-      - actual_et
+      - et
     time_step: monthly
     period: "2000/2023"
     spatial_extent: CONUS

@@ -1040,7 +1040,7 @@ def agg_ssebop_cmd(
     )
 
     try:
-        ds = aggregate_ssebop(
+        aggregate_ssebop(
             fabric_path=fabric_path,
             id_col=id_col,
             period=period,
@@ -1059,12 +1059,8 @@ def agg_ssebop_cmd(
         sys.exit(1)
 
     console.print(
-        f"[green]SSEBop aggregation complete: "
-        f"{ds.sizes.get('time', '?')} time steps x "
-        f"{ds.sizes.get(id_col, '?')} HRUs[/green]"
-    )
-    console.print(
-        f"[green]Output: {workdir / 'data' / 'aggregated' / 'ssebop_agg_aet.nc'}[/green]"
+        f"[green]SSEBop aggregation complete; per-year NCs and manifest "
+        f"updated under {workdir / 'data' / 'aggregated' / 'ssebop'}[/green]"
     )
 
 

@@ -1,3 +1,5 @@
+default_install_hook_types: [pre-commit, pre-push]
+
 repos:
   - repo: https://github.com/kynan/nbstripout
     rev: 0.8.1
@@ -21,13 +23,17 @@ repos:
         pass_filenames: false
         types: [python]
 
-      # Quiet pytest for pre-commit (verbose output can hang in pipes).
-      # Use `pixi run -e dev test` interactively for verbose output.
-      # NOTE: use `pixi run test-quiet` (default env, not -e dev) to avoid
-      # dask scheduler slow-start on Hovenweep HPC login nodes (~30s/test in dev env).
+      # Tests run at pre-push (not pre-commit) to keep per-commit friction
+      # low while still gating anything that reaches the remote. Quiet
+      # pytest for hook output (verbose output can hang in pipes); use
+      # `pixi run -e dev test` interactively for verbose output. NOTE: use
+      # `pixi run test-quiet` (default env, not -e dev) to avoid dask
+      # scheduler slow-start on Hovenweep HPC login nodes (~30s/test in
+      # dev env).
       - id: test
         name: pytest (unit only)
         entry: pixi run test-quiet
         language: system
         pass_filenames: false
         always_run: true
+        stages: [pre-push]

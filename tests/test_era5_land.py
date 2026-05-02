@@ -144,6 +144,21 @@ def test_daily_to_monthly_sum():
     assert monthly.attrs["units"] == "m"
 
 
+def _write_fake_month_nc(path: Path, year: int, month: int) -> None:
+    """Write a minimal NC whose time coord falls inside ``(year, month)``.
+
+    Tests that mock CDS retrieve must write a real NetCDF (not raw bytes)
+    because download_month_variable now validates the time coord against
+    the requested (year, month) before persisting.
+    """
+    days = pd.Period(f"{year}-{month:02d}").days_in_month
+    times = pd.date_range(f"{year}-{month:02d}-01", periods=days * 24, freq="1h")
+    xr.Dataset(
+        {"ro": (["time", "latitude", "longitude"], np.zeros((len(times), 1, 1)))},
+        coords={"time": times, "latitude": [40.0], "longitude": [-100.0]},
+    ).to_netcdf(path)
+
+
 def test_download_month_variable_calls_cds_client(tmp_path, monkeypatch):
     """download_month_variable submits a single-month CDS request."""
     from nhf_spatial_targets.fetch.era5_land import download_month_variable
@@ -151,7 +166,7 @@ def test_download_month_variable_calls_cds_client(tmp_path, monkeypatch):
     out = tmp_path / "era5_land_ro_2020_03.nc"
 
     def fake_retrieve(dataset, request, path):
-        Path(path).write_bytes(b"fake_nc_data")
+        _write_fake_month_nc(Path(path), year=2020, month=3)
 
     fake_client = MagicMock()
     fake_client.retrieve = MagicMock(side_effect=fake_retrieve)
@@ -185,13 +200,17 @@ def test_download_month_variable_extracts_zip(tmp_path, monkeypatch):
     from nhf_spatial_targets.fetch.era5_land import download_month_variable
 
     out = tmp_path / "era5_land_ro_2020_03.nc"
-    nc_content = b"fake_nc_data_inside_zip"
 
     def fake_retrieve(dataset, request, path):
-        # Simulate CDS API returning a zip-wrapped NetCDF.
+        # Simulate CDS API returning a zip-wrapped NetCDF. Build a
+        # real per-month NC in a tmp dir, read its bytes, and pack them.
+        scratch = tmp_path / "_scratch.nc"
+        _write_fake_month_nc(scratch, year=2020, month=3)
+        nc_bytes = scratch.read_bytes()
+        scratch.unlink()
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as zf:
-            zf.writestr("data.nc", nc_content)
+            zf.writestr("data.nc", nc_bytes)
         Path(path).write_bytes(buf.getvalue())
 
     fake_client = MagicMock()
@@ -204,7 +223,6 @@ def test_download_month_variable_extracts_zip(tmp_path, monkeypatch):
 
     assert result == out
     assert out.exists()
-    assert out.read_bytes() == nc_content
     # Confirm the output file is not a zip.
     assert not zipfile.is_zipfile(out)
     # No .tmp file should remain.
@@ -221,7 +239,7 @@ def test_download_month_variable_skips_existing(tmp_path, monkeypatch):
         "nhf_spatial_targets.fetch.era5_land._cds_client", lambda: fake_client
     )
     out = tmp_path / "era5_land_ro_2020_03.nc"
-    out.write_bytes(b"existing")
+    _write_fake_month_nc(out, year=2020, month=3)
     download_month_variable(year=2020, month=3, variable="ro", output_path=out)
     fake_client.retrieve.assert_not_called()
 
@@ -247,6 +265,192 @@ def test_download_month_variable_atomic_cleanup_on_failure(tmp_path, monkeypatch
 
     assert not out.exists()
     assert not Path(str(out) + ".tmp").exists()
+
+
+def test_download_month_variable_rejects_mismatched_cds_response(tmp_path, monkeypatch):
+    """If CDS returns data for the wrong (year, month), the chunk is not persisted.
+
+    Regression for the era5_land_ssro_2013_03.nc / era5_land_ro_2021_01.nc
+    incident: a chunk file's contents covered a different time window than
+    its filename suggested. open_mfdataset(combine="by_coords") then
+    silently concatenated the bad chunk into the year file, producing
+    bloated daily and monthly NCs that tripped the aggregator's
+    enumerate_years overlap check three sources downstream.
+    """
+    from nhf_spatial_targets.fetch.era5_land import download_month_variable
+
+    out = tmp_path / "era5_land_ro_2020_03.nc"
+
+    def fake_retrieve_wrong_month(dataset, request, path):
+        # Caller asked for 2020-03 but we write 2018-05 data instead —
+        # mimics the production failure mode.
+        _write_fake_month_nc(Path(path), year=2018, month=5)
+
+    fake_client = MagicMock()
+    fake_client.retrieve = MagicMock(side_effect=fake_retrieve_wrong_month)
+    monkeypatch.setattr(
+        "nhf_spatial_targets.fetch.era5_land._cds_client", lambda: fake_client
+    )
+
+    with pytest.raises(ValueError, match="time coord covers"):
+        download_month_variable(year=2020, month=3, variable="ro", output_path=out)
+
+    assert not out.exists()
+    assert not Path(str(out) + ".tmp").exists()
+
+
+def test_download_month_variable_re_fetches_existing_corrupt_chunk(
+    tmp_path, monkeypatch
+):
+    """An existing chunk whose content doesn't match its filename is unlinked
+    and re-fetched. Catches pre-existing corruption that would otherwise
+    bypass validation via the skip-existing fast path.
+    """
+    from nhf_spatial_targets.fetch.era5_land import download_month_variable
+
+    out = tmp_path / "era5_land_ro_2020_03.nc"
+    # Pre-existing corrupt chunk: filename says 2020-03 but content is 2018-05.
+    _write_fake_month_nc(out, year=2018, month=5)
+
+    # Track CDS calls to confirm re-fetch happened.
+    def fake_retrieve_correct(dataset, request, path):
+        _write_fake_month_nc(Path(path), year=2020, month=3)
+
+    fake_client = MagicMock()
+    fake_client.retrieve = MagicMock(side_effect=fake_retrieve_correct)
+    monkeypatch.setattr(
+        "nhf_spatial_targets.fetch.era5_land._cds_client", lambda: fake_client
+    )
+
+    result = download_month_variable(year=2020, month=3, variable="ro", output_path=out)
+
+    fake_client.retrieve.assert_called_once()
+    assert result == out
+    assert out.exists()
+    # File was rewritten — validate the new content. (`retrieve` was called
+    # exactly once above and the new content covers the requested window;
+    # an mtime-bump check is redundant and races on filesystems whose
+    # timestamp granularity is coarser than the unlink+rewrite latency.)
+    with xr.open_dataset(out) as ds:
+        times = pd.DatetimeIndex(ds.time.values)
+    assert set(zip(times.year.tolist(), times.month.tolist())) == {(2020, 3)}
+
+
+def test_assign_worker_years_full_coverage_with_racing_manifest():
+    """Round-robin sharding must cover every year exactly once across all
+    workers, even when the manifest grows mid-run because sibling workers
+    finish in parallel.
+
+    Regression for the production failure: with 47 years (1979-2025) and
+    4 workers, the prior logic dropped 9 of 47 years (including 2022)
+    because each worker computed ``remaining = all_years - completed``
+    and then sliced ``remaining`` round-robin — and sibling workers each
+    saw a different ``completed`` set, so the round-robin didn't tile.
+    """
+    from nhf_spatial_targets.fetch.era5_land import _assign_worker_years
+
+    all_years = list(range(1979, 2026))  # 47 years, matches production
+    n_workers = 4
+
+    # Simulate the actual race: worker 0 starts with empty manifest,
+    # processes its slice, writes those 12 years to the manifest.
+    # Workers 1-3 then start and see worker 0's outputs as completed.
+    worker_completions = {
+        0: set(),
+        1: set(all_years[0::n_workers]),
+        2: set(all_years[0::n_workers]),
+        3: set(all_years[0::n_workers]),
+    }
+
+    assigned_by_worker = {}
+    for w in range(n_workers):
+        assigned, _ = _assign_worker_years(
+            all_years, worker_completions[w], w, n_workers
+        )
+        assigned_by_worker[w] = assigned
+
+    # Worker 0 processes its slice; workers 1-3 process theirs (each
+    # filters out worker 0's outputs, but those aren't in their slices
+    # anyway under the new logic).
+    actually_processed = set()
+    for w, ys in assigned_by_worker.items():
+        actually_processed.update(ys)
+    actually_processed.update(worker_completions[1])  # worker 0's done years
+
+    assert actually_processed == set(all_years), (
+        f"missing years: {sorted(set(all_years) - actually_processed)}"
+    )
+
+    # No two workers process the same year — the slices are disjoint.
+    flat = [y for ys in assigned_by_worker.values() for y in ys]
+    assert len(flat) == len(set(flat))
+
+
+def test_assign_worker_years_2022_orphan_regression():
+    """Specific regression: with 47 years across 4 workers and worker 0's
+    outputs already manifest-completed, 2022 must still be assigned to
+    *some* worker. (Was silently dropped by the prior round-robin logic.)
+    """
+    from nhf_spatial_targets.fetch.era5_land import _assign_worker_years
+
+    all_years = list(range(1979, 2026))
+    n_workers = 4
+    completed = set(all_years[0::n_workers])  # worker 0's slice
+
+    assigned_to_someone = set()
+    for w in range(n_workers):
+        assigned, _ = _assign_worker_years(all_years, completed, w, n_workers)
+        assigned_to_someone.update(assigned)
+
+    assert 2022 in assigned_to_someone
+
+
+def test_assign_worker_years_skipped_reports_intersection_only():
+    """``skipped`` is the worker-slice ∩ completed — not the full completed set."""
+    from nhf_spatial_targets.fetch.era5_land import _assign_worker_years
+
+    all_years = [2000, 2001, 2002, 2003, 2004]
+    # Mark 2001 (worker 1's slice) and 2003 (worker 1's slice) as completed.
+    # Worker 0 should not see those in its skipped list.
+    completed = {2001, 2003}
+
+    assigned_w0, skipped_w0 = _assign_worker_years(all_years, completed, 0, 2)
+    assert assigned_w0 == [2000, 2002, 2004]  # worker 0's slice, none completed
+    assert skipped_w0 == []
+
+    assigned_w1, skipped_w1 = _assign_worker_years(all_years, completed, 1, 2)
+    assert assigned_w1 == []  # all of worker 1's slice already done
+    assert skipped_w1 == [2001, 2003]
+
+
+def test_validate_chunk_time_coord_accepts_matching(tmp_path):
+    from nhf_spatial_targets.fetch.era5_land import _validate_chunk_time_coord
+
+    p = tmp_path / "era5_land_ro_2020_03.nc"
+    _write_fake_month_nc(p, year=2020, month=3)
+    # Should not raise.
+    _validate_chunk_time_coord(p, year=2020, month=3)
+
+
+def test_validate_chunk_time_coord_rejects_extra_months(tmp_path):
+    """Reject a chunk whose time coord includes timestamps outside the
+    requested window — even if the requested month is also present."""
+    from nhf_spatial_targets.fetch.era5_land import _validate_chunk_time_coord
+
+    # Build a chunk that contains BOTH 2020-03 (a few hours) AND 2020-04
+    # (a few hours). The expected (year, month) is just (2020, 3).
+    times = pd.DatetimeIndex(
+        list(pd.date_range("2020-03-30", periods=24, freq="1h"))
+        + list(pd.date_range("2020-04-01", periods=24, freq="1h"))
+    )
+    p = tmp_path / "era5_land_ro_2020_03.nc"
+    xr.Dataset(
+        {"ro": (["time", "lat", "lon"], np.zeros((len(times), 1, 1)))},
+        coords={"time": times, "lat": [40.0], "lon": [-100.0]},
+    ).to_netcdf(p)
+
+    with pytest.raises(ValueError, match="time coord covers"):
+        _validate_chunk_time_coord(p, year=2020, month=3)
 
 
 def test_download_year_calls_cds_client(tmp_path, monkeypatch):

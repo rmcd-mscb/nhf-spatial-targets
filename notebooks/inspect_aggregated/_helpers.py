@@ -290,6 +290,86 @@ def plot_nan_hrus(
     ax.set_ylabel("Latitude")
 
 
+def daily_coverage_summary(
+    ds: xr.Dataset,
+    var: str,
+    *,
+    threshold: float = 0.0,
+    coverage_var: str | None = None,
+    coverage_threshold: float = 0.7,
+) -> pd.DataFrame:
+    """Per-timestep HRU counts for picking inspection-worthy days.
+
+    Computes, per timestep, the number of HRUs where:
+      - ``var`` is finite (column ``n_finite``)
+      - ``var`` strictly exceeds ``threshold`` (``n_above``)
+      - ``coverage_var`` strictly exceeds ``coverage_threshold``
+        (``n_covered``, included only when ``coverage_var`` is set)
+      - both gates pass (``n_overlap``, included only when
+        ``coverage_var`` is set)
+
+    For MOD10C1: a low ``n_overlap`` count means the timestep is
+    cloud-dominated or pre-Terra-systematic-data (early 2000), so the
+    snow panel will look spatially sparse even though the underlying
+    data is correct.
+
+    The dataset's first dim is treated as the time dim; the second is
+    treated as the HRU dim.
+    """
+    arr = ds[var].values
+    time_dim = ds[var].dims[0]
+    times = pd.DatetimeIndex(ds[time_dim].values)
+    finite = np.isfinite(arr)
+    above = finite & (arr > threshold)
+    cols: dict[str, np.ndarray] = {
+        "n_finite": finite.sum(axis=1),
+        "n_above": above.sum(axis=1),
+    }
+    if coverage_var is not None:
+        cov_arr = ds[coverage_var].values
+        cov_pass = np.isfinite(cov_arr) & (cov_arr > coverage_threshold)
+        cols["n_covered"] = cov_pass.sum(axis=1)
+        cols["n_overlap"] = (above & cov_pass).sum(axis=1)
+    return pd.DataFrame(cols, index=times).rename_axis("date")
+
+
+def find_best_day(
+    ds: xr.Dataset,
+    var: str,
+    *,
+    threshold: float = 0.0,
+    coverage_var: str | None = None,
+    coverage_threshold: float = 0.7,
+    month: int | None = None,
+) -> pd.Timestamp:
+    """Return the date with the largest count of HRUs that pass the
+    primary threshold and (when set) the coverage gate.
+
+    Companion to :func:`daily_coverage_summary`. When picking
+    ``TARGET_DAY`` for a notebook, the timestep that maximizes
+    ``n_overlap`` produces the spatially richest inspection panel —
+    avoids the early-Terra/cloud-dominated days where most HRUs are NaN.
+
+    ``month`` (1-12), if set, restricts selection to that calendar
+    month. If no overlap gate is set, the metric falls back to
+    ``n_above`` (count of HRUs above the primary threshold).
+    """
+    df = daily_coverage_summary(
+        ds,
+        var,
+        threshold=threshold,
+        coverage_var=coverage_var,
+        coverage_threshold=coverage_threshold,
+    )
+    if month is not None:
+        df = df[df.index.month == month]
+    if df.empty:
+        scope = f" in month {month}" if month is not None else ""
+        raise ValueError(f"No timesteps found{scope}")
+    metric = "n_overlap" if "n_overlap" in df.columns else "n_above"
+    return df[metric].idxmax()
+
+
 def save_figure(fig, name: str) -> None:
     """Write ``fig`` to ``FIGURES_DIR/<name>.png`` iff ``SAVE_FIGURES``.
 
