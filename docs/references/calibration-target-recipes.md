@@ -72,34 +72,49 @@ Per-HRU per-month: `lower_bound = min(era5_cfs, gldas_cfs)`,
 ### 2. Actual evapotranspiration (AET)
 
 - **PRMS variable:** `hru_actet`
-- **Sources:** SSEBop `et`, MOD16A2 v061 `ET_500m`
+- **Sources:** SSEBop `et`, MOD16A2 v061 `ET_500m`, MWBM (Wieczorek et al. 2024) `aet`
 - **Builder:** `src/nhf_spatial_targets/targets/aet.py` (status: stub at last check)
 
 **Native-unit conversion to mm/month**
 
 - SSEBop `et`: native mm/month, monthly time step. No conversion. **Variable name is
   `et`** — earlier code wrote `actual_et`, which doesn't exist in the zarr.
-- MOD16A2 `ET_500m`: kg m⁻² per 8-day composite (with units `kg m-2 / 8-day`).
-  1 kg m⁻² of water = 1 mm depth, so 1 composite value = mm of ET over 8 days.
-  Aggregation to a calendar month: weight each composite by
-  `(days of overlap with target month) / 8`, then sum the weighted contributions
-  for all composites that intersect the month.
+- MOD16A2 `ET_500m`: kg m⁻² per 8-day composite, with `scale_factor=0.1` per the
+  HDF spec. 1 kg m⁻² of water = 1 mm depth, so 1 composite value × 0.1 = mm of ET
+  over the composite window. The standard composite covers 8 days; the year-end
+  composite at DOY 361 is shorter (5–6 days) because LP DAAC caps it at the
+  calendar-year boundary, so its value represents the actual 5–6 days of ET, not
+  8 (treating it as 8 would over-count days 1–3 of the next January via spillover).
+  Aggregation to a calendar month: for each composite that intersects the month,
+  weight by `(days of overlap with target month) / composite_length_c` (where
+  `composite_length_c` is 8 for standard composites and 5–6 for the year-end one),
+  then sum weighted contributions × `scale_factor`. The reference implementation
+  is `_mod16a2_to_monthly_mm` in `notebooks/inspect_aggregated/inspect_aggregated_aet.ipynb`
+  — the builder should match it (and the inspection notebook will only validate
+  the builder if it does).
+- MWBM `aet`: native mm/month, monthly time step. No conversion. CONUS-wide MWBM
+  forced by ClimGrid (Wieczorek et al. 2024); aggregated to HRU polygons per year.
 
 **Time conventions**
 
 - SSEBop monthly, timestamps at start-of-month (typical zarr convention; verify per file).
 - MOD16A2 8-day composites with timestamps at the start of the 8-day window
   (`A{year}{doy}` filename pattern).
+- MWBM monthly, start-of-month.
 
 **Spatial extent**
 
 - SSEBop: CONUS, accessed remotely via the USGS NHGF STAC catalog — no local
   consolidated NC. Aggregation reads the zarr directly.
 - MOD16A2: global tiles; we keep yearly consolidated NCs subset around CONUS+.
+- MWBM: CONUS, distributed pre-aggregated to a 1 km polygon mesh; aggregated to
+  the HRU fabric.
 
 **Combination rule (TM 6-B10 / per repo)**
 
-Per-HRU per-month: range across both sources defines the calibration error bound.
+Per-HRU per-month: `lower_bound = min(ssebop, mod16a2, mwbm)`,
+`upper_bound = max(ssebop, mod16a2, mwbm)` over **absolute mm/month** values
+(not 0–1 normalised — the inter-source spread *is* the calibration error bound).
 
 **Open / verify before implementing**
 
@@ -110,6 +125,12 @@ Per-HRU per-month: range across both sources defines the calibration error bound
   `decode_cf=True`, or apply the scale factor explicitly in the builder. This is
   the AET-equivalent of the Reitz / NCEP / GLDAS issues — values look "wrong by
   exactly N×" because of an upstream encoding the catalog didn't follow.
+- **MOD16A2 8-day → monthly resample.** A "pick one composite, label it mm/month"
+  shortcut (used in earlier inspect notebooks) under-counts MOD16A2 by ~3–4×
+  because a single 8-day composite is being reported as a monthly total. Because
+  the AET target uses absolute magnitudes directly (no 0–1 normalisation), this
+  error propagates straight into the `min` bound. Use the overlap-weighted
+  formula above; do not skip it.
 
 ---
 
