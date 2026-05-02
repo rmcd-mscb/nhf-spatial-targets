@@ -64,7 +64,11 @@ variables:
       mwbm_climgrid contributes the MWBM-family AET trace
       (Wieczorek et al. 2024, mm/month native). Consumption by the
       AET target builder is gated on targets/aet.py being implemented
-      (currently a NotImplementedError stub).
+      (currently a NotImplementedError stub). MOD16A2 v061 inclusion
+      in the bound is pending collaborator consensus per the July 2000
+      inspection finding (see docs/references/lessons-learned.md);
+      targets/aet.py should accept a `sources` override from project
+      config until that decision is finalised.
     normalize: false
     output_format: netcdf
 

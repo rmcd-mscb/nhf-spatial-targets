@@ -9,10 +9,16 @@ Builds the five baseline calibration targets documented in [Hay and others (2022
 | Target | PRMS Variable | Sources | Method | Time Step |
 |---|---|---|---|---|
 | Runoff | `basin_cfs` | ERA5-Land (`ro`) + GLDAS-2.1 NOAH (`Qs_acc + Qsb_acc`) | Multi-source min/max | Monthly |
-| AET | `hru_actet` | MOD16A2 v061 + SSEBop | Multi-source min/max | Monthly |
+| AET | `hru_actet` | SSEBop + MWBM (ClimGrid) + MOD16A2 v061¹ | Multi-source min/max | Monthly |
 | Recharge | `recharge` | Reitz 2017 + WaterGAP 2.2d + ERA5-Land (`ssro`) | Normalized min/max | Annual |
 | Soil Moisture | `soil_rechr` | MERRA-2 + NCEP/NCAR + NLDAS-MOSAIC + NLDAS-NOAH | Normalized min/max | Monthly + Annual |
 | Snow Cover | `snowcov_area` | MOD10C1 v061 | MODIS CI bounds | Daily |
+
+¹ MOD16A2 v061 inclusion in the AET bound is **pending collaborator consensus** —
+the July 2000 inspection found it reads essentially flat across the seasonal
+cycle on CONUS+ while SSEBop and MWBM swing 6–11×. See
+[`docs/references/lessons-learned.md`](docs/references/lessons-learned.md)
+§ MOD16A2 v061 flat-on-CONUS+ for the full finding.
 
 ## Quick Start
 
@@ -173,6 +179,7 @@ Each `fetch` command downloads source granules and consolidates them into a sing
 | MOD10C1 v061 | `fetch mod10c1` | earthaccess (daily HDF4, 0.05&deg;) | `mod10c1_v061_{year}_consolidated.nc` |
 | WaterGAP 2.2d | `fetch watergap22d` | pangaeapy (single NC4) | `watergap22d_qrdif_cf.nc` |
 | Reitz 2017 | `fetch reitz2017` | sciencebasepy (annual GeoTIFF) | `reitz2017_consolidated.nc` |
+| MWBM (ClimGrid) | `fetch mwbm-climgrid` | manual download (ScienceBase, CAPTCHA-gated 7.5 GB NC) | `ClimGrid_WBM.nc` |
 
 All fetch commands support **incremental download** — periods already recorded in `manifest.json` are skipped.
 

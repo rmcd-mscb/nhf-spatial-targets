@@ -132,6 +132,23 @@ Per-HRU per-month: `lower_bound = min(ssebop, mod16a2, mwbm)`,
   error propagates straight into the `min` bound. Use the overlap-weighted
   formula above; do not skip it.
 
+**Open decisions (pending collaborator consensus)**
+
+- **MOD16A2 v061 inclusion.** The July 2000 cross-check in
+  `notebooks/inspect_aggregated/inspect_aggregated_aet.ipynb` shows MOD16A2 v061
+  is essentially flat across the seasonal cycle on the CONUS+ aggregation
+  (Jul/Jan = 1.12×) while SSEBop and MWBM swing 6–11× as expected for CONUS
+  ET. The flatness is present at both gridded and aggregated scales, so it is
+  already in the consolidated NC, not an aggregation artefact. In both January
+  and July MOD16A2 sets one end of the multi-source min/max bound and pulls
+  it away from where SSEBop and MWBM agree — the opposite of what the bound
+  is meant to do. Whether to keep MOD16A2 in the bound, drop it, or wait for
+  v062 / a v061 reprocess is **pending collaborator consensus**. Until then,
+  `targets/aet.py` should accept a `sources` override from project config so
+  the decision can be applied without a code change. See
+  `docs/references/lessons-learned.md` § MOD16A2 v061 flat-on-CONUS+ for the
+  full finding and the per-month evidence.
+
 ---
 
 ### 3. Recharge (RCH)
@@ -164,6 +181,15 @@ ERA5-Land: monthly, end-of-month.
 Reitz is CONUS-only at 0.0083° (1 km). WaterGAP and ERA5-Land are global / CONUS+. For
 inspection, the recharge notebook clips all three to ERA5-Land's footprint; the target
 builder should aggregate each to HRUs and then operate per-HRU.
+
+**Datastore files**
+
+- Reitz: `<datastore>/reitz2017/reitz2017_consolidated.nc` (annual, time mid-year).
+- WaterGAP: `<datastore>/watergap22d/watergap22d_qrdif_cf.nc` — CF-conformant rewrite
+  of the PANGAEA NC4 (`watergap_22d_WFDEI-GPCC_histsoc_qrdif_monthly_1901_2016.nc4`)
+  with decoded time so `sel(time=str(year))` works without manual cftime handling.
+- ERA5-Land: `<datastore>/era5_land/monthly/era5_land_monthly_{year}.nc` (per-year
+  monthly NCs, end-of-month timestamps).
 
 **Combination rule (TM 6-B10)**
 
