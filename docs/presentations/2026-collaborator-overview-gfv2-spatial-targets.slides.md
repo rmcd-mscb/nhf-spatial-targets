@@ -3,7 +3,7 @@ marp: true
 theme: default
 paginate: true
 size: 16:9
-header: '**nhf-spatial-targets** · collaborator overview'
+header: '**nhf-spatial-targets** · collaborator overview · `gfv2-spatial-targets`'
 footer: '2026 · NHM calibration targets'
 style: |
   section { font-size: 22px; }
@@ -19,6 +19,8 @@ style: |
 
 ### Pipeline overview & pre-target inspection findings
 
+#### Project: `gfv2-spatial-targets`
+
 Collaborator briefing — calibration-target consensus
 
 Goal of this session: align on **(a) period of record per target group**
@@ -33,7 +35,7 @@ USGS National Hydrologic Model · TM 6-B10 (Hay et al. 2022)
 ## Today's plan
 
 1. **Pipeline tour** — repo layout, datastore convention, project setup, workflow
-2. **Per-target inspection results** — one or two figures per target, the open questions
+2. **Two-stage QA/QC** — gridded source QC (Stage 1) → HRU aggregate QC (Stage 2)
 3. **Decisions** — period of record + datasets, per target group
 4. **Open discussion**
 
@@ -90,7 +92,7 @@ src/nhf_spatial_targets/
   cli.py      ← `nhf-targets` entry point
 
 notebooks/
-  inspect_aggregated/             # per-target QC notebooks
+  aggregated/             # per-target QC notebooks
   inspect_consolidated/           # source-NC QC, pre-aggregation
 ```
 
@@ -244,14 +246,102 @@ duplicate downloads when re-running targets.
 
 ---
 
-# Per-target inspection results
+# Two-stage QA/QC
+
+We inspect every target at **two scales** before it informs a calibration bound:
+
+1. **Gridded source QC** — `notebooks/consolidated/inspect_consolidated_*.ipynb`
+   Do the source products agree on the spatial pattern *before we aggregate*?
+2. **HRU aggregate QC** — `notebooks/aggregated/inspect_aggregated_*.ipynb`
+   Did aggregation preserve that pattern at the fabric scale?
+
+Each notebook writes its panels to `docs/figures/{consolidated,aggregated}/<project>/`
+via a `save_figure(fig, name)` hook, so the same figures show up in this deck.
+This guards against silent bugs at *either* scale: a gridded-source artefact
+that aggregation would mask, or an aggregation artefact the source didn't have.
+
+---
+
+# Stage 1 — Gridded source QC
+
+The figures that follow are pre-aggregation: each product on its **native grid**,
+clipped to a common extent, side-by-side on a shared colour scale.
+
+Goal is *visual triangulation* — if three independent products agree on the
+spatial pattern, the inter-product spread we see at the HRU level (Stage 2) is
+real signal, not pipeline noise.
+
+---
+
+## Runoff — gridded sources
+
+![w:1000](../figures/consolidated/gfv2-spatial-targets/runoff_normalized_comparison.png)
+
+ERA5-Land `ro` and GLDAS-2.1 NOAH `Qs_acc + Qsb_acc`, both reduced to mm/month
+on the ERA5-Land footprint and a shared colour scale. Wet–dry gradient and
+orographic patterns line up; magnitude offsets are real LSM differences (the
+exact spread the multi-source bound is meant to capture).
+
+---
+
+## AET — gridded sources
+
+![w:1000](../figures/consolidated/gfv2-spatial-targets/aet_normalized_comparison.png)
+
+SSEBop, MWBM (ClimGrid), and MOD16A2 v061 reduced to a common mm/month
+extent. SSEBop and MWBM track each other on the wet-east / dry-west pattern;
+MOD16A2 v061 looks visibly **flat** even at the gridded scale — already
+visible *before* aggregation, confirming the flat-on-CONUS+ behaviour is a
+product property rather than something the HRU step introduced. (See AET
+decision slide later in deck.)
+
+---
+
+## Recharge — gridded sources
+
+![w:1000](../figures/consolidated/gfv2-spatial-targets/recharge_normalized_comparison.png)
+
+Reitz 2017 `total_recharge`, WaterGAP 2.2d `qrdif`, and ERA5-Land `ssro` on a
+shared mm/year extent. Absolute magnitudes diverge by design (empirical
+total recharge vs modelled diffuse recharge vs sub-surface runoff proxy) —
+the 0–1 normalisation in Stage 2 is what makes them combinable. The gridded
+view confirms the spatial *patterns* still rhyme.
+
+---
+
+## Soil moisture — gridded sources
+
+![w:1000](../figures/consolidated/gfv2-spatial-targets/soil_moisture_normalized_comparison.png)
+
+MERRA-2 `GWETTOP`, NLDAS-2 NOAH, NLDAS-2 MOSAIC, NCEP/NCAR R1 — four products,
+four different definitions of "soil moisture", on the NLDAS CONUS footprint.
+The gridded comparison shows up the layer-depth and variable-meaning caveats
+visually (MERRA-2's plant-available wetness vs NCEP's VWC) — and motivates
+why the Stage 2 target uses 0–1 normalisation rather than absolute values.
+
+---
+
+## Snow-covered area — gridded source
+
+![w:1000](../figures/consolidated/gfv2-spatial-targets/snow_covered_area_raw_panels.png)
+
+MOD10C1 v061 `Day_CMG_Snow_Cover` on March 1, 2000 (peak-CONUS snow date).
+Single product so there's no cross-source check at this stage; the gridded
+view exists to confirm the **CI > 70% pre-aggregation mask** removes the
+flag-code contamination (237 inland water, 239 ocean, 250 cloud) before the
+fabric ever sees the data — the non-commutativity gotcha that motivated the
+A2 transformation policy.
+
+---
+
+# Stage 2 — HRU aggregate QC
 
 What follows is the per-target HRU-level QC: what we have aggregated to the
 fabric, what looks right, what's open.
 
-Source notebooks live at `notebooks/inspect_aggregated/inspect_aggregated_*.ipynb`.
+Source notebooks live at `notebooks/aggregated/inspect_aggregated_*.ipynb`.
 Each notebook produces ~5–7 figures and saves them to
-`docs/figures/inspect_aggregated/` for re-use.
+`docs/figures/aggregated/<project>/` for re-use.
 
 ---
 
@@ -265,13 +355,13 @@ Native-unit map confirms the unit-conversion fix from PR #68:
 GLDAS `_acc` fields are *means of 3-hourly accumulations*, not sums — must
 be multiplied by `8 × days_in_month` (was 224–248× too small without it).
 
-![w:900](../figures/inspect_aggregated/runoff_native_units_map.png)
+![w:900](../figures/aggregated/gfv2-spatial-targets/runoff_native_units_map.png)
 
 ---
 
 ## Runoff — cross-source comparison
 
-![w:900](../figures/inspect_aggregated/runoff_normalized_comparison.png)
+![w:900](../figures/aggregated/gfv2-spatial-targets/runoff_normalized_comparison.png)
 
 Two sources, mm/month on a shared colour scale (ERA5-Land reference).
 Pattern agreement is good in the wet–dry gradient; magnitude offsets
@@ -288,7 +378,7 @@ kind of inter-product spread the min/max bound is meant to capture.
 - **Cadence:** monthly; MOD16A2's 8-day composites resampled via
   overlap-weighted sum (recipes §2)
 
-![w:900](../figures/inspect_aggregated/aet_normalized_comparison.png)
+![w:900](../figures/aggregated/gfv2-spatial-targets/aet_normalized_comparison.png)
 
 <span class="footnote">¹ MOD16A2 v061 inclusion is pending today's discussion — see slide 18.</span>
 
@@ -296,7 +386,7 @@ kind of inter-product spread the min/max bound is meant to capture.
 
 ## AET — distribution shape
 
-![w:780](../figures/inspect_aggregated/aet_histogram.png)
+![w:780](../figures/aggregated/gfv2-spatial-targets/aet_histogram.png)
 
 Cross-source distribution at the chosen target month. Look for:
 **mode separation** (where is the typical HRU's ET?), **tail behaviour**
@@ -356,13 +446,13 @@ recharge, process-modelled diffuse recharge, sub-surface runoff. Absolute
 magnitudes diverge by design; the 0–1 normalisation is what makes them
 combinable. The optimisation targets relative year-to-year change.
 
-![w:850](../figures/inspect_aggregated/recharge_normalized_comparison.png)
+![w:850](../figures/aggregated/gfv2-spatial-targets/recharge_normalized_comparison.png)
 
 ---
 
 ## Recharge — time series at four climate regimes
 
-![w:900](../figures/inspect_aggregated/recharge_time_series.png)
+![w:900](../figures/aggregated/gfv2-spatial-targets/recharge_time_series.png)
 
 Inter-annual variability is the signal the calibration target captures.
 Olympic Peninsula vs Phoenix span ~5–10× absolute scale; relative phasing
@@ -384,13 +474,13 @@ across products drives the bound width.
 The 0–1 normalisation handles all of this gracefully — but don't try to
 compare absolute values across the four.
 
-![w:780](../figures/inspect_aggregated/soil_moisture_normalized_comparison.png)
+![w:780](../figures/aggregated/gfv2-spatial-targets/soil_moisture_normalized_comparison.png)
 
 ---
 
 ## Soil moisture — distribution shape
 
-![w:780](../figures/inspect_aggregated/soil_moisture_histogram.png)
+![w:780](../figures/aggregated/gfv2-spatial-targets/soil_moisture_histogram.png)
 
 Even after each source is *physically* in its own native units, the
 *shape* of the per-HRU distribution should be broadly comparable. A
@@ -411,7 +501,7 @@ Without it, CONUS-mean for a typical day is dominated by flag codes
 (237 = inland water, 239 = ocean, 250 = cloud-obscured water) and lands
 near 100, which is physically meaningless.
 
-![w:900](../figures/inspect_aggregated/snow_covered_area_normalized_comparison.png)
+![w:900](../figures/aggregated/gfv2-spatial-targets/snow_covered_area_normalized_comparison.png)
 
 ---
 
@@ -483,7 +573,9 @@ MWBM family extensions for RCH).
 - **Per-target recipes:** `docs/references/calibration-target-recipes.md`
 - **Lessons learned:** `docs/references/lessons-learned.md`
   *(MOD16A2 finding, validation-cell limits, mask conventions, etc.)*
-- **Inspection notebooks:** `notebooks/inspect_aggregated/inspect_aggregated_*.ipynb`
+- **Inspection notebooks:**
+  - Stage 1 (gridded): `notebooks/consolidated/inspect_consolidated_*.ipynb`
+  - Stage 2 (HRU): `notebooks/aggregated/inspect_aggregated_*.ipynb`
 - **TM 6-B10 crib sheet:** `docs/references/tm6b10-summary.md`
 - **CLAUDE.md:** project-level conventions, known gaps, dev workflow
 

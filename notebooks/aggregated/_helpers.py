@@ -4,7 +4,7 @@ This module is a sibling of the notebooks (not packaged into
 nhf_spatial_targets). It holds path discovery, fabric I/O, HRU
 choropleth plotting, area-weighted means, time-window slicing,
 representative-point lookup, catalog-units lookup, and a save-figure
-helper used to populate docs/figures/inspect_aggregated/ for downstream
+helper used to populate docs/figures/aggregated/ for downstream
 slide / documentation work.
 
 Notebooks import via:
@@ -35,7 +35,8 @@ from shapely.geometry import Point
 from nhf_spatial_targets import catalog as cat
 
 SAVE_FIGURES: bool = False
-FIGURES_DIR: Path = Path("docs/figures/inspect_aggregated/")
+FIGURES_DIR: Path = Path("docs/figures/aggregated/")
+PROJECT: str | None = None
 
 
 def unit_from_catalog(source_key: str, var: str) -> str:
@@ -371,25 +372,32 @@ def find_best_day(
 
 
 def save_figure(fig, name: str) -> None:
-    """Write ``fig`` to ``FIGURES_DIR/<name>.png`` iff ``SAVE_FIGURES``.
+    """Write ``fig`` to ``FIGURES_DIR[/PROJECT]/<name>.png`` iff ``SAVE_FIGURES``.
 
     No-op when ``SAVE_FIGURES`` is ``False`` (the default). Notebooks
     enable saving by setting ``_helpers.SAVE_FIGURES = True`` near the
     top before any plotting cell runs.
 
+    When ``PROJECT`` is set (notebooks should set
+    ``_helpers.PROJECT = PROJECT_DIR.name`` so figures from different
+    fabrics stay separate), figures land under
+    ``FIGURES_DIR / PROJECT / <name>.png``. With ``PROJECT = None``
+    figures land directly in ``FIGURES_DIR`` — fine for ad-hoc local
+    work, but commits should always set ``PROJECT`` so the deck's
+    figure paths resolve unambiguously.
+
     Relative paths in ``FIGURES_DIR`` are resolved against the repo
-    root (this module's great-grandparent directory), so the default
-    ``Path("docs/figures/inspect_aggregated/")`` lands at repo-root
-    ``docs/figures/inspect_aggregated/`` regardless of the notebook's
-    CWD. Absolute paths (user overrides, pytest tmp_path) are honored
-    as-is.
+    root (this module's great-grandparent directory). Absolute paths
+    (user overrides, pytest tmp_path) are honored as-is.
     """
     if not SAVE_FIGURES:
         return
     target_dir = FIGURES_DIR
     if not target_dir.is_absolute():
-        # _helpers.py lives at <repo>/notebooks/inspect_aggregated/_helpers.py;
+        # _helpers.py lives at <repo>/notebooks/aggregated/_helpers.py;
         # repo root is two parents up from that.
         target_dir = Path(__file__).resolve().parent.parent.parent / target_dir
+    if PROJECT:
+        target_dir = target_dir / PROJECT
     target_dir.mkdir(parents=True, exist_ok=True)
     fig.savefig(target_dir / f"{name}.png", dpi=150, bbox_inches="tight")

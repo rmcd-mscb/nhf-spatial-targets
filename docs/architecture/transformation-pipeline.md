@@ -18,7 +18,7 @@ file that tells you which stage your transformation belongs in.
 | `aggregate/<src>.py` `post_aggregate_hook` | Cosmetic-only: attach attrs, rename auxiliary diagnostic variables (e.g. `valid_mask` → `valid_area_fraction` after the per-pixel 0/1 mask becomes an HRU-fraction). | Modify aggregated source values. |
 | `normalize/methods.py` | Per-source per-HRU operations whose definition is *at HRU scale*: 0–1 normalization, multi-source min/max bounds, NN-fill of NaN HRUs from partial source coverage. | Mask flags. Reach back to pixel-level data. |
 | `targets/<tgt>.py` | Linear unit conversions (`× 1000`, `÷ 100`, `× 8 × days_in_month`), CF-compliant target NetCDF assembly, calling into `normalize/` for combination. | Anything that can't be expressed at HRU scale. |
-| `notebooks/inspect_aggregated/*` | Diagnostic. Re-implements the same conversions as `targets/` to visually verify the aggregated NCs. | Define new transformations not used in `targets/`. |
+| `notebooks/aggregated/*` | Diagnostic. Re-implements the same conversions as `targets/` to visually verify the aggregated NCs. | Define new transformations not used in `targets/`. |
 
 The aggregated NC at `<project>/data/aggregated/<source_key>/...` therefore
 carries the source's **native variable names** and **native units**, with
@@ -213,7 +213,7 @@ the linear case (rule 3). Default to `targets/` for consistency.
 
 ## How to verify
 
-The inspect notebooks (`notebooks/inspect_aggregated/inspect_aggregated_*.ipynb`)
+The inspect notebooks (`notebooks/aggregated/inspect_aggregated_*.ipynb`)
 each have a **validation cell** that compares the area-weighted-mean over
 the HRU fabric against an unweighted gridded mean of the same source over
 the consolidated-NC bbox. They differ by 5–30% for sources with significant

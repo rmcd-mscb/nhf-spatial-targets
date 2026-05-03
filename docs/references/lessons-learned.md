@@ -17,7 +17,7 @@ MOD16A2 v061 in the AET multi-source `min/max` bound.
 ### What we found
 
 The July 2000 cross-check in
-`notebooks/inspect_aggregated/inspect_aggregated_aet.ipynb` (commit
+`notebooks/aggregated/inspect_aggregated_aet.ipynb` (commit
 `cce4ed6`, finding cell `55a87e3a`) compared the three AET sources at
 calendar-month cadence on a CONUS+ subset:
 
@@ -57,7 +57,7 @@ MOD16A2 would give a tighter but more honest bound.
 
 ### Where to look in the code
 
-- Inspection notebook: `notebooks/inspect_aggregated/inspect_aggregated_aet.ipynb`
+- Inspection notebook: `notebooks/aggregated/inspect_aggregated_aet.ipynb`
   (cells `38002926` for the time-series analysis, `55a87e3a` for the
   finding).
 - Aggregation adapter: `src/nhf_spatial_targets/aggregate/mod16a2.py`.
@@ -125,7 +125,7 @@ ds["ET_500m"] = ds["ET_500m"].where(ds["ET_500m"] <= 3270.0)
 
 The same threshold is applied in the inspection notebook's gridded
 helper (`_mod16a2_target_month_gridded_mm` in
-`notebooks/inspect_aggregated/inspect_aggregated_aet.ipynb`); without
+`notebooks/aggregated/inspect_aggregated_aet.ipynb`); without
 it, ~37% of CONUS+ pixels in a typical January composite carry flag
 codes ≈ 3276 mm and the gridded mean reads ~10× too high. The mask is
 the same threshold in both paths so the two columns of the AET
