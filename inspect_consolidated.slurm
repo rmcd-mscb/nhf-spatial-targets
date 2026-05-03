@@ -1,49 +1,54 @@
 #!/bin/bash
-#SBATCH --job-name=nhf-inspect
+#SBATCH --job-name=nhf-inspect-consolidated
 #SBATCH --account=impd
 #SBATCH --partition=cpu
 #SBATCH --array=0-4
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=128G
+#SBATCH --mem=192G
 #SBATCH --time=04:00:00
-#SBATCH --output=logs/inspect_%a_%A.out
-#SBATCH --error=logs/inspect_%a_%A.err
+#SBATCH --output=logs/inspect_consolidated_%a_%A.out
+#SBATCH --error=logs/inspect_consolidated_%a_%A.err
 
-# NHF Spatial Targets — execute inspect_aggregated_* notebooks headlessly
-# on a compute node so plot generation has the memory it needs (the login
-# node is too constrained for CONUS-wide HRU choropleths over 10-year
-# stacks).
+# NHF Spatial Targets — execute inspect_consolidated_* notebooks headlessly
+# on a compute node so plot generation has the memory it needs (CONUS-wide
+# gridded comparisons across 2-4 sources blow past login-node limits).
 #
 # Each array task executes one notebook in-place via `jupyter nbconvert
 # --execute --inplace`, which embeds rendered figures and dataframe
-# outputs into the .ipynb file. After the job completes, open the
-# notebook in JupyterLab/VSCode to view results — no kernel re-run
-# required.
+# outputs into the .ipynb file. With SAVE_FIGURES=1 the notebooks ALSO
+# write each panel to docs/figures/consolidated/<project>/<name>.png
+# (the script always passes a <project> tag derived from $PROJECT_DIR).
 #
-# Notebooks have hardcoded PROJECT_DIR pointing at gfv2-spatial-targets.
-# To inspect a different project, edit the PROJECT_DIR cell in each .ipynb
-# before submitting (the SLURM env var below is informational only — it
-# does not override the in-notebook path).
+# Memory note:
+#   192G is the default because the NLDAS+MERRA-2+NCEP+NCAR soil-moisture
+#   gridded comparison and the ERA5-Land/GLDAS runoff comparison hold
+#   multiple full-CONUS rasters in RAM simultaneously. AET and recharge
+#   fit comfortably below this; SCA needs the least. Bump with `--mem=...`
+#   if a heavier rerun is needed.
+#
+# Notebooks have hardcoded DATASTORE / PROJECT paths pointing at
+# nhf-datastore + gfv2-spatial-targets on caldera. Edit them in-place
+# before submitting if pointing at a different project.
 #
 # Prerequisites:
-#   - Aggregated outputs already exist under $PROJECT_DIR/data/aggregated/
-#     (see agg_all.slurm)
+#   - Consolidated source NCs already present in the datastore (fetch
+#     stage complete)
 #   - Dev environment installed: `pixi install -e dev`
 #
 # Usage:
 #   mkdir -p logs                         # required — SLURM refuses to
 #                                         # start with no log output
-#   sbatch inspect_aggregated.slurm
+#   sbatch inspect_consolidated.slurm
 #
 # Run a single notebook by index (e.g. AET = 0):
-#   sbatch --array=0 inspect_aggregated.slurm
+#   sbatch --array=0 inspect_consolidated.slurm
 #
-# Bump memory for a heavier rerun:
-#   sbatch --mem=256G inspect_aggregated.slurm
+# Bump memory:
+#   sbatch --mem=256G inspect_consolidated.slurm
 #
-# To also save figures to docs/figures/aggregated/<project>/, set:
-#   SAVE_FIGURES=1 sbatch inspect_aggregated.slurm
+# To save figures to docs/figures/consolidated/<project>/, set:
+#   SAVE_FIGURES=1 sbatch inspect_consolidated.slurm
 
 set -euo pipefail
 
@@ -54,13 +59,13 @@ TIMEOUT="${TIMEOUT:-3600}"  # per-cell execution timeout in seconds
 
 cd "$REPO_DIR" || { echo "ERROR: REPO_DIR=$REPO_DIR not found" >&2; exit 1; }
 
-# Map array index -> notebook filename (relative to notebooks/aggregated/)
+# Map array index -> notebook filename (relative to notebooks/consolidated/)
 NOTEBOOKS=(
-    "inspect_aggregated_aet.ipynb"                # 0 — SSEBop + MOD16A2 v061
-    "inspect_aggregated_recharge.ipynb"           # 1 — WaterGAP 2.2d + Reitz 2017 + ERA5-Land ssro
-    "inspect_aggregated_runoff.ipynb"             # 2 — ERA5-Land + GLDAS-2.1 NOAH
-    "inspect_aggregated_soil_moisture.ipynb"      # 3 — MERRA-2 + NCEP/NCAR + NLDAS Mosaic + NLDAS NOAH
-    "inspect_aggregated_snow_covered_area.ipynb"  # 4 — MOD10C1 v061
+    "inspect_consolidated_aet.ipynb"                # 0 — SSEBop + MWBM + MOD16A2 v061
+    "inspect_consolidated_recharge.ipynb"           # 1 — Reitz 2017 + WaterGAP 2.2d + ERA5-Land ssro
+    "inspect_consolidated_runoff.ipynb"             # 2 — ERA5-Land + GLDAS-2.1 NOAH
+    "inspect_consolidated_soil_moisture.ipynb"      # 3 — MERRA-2 + NLDAS NOAH + NLDAS Mosaic + NCEP/NCAR
+    "inspect_consolidated_snow_covered_area.ipynb"  # 4 — MOD10C1 v061
 )
 
 if (( SLURM_ARRAY_TASK_ID < 0 || SLURM_ARRAY_TASK_ID >= ${#NOTEBOOKS[@]} )); then
@@ -69,7 +74,7 @@ if (( SLURM_ARRAY_TASK_ID < 0 || SLURM_ARRAY_TASK_ID >= ${#NOTEBOOKS[@]} )); the
 fi
 
 NB="${NOTEBOOKS[$SLURM_ARRAY_TASK_ID]}"
-NB_PATH="notebooks/aggregated/$NB"
+NB_PATH="notebooks/consolidated/$NB"
 
 echo "=== Array task $SLURM_ARRAY_TASK_ID: $NB ==="
 echo "=== Project:       $PROJECT_DIR ==="
@@ -87,7 +92,7 @@ if [[ "$SAVE_FIGURES" == "1" ]]; then
     trap 'rm -f "$STARTUP_FILE"' EXIT
     cat > "$STARTUP_FILE" <<EOF
 import sys
-sys.path.insert(0, "notebooks/aggregated")
+sys.path.insert(0, "notebooks/consolidated")
 import _helpers
 _helpers.SAVE_FIGURES = True
 _helpers.PROJECT = "$(basename "$PROJECT_DIR")"

@@ -117,6 +117,15 @@ fmt-check = { cmd = "ruff format --check src/ tests/", description = "Check form
 
 # Register a Jupyter kernel pointing at the pixi dev env so VSCode /
 # JupyterLab can select it. Matches the kernelspec name embedded in
-# notebooks/inspect_aggregated/*.ipynb. Run once per machine:
+# notebooks/aggregated/*.ipynb. Run once per machine:
 #   pixi run -e dev install-kernel
 install-kernel = { cmd = "python -m ipykernel install --user --name nhf-spatial-targets --display-name 'Python (nhf-spatial-targets)'", description = "Register Jupyter kernel for the pixi dev env (use with -e dev)" }
+
+# Re-execute inspection notebooks and write PNGs to docs/figures/<group>/<project>/.
+# Notebooks set _helpers.PROJECT themselves from PROJECT_DIR.name when run
+# interactively. For headless renders, pass --project to namespace the output:
+#     pixi run -e dev render-figures -- --project gfv2-spatial-targets
+# Use the SLURM scripts (inspect_*.slurm) for HPC-scale memory.
+render-figures              = { cmd = "python scripts/render_figures.py --group all",          description = "Re-execute all inspection notebooks and save figures to docs/figures/<group>/<project>/" }
+render-figures-consolidated = { cmd = "python scripts/render_figures.py --group consolidated", description = "Re-execute consolidated notebooks and save to docs/figures/consolidated/<project>/" }
+render-figures-aggregated   = { cmd = "python scripts/render_figures.py --group aggregated",   description = "Re-execute aggregated notebooks and save to docs/figures/aggregated/<project>/" }

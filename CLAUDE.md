@@ -128,7 +128,7 @@ Full architectural reference: `docs/architecture/transformation-pipeline.md`.
 **The aggregated NC at `<project>/data/aggregated/<source_key>/...`
 therefore carries the source's NATIVE variable names and NATIVE units**,
 with flag-masked and quality-gated values. Inspect notebooks in
-`notebooks/inspect_aggregated/` apply the same `÷ 100` / `× 1000` / etc.
+`notebooks/aggregated/` apply the same `÷ 100` / `× 1000` / etc.
 conversions inline, mirroring `targets/`, so they should produce
 order-of-magnitude-matching results when validated against gridded means.
 
@@ -228,7 +228,7 @@ See `catalog/sources.yml` `status:` and `notes:` fields for per-source gaps.
 
 **Still open:**
 - SCA CI-bounds formula — PRMSobjfun.f not publicly available; formula unconfirmed
-- MOD16A2 v061 flat-on-CONUS+ seasonality — July 2000 inspection (`notebooks/inspect_aggregated/inspect_aggregated_aet.ipynb`) shows Jul/Jan = 1.12× vs SSEBop / MWBM 6–11× expected. Inclusion in the AET multi-source min/max bound is **pending collaborator consensus**; see `docs/references/lessons-learned.md` § MOD16A2 v061 flat-on-CONUS+.
+- MOD16A2 v061 flat-on-CONUS+ seasonality — July 2000 inspection (`notebooks/aggregated/inspect_aggregated_aet.ipynb`) shows Jul/Jan = 1.12× vs SSEBop / MWBM 6–11× expected. Inclusion in the AET multi-source min/max bound is **pending collaborator consensus**; see `docs/references/lessons-learned.md` § MOD16A2 v061 flat-on-CONUS+.
 
 **Resolved (previously open):**
 - SSEBop — accessed via USGS NHGF STAC catalog (collection `ssebopeta_monthly`, doi:10.5066/P9L2YMV, 2000–2023 monthly, 1km). Aggregated directly to HRU fabric via gdptools — no local download. See PR #34.

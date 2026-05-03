@@ -162,7 +162,7 @@ sources:
     license: public domain (NASA)
     status: current
     notes: >
-      July 2000 cross-check (notebooks/inspect_aggregated/inspect_aggregated_aet.ipynb)
+      July 2000 cross-check (notebooks/aggregated/inspect_aggregated_aet.ipynb)
       shows essentially flat seasonality at both gridded and aggregated CONUS+
       scales (Jul/Jan = 1.12x) while SSEBop and MWBM swing 6-11x as expected
       for CONUS ET. The flatness is already in the consolidated NC, not an

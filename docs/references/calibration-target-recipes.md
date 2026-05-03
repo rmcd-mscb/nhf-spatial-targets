@@ -89,7 +89,7 @@ Per-HRU per-month: `lower_bound = min(era5_cfs, gldas_cfs)`,
   weight by `(days of overlap with target month) / composite_length_c` (where
   `composite_length_c` is 8 for standard composites and 5–6 for the year-end one),
   then sum weighted contributions × `scale_factor`. The reference implementation
-  is `_mod16a2_to_monthly_mm` in `notebooks/inspect_aggregated/inspect_aggregated_aet.ipynb`
+  is `_mod16a2_to_monthly_mm` in `notebooks/aggregated/inspect_aggregated_aet.ipynb`
   — the builder should match it (and the inspection notebook will only validate
   the builder if it does).
 - MWBM `aet`: native mm/month, monthly time step. No conversion. CONUS-wide MWBM
@@ -135,7 +135,7 @@ Per-HRU per-month: `lower_bound = min(ssebop, mod16a2, mwbm)`,
 **Open decisions (pending collaborator consensus)**
 
 - **MOD16A2 v061 inclusion.** The July 2000 cross-check in
-  `notebooks/inspect_aggregated/inspect_aggregated_aet.ipynb` shows MOD16A2 v061
+  `notebooks/aggregated/inspect_aggregated_aet.ipynb` shows MOD16A2 v061
   is essentially flat across the seasonal cycle on the CONUS+ aggregation
   (Jul/Jan = 1.12×) while SSEBop and MWBM swing 6–11× as expected for CONUS
   ET. The flatness is present at both gridded and aggregated scales, so it is

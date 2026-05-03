@@ -48,5 +48,8 @@ htmlcov/
 # Claude Code runtime (settings.json and settings.local.json ARE tracked)
 .claude/scheduled_tasks.lock
 
-# Inspection notebook figures (saved when SAVE_FIGURES=True)
-docs/figures/
+# Inspection-notebook figures live under docs/figures/<group>/<project>/
+# and are committed — regenerate with `pixi run render-figures` (local) or
+# the inspect_*.slurm scripts (HPC). Cache files from notebook execution
+# are still ignored.
+docs/figures/.cache/
