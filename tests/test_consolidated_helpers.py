@@ -50,10 +50,11 @@ def test_save_figure_writes_png_when_enabled(helpers, tmp_path, monkeypatch):
 
     monkeypatch.setattr(helpers, "SAVE_FIGURES", True)
     monkeypatch.setattr(helpers, "FIGURES_DIR", tmp_path / "figures")
+    monkeypatch.setattr(helpers, "PROJECT", "test-project")
     fig = plt.figure()
     helpers.save_figure(fig, "test_enabled")
     plt.close(fig)
-    assert (tmp_path / "figures" / "test_enabled.png").exists()
+    assert (tmp_path / "figures" / "test-project" / "test_enabled.png").exists()
 
 
 def test_save_figure_writes_under_project_subdir(helpers, tmp_path, monkeypatch):
@@ -81,7 +82,8 @@ def test_save_figure_no_subdir_when_project_none(helpers, tmp_path, monkeypatch)
     monkeypatch.setattr(helpers, "FIGURES_DIR", tmp_path / "figures")
     monkeypatch.setattr(helpers, "PROJECT", None)
     fig = plt.figure()
-    helpers.save_figure(fig, "test_no_project")
+    with pytest.warns(UserWarning, match="PROJECT is unset"):
+        helpers.save_figure(fig, "test_no_project")
     plt.close(fig)
     assert (tmp_path / "figures" / "test_no_project.png").exists()
 
@@ -96,8 +98,18 @@ def test_save_figure_relative_path_resolves_to_repo_root(helpers, monkeypatch):
 
     monkeypatch.setattr(helpers, "SAVE_FIGURES", True)
     monkeypatch.setattr(helpers, "FIGURES_DIR", Path("docs/figures/consolidated/"))
+    # Set PROJECT so the test artefact lands in a clearly-test-only subdir,
+    # outside the committed `<project>/` namespace.
+    monkeypatch.setattr(helpers, "PROJECT", "_pytest")
 
-    expected = REPO_ROOT / "docs" / "figures" / "consolidated" / "_pytest_smoke.png"
+    expected = (
+        REPO_ROOT
+        / "docs"
+        / "figures"
+        / "consolidated"
+        / "_pytest"
+        / "_pytest_smoke.png"
+    )
     try:
         fig = plt.figure()
         helpers.save_figure(fig, "_pytest_smoke")
@@ -106,3 +118,5 @@ def test_save_figure_relative_path_resolves_to_repo_root(helpers, monkeypatch):
     finally:
         if expected.exists():
             expected.unlink()
+        if expected.parent.exists():
+            expected.parent.rmdir()

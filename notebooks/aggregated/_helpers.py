@@ -4,8 +4,9 @@ This module is a sibling of the notebooks (not packaged into
 nhf_spatial_targets). It holds path discovery, fabric I/O, HRU
 choropleth plotting, area-weighted means, time-window slicing,
 representative-point lookup, catalog-units lookup, and a save-figure
-helper used to populate docs/figures/aggregated/ for downstream
-slide / documentation work.
+helper used to populate docs/figures/aggregated/[<project>/] for
+downstream slide / documentation work (the optional <project> subdir
+is set via _helpers.PROJECT to namespace by fabric).
 
 Notebooks import via:
 
@@ -22,6 +23,7 @@ Or, since Jupyter puts the notebook's directory on sys.path, simply:
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import geopandas as gpd
@@ -387,15 +389,24 @@ def save_figure(fig, name: str) -> None:
     figure paths resolve unambiguously.
 
     Relative paths in ``FIGURES_DIR`` are resolved against the repo
-    root (this module's great-grandparent directory). Absolute paths
-    (user overrides, pytest tmp_path) are honored as-is.
+    root, three parents up from this file
+    (``aggregated/_helpers.py`` -> ``notebooks/`` -> ``<repo>``).
+    Absolute paths (user overrides, pytest tmp_path) are honored as-is.
     """
     if not SAVE_FIGURES:
         return
+    if not PROJECT:
+        warnings.warn(
+            "save_figure: SAVE_FIGURES is True but PROJECT is unset. "
+            "Figures will land directly in FIGURES_DIR with no project subdir, "
+            "risking collision with other fabrics' figures. "
+            "Set _helpers.PROJECT = PROJECT_DIR.name to namespace by project.",
+            stacklevel=2,
+        )
     target_dir = FIGURES_DIR
     if not target_dir.is_absolute():
-        # _helpers.py lives at <repo>/notebooks/aggregated/_helpers.py;
-        # repo root is two parents up from that.
+        # Resolve relative paths against the repo root, three parents up:
+        # <repo>/notebooks/aggregated/_helpers.py -> <repo>.
         target_dir = Path(__file__).resolve().parent.parent.parent / target_dir
     if PROJECT:
         target_dir = target_dir / PROJECT

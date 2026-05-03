@@ -17,7 +17,8 @@
 # Each array task executes one notebook in-place via `jupyter nbconvert
 # --execute --inplace`, which embeds rendered figures and dataframe
 # outputs into the .ipynb file. With SAVE_FIGURES=1 the notebooks ALSO
-# write each panel to docs/figures/consolidated/<name>.png.
+# write each panel to docs/figures/consolidated/<project>/<name>.png
+# (the script always passes a <project> tag derived from $PROJECT_DIR).
 #
 # Memory note:
 #   192G is the default because the NLDAS+MERRA-2+NCEP+NCAR soil-moisture

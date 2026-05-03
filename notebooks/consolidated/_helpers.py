@@ -12,11 +12,12 @@ Notebooks import via:
     from _helpers import save_figure
     import _helpers
     _helpers.SAVE_FIGURES = True            # opt in to writing PNGs
-    _helpers.PROJECT = PROJECT.name         # namespace by project dir
+    _helpers.PROJECT = PROJECT_DIR.name     # namespace by project dir
 """
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 SAVE_FIGURES: bool = False
@@ -32,7 +33,7 @@ def save_figure(fig, name: str) -> None:
     top before any plotting cell runs.
 
     When ``PROJECT`` is set (notebooks should set
-    ``_helpers.PROJECT = PROJECT.name`` so figures from different
+    ``_helpers.PROJECT = PROJECT_DIR.name`` so figures from different
     fabrics stay separate), figures land under
     ``FIGURES_DIR / PROJECT / <name>.png``. With ``PROJECT = None``
     figures land directly in ``FIGURES_DIR`` — fine for ad-hoc local
@@ -40,15 +41,24 @@ def save_figure(fig, name: str) -> None:
     figure paths resolve unambiguously.
 
     Relative paths in ``FIGURES_DIR`` are resolved against the repo
-    root (this module's grandparent's parent). Absolute paths (user
-    overrides, pytest tmp_path) are honored as-is.
+    root, three parents up from this file
+    (``consolidated/_helpers.py`` -> ``notebooks/`` -> ``<repo>``).
+    Absolute paths (user overrides, pytest tmp_path) are honored as-is.
     """
     if not SAVE_FIGURES:
         return
+    if not PROJECT:
+        warnings.warn(
+            "save_figure: SAVE_FIGURES is True but PROJECT is unset. "
+            "Figures will land directly in FIGURES_DIR with no project subdir, "
+            "risking collision with other fabrics' figures. "
+            "Set _helpers.PROJECT = PROJECT_DIR.name to namespace by project.",
+            stacklevel=2,
+        )
     target_dir = FIGURES_DIR
     if not target_dir.is_absolute():
-        # _helpers.py lives at <repo>/notebooks/consolidated/_helpers.py;
-        # repo root is two parents up from that.
+        # Resolve relative paths against the repo root, three parents up:
+        # <repo>/notebooks/consolidated/_helpers.py -> <repo>.
         target_dir = Path(__file__).resolve().parent.parent.parent / target_dir
     if PROJECT:
         target_dir = target_dir / PROJECT
