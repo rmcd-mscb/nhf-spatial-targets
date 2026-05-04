@@ -11,10 +11,12 @@ the finding when the underlying data product changes.
 
 ## MOD16A2 v061 flat-on-CONUS+
 
-**Status:** resolved — root cause was fill-value contamination at the
-consolidation reprojection step, not a property of the source data. Fix
-landed in `fetch/consolidate.py` (PR #88). Re-consolidating + re-aggregating
-restores realistic seasonality.
+**Status:** resolved — two interacting bugs, both fixed in PR #88:
+(1) fill-value contamination at the consolidation reprojection step
+(`fetch/consolidate.py`), and (2) double-scaling in the inspection
+notebooks' monthly-resample helpers (`notebooks/aggregated/`,
+`notebooks/consolidated/`). Re-consolidating + re-aggregating + re-running
+the notebooks restores realistic seasonality and absolute magnitudes.
 
 ### What we found
 
@@ -72,16 +74,34 @@ believable seasonal swing.
 
 ### The fix
 
-`_mosaic_and_reproject_timestep` now masks ET_500m values above the
-valid-data ceiling (raw 32700 / scaled 3270) **before** `Resampling.average`
-runs, so the area-weighted mean only sees valid pixels. Boundary cells
-become either real averages of their valid neighbours or NaN — never an
-intermediate contaminated value. Threshold detection is automatic so
-the helper works whether rioxarray returns scaled or raw values
-(`_mask_modis_et_fills` in `fetch/consolidate.py`).
+**Pipeline (`fetch/consolidate.py`).** `_mosaic_and_reproject_timestep`
+now masks ET_500m values above the valid-data ceiling (raw 32700 / scaled
+3270) **before** `Resampling.average` runs, so the area-weighted mean
+only sees valid pixels. Boundary cells become either real averages of
+their valid neighbours or NaN — never an intermediate contaminated value.
+Threshold detection is automatic so the helper works whether rioxarray
+returns scaled or raw values (`_mask_modis_et_fills` in
+`fetch/consolidate.py`). `aggregate/mod16a2.py:_mask_et_fill` is kept as
+a belt-and-suspenders post-aggregate hook; on a freshly-consolidated NC
+it is now a no-op.
 
-`aggregate/mod16a2.py:_mask_et_fill` is kept as a belt-and-suspenders
-post-aggregate hook; on a freshly-consolidated NC it is now a no-op.
+**Notebooks.** While verifying the fill-mask fix we also discovered the
+inspection notebooks were double-scaling MOD16A2 by a factor of 0.1.
+The consolidated NC stores raw int-like values on-disk (max 32766) with
+`scale_factor=0.1` in attrs; xarray's default `decode_cf=True` applies
+the scale on read, so values arriving in the helpers are already in
+scaled mm/8 day. The `_mod16a2_to_monthly_mm` helper in
+`notebooks/aggregated/inspect_aggregated_aet.ipynb` then multiplied by
+`0.1` again, producing figures whose values were 10× too low — visually
+the MOD16A2 panel still looked plausible because the contaminated
+boundary cells survived the double-scaling and saturated the colourbar
+at the high end while the rest of the panel got squashed near zero.
+The notebook helper now trusts `decode_cf=True` and refuses to run
+against a raw-value DataArray (sanity-check `assert max <= 3300`).
+The consolidated notebook's `_mod16a2_monthly_mm` was also missing the
+`<= 3270` fill mask (the misleading "Note on scale factor" cell
+documented this as "scale_factor not applied" — that was a misdiagnosis).
+Both helpers are corrected in PR #88.
 
 ### Operational impact
 
@@ -104,9 +124,12 @@ post-aggregate hook; on a freshly-consolidated NC it is now a no-op.
 - Regression test: `tests/test_consolidate_modis.py`
   (`test_mask_modis_et_fills_*`,
   `test_mosaic_and_reproject_timestep_no_fill_contamination`).
-- Inspection notebook: `notebooks/aggregated/inspect_aggregated_aet.ipynb`
-  (re-run after re-aggregation; the explicit `× 0.1` in
-  `_mod16a2_to_monthly_mm` is independent of this fix).
+- Inspection notebooks (both updated by PR #88; re-run after re-aggregation):
+  `notebooks/aggregated/inspect_aggregated_aet.ipynb` (`_mod16a2_to_monthly_mm`
+  no longer applies `× 0.1`; `× scale_factor` was double-scaling on top of
+  xarray's `decode_cf`) and `notebooks/consolidated/inspect_consolidated_aet.ipynb`
+  (`_mod16a2_monthly_mm` now masks special codes `> 3270` before the
+  monthly sum; the misleading "Note on scale factor" cell is corrected).
 - Catalog entry: `catalog/sources.yml` → `mod16a2_v061` (`notes:` block,
   updated alongside this fix).
 
