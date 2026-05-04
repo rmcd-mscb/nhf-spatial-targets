@@ -370,7 +370,7 @@ def _update_manifest(
 _MOD16A2_SOURCE_KEY = "mod16a2_v061"
 
 
-def fetch_mod16a2(workdir: Path, period: str) -> dict:
+def fetch_mod16a2(workdir: Path, period: str, force: bool = False) -> dict:
     """Download MOD16A2 AET granules for the given period.
 
     Downloads and consolidates per-timestep to limit peak memory.
@@ -384,6 +384,14 @@ def fetch_mod16a2(workdir: Path, period: str) -> dict:
         writes files to the datastore under ``mod16a2_v061/``.
     period : str
         Temporal range as ``"YYYY/YYYY"`` (start/end years inclusive).
+    force : bool
+        Re-fetch every year in *period* even if it is already recorded
+        in ``manifest.json``. The manifest entry for ``mod16a2_v061`` is
+        overwritten with the new fetch's metadata when the run finishes,
+        consistent with the manifest's "current state" semantics. Use
+        when a pipeline change has invalidated the existing consolidated
+        NCs (e.g. PR #88's fill-mask change). Default ``False`` keeps
+        the incremental behaviour.
 
     Returns
     -------
@@ -404,10 +412,24 @@ def fetch_mod16a2(workdir: Path, period: str) -> dict:
     bbox = ws.fabric["bbox_buffered"]
     bbox_t = _bbox_tuple(bbox)
 
-    # Determine which years need downloading
+    # Determine which years need downloading. ``force=True`` bypasses the
+    # manifest-based skip and re-fetches every year in *period*.
     all_years = years_in_period(period)
-    already_have = _existing_years(workdir, source_key)
-    needed = [y for y in all_years if y not in already_have]
+    if force:
+        already_have = _existing_years(workdir, source_key)
+        needed = list(all_years)
+        if already_have:
+            logger.warning(
+                "force=True: re-fetching %d year(s); manifest entry for %s "
+                "(currently records %d year(s)) will be overwritten when the "
+                "run completes",
+                len(needed),
+                source_key,
+                len(already_have),
+            )
+    else:
+        already_have = _existing_years(workdir, source_key)
+        needed = [y for y in all_years if y not in already_have]
 
     output_dir = ws.raw_dir(source_key)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -760,7 +782,7 @@ def _subset_to_conus(hdf_path: Path, bbox: dict | None = None) -> Path:
     return out_path
 
 
-def fetch_mod10c1(workdir: Path, period: str) -> dict:
+def fetch_mod10c1(workdir: Path, period: str, force: bool = False) -> dict:
     """Download MOD10C1 daily snow cover CMG files for the given period.
 
     Supports incremental download — years already recorded in
@@ -775,6 +797,13 @@ def fetch_mod10c1(workdir: Path, period: str) -> dict:
         writes files to the datastore under ``mod10c1_v061/``.
     period : str
         Temporal range as ``"YYYY/YYYY"`` (start/end years inclusive).
+    force : bool
+        Re-fetch every year in *period* even if it is already recorded
+        in ``manifest.json``. The manifest entry for ``mod10c1_v061`` is
+        overwritten with the new fetch's metadata when the run finishes.
+        Use when a pipeline change has invalidated the existing
+        consolidated NCs. Default ``False`` keeps the incremental
+        behaviour.
 
     Returns
     -------
@@ -793,10 +822,24 @@ def fetch_mod10c1(workdir: Path, period: str) -> dict:
     bbox = ws.fabric["bbox_buffered"]
     bbox_t = _bbox_tuple(bbox)
 
-    # Determine which years need downloading
+    # Determine which years need downloading. ``force=True`` bypasses the
+    # manifest-based skip and re-fetches every year in *period*.
     all_years = years_in_period(period)
-    already_have = _existing_years(workdir, source_key)
-    needed = [y for y in all_years if y not in already_have]
+    if force:
+        already_have = _existing_years(workdir, source_key)
+        needed = list(all_years)
+        if already_have:
+            logger.warning(
+                "force=True: re-fetching %d year(s); manifest entry for %s "
+                "(currently records %d year(s)) will be overwritten when the "
+                "run completes",
+                len(needed),
+                source_key,
+                len(already_have),
+            )
+    else:
+        already_have = _existing_years(workdir, source_key)
+        needed = [y for y in all_years if y not in already_have]
 
     output_dir = ws.raw_dir(source_key)
     output_dir.mkdir(parents=True, exist_ok=True)

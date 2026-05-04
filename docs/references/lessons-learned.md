@@ -115,6 +115,29 @@ Both helpers are corrected in PR #88.
   on PR-#88 merge; downstream consumers should re-aggregate before
   rebuilding AET targets.
 
+### How to re-run after PR #88
+
+The fetch command's manifest-based year-skip means a plain re-run does
+nothing once a year is recorded. PR #88 adds a `--force` flag to
+`nhf-targets fetch mod16a2` (and `mod10c1`) for exactly this case:
+
+```bash
+# 1. Re-fetch (overwrites consolidated NCs and the mod16a2_v061
+#    manifest entry on completion)
+pixi run nhf-targets fetch mod16a2 --project-dir <project> -p YYYY/YYYY --force
+
+# 2. Drop the aggregated NCs so the per-year `out_path.exists()`
+#    skip in aggregate/_driver.py doesn't keep the stale outputs
+rm <project>/data/aggregated/mod16a2_v061/*_agg.nc
+
+# 3. Re-aggregate
+pixi run nhf-targets agg mod16a2 --project-dir <project>
+```
+
+The weights cache at `<project>/weights/mod16a2_v061_batch*.csv` does
+*not* need to be cleared — its fingerprint is on the fabric batch
+geometry, not on source values, so it stays valid across this fix.
+
 ### Where to look in the code
 
 - Mask helper + reprojection: `src/nhf_spatial_targets/fetch/consolidate.py`
