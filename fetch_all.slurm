@@ -22,6 +22,19 @@
 #
 # To run a single source only (e.g. index 2 = merra2):
 #   sbatch --array=2 fetch_all.slurm
+#
+# Force re-fetch (bypasses the manifest-based year-skip; the entry in
+# manifest.json is overwritten on completion). Only applies to sources
+# that record per-year completion in the manifest — currently
+# fetch-mod16a2 (index 8) and fetch-mod10c1 (index 9). Other sources
+# fetch all-or-nothing per run, so FORCE is ignored for them with a
+# log line.
+#
+#   export FORCE=1
+#   sbatch --array=8 fetch_all.slurm   # MOD16A2 only, force re-fetch
+#
+# Use this after a pipeline change has invalidated the existing
+# consolidated NCs (e.g. PR #88's MOD16A2 fill-mask fix).
 
 set -euo pipefail
 
@@ -72,6 +85,26 @@ echo "=== Array task $SLURM_ARRAY_TASK_ID: $TASK  period=$PERIOD ==="
 echo "=== Start: $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 echo "=== Host:  $(hostname) ==="
 
-pixi run "$TASK" -- --project-dir "$PROJECT_DIR" --period "$PERIOD"
+# Decide whether to forward --force. Only fetch-mod16a2 / fetch-mod10c1
+# implement the flag (they're the sources with manifest-based per-year
+# skip logic). For everything else, log and ignore so a single FORCE=1
+# can be used with the full array without erroring on un-flagged sources.
+EXTRA_ARGS=()
+case "${FORCE:-}" in
+    1|true|TRUE|yes)
+        case "$TASK" in
+            fetch-mod16a2|fetch-mod10c1)
+                EXTRA_ARGS+=("--force")
+                echo "=== FORCE=$FORCE: appending --force to $TASK ==="
+                ;;
+            *)
+                echo "=== FORCE=$FORCE: ignored for $TASK (no --force support) ==="
+                ;;
+        esac
+        ;;
+esac
+
+pixi run "$TASK" -- --project-dir "$PROJECT_DIR" --period "$PERIOD" \
+    ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
 
 echo "=== Done:  $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
