@@ -23,17 +23,9 @@ repos:
         pass_filenames: false
         types: [python]
 
-      # Tests run at pre-push (not pre-commit) to keep per-commit friction
-      # low while still gating anything that reaches the remote. Quiet
-      # pytest for hook output (verbose output can hang in pipes); use
-      # `pixi run -e dev test` interactively for verbose output. NOTE: use
-      # `pixi run test-quiet` (default env, not -e dev) to avoid dask
-      # scheduler slow-start on Hovenweep HPC login nodes (~30s/test in
-      # dev env).
-      - id: test
-        name: pytest (unit only)
-        entry: pixi run test-quiet
-        language: system
-        pass_filenames: false
-        always_run: true
-        stages: [pre-push]
+# Tests are NOT run as a pre-push hook. CI on the PR is the gate before
+# merge; the local pre-push test hook had become a time sink as the
+# suite grew (~2 min) and was prone to false-failing when the
+# pre-commit framework's auto-stash collided with unstaged notebook
+# drift. Run `pixi run -e dev test` manually before pushing if you want
+# the local feedback.
