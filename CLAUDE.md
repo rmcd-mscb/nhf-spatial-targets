@@ -228,10 +228,10 @@ See `catalog/sources.yml` `status:` and `notes:` fields for per-source gaps.
 
 **Still open:**
 - SCA CI-bounds formula — PRMSobjfun.f not publicly available; formula unconfirmed
-- MOD16A2 v061 flat-on-CONUS+ seasonality — July 2000 inspection (`notebooks/aggregated/inspect_aggregated_aet.ipynb`) shows Jul/Jan = 1.12× vs SSEBop / MWBM 6–11× expected. Inclusion in the AET multi-source min/max bound is **pending collaborator consensus**; see `docs/references/lessons-learned.md` § MOD16A2 v061 flat-on-CONUS+.
 
 **Resolved (previously open):**
 - SSEBop — accessed via USGS NHGF STAC catalog (collection `ssebopeta_monthly`, doi:10.5066/P9L2YMV, 2000–2023 monthly, 1km). Aggregated directly to HRU fabric via gdptools — no local download. See PR #34.
+- MOD16A2 v061 flat-on-CONUS+ seasonality — root cause was fill-value contamination at the consolidate-time sinusoidal→4 km reprojection: `rioxarray`'s `masked=True` only masks the declared `_FillValue`, leaving the other special codes (water=32761, barren=32762, snow/ice=32763, cloudy=32764, no-data=32766) to be averaged into valid neighbours by `Resampling.average`. Fixed in PR #88 by masking ET_500m fills *before* reprojection. Existing consolidated/aggregated NCs are invalid; re-fetch + re-aggregate to recover real seasonality. See `docs/references/lessons-learned.md` § MOD16A2 v061 flat-on-CONUS+.
 
 ## Testing
 

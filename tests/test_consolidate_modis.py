@@ -652,3 +652,149 @@ def test_log_memory_does_not_raise():
 
     # Should not raise regardless of platform
     log_memory("test checkpoint")
+
+
+# ---------------------------------------------------------------------------
+# MOD16A2 fill-value masking (regression for fill-contamination bug)
+# ---------------------------------------------------------------------------
+
+
+def test_mask_modis_et_fills_scaled_input():
+    """Scaled tile (rioxarray decoded) — special codes 3276.x are masked."""
+    from nhf_spatial_targets.fetch.consolidate import _mask_modis_et_fills
+
+    da = xr.DataArray(
+        np.array([0.0, 50.0, 3000.0, 3270.0, 3276.1, 3276.6, 3276.7], dtype=np.float32),
+        dims=["x"],
+    )
+    out = _mask_modis_et_fills(da)
+
+    expected_finite = np.array([0.0, 50.0, 3000.0, 3270.0])
+    finite = out.values[np.isfinite(out.values)]
+    np.testing.assert_array_equal(finite, expected_finite)
+    # The 3 fill codes become NaN
+    assert np.isnan(out.values[4])
+    assert np.isnan(out.values[5])
+    assert np.isnan(out.values[6])
+
+
+def test_mask_modis_et_fills_raw_input():
+    """Raw tile (rioxarray did not decode) — special codes 32761+ are masked."""
+    from nhf_spatial_targets.fetch.consolidate import _mask_modis_et_fills
+
+    da = xr.DataArray(
+        np.array(
+            [0.0, 500.0, 30000.0, 32700.0, 32761.0, 32766.0, 32767.0], dtype=np.float32
+        ),
+        dims=["x"],
+    )
+    out = _mask_modis_et_fills(da)
+
+    expected_finite = np.array([0.0, 500.0, 30000.0, 32700.0])
+    finite = out.values[np.isfinite(out.values)]
+    np.testing.assert_array_equal(finite, expected_finite)
+    assert np.isnan(out.values[4])
+    assert np.isnan(out.values[5])
+    assert np.isnan(out.values[6])
+
+
+def test_mask_modis_et_fills_all_valid_scaled():
+    """All-valid scaled tile is unchanged."""
+    from nhf_spatial_targets.fetch.consolidate import _mask_modis_et_fills
+
+    da = xr.DataArray(np.array([0.0, 50.0, 100.0, 200.0], dtype=np.float32), dims=["x"])
+    out = _mask_modis_et_fills(da)
+
+    np.testing.assert_array_equal(out.values, da.values)
+
+
+def test_mask_modis_et_fills_all_nan():
+    """All-NaN tile passes through without raising."""
+    from nhf_spatial_targets.fetch.consolidate import _mask_modis_et_fills
+
+    da = xr.DataArray(np.full(5, np.nan, dtype=np.float32), dims=["x"])
+    out = _mask_modis_et_fills(da)
+
+    assert np.all(np.isnan(out.values))
+
+
+def test_mask_modis_et_fills_empty():
+    """Empty tile passes through without raising."""
+    from nhf_spatial_targets.fetch.consolidate import _mask_modis_et_fills
+
+    da = xr.DataArray(np.empty((0,), dtype=np.float32), dims=["x"])
+    out = _mask_modis_et_fills(da)
+
+    assert out.size == 0
+
+
+def _make_sinusoidal_tile_mixed(
+    path: Path, h: int, v: int, valid_value: int = 100, fill_value: int = 32766
+) -> None:
+    """Write a sinusoidal-projected GeoTIFF with half valid, half fill pixels.
+
+    The left half of the tile carries ``valid_value`` (raw) pixels and the
+    right half carries ``fill_value`` pixels.  Drives the regression test
+    for the consolidation reprojection: ``Resampling.average`` would otherwise
+    produce contaminated 4 km cells whose averaged values fall in the
+    physically impossible (100, 3270) scaled range at the valid/fill seam.
+    """
+    srs = CRS.from_proj4(
+        "+proj=sinu +lon_0=0 +x_0=0 +y_0=0 +R=6371007.181 +units=m +no_defs"
+    )
+    nx, ny = 48, 48
+    x0 = -10_000_000 + h * 200_000
+    y0 = 6_000_000 - v * 200_000
+    res = 500.0
+    transform = from_bounds(x0, y0 - ny * res, x0 + nx * res, y0, nx, ny)
+    data = np.full((1, ny, nx), valid_value, dtype=np.int16)
+    data[:, :, nx // 2 :] = fill_value
+    da = xr.DataArray(data, dims=["band", "y", "x"], coords={"band": [1]})
+    da.rio.write_crs(srs, inplace=True)
+    da.rio.write_transform(transform, inplace=True)
+    da.rio.write_nodata(-1, inplace=True)
+    da.rio.to_raster(path, driver="GTiff")
+
+
+def test_mosaic_and_reproject_timestep_no_fill_contamination(tmp_path: Path) -> None:
+    """Reprojected tile has no contaminated cells in the (100, 3270) scaled band.
+
+    Regression for the MOD16A2 v061 flat-on-CONUS+ bug. Before the fix,
+    ``Resampling.average`` blended valid (raw 100) with fill-coded
+    (raw 32766) pixels at the boundary, producing scaled values of
+    ~1660 mm/8day that survived the post-aggregate ``<= 3270`` mask.
+    After the fix, fill codes are masked to NaN before reprojection, so
+    boundary cells are either real averages of valid pixels (≈ 10 scaled)
+    or NaN — never a contaminated middle value.
+    """
+    from nhf_spatial_targets.fetch.consolidate import _mosaic_and_reproject_timestep
+
+    source_dir = tmp_path / "mod16a2_v061"
+    source_dir.mkdir(parents=True)
+
+    # One mixed tile: left half = raw 100 (valid, scaled 10), right half = 32766 (fill)
+    tile_path = source_dir / "MOD16A2GF.A2010001.h08v04.061.test.hdf"
+    _make_sinusoidal_tile_mixed(tile_path, h=8, v=4, valid_value=100, fill_value=32766)
+
+    out = _mosaic_and_reproject_timestep(
+        tile_paths=[tile_path],
+        variable="ET_500m",
+        bbox=(-130.0, 20.0, -60.0, 55.0),
+        resolution=0.04,
+    )
+
+    vals = out.values[np.isfinite(out.values)]
+    # If raw values came through, max would be near 100 (raw → scaled 10);
+    # if scaled, max would be near 10 (scaled). In either case the contaminated
+    # band — present pre-fix as values 100..3270 in scaled units, or
+    # 1000..32700 in raw — must be empty.
+    contaminated_scaled = ((vals > 100.0) & (vals < 3270.0)).sum()
+    contaminated_raw = ((vals > 1000.0) & (vals < 32700.0)).sum()
+    assert contaminated_scaled == 0, (
+        f"Found {contaminated_scaled} cells in the contaminated scaled band "
+        f"(100, 3270) — fill values reached Resampling.average"
+    )
+    assert contaminated_raw == 0, (
+        f"Found {contaminated_raw} cells in the contaminated raw band "
+        f"(1000, 32700) — fill values reached Resampling.average"
+    )

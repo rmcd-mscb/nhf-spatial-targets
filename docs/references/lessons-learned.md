@@ -11,8 +11,10 @@ the finding when the underlying data product changes.
 
 ## MOD16A2 v061 flat-on-CONUS+
 
-**Status:** open — pending collaborator consensus on whether to keep
-MOD16A2 v061 in the AET multi-source `min/max` bound.
+**Status:** resolved — root cause was fill-value contamination at the
+consolidation reprojection step, not a property of the source data. Fix
+landed in `fetch/consolidate.py` (PR #88). Re-consolidating + re-aggregating
+restores realistic seasonality.
 
 ### What we found
 
@@ -25,46 +27,88 @@ calendar-month cadence on a CONUS+ subset:
 |---|---|---|---|
 | SSEBop | 9.0 | 101.1 | **11.2×** |
 | MWBM (ClimGrid) | 12.5 | 77.8 | **6.2×** |
-| MOD16A2 v061 | 33.3 | 37.4 | **1.12×** |
+| MOD16A2 v061 (pre-fix) | 33.3 | 37.4 | **1.12×** |
 
-MOD16A2 v061 is essentially flat across the seasonal cycle while the
-other two products swing 6–11× as expected for CONUS ET. The flatness is
+MOD16A2 v061 read as essentially flat across the seasonal cycle while the
+other two products swung 6–11× as expected for CONUS ET. The flatness was
 present at both the gridded level (Jan 65.5 → Jul 70.0 = 1.07×) and the
-HRU-aggregated level, so it is already in the consolidated NC, not an
-aggregation artefact.
+HRU-aggregated level, but it is not a property of the consolidated NC's
+raw values — it is an artefact of the consolidate-time reprojection.
 
-### Why it matters
+### Root cause
 
-The AET target uses `multi_source_minmax` over **absolute** mm/month —
-no 0–1 normalisation. In both January and July MOD16A2 sets one end of
-the bound and pulls it away from where SSEBop and MWBM agree:
+`_mosaic_and_reproject_timestep` reprojects from the native 500 m
+sinusoidal tiles to a 0.04° (≈ 4 km) lat/lon grid using
+`Resampling.average`. MOD16A2 v061 reserves raw integer values 32761–32767
+for special codes (water=32761, barren=32762, snow/ice=32763, cloudy=32764,
+no-data=32766, not-processed=32767). `rioxarray.open_rasterio(masked=True)`
+maps **only** the declared `_FillValue` (typically the not-processed code)
+to NaN; the other six special codes remain as ordinary numeric pixels.
 
-- January: `min = SSEBop (9), max = MOD16A2 (33)` → MOD16A2 sets the upper bound.
-- July: `min = MOD16A2 (37), max = SSEBop (101)` → MOD16A2 sets the lower bound.
+When `Resampling.average` mixed valid pixels (raw ≈ 0–500) with one of
+those un-masked fill codes (raw ≈ 32766), the resulting 4 km cell carried
+an arithmetic average like `(31 × 100 + 1 × 32766) / 32 ≈ 1124` raw
+(≈ 112 mm/8 day scaled). Such cells appeared along every coastline,
+lake margin, and snow boundary — wherever a valid 4 km cell touched a
+fill-coded one. They were physically impossible (10× peak summer ET in
+January) but fell well below the `<= 3270` post-reprojection mask in
+`aggregate/mod16a2.py:_mask_et_fill`, so they survived into HRU
+aggregation. With ~10 % of CONUS+ cells contaminated this way and an
+average contaminated value of ~1003 mm/8 day, every coastline/lake-margin
+HRU was pulled toward the contaminated mean. That eliminates real
+spatial variation and flattens the seasonal cycle.
 
-That is the opposite of what a multi-source error envelope is meant to
-do. SSEBop and MWBM agree to within ~30% in both seasons, and dropping
-MOD16A2 would give a tighter but more honest bound.
+Quantifying with `mod16a2_v061_2010_consolidated.nc` (Jan 1 vs Jul 4
+2010, gridded means under different masks):
 
-### Possible causes (not yet investigated)
+| Mask threshold | Jan mean | Jul mean | Jul/Jan |
+|---|---|---|---|
+| `<= 3270` (pre-fix) | 168.1 | 184.1 | **1.10×** |
+| `<= 200` | 10.7 | 26.3 | 2.47× |
+| `<= 100` | 6.3 | 21.9 | **3.47×** |
 
-- Over-eager flag masking on the consolidated NC (the `<= 3270` threshold
-  in `aggregate/mod16a2.py:_mask_et_fill` may be removing real low-ET
-  pixels that the v061 GF gap-fill marks as flag-coded).
-- Consolidate-step averaging that homogenises composites across the year.
-- Genuine v061 GF behaviour on our CONUS+ tile selection, possibly fixed
-  in a future v061 reprocess or a v062 release.
+A tighter threshold drops the contaminated cells and recovers a
+believable seasonal swing.
+
+### The fix
+
+`_mosaic_and_reproject_timestep` now masks ET_500m values above the
+valid-data ceiling (raw 32700 / scaled 3270) **before** `Resampling.average`
+runs, so the area-weighted mean only sees valid pixels. Boundary cells
+become either real averages of their valid neighbours or NaN — never an
+intermediate contaminated value. Threshold detection is automatic so
+the helper works whether rioxarray returns scaled or raw values
+(`_mask_modis_et_fills` in `fetch/consolidate.py`).
+
+`aggregate/mod16a2.py:_mask_et_fill` is kept as a belt-and-suspenders
+post-aggregate hook; on a freshly-consolidated NC it is now a no-op.
+
+### Operational impact
+
+- All consolidated MOD16A2 NCs produced before PR #88 carry the
+  contamination. Re-consolidating from the HDF tiles is cheap CPU-wise
+  but requires the HDFs (which are deleted after consolidation in normal
+  pipeline runs) — for an existing project, a full re-fetch + re-consolidate
+  is the cleanest path.
+- Re-aggregation is required after re-consolidation. The aggregated
+  outputs at `<project>/data/aggregated/mod16a2_v061/` become invalid
+  on PR-#88 merge; downstream consumers should re-aggregate before
+  rebuilding AET targets.
 
 ### Where to look in the code
 
+- Mask helper + reprojection: `src/nhf_spatial_targets/fetch/consolidate.py`
+  (`_mask_modis_et_fills`, `_mosaic_and_reproject_timestep`).
+- Post-aggregate safety net: `src/nhf_spatial_targets/aggregate/mod16a2.py`
+  (`_mask_et_fill`).
+- Regression test: `tests/test_consolidate_modis.py`
+  (`test_mask_modis_et_fills_*`,
+  `test_mosaic_and_reproject_timestep_no_fill_contamination`).
 - Inspection notebook: `notebooks/aggregated/inspect_aggregated_aet.ipynb`
-  (cells `38002926` for the time-series analysis, `55a87e3a` for the
-  finding).
-- Aggregation adapter: `src/nhf_spatial_targets/aggregate/mod16a2.py`.
-- Catalog entry: `catalog/sources.yml` → `mod16a2_v061` (`notes:` block).
-- Target builder (stub): `src/nhf_spatial_targets/targets/aet.py` —
-  should accept a `sources` override from project config until the
-  decision is finalised.
+  (re-run after re-aggregation; the explicit `× 0.1` in
+  `_mod16a2_to_monthly_mm` is independent of this fix).
+- Catalog entry: `catalog/sources.yml` → `mod16a2_v061` (`notes:` block,
+  updated alongside this fix).
 
 ---
 

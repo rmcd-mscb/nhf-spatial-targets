@@ -6,6 +6,7 @@ import gc
 import logging
 import os
 import re
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -656,6 +657,45 @@ def consolidate_mod10c1(
     }
 
 
+def _mask_modis_et_fills(da: xr.DataArray) -> xr.DataArray:
+    """Mask MOD16A2 ET_500m special-code pixels to NaN before reprojection.
+
+    MOD16A2 v061 ET_500m reserves raw integer values 32761–32767 for
+    special codes (water=32761, barren=32762, snow/ice=32763,
+    cloudy=32764, no-data=32766, not-processed=32767); valid data is
+    raw 0–32700 (scaled 0.0–3270.0 after ``scale_factor=0.1``).
+
+    rioxarray's ``masked=True`` only maps the single declared
+    ``_FillValue`` to NaN — the other special codes flow through and
+    become ordinary numeric pixels. If they reach ``Resampling.average``,
+    the reprojection blends them with valid neighbours and produces
+    contaminated 4 km cells in the (100, 3270) range that look like
+    real ET but are arithmetic noise. Those cells then survive the
+    post-reprojection ``_mask_et_fill`` (which only catches pure-fill
+    cells ≥ 3270) and bias HRU aggregations near coastlines, lakes,
+    snow boundaries, etc.
+
+    The fix is to mask the special codes *before* the reprojection,
+    so the area-weighted average only sees valid pixels.
+
+    Threshold detection is automatic: rioxarray normally applies
+    ``scale_factor`` when ``masked=True``, so ``da`` arrives in scaled
+    units (valid max 3270). If a future rioxarray version returns raw
+    integers instead, the runtime check picks the equivalent raw
+    threshold (32700).
+    """
+    if da.size:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            finite_max = float(np.nanmax(da.values))
+    else:
+        finite_max = 0.0
+    if not np.isfinite(finite_max):
+        return da  # all-NaN or empty — nothing to mask
+    threshold = 32700.0 if finite_max > 5000.0 else 3270.0
+    return da.where(da <= threshold)
+
+
 def _mosaic_and_reproject_timestep(
     tile_paths: list[Path],
     variable: str,
@@ -722,6 +762,8 @@ def _mosaic_and_reproject_timestep(
         else:
             da = result.load()
             result.close()
+        if variable == "ET_500m":
+            da = _mask_modis_et_fills(da)
         arrays.append(da)
 
     mosaic = None
