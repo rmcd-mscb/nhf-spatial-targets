@@ -274,6 +274,7 @@ def plot_hru_choropleth(
     ax.set_title(title, fontsize=11)
     ax.set_xlabel("Longitude")
     ax.set_ylabel("Latitude")
+    ax.set_aspect("equal")  # 1° lon = 1° lat — prevents east-west stretching
 
 
 def plot_nan_hrus(
@@ -291,6 +292,7 @@ def plot_nan_hrus(
     ax.set_title(title, fontsize=11)
     ax.set_xlabel("Longitude")
     ax.set_ylabel("Latitude")
+    ax.set_aspect("equal")  # 1° lon = 1° lat — prevents east-west stretching
 
 
 def daily_coverage_summary(
