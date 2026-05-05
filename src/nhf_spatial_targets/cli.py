@@ -649,6 +649,19 @@ def fetch_mod16a2_cmd(
         str,
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
     ],
+    force: Annotated[
+        bool,
+        Parameter(
+            name=["--force"],
+            help=(
+                "Re-fetch every year in --period, ignoring the manifest's "
+                "year-skip. Use after a pipeline change has invalidated the "
+                "existing consolidated NCs (e.g. PR #88's fill-mask fix). The "
+                "manifest entry for mod16a2_v061 is overwritten when the run "
+                "completes."
+            ),
+        ),
+    ] = False,
 ):
     """Download MODIS MOD16A2 v061 AET data (8-day composites, 500m)."""
     import json as json_mod
@@ -662,10 +675,15 @@ def fetch_mod16a2_cmd(
         sys.exit(2)
 
     console = Console()
-    console.print(f"[bold]Fetching MOD16A2 v061 for period {period}...[/bold]")
+    if force:
+        console.print(
+            f"[bold]Force re-fetching MOD16A2 v061 for period {period}...[/bold]"
+        )
+    else:
+        console.print(f"[bold]Fetching MOD16A2 v061 for period {period}...[/bold]")
 
     try:
-        result = fetch_mod16a2(workdir=workdir, period=period)
+        result = fetch_mod16a2(workdir=workdir, period=period, force=force)
     except (ValueError, FileNotFoundError, RuntimeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -694,6 +712,17 @@ def fetch_mod10c1_cmd(
         str,
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
     ],
+    force: Annotated[
+        bool,
+        Parameter(
+            name=["--force"],
+            help=(
+                "Re-fetch every year in --period, ignoring the manifest's "
+                "year-skip. The manifest entry for mod10c1_v061 is "
+                "overwritten when the run completes."
+            ),
+        ),
+    ] = False,
 ):
     """Download MODIS MOD10C1 v061 daily snow cover data (0.05deg CMG)."""
     import json as json_mod
@@ -707,10 +736,15 @@ def fetch_mod10c1_cmd(
         sys.exit(2)
 
     console = Console()
-    console.print(f"[bold]Fetching MOD10C1 v061 for period {period}...[/bold]")
+    if force:
+        console.print(
+            f"[bold]Force re-fetching MOD10C1 v061 for period {period}...[/bold]"
+        )
+    else:
+        console.print(f"[bold]Fetching MOD10C1 v061 for period {period}...[/bold]")
 
     try:
-        result = fetch_mod10c1(workdir=workdir, period=period)
+        result = fetch_mod10c1(workdir=workdir, period=period, force=force)
     except (ValueError, FileNotFoundError, RuntimeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)

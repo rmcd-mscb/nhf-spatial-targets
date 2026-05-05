@@ -325,7 +325,25 @@ def test_fetch_mod16a2_calls_fetch(mock_fetch, tmp_path):
         "--period",
         "2005/2005",
     )
-    mock_fetch.assert_called_once_with(workdir=workdir, period="2005/2005")
+    mock_fetch.assert_called_once_with(workdir=workdir, period="2005/2005", force=False)
+
+
+@patch("nhf_spatial_targets.fetch.modis.fetch_mod16a2")
+def test_fetch_mod16a2_force_flag(mock_fetch, tmp_path):
+    """--force is forwarded to fetch_mod16a2()."""
+    mock_fetch.return_value = {"files": [], "consolidated_ncs": {}}
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    _run(
+        "fetch",
+        "mod16a2",
+        "--project-dir",
+        str(workdir),
+        "--period",
+        "2005/2005",
+        "--force",
+    )
+    mock_fetch.assert_called_once_with(workdir=workdir, period="2005/2005", force=True)
 
 
 # ---- fetch mod10c1 command -------------------------------------------------
@@ -358,7 +376,25 @@ def test_fetch_mod10c1_calls_fetch(mock_fetch, tmp_path):
         "--period",
         "2005/2005",
     )
-    mock_fetch.assert_called_once_with(workdir=workdir, period="2005/2005")
+    mock_fetch.assert_called_once_with(workdir=workdir, period="2005/2005", force=False)
+
+
+@patch("nhf_spatial_targets.fetch.modis.fetch_mod10c1")
+def test_fetch_mod10c1_force_flag(mock_fetch, tmp_path):
+    """--force is forwarded to fetch_mod10c1()."""
+    mock_fetch.return_value = {"files": [], "consolidated_ncs": {}}
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    _run(
+        "fetch",
+        "mod10c1",
+        "--project-dir",
+        str(workdir),
+        "--period",
+        "2005/2005",
+        "--force",
+    )
+    mock_fetch.assert_called_once_with(workdir=workdir, period="2005/2005", force=True)
 
 
 # ---- fetch watergap22d command ---------------------------------------------

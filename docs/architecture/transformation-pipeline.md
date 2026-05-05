@@ -15,15 +15,19 @@ file that tells you which stage your transformation belongs in.
 |---|---|---|
 | `fetch/<src>.py` | Download raw files; consolidate per-year NCs from upstream tiles/granules; reproject (e.g. MODIS sinusoidal → WGS84) when the upstream format isn't directly usable. | Apply scale factors, mask flag values, derive new variables, or filter by quality. The datastore should mirror the source's native semantics. |
 | `aggregate/<src>.py` `pre_aggregate_hook` | Apply *pixel-defined* operations: flag-value masks, sums-of-accumulations needed to produce a single variable to aggregate, and quality gates that determine which pixels participate in the area-weighted mean. | Apply linear scale factors. Rename source variables. Compute multi-source combinations. Do anything that could equally well live downstream. |
-| `aggregate/<src>.py` `post_aggregate_hook` | Cosmetic-only: attach attrs, rename auxiliary diagnostic variables (e.g. `valid_mask` → `valid_area_fraction` after the per-pixel 0/1 mask becomes an HRU-fraction). | Modify aggregated source values. |
-| `normalize/methods.py` | Per-source per-HRU operations whose definition is *at HRU scale*: 0–1 normalization, multi-source min/max bounds, NN-fill of NaN HRUs from partial source coverage. | Mask flags. Reach back to pixel-level data. |
-| `targets/<tgt>.py` | Linear unit conversions (`× 1000`, `÷ 100`, `× 8 × days_in_month`), CF-compliant target NetCDF assembly, calling into `normalize/` for combination. | Anything that can't be expressed at HRU scale. |
+| `aggregate/<src>.py` `stat_method` | Pick `"mean"` (default, NaN propagates) or `"masked_mean"` (NaN skipped) per source. **`masked_mean` whenever there is a `pre_aggregate_hook` that sets pixels to NaN** so the per-pixel mask doesn't poison every HRU it touches; `mean` otherwise so geometric / true-upstream NaN propagates honestly. | Use `"mean"` with a source that has per-pixel masking — that defeats the mask. |
+| `aggregate/<src>.py` `post_aggregate_hook` | Cosmetic-only: attach attrs, rename auxiliary diagnostic variables (e.g. `valid_mask` → `valid_area_fraction` after the per-pixel 0/1 mask becomes an HRU-fraction). | Modify aggregated source values. Impute / NN-fill aggregated values. |
+| `normalize/methods.py` | Per-source per-HRU operations whose definition is *at HRU scale*: 0–1 normalization, multi-source min/max bounds. | Mask flags. Reach back to pixel-level data. NN-fill aggregated NCs. |
+| `targets/<tgt>.py` | Linear unit conversions (`× 1000`, `÷ 100`, `× 8 × days_in_month`), CF-compliant target NetCDF assembly, multi-source combination via NaN-aware reduction, and (optionally) NN-fill of the resulting per-HRU per-time *bound*. | Anything that can't be expressed at HRU scale. NN-fill on the aggregated NCs (use the bound). |
 | `notebooks/aggregated/*` | Diagnostic. Re-implements the same conversions as `targets/` to visually verify the aggregated NCs. | Define new transformations not used in `targets/`. |
 
 The aggregated NC at `<project>/data/aggregated/<source_key>/...` therefore
 carries the source's **native variable names** and **native units**, with
-flag-masked and quality-gated values. Downstream consumers know what to
-expect.
+flag-masked and quality-gated values. **HRU NaN is honest**: it means the
+HRU genuinely has no useful data from this source under the
+`stat_method`/pre-hook policy. Imputation (NN-fill) — when the user wants
+it — happens at the *target* stage on the resulting per-HRU per-time bound,
+never on the aggregated NCs. Downstream consumers know what to expect.
 
 ## The principle
 
@@ -107,8 +111,7 @@ per-pixel gate has already run, so `valid_area_fraction` reports how
 much of the HRU's source-grid area passed CI > 70 — gating on it again
 discards trustworthy partial-coverage HRUs that the pre-gate already
 selected for. Treat `valid_area_fraction` as a coverage diagnostic, not
-a re-applied threshold. If you need to handle low-coverage HRUs, the
-intended path is `normalize/methods.py` NN-fill.
+a re-applied threshold.
 
 Concrete cases in this repo:
 
@@ -118,6 +121,67 @@ Concrete cases in this repo:
 - `aggregate/mod10c1.py` — pre-hook masks flag values >100 on both
   `Day_CMG_Snow_Cover` and `Day_CMG_Clear_Index`, and applies the per-pixel
   CI > 70 quality gate from TM 6-B10.
+
+### `stat_method`: `mean` vs `masked_mean`
+
+A source with a per-pixel mask in its `pre_aggregate_hook` produces a
+mosaic where some pixels are NaN by deliberate choice. The aggregator's
+`stat_method` setting determines what happens when those NaN pixels meet
+the area-weighted mean:
+
+- **`stat_method="mean"`** (default, gdptools `WeightedMean`): NaN
+  propagates. Any single NaN pixel contributing to an HRU produces a NaN
+  HRU value. This is the right choice when source pixels arrive at the
+  aggregator without per-pixel masking — NaN means "no source data here"
+  (geometric partial coverage, true upstream gap), and propagation is
+  the honest answer.
+- **`stat_method="masked_mean"`** (gdptools `MAWeightedMean`,
+  `numpy.ma`-backed): NaN pixels are skipped; the HRU value is the
+  area-weighted mean over the *survivors*. This is the right choice when
+  the `pre_aggregate_hook` sets pixels to NaN deliberately. Without it,
+  the per-pixel mask poisons every HRU that touches even one masked
+  pixel — defeating the point of having a per-pixel mask. With it, the
+  HRU mean honestly reports "the area-weighted mean of pixels that
+  survived the pre-aggregate gate"; the HRU is NaN only when *every*
+  contributing pixel was masked, which is the genuine "no useful source
+  data" state.
+
+The rule is mechanical: **if `pre_aggregate_hook` sets pixels to NaN, set
+`stat_method="masked_mean"`**. `aggregate/mod16a2.py` and
+`aggregate/mod10c1.py` both meet this condition (PR #88 fill mask and
+the CI > 70 gate respectively) and both use `masked_mean`. Sources without
+a NaN-emitting pre-hook stay on the default `mean` so geometric and
+true-upstream NaN values still propagate as the explicit "no data" signal
+the architecture relies on.
+
+`SourceAdapter.stat_method` is the per-source knob; the driver enforces
+the choice in `aggregate_variables_for_batch`.
+
+### Imputation lives at the target stage, not aggregation
+
+A separate question is what to do about HRUs that come out of aggregation
+NaN (because *every* contributing source pixel was masked or out of range,
+or because the HRU's geometry didn't cover any source data at all).
+Earlier iterations of this repo planned a NN-fill step in
+`normalize/methods.py` that ran on aggregated NCs. **That plan has been
+revised**: the aggregated NCs preserve NaN HRUs honestly, and any
+imputation policy lives at the *target* stage:
+
+1. The target builder reads each source's aggregated NC and applies linear
+   unit conversions / time resamples.
+2. It combines sources via NaN-aware reduction (`np.fmin`/`np.fmax` or
+   xarray `.min/max(skipna=True)` along a stacked source dim). The
+   resulting bound is well-defined whenever ≥1 source is finite at that
+   HRU/time and is NaN only when *every* source is NaN.
+3. *Optionally*, the target builder may NN-fill the resulting per-HRU
+   per-time bound to cover any HRUs that are still NaN. This is a
+   per-target choice — some targets want a complete bound at every HRU,
+   others want NaN to propagate as a calibration-skip signal.
+
+This split keeps the aggregated NC layer as the canonical "what each
+source actually covers" record, and concentrates imputation-policy
+decisions where they're most legible — alongside the target's combination
+rule and unit conversions.
 
 ### Per-HRU time-series normalization
 
@@ -165,6 +229,11 @@ aggregate/mod10c1.py     pre_aggregate_hook = build_masked_source
     └─ Emit valid_mask = 1.0 where pixel passes, else 0.0
        Native 0–100 integer scale preserved on both source variables.
 
+aggregate/mod10c1.py     stat_method = "masked_mean"
+    └─ The pre-hook deliberately sets pixels to NaN, so the aggregator
+       skips them and computes the area-weighted mean of survivors.
+       HRU is NaN only when every contributing pixel was masked.
+
 aggregate/mod10c1.py     post_aggregate_hook = _rename_valid_mask
     └─ Rename valid_mask → valid_area_fraction
        (after gdptools area-weighted mean, the per-pixel 0/1 indicator is
@@ -192,17 +261,21 @@ When you add a new source that needs transformations, ask in order:
 
 1. **Is it required so that the area-weighted mean is computable / well-
    defined?** (Mask invalid pixels, derive a single sum from accumulated
-   components.) → `pre_aggregate_hook`.
+   components.) → `pre_aggregate_hook`. **If this hook sets pixels to NaN,
+   also set `stat_method="masked_mean"` on the adapter.**
 2. **Is it a per-pixel quality threshold whose definition is at the source
-   grid?** → `pre_aggregate_hook`. Note: even though linear rescaling
-   commutes, threshold operations do not — apply at the granularity where
-   the threshold is defined.
+   grid?** → `pre_aggregate_hook` (with `stat_method="masked_mean"`). Note:
+   even though linear rescaling commutes, threshold operations do not —
+   apply at the granularity where the threshold is defined.
 3. **Is it a linear unit conversion?** → `targets/<tgt>.py`. (Mirror it in
    the inspect notebook.)
 4. **Is it per-source normalization for combinability with other sources?**
    → `normalize/methods.py`.
 5. **Is it multi-source combination (min/max bounds, etc.)?** →
-   `targets/<tgt>.py`.
+   `targets/<tgt>.py`. Use NaN-aware reduction (`np.fmin`/`np.fmax`,
+   `.min/max(skipna=True)`) so the bound is defined wherever ≥1 source is
+   finite. NN-fill (if desired) runs here too, on the *bound* — never on
+   the aggregated NC.
 6. **Is it cosmetic (rename, attach attrs)?** → `post_aggregate_hook` if
    the rename is naturally post-aggregation (e.g. the per-pixel mask
    becomes a per-HRU fraction); otherwise leave names native and rename

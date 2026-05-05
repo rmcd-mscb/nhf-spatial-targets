@@ -11,8 +11,12 @@ the finding when the underlying data product changes.
 
 ## MOD16A2 v061 flat-on-CONUS+
 
-**Status:** open — pending collaborator consensus on whether to keep
-MOD16A2 v061 in the AET multi-source `min/max` bound.
+**Status:** resolved — two interacting bugs, both fixed in PR #88:
+(1) fill-value contamination at the consolidation reprojection step
+(`fetch/consolidate.py`), and (2) double-scaling in the inspection
+notebooks' monthly-resample helpers (`notebooks/aggregated/`,
+`notebooks/consolidated/`). Re-consolidating + re-aggregating + re-running
+the notebooks restores realistic seasonality and absolute magnitudes.
 
 ### What we found
 
@@ -25,46 +29,232 @@ calendar-month cadence on a CONUS+ subset:
 |---|---|---|---|
 | SSEBop | 9.0 | 101.1 | **11.2×** |
 | MWBM (ClimGrid) | 12.5 | 77.8 | **6.2×** |
-| MOD16A2 v061 | 33.3 | 37.4 | **1.12×** |
+| MOD16A2 v061 (pre-fix) | 33.3 | 37.4 | **1.12×** |
 
-MOD16A2 v061 is essentially flat across the seasonal cycle while the
-other two products swing 6–11× as expected for CONUS ET. The flatness is
+MOD16A2 v061 read as essentially flat across the seasonal cycle while the
+other two products swung 6–11× as expected for CONUS ET. The flatness was
 present at both the gridded level (Jan 65.5 → Jul 70.0 = 1.07×) and the
-HRU-aggregated level, so it is already in the consolidated NC, not an
-aggregation artefact.
+HRU-aggregated level, but it is not a property of the consolidated NC's
+raw values — it is an artefact of the consolidate-time reprojection.
 
-### Why it matters
+### Root cause
 
-The AET target uses `multi_source_minmax` over **absolute** mm/month —
-no 0–1 normalisation. In both January and July MOD16A2 sets one end of
-the bound and pulls it away from where SSEBop and MWBM agree:
+`_mosaic_and_reproject_timestep` reprojects from the native 500 m
+sinusoidal tiles to a 0.04° (≈ 4 km) lat/lon grid using
+`Resampling.average`. MOD16A2 v061 reserves raw integer values 32761–32767
+for special codes (water=32761, barren=32762, snow/ice=32763, cloudy=32764,
+no-data=32766, not-processed=32767). `rioxarray.open_rasterio(masked=True)`
+maps **only** the declared `_FillValue` (typically the not-processed code)
+to NaN; the other six special codes remain as ordinary numeric pixels.
 
-- January: `min = SSEBop (9), max = MOD16A2 (33)` → MOD16A2 sets the upper bound.
-- July: `min = MOD16A2 (37), max = SSEBop (101)` → MOD16A2 sets the lower bound.
+When `Resampling.average` mixed valid pixels (raw ≈ 0–500) with one of
+those un-masked fill codes (raw ≈ 32766), the resulting 4 km cell carried
+an arithmetic average like `(31 × 100 + 1 × 32766) / 32 ≈ 1124` raw
+(≈ 112 mm/8 day scaled). Such cells appeared along every coastline,
+lake margin, and snow boundary — wherever a valid 4 km cell touched a
+fill-coded one. They were physically impossible (10× peak summer ET in
+January) but fell well below the `<= 3270` post-reprojection mask in
+`aggregate/mod16a2.py:_mask_et_fill`, so they survived into HRU
+aggregation. With ~10 % of CONUS+ cells contaminated this way and an
+average contaminated value of ~1003 mm/8 day, every coastline/lake-margin
+HRU was pulled toward the contaminated mean. That eliminates real
+spatial variation and flattens the seasonal cycle.
 
-That is the opposite of what a multi-source error envelope is meant to
-do. SSEBop and MWBM agree to within ~30% in both seasons, and dropping
-MOD16A2 would give a tighter but more honest bound.
+Quantifying with `mod16a2_v061_2010_consolidated.nc` (Jan 1 vs Jul 4
+2010, gridded means under different masks):
 
-### Possible causes (not yet investigated)
+| Mask threshold | Jan mean | Jul mean | Jul/Jan |
+|---|---|---|---|
+| `<= 3270` (pre-fix) | 168.1 | 184.1 | **1.10×** |
+| `<= 200` | 10.7 | 26.3 | 2.47× |
+| `<= 100` | 6.3 | 21.9 | **3.47×** |
 
-- Over-eager flag masking on the consolidated NC (the `<= 3270` threshold
-  in `aggregate/mod16a2.py:_mask_et_fill` may be removing real low-ET
-  pixels that the v061 GF gap-fill marks as flag-coded).
-- Consolidate-step averaging that homogenises composites across the year.
-- Genuine v061 GF behaviour on our CONUS+ tile selection, possibly fixed
-  in a future v061 reprocess or a v062 release.
+A tighter threshold drops the contaminated cells and recovers a
+believable seasonal swing.
+
+### The fix
+
+**Pipeline (`fetch/consolidate.py`).** `_mosaic_and_reproject_timestep`
+now masks ET_500m values above the valid-data ceiling (raw 32700 / scaled
+3270) **before** `Resampling.average` runs, so the area-weighted mean
+only sees valid pixels. Boundary cells become either real averages of
+their valid neighbours or NaN — never an intermediate contaminated value.
+Threshold detection is automatic so the helper works whether rioxarray
+returns scaled or raw values (`_mask_modis_et_fills` in
+`fetch/consolidate.py`). `aggregate/mod16a2.py:_mask_et_fill` is kept as
+a belt-and-suspenders post-aggregate hook; on a freshly-consolidated NC
+it is now a no-op.
+
+**Notebooks.** While verifying the fill-mask fix we also discovered the
+inspection notebooks were double-scaling MOD16A2 by a factor of 0.1.
+The consolidated NC stores raw int-like values on-disk (max 32766) with
+`scale_factor=0.1` in attrs; xarray's default `decode_cf=True` applies
+the scale on read, so values arriving in the helpers are already in
+scaled mm/8 day. The `_mod16a2_to_monthly_mm` helper in
+`notebooks/aggregated/inspect_aggregated_aet.ipynb` then multiplied by
+`0.1` again, producing figures whose values were 10× too low — visually
+the MOD16A2 panel still looked plausible because the contaminated
+boundary cells survived the double-scaling and saturated the colourbar
+at the high end while the rest of the panel got squashed near zero.
+The notebook helper now trusts `decode_cf=True` and refuses to run
+against a raw-value DataArray (sanity-check `assert max <= 3300`).
+The consolidated notebook's `_mod16a2_monthly_mm` was also missing the
+`<= 3270` fill mask (the misleading "Note on scale factor" cell
+documented this as "scale_factor not applied" — that was a misdiagnosis).
+Both helpers are corrected in PR #88.
+
+### Operational impact
+
+- All consolidated MOD16A2 NCs produced before PR #88 carry the
+  contamination. Re-consolidating from the HDF tiles is cheap CPU-wise
+  but requires the HDFs (which are deleted after consolidation in normal
+  pipeline runs) — for an existing project, a full re-fetch + re-consolidate
+  is the cleanest path.
+- Re-aggregation is required after re-consolidation. The aggregated
+  outputs at `<project>/data/aggregated/mod16a2_v061/` become invalid
+  on PR-#88 merge; downstream consumers should re-aggregate before
+  rebuilding AET targets.
+
+### How to re-run after PR #88
+
+The fetch command's manifest-based year-skip means a plain re-run does
+nothing once a year is recorded. PR #88 adds a `--force` flag to
+`nhf-targets fetch mod16a2` (and `mod10c1`) for exactly this case:
+
+```bash
+# 1. Re-fetch (overwrites consolidated NCs and the mod16a2_v061
+#    manifest entry on completion)
+pixi run nhf-targets fetch mod16a2 --project-dir <project> -p YYYY/YYYY --force
+
+# 2. Drop the aggregated NCs so the per-year `out_path.exists()`
+#    skip in aggregate/_driver.py doesn't keep the stale outputs
+rm <project>/data/aggregated/mod16a2_v061/*_agg.nc
+
+# 3. Re-aggregate
+pixi run nhf-targets agg mod16a2 --project-dir <project>
+```
+
+The weights cache at `<project>/weights/mod16a2_v061_batch*.csv` does
+*not* need to be cleared — its fingerprint is on the fabric batch
+geometry, not on source values, so it stays valid across this fix.
 
 ### Where to look in the code
 
-- Inspection notebook: `notebooks/aggregated/inspect_aggregated_aet.ipynb`
-  (cells `38002926` for the time-series analysis, `55a87e3a` for the
-  finding).
-- Aggregation adapter: `src/nhf_spatial_targets/aggregate/mod16a2.py`.
-- Catalog entry: `catalog/sources.yml` → `mod16a2_v061` (`notes:` block).
-- Target builder (stub): `src/nhf_spatial_targets/targets/aet.py` —
-  should accept a `sources` override from project config until the
-  decision is finalised.
+- Mask helper + reprojection: `src/nhf_spatial_targets/fetch/consolidate.py`
+  (`_mask_modis_et_fills`, `_mosaic_and_reproject_timestep`).
+- Post-aggregate safety net: `src/nhf_spatial_targets/aggregate/mod16a2.py`
+  (`_mask_et_fill`).
+- Regression test: `tests/test_consolidate_modis.py`
+  (`test_mask_modis_et_fills_*`,
+  `test_mosaic_and_reproject_timestep_no_fill_contamination`).
+- Inspection notebooks (both updated by PR #88; re-run after re-aggregation):
+  `notebooks/aggregated/inspect_aggregated_aet.ipynb` (`_mod16a2_to_monthly_mm`
+  no longer applies `× 0.1`; `× scale_factor` was double-scaling on top of
+  xarray's `decode_cf`) and `notebooks/consolidated/inspect_consolidated_aet.ipynb`
+  (`_mod16a2_monthly_mm` now masks special codes `> 3270` before the
+  monthly sum; the misleading "Note on scale factor" cell is corrected).
+- Catalog entry: `catalog/sources.yml` → `mod16a2_v061` (`notes:` block,
+  updated alongside this fix).
+
+---
+
+## `mean` vs `masked_mean`, and where NN-fill belongs
+
+**Status:** convention revised. Aggregation now uses `masked_mean` for
+sources with explicit per-pixel masking (MOD16A2 fill mask, MOD10C1 CI
+gate); `mean` everywhere else. NN-fill, when applied at all, lives at
+the *target* stage, not the aggregation stage.
+
+### Where the original convention came from
+
+An earlier feedback note said: "Aggregation uses gdptools
+`stat_method='mean'` — never `masked_mean`. Plain mean produces NaN for
+partial-coverage HRUs by design; nearest-neighbour-fill those NaN
+HRUs as a separate post-processing step in `normalize/methods.py`,
+called by each target builder before normalisation/combination."
+
+That was the right rule when no source had per-pixel masking: NaN at
+the pixel level meant "no source data here" (geometric partial
+coverage), and propagating it to the HRU was honest. The plan was to
+fix coverage gaps later via NN-fill, with the imputation step
+explicitly visible in `normalize/`.
+
+### What the PR #88 work surfaced
+
+PR #88 added a per-pixel fill mask for MOD16A2 (water/barren/snow/cloud/
+no-data codes → NaN before reprojection). MOD10C1 already had similar
+per-pixel masking (CI > 70 gate, plus flag-value masks). With
+`stat_method="mean"` those pixel-level NaNs poisoned every HRU that
+touched even one masked pixel — *most* coastal / lake-margin / snow-
+boundary HRUs. The aggregated NCs went from "biased values from
+unmasked fills" (the original bug) to "honest but unhelpfully sparse
+NaN coverage" (the symptom that surfaced post-fix when the user noticed
+MOD16A2 missing in time-series plots for every representative HRU
+except Southern Appalachians).
+
+The mechanical question is: when a per-pixel mask sets a pixel to NaN
+*on purpose*, should the HRU mean propagate that NaN or skip it?
+
+- Propagating it (the original convention's behaviour with `mean`):
+  treats the deliberate mask the same as a true-upstream NaN. Defeats
+  the per-pixel mask the moment any masked pixel touches the HRU.
+- Skipping it (the new behaviour with `masked_mean`): the HRU value is
+  the area-weighted mean of pixels that survived the gate. NaN at the
+  HRU level still happens, but only when *every* contributing pixel was
+  masked — which is the genuine "no useful source data" state.
+
+For a source with a `pre_aggregate_hook` that sets pixels to NaN,
+`masked_mean` is the only way to make the per-pixel mask do its job at
+the HRU level. The original convention was right for sources without
+per-pixel masking; it was wrong for sources with it.
+
+### The revised convention
+
+- `SourceAdapter.stat_method` (default `"mean"`) controls the
+  per-source choice. Sources whose `pre_aggregate_hook` sets pixels to
+  NaN must override to `"masked_mean"`; sources without such a hook
+  stay on `"mean"` so geometric / true-upstream NaN still propagates.
+- `aggregate/mod16a2.py` and `aggregate/mod10c1.py` are the only
+  current `masked_mean` users. When a future source adds a NaN-emitting
+  pre-hook, it should set `stat_method="masked_mean"` at the same time.
+- The aggregated NCs are now the canonical "what each source actually
+  covers" record. They preserve NaN HRUs honestly — no imputation.
+
+### NN-fill moves to the target stage
+
+The original plan was for `normalize/methods.py` to NN-fill aggregated
+NaN HRUs before the target builder ran. That plan is revised: NN-fill,
+*if applied at all*, runs at the target stage on the per-HRU per-time
+*bound*, not on the aggregated NCs. The reasoning:
+
+1. **Multi-source min/max bounds are NaN-aware.** With three sources,
+   the per-HRU per-month bound (`np.fmin`/`np.fmax`) is well-defined
+   whenever ≥1 source is finite. A NaN HRU in MOD16A2 doesn't break the
+   AET target's bound — it just means MOD16A2 doesn't contribute that
+   month. NN-filling MOD16A2 first would silently introduce an imputed
+   value where the source genuinely has nothing to say.
+2. **Aggregated NCs as honest record.** Different consumers (calibration
+   target, diagnostic notebook, future analyses) may want different
+   imputation policies. Preserving NaN at the aggregated layer keeps
+   the record canonical and lets each consumer decide.
+3. **Target-time NN-fill is the right scale.** If a target needs a
+   complete bound at every HRU, NN-fill the *bound* after multi-source
+   reduction — that's a single per-HRU per-time imputation step,
+   transparent in the target builder and easy to audit.
+
+### Where to look in the code
+
+- `src/nhf_spatial_targets/aggregate/_adapter.py` — `SourceAdapter.stat_method`
+  field and validation.
+- `src/nhf_spatial_targets/aggregate/_driver.py` — `aggregate_variables_for_batch`
+  forwards `adapter.stat_method` to gdptools `AggGen`.
+- `src/nhf_spatial_targets/aggregate/mod16a2.py`, `aggregate/mod10c1.py`
+  — `stat_method="masked_mean"` set on the adapter, with a comment
+  explaining the link to the per-pixel mask in the pre-hook.
+- `CLAUDE.md` § "Aggregation Transformation Policy" — concise rule for
+  AI assistants.
+- `docs/architecture/transformation-pipeline.md` — full architectural
+  rule + decision flow.
 
 ---
 

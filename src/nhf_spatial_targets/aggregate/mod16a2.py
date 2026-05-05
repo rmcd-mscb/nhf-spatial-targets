@@ -28,13 +28,22 @@ MODIS_SINUSOIDAL_PROJ = (
 
 
 def _mask_et_fill(ds: xr.Dataset) -> xr.Dataset:
-    """Mask MODIS ET_500m special/fill values before area-weighted aggregation.
+    """Safety-net mask for MODIS ET_500m special/fill values.
 
-    The consolidated NC stores scaled float32 values (raw × 0.1).  MOD16A2
-    valid_range for ET_500m is 0–32700 raw (0–3270.0 scaled).  Values above
-    3270 are special codes (water=32761, barren=32762, snow/ice=32763,
-    cloudy=32764, no-data=32766, not-processed=32767 in raw units) that must
-    be set to NaN so they do not contaminate the weighted mean.
+    Primary fill-masking now happens at consolidation time, *before* the
+    sinusoidal-to-EPSG:4326 reprojection in
+    ``fetch.consolidate._mosaic_and_reproject_timestep``. That is the only
+    place where masking is correct: the consolidation reprojection uses
+    ``Resampling.average``, and post-reprojection masking cannot undo the
+    fill-contaminated averages it produces (an HRU with 50/50 valid/fill
+    blend reads as ~1660 mm/8day in scaled units, well below the 3270
+    threshold). See PR #88 / lessons-learned.md § MOD16A2 v061
+    flat-on-CONUS+ for the worked example.
+
+    This hook remains as belt-and-suspenders against (a) consolidated NCs
+    produced by older pipeline versions and (b) any pure-fill cells that
+    happen to slip through (which would only occur if the consolidation
+    mask is bypassed). On a freshly-consolidated NC it is a no-op.
     """
     ds["ET_500m"] = ds["ET_500m"].where(ds["ET_500m"] <= 3270.0)
     return ds
@@ -46,6 +55,16 @@ ADAPTER = SourceAdapter(
     variables=["ET_500m"],
     source_crs="EPSG:4326",  # consolidate_mod16a2 reprojects tiles to WGS84
     pre_aggregate_hook=_mask_et_fill,
+    # Per-pixel fill mask runs in pre_aggregate_hook AND inside
+    # consolidate before reprojection (PR #88). With stat_method="mean"
+    # those NaN pixels would propagate to the HRU, marking every HRU
+    # that touches a coastline / water body / snow boundary as NaN.
+    # Use masked_mean so the HRU value reflects the area-weighted mean
+    # of pixels that survived the fill mask; HRUs whose contributing
+    # pixels are all fills still come out NaN, which is the honest
+    # "no MOD16A2 here" signal. See
+    # docs/architecture/transformation-pipeline.md.
+    stat_method="masked_mean",
 )
 
 

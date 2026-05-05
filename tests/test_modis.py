@@ -410,6 +410,117 @@ def test_mod16a2_incremental_skips_year(
     assert call_kwargs["temporal"] == ("2011-01-01", "2011-12-31")
 
 
+@patch(
+    "nhf_spatial_targets.fetch.modis.consolidate_mod16a2",
+    return_value=_MOCK_CONSOLIDATION,
+)
+@patch(
+    "nhf_spatial_targets.fetch.modis.consolidate_mod16a2_finalize",
+    return_value={
+        "consolidated_nc": "data/raw/mod16a2_v061/mod16a2_v061_2010_consolidated.nc",
+        "last_consolidated_utc": "2026-01-01T00:00:00+00:00",
+        "n_files": 1,
+        "variables": ["ET_500m", "ET_QC_500m"],
+    },
+)
+@patch(
+    "nhf_spatial_targets.fetch.modis.consolidate_mod16a2_timestep",
+    return_value=Path("/tmp/fake_tmp.nc"),
+)
+@patch("earthaccess.download")
+@patch("earthaccess.search_data")
+@patch("nhf_spatial_targets.fetch.modis.earthdata_login")
+def test_mod16a2_force_refetches_year(
+    mock_login, mock_search, mock_dl, mock_ts, mock_fin, mock_consolidate, workdir
+):
+    """force=True re-fetches a year even when the manifest already records it.
+
+    Regression for the PR #88 operational need: a pipeline change can
+    invalidate consolidated NCs while the manifest still claims they are
+    fresh. ``force=True`` must bypass the manifest-based skip; without it
+    the only remediation is hand-editing manifest.json.
+    """
+    manifest = {
+        "sources": {
+            "mod16a2_v061": {
+                "period": "2010/2010",
+                "files": [
+                    {
+                        "path": "data/raw/mod16a2_v061/MOD16A2GF.A2010001.h08v04.061.2020256154955.hdf",
+                        "year": 2010,
+                        "size_bytes": 100,
+                        "downloaded_utc": "2026-01-01T00:00:00+00:00",
+                    }
+                ],
+            }
+        }
+    }
+    (workdir / "manifest.json").write_text(json.dumps(manifest))
+
+    mock_search.return_value = [
+        _mock_granule("MOD16A2GF.A2010001.h08v04.061.2020256154955.hdf")
+    ]
+    mock_dl.return_value = _fake_download(workdir, year=2010)
+
+    from nhf_spatial_targets.fetch.modis import fetch_mod16a2
+
+    fetch_mod16a2(workdir=workdir, period="2010/2010", force=True)
+
+    # Search should have been issued for 2010 even though the manifest
+    # already records it — that's exactly the manifest-skip the flag bypasses.
+    assert mock_search.call_count == 1
+    assert mock_search.call_args[1]["temporal"] == ("2010-01-01", "2010-12-31")
+
+
+@patch(
+    "nhf_spatial_targets.fetch.modis.consolidate_mod16a2",
+    return_value=_MOCK_CONSOLIDATION,
+)
+@patch(
+    "nhf_spatial_targets.fetch.modis.consolidate_mod16a2_finalize",
+    return_value={
+        "consolidated_nc": "data/raw/mod16a2_v061/mod16a2_v061_2010_consolidated.nc",
+        "last_consolidated_utc": "2026-01-01T00:00:00+00:00",
+        "n_files": 1,
+        "variables": ["ET_500m", "ET_QC_500m"],
+    },
+)
+@patch(
+    "nhf_spatial_targets.fetch.modis.consolidate_mod16a2_timestep",
+    return_value=Path("/tmp/fake_tmp.nc"),
+)
+@patch("earthaccess.download")
+@patch("earthaccess.search_data")
+@patch("nhf_spatial_targets.fetch.modis.earthdata_login")
+def test_mod16a2_force_default_is_skip(
+    mock_login, mock_search, mock_dl, mock_ts, mock_fin, mock_consolidate, workdir
+):
+    """force defaults to False — incremental behaviour is preserved."""
+    manifest = {
+        "sources": {
+            "mod16a2_v061": {
+                "period": "2010/2010",
+                "files": [
+                    {
+                        "path": "data/raw/mod16a2_v061/MOD16A2GF.A2010001.h08v04.061.2020256154955.hdf",
+                        "year": 2010,
+                        "size_bytes": 100,
+                        "downloaded_utc": "2026-01-01T00:00:00+00:00",
+                    }
+                ],
+            }
+        }
+    }
+    (workdir / "manifest.json").write_text(json.dumps(manifest))
+
+    from nhf_spatial_targets.fetch.modis import fetch_mod16a2
+
+    # Default force=False — 2010 already in manifest, search should not run.
+    fetch_mod16a2(workdir=workdir, period="2010/2010")
+
+    assert mock_search.call_count == 0
+
+
 # ---------------------------------------------------------------------------
 # MOD10C1 helpers
 # ---------------------------------------------------------------------------

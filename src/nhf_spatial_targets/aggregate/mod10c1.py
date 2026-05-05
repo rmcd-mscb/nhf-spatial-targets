@@ -178,6 +178,15 @@ ADAPTER = SourceAdapter(
     source_crs="EPSG:4326",
     pre_aggregate_hook=build_masked_source,
     post_aggregate_hook=_rename_valid_mask,
+    # build_masked_source sets failed-CI / flag-coded pixels to NaN.
+    # With stat_method="mean" those NaN pixels would poison every HRU
+    # that intersects a partly-cloudy or partly-flag-coded region —
+    # i.e. most HRUs in winter. masked_mean computes the weighted
+    # mean of pixels that survived the CI > 70 gate; HRUs whose
+    # contributing pixels are all NaN remain NaN. valid_area_fraction
+    # (post_aggregate_hook) reports coverage alongside.
+    # See docs/architecture/transformation-pipeline.md.
+    stat_method="masked_mean",
 )
 
 

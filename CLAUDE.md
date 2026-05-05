@@ -116,21 +116,49 @@ Full architectural reference: `docs/architecture/transformation-pipeline.md`.
   `valid_area_fraction` after the per-pixel 0/1 mask becomes an HRU
   fraction), attach attrs. Do not modify aggregated source values.
 - **Per-HRU transforms (`normalize/methods.py`):** 0–1 normalization,
-  multi-source min/max, NN-fill of NaN HRUs from partial coverage. Defined at
-  HRU scale, must run post-aggregation.
+  multi-source min/max, NN-fill of NaN HRUs (when applied at all, see below).
+  Defined at HRU scale, must run post-aggregation.
 - **Linear unit conversions (`targets/<tgt>.py`):** `× 1000`, `÷ 100`,
   `× 8 × days_in_month`, mm/month → cfs, etc. These commute with
   aggregation; we put them downstream so the aggregated NC stays in native
   units (easier to spot a missed conversion factor).
 - **Multi-source combination (`targets/<tgt>.py`):** must be post-aggregation
-  by definition (different sources have different grids).
+  by definition (different sources have different grids). For
+  `multi_source_minmax` targets use **NaN-aware** reduction
+  (`np.fmin`/`np.fmax` or xarray `.min/max(skipna=True)` along a stacked
+  source dim) so a bound is well-defined whenever ≥1 source is finite at the
+  HRU/time. The bound is NaN only when *every* source is NaN there.
+
+**`stat_method` choice: `mean` vs `masked_mean`.** gdptools' area-weighted
+mean comes in two flavours, and the right choice depends on whether the
+source has explicit per-pixel masking:
+
+- **`stat_method="mean"` (default).** NaN propagates: any NaN pixel
+  contributing to an HRU makes the HRU value NaN. Use this when source
+  pixels arrive at the aggregator without per-pixel masking, so NaN means
+  "no source data here" (geometric partial coverage, true upstream gaps).
+- **`stat_method="masked_mean"`.** NaN pixels are skipped; the HRU value is
+  the area-weighted mean of the *survivors*. Use this when the source
+  **deliberately** masks pixels in `pre_aggregate_hook` (fill-value mask,
+  quality gate, etc.). Without it, the per-pixel mask would poison every
+  HRU that touches even one masked pixel — defeating the point of having a
+  per-pixel mask in the first place. Currently used by
+  `aggregate/mod16a2.py` (PR #88 fill mask) and `aggregate/mod10c1.py`
+  (CI > 70 gate). Configurable via `SourceAdapter.stat_method`.
 
 **The aggregated NC at `<project>/data/aggregated/<source_key>/...`
 therefore carries the source's NATIVE variable names and NATIVE units**,
-with flag-masked and quality-gated values. Inspect notebooks in
-`notebooks/aggregated/` apply the same `÷ 100` / `× 1000` / etc.
-conversions inline, mirroring `targets/`, so they should produce
-order-of-magnitude-matching results when validated against gridded means.
+with flag-masked and quality-gated values. **HRU NaN values are honest**:
+the aggregator never imputes. NN-fill, when desired, is a target-stage
+concern — applied to the per-HRU per-time bound in `targets/<tgt>.py`
+*after* multi-source combination, never to the aggregated NC itself. This
+keeps the aggregated NCs as the canonical "what the source actually
+covers" record while letting individual targets choose imputation policy.
+
+Inspect notebooks in `notebooks/aggregated/` apply the same `÷ 100` /
+`× 1000` / etc. conversions inline, mirroring `targets/`, so they should
+produce order-of-magnitude-matching results when validated against gridded
+means.
 
 **Why ordering matters (the gotcha):** post-aggregation gating of a
 per-pixel quality field gives a different answer than pre-aggregation
@@ -228,10 +256,10 @@ See `catalog/sources.yml` `status:` and `notes:` fields for per-source gaps.
 
 **Still open:**
 - SCA CI-bounds formula — PRMSobjfun.f not publicly available; formula unconfirmed
-- MOD16A2 v061 flat-on-CONUS+ seasonality — July 2000 inspection (`notebooks/aggregated/inspect_aggregated_aet.ipynb`) shows Jul/Jan = 1.12× vs SSEBop / MWBM 6–11× expected. Inclusion in the AET multi-source min/max bound is **pending collaborator consensus**; see `docs/references/lessons-learned.md` § MOD16A2 v061 flat-on-CONUS+.
 
 **Resolved (previously open):**
 - SSEBop — accessed via USGS NHGF STAC catalog (collection `ssebopeta_monthly`, doi:10.5066/P9L2YMV, 2000–2023 monthly, 1km). Aggregated directly to HRU fabric via gdptools — no local download. See PR #34.
+- MOD16A2 v061 flat-on-CONUS+ seasonality — root cause was fill-value contamination at the consolidate-time sinusoidal→4 km reprojection: `rioxarray`'s `masked=True` only masks the declared `_FillValue`, leaving the other special codes (water=32761, barren=32762, snow/ice=32763, cloudy=32764, no-data=32766) to be averaged into valid neighbours by `Resampling.average`. Fixed in PR #88 by masking ET_500m fills *before* reprojection. Existing consolidated/aggregated NCs are invalid; re-fetch + re-aggregate to recover real seasonality. See `docs/references/lessons-learned.md` § MOD16A2 v061 flat-on-CONUS+.
 
 ## Testing
 

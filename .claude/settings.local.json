@@ -45,7 +45,11 @@
       "Bash(sort -k1 -n)",
       "Bash(python -c \"import json,sys; m=json.load\\(sys.stdin\\); s=m.get\\('sources',{}\\).get\\('mod16a2_v061',{}\\); print\\(json.dumps\\(s, indent=2\\)\\)\")",
       "Bash(python -c \"import json,sys; m=json.load\\(sys.stdin\\); print\\('keys:', list\\(m.keys\\(\\)\\)\\); print\\('source keys:', list\\(m.get\\('sources',{}\\).keys\\(\\)\\)\\)\")",
-      "Bash(awk -F_ '{src=$1\"_\"$2; if \\(NF>=5\\) src=$1\"_\"$2\"_\"$3; print src}')"
+      "Bash(awk -F_ '{src=$1\"_\"$2; if \\(NF>=5\\) src=$1\"_\"$2\"_\"$3; print src}')",
+      "Bash(gh --version)",
+      "Bash(gh auth *)",
+      "Bash(bash -n /caldera/hovenweep/projects/usgs/water/impd/nhgf/nhf-spatial-targets/fetch_all.slurm)",
+      "Bash(shellcheck /caldera/hovenweep/projects/usgs/water/impd/nhgf/nhf-spatial-targets/fetch_all.slurm)"
     ]
   }
 }
