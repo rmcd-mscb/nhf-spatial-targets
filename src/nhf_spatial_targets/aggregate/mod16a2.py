@@ -55,6 +55,16 @@ ADAPTER = SourceAdapter(
     variables=["ET_500m"],
     source_crs="EPSG:4326",  # consolidate_mod16a2 reprojects tiles to WGS84
     pre_aggregate_hook=_mask_et_fill,
+    # Per-pixel fill mask runs in pre_aggregate_hook AND inside
+    # consolidate before reprojection (PR #88). With stat_method="mean"
+    # those NaN pixels would propagate to the HRU, marking every HRU
+    # that touches a coastline / water body / snow boundary as NaN.
+    # Use masked_mean so the HRU value reflects the area-weighted mean
+    # of pixels that survived the fill mask; HRUs whose contributing
+    # pixels are all fills still come out NaN, which is the honest
+    # "no MOD16A2 here" signal. See
+    # docs/architecture/transformation-pipeline.md.
+    stat_method="masked_mean",
 )
 
 

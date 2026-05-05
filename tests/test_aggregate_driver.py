@@ -89,6 +89,50 @@ def test_source_adapter_defaults():
     assert adapter.time_coord is None
     assert adapter.pre_aggregate_hook is None
     assert adapter.post_aggregate_hook is None
+    assert adapter.stat_method == "mean"
+
+
+def test_source_adapter_stat_method_override():
+    """stat_method can be overridden to gdptools-supported values."""
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+
+    adapter = SourceAdapter(
+        source_key="merra2",
+        output_name="merra2_agg.nc",
+        variables=["GWETTOP"],
+        stat_method="masked_mean",
+    )
+    assert adapter.stat_method == "masked_mean"
+
+
+def test_source_adapter_stat_method_validation_rejects_typo():
+    """Adapter construction surfaces a typo'd stat_method early."""
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+
+    with pytest.raises(ValueError, match="stat_method"):
+        SourceAdapter(
+            source_key="merra2",
+            output_name="merra2_agg.nc",
+            variables=["GWETTOP"],
+            stat_method="masked_meen",  # intentional typo
+        )
+
+
+def test_modis_adapters_use_masked_mean():
+    """MOD16A2 and MOD10C1 adapters opt into masked_mean.
+
+    Both have pre_aggregate_hooks that set source pixels to NaN
+    deliberately (PR #88 fill mask, CI > 70 gate), so the policy
+    requires masked_mean. A regression on this would silently re-
+    introduce NaN propagation through the per-pixel masks.
+    """
+    from nhf_spatial_targets.aggregate.mod10c1 import ADAPTER as MOD10C1
+    from nhf_spatial_targets.aggregate.mod16a2 import ADAPTER as MOD16A2
+
+    assert MOD16A2.stat_method == "masked_mean"
+    assert MOD16A2.pre_aggregate_hook is not None
+    assert MOD10C1.stat_method == "masked_mean"
+    assert MOD10C1.pre_aggregate_hook is not None
 
 
 @pytest.fixture()
@@ -175,6 +219,50 @@ def test_aggregate_variables_for_batch_merges_variables(tiny_fabric):
         )
     assert set(result.data_vars) == {"a", "b"}
     assert result.sizes["hru_id"] == 4
+    # Default stat_method "mean" is forwarded to gdptools when omitted.
+    for call in mock_agg.call_args_list:
+        assert call.kwargs["stat_method"] == "mean"
+
+
+def test_aggregate_variables_for_batch_forwards_stat_method(tiny_fabric):
+    """stat_method passed to the driver lands in gdptools AggGen."""
+    from nhf_spatial_targets.aggregate._driver import (
+        aggregate_variables_for_batch,
+    )
+
+    batch_gdf = gpd.read_file(tiny_fabric)
+    batch_gdf["batch_id"] = 0
+    times = pd.date_range("2000-01-01", periods=2, freq="MS")
+    source_ds = xr.Dataset(
+        {"a": (["time", "lat", "lon"], np.ones((2, 2, 2)))},
+        coords={"time": times, "lat": [0.25, 0.75], "lon": [0.5, 1.5]},
+    )
+
+    with (
+        patch("nhf_spatial_targets.aggregate._driver.AggGen") as mock_agg,
+        patch("nhf_spatial_targets.aggregate._driver.UserCatData") as mock_ucd,
+    ):
+        mock_ucd.return_value = _fake_user_data()
+        agg_instance = MagicMock()
+        mock_agg.return_value = agg_instance
+        agg_instance.calculate_agg.side_effect = [_fake_agg_result("a", [0, 1, 2, 3])]
+
+        aggregate_variables_for_batch(
+            batch_gdf=batch_gdf,
+            source_ds=source_ds,
+            variables=["a"],
+            source_crs="EPSG:4326",
+            x_coord="lon",
+            y_coord="lat",
+            time_coord="time",
+            id_col="hru_id",
+            weights=_fake_weights(),
+            period=("2000-01-01", "2000-02-01"),
+            stat_method="masked_mean",
+        )
+
+    assert mock_agg.call_count == 1
+    assert mock_agg.call_args.kwargs["stat_method"] == "masked_mean"
 
 
 def test_aggregate_source_writes_multi_var_nc_and_manifest(tmp_path, tiny_fabric):

@@ -408,6 +408,7 @@ def aggregate_year(
                     id_col=id_col,
                     weights=weights,
                     period=period,
+                    stat_method=adapter.stat_method,
                 )
             except Exception as exc:
                 # Preserve the original exception type (FileNotFoundError,
@@ -594,6 +595,7 @@ def aggregate_variables_for_batch(
     weights: pd.DataFrame,
     *,
     period: tuple[str, str],
+    stat_method: str = "mean",
 ) -> xr.Dataset:
     """Run gdptools AggGen once per variable, merge results on HRU ID.
 
@@ -617,6 +619,18 @@ def aggregate_variables_for_batch(
         Name of the HRU identifier column in batch_gdf.
     weights : pd.DataFrame
         Pre-computed weight table from compute_or_load_weights.
+    stat_method : str
+        gdptools area-weighted reduction method. Default ``"mean"`` is
+        the right choice for sources arriving without per-pixel masking
+        — any NaN source pixel propagates to a NaN HRU value, which is
+        an honest "no data" signal at the HRU level. Pass
+        ``"masked_mean"`` for sources that **deliberately** mask pixels
+        in ``pre_aggregate_hook`` (fill masks, quality gates) so the
+        per-pixel mask doesn't poison every HRU it touches; the HRU
+        mean then reports the area-weighted mean of pixels that
+        survived the pre-aggregate gate. See
+        ``docs/architecture/transformation-pipeline.md`` for the full
+        rule.
 
     Returns
     -------
@@ -639,7 +653,7 @@ def aggregate_variables_for_batch(
         )
         agg = AggGen(
             user_data=user_data,
-            stat_method="mean",
+            stat_method=stat_method,
             agg_engine="serial",
             agg_writer="none",
             weights=weights,

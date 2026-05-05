@@ -23,6 +23,21 @@ class SourceAdapter:
     this to a tighter pattern.  ``pre_aggregate_hook``, when set, receives each
     lazily-opened per-year Dataset and may add derived variables before the
     aggregation loop runs.
+
+    ``stat_method`` selects the gdptools area-weighted reduction. Default
+    ``"mean"`` is the right choice when source pixels arrive at the
+    aggregator without per-pixel masking — any NaN source pixel propagates
+    to a NaN HRU value, which is an honest "no useful data here" signal.
+    Override to ``"masked_mean"`` (skips NaN pixels and computes the
+    weighted mean of the survivors) when the source **deliberately** masks
+    pixels in ``pre_aggregate_hook`` — fill-value masks, quality gates,
+    etc. Without this override, the per-pixel mask poisons every HRU that
+    touches even one masked pixel; with it, the HRU mean honestly reports
+    the area-weighted mean of pixels that survived the pre-aggregate gate
+    and the HRU is NaN only when *every* contributing pixel was masked.
+    Currently used by ``aggregate/mod16a2.py`` (PR #88 fill mask) and
+    ``aggregate/mod10c1.py`` (CI > 70 quality gate). See
+    ``docs/architecture/transformation-pipeline.md`` for the full rule.
     """
 
     source_key: str
@@ -37,6 +52,7 @@ class SourceAdapter:
     files_glob: str = "*_consolidated.nc"
     pre_aggregate_hook: Callable[[xr.Dataset], xr.Dataset] | None = field(default=None)
     post_aggregate_hook: Callable[[xr.Dataset], xr.Dataset] | None = field(default=None)
+    stat_method: str = "mean"
 
     def __post_init__(self) -> None:
         # Coerce list → tuple so callers can pass list literals.
@@ -46,6 +62,31 @@ class SourceAdapter:
         if "/" in self.output_name or "\\" in self.output_name:
             raise ValueError(
                 f"SourceAdapter.output_name must be a bare filename, got {self.output_name!r}"
+            )
+        # Validate against gdptools' allowed stat methods. Listing the
+        # commonly-used pair explicitly here so a typo is caught at adapter
+        # construction rather than deep inside the aggregation loop.
+        _ALLOWED_STAT_METHODS = {
+            "mean",
+            "masked_mean",
+            "median",
+            "masked_median",
+            "std",
+            "masked_std",
+            "min",
+            "masked_min",
+            "max",
+            "masked_max",
+            "sum",
+            "masked_sum",
+            "count",
+            "masked_count",
+        }
+        if self.stat_method not in _ALLOWED_STAT_METHODS:
+            raise ValueError(
+                f"SourceAdapter.stat_method={self.stat_method!r} is not a "
+                f"gdptools STATSMETHODS value; expected one of "
+                f"{sorted(_ALLOWED_STAT_METHODS)}"
             )
         # Named invariant: which declared variable is used to infer the source
         # grid for WeightGen. Defaults to the first variable; drivers/tests that

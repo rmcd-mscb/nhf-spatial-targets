@@ -158,6 +158,106 @@ geometry, not on source values, so it stays valid across this fix.
 
 ---
 
+## `mean` vs `masked_mean`, and where NN-fill belongs
+
+**Status:** convention revised. Aggregation now uses `masked_mean` for
+sources with explicit per-pixel masking (MOD16A2 fill mask, MOD10C1 CI
+gate); `mean` everywhere else. NN-fill, when applied at all, lives at
+the *target* stage, not the aggregation stage.
+
+### Where the original convention came from
+
+An earlier feedback note said: "Aggregation uses gdptools
+`stat_method='mean'` — never `masked_mean`. Plain mean produces NaN for
+partial-coverage HRUs by design; nearest-neighbour-fill those NaN
+HRUs as a separate post-processing step in `normalize/methods.py`,
+called by each target builder before normalisation/combination."
+
+That was the right rule when no source had per-pixel masking: NaN at
+the pixel level meant "no source data here" (geometric partial
+coverage), and propagating it to the HRU was honest. The plan was to
+fix coverage gaps later via NN-fill, with the imputation step
+explicitly visible in `normalize/`.
+
+### What the PR #88 work surfaced
+
+PR #88 added a per-pixel fill mask for MOD16A2 (water/barren/snow/cloud/
+no-data codes → NaN before reprojection). MOD10C1 already had similar
+per-pixel masking (CI > 70 gate, plus flag-value masks). With
+`stat_method="mean"` those pixel-level NaNs poisoned every HRU that
+touched even one masked pixel — *most* coastal / lake-margin / snow-
+boundary HRUs. The aggregated NCs went from "biased values from
+unmasked fills" (the original bug) to "honest but unhelpfully sparse
+NaN coverage" (the symptom that surfaced post-fix when the user noticed
+MOD16A2 missing in time-series plots for every representative HRU
+except Southern Appalachians).
+
+The mechanical question is: when a per-pixel mask sets a pixel to NaN
+*on purpose*, should the HRU mean propagate that NaN or skip it?
+
+- Propagating it (the original convention's behaviour with `mean`):
+  treats the deliberate mask the same as a true-upstream NaN. Defeats
+  the per-pixel mask the moment any masked pixel touches the HRU.
+- Skipping it (the new behaviour with `masked_mean`): the HRU value is
+  the area-weighted mean of pixels that survived the gate. NaN at the
+  HRU level still happens, but only when *every* contributing pixel was
+  masked — which is the genuine "no useful source data" state.
+
+For a source with a `pre_aggregate_hook` that sets pixels to NaN,
+`masked_mean` is the only way to make the per-pixel mask do its job at
+the HRU level. The original convention was right for sources without
+per-pixel masking; it was wrong for sources with it.
+
+### The revised convention
+
+- `SourceAdapter.stat_method` (default `"mean"`) controls the
+  per-source choice. Sources whose `pre_aggregate_hook` sets pixels to
+  NaN must override to `"masked_mean"`; sources without such a hook
+  stay on `"mean"` so geometric / true-upstream NaN still propagates.
+- `aggregate/mod16a2.py` and `aggregate/mod10c1.py` are the only
+  current `masked_mean` users. When a future source adds a NaN-emitting
+  pre-hook, it should set `stat_method="masked_mean"` at the same time.
+- The aggregated NCs are now the canonical "what each source actually
+  covers" record. They preserve NaN HRUs honestly — no imputation.
+
+### NN-fill moves to the target stage
+
+The original plan was for `normalize/methods.py` to NN-fill aggregated
+NaN HRUs before the target builder ran. That plan is revised: NN-fill,
+*if applied at all*, runs at the target stage on the per-HRU per-time
+*bound*, not on the aggregated NCs. The reasoning:
+
+1. **Multi-source min/max bounds are NaN-aware.** With three sources,
+   the per-HRU per-month bound (`np.fmin`/`np.fmax`) is well-defined
+   whenever ≥1 source is finite. A NaN HRU in MOD16A2 doesn't break the
+   AET target's bound — it just means MOD16A2 doesn't contribute that
+   month. NN-filling MOD16A2 first would silently introduce an imputed
+   value where the source genuinely has nothing to say.
+2. **Aggregated NCs as honest record.** Different consumers (calibration
+   target, diagnostic notebook, future analyses) may want different
+   imputation policies. Preserving NaN at the aggregated layer keeps
+   the record canonical and lets each consumer decide.
+3. **Target-time NN-fill is the right scale.** If a target needs a
+   complete bound at every HRU, NN-fill the *bound* after multi-source
+   reduction — that's a single per-HRU per-time imputation step,
+   transparent in the target builder and easy to audit.
+
+### Where to look in the code
+
+- `src/nhf_spatial_targets/aggregate/_adapter.py` — `SourceAdapter.stat_method`
+  field and validation.
+- `src/nhf_spatial_targets/aggregate/_driver.py` — `aggregate_variables_for_batch`
+  forwards `adapter.stat_method` to gdptools `AggGen`.
+- `src/nhf_spatial_targets/aggregate/mod16a2.py`, `aggregate/mod10c1.py`
+  — `stat_method="masked_mean"` set on the adapter, with a comment
+  explaining the link to the per-pixel mask in the pre-hook.
+- `CLAUDE.md` § "Aggregation Transformation Policy" — concise rule for
+  AI assistants.
+- `docs/architecture/transformation-pipeline.md` — full architectural
+  rule + decision flow.
+
+---
+
 ## WaterGAP gridded vs aggregated bbox mismatch
 
 **Status:** documented — no fix needed.

@@ -346,28 +346,69 @@ Per-HRU per-day:
 
 ---
 
-## Aggregation and missing-HRU conventions
+## Aggregation, masked_mean, and target-time NN-fill
 
-The aggregation pipeline uses `gdptools` with **`stat_method="mean"`**
-(set in `src/nhf_spatial_targets/aggregate/_driver.py` and per-source
-modules — do not switch this to `masked_mean`). Plain `mean` produces
-NaN for any HRU whose polygon does not have full source-grid coverage,
-which is the behaviour we want: it makes coverage gaps explicit and
-auditable rather than silently substituting partial averages.
+The aggregation pipeline uses `gdptools` with `stat_method` set per
+source on `SourceAdapter.stat_method`:
 
-After aggregation, NaN HRUs are filled by **nearest-neighbor in HRU
-space** as a post-processing step before the per-target combination /
-normalization runs. This keeps the aggregation step honest about
-coverage, and pushes the fill choice into a single, auditable place
-where it can be inspected, swapped out (e.g. for a different fill
-algorithm), or disabled per-target.
+- **`"mean"` (default)** for sources without per-pixel masking. NaN
+  source pixels propagate to NaN HRU values — the honest "no source
+  data here" signal for geometric partial coverage and true upstream
+  gaps.
+- **`"masked_mean"`** for sources whose `pre_aggregate_hook`
+  deliberately sets pixels to NaN (fill-value masks, quality gates).
+  The HRU mean is the area-weighted mean of pixels that survived the
+  pre-aggregate gate; the HRU is NaN only when *every* contributing
+  pixel was masked. Currently used by `aggregate/mod16a2.py` (PR #88
+  fill mask) and `aggregate/mod10c1.py` (CI > 70 gate).
 
-Implementation lives in `src/nhf_spatial_targets/normalize/` (or
-should — at the time of writing this is a forward-looking convention,
-not yet implemented). Target builders should call the shared fill
-utility on each source's aggregated DataArray before normalizing or
-combining; this also makes the "before fill" and "after fill" states
-both inspectable in the per-target inspect notebook.
+The choice is mechanical: **if the source has a `pre_aggregate_hook`
+that sets pixels to NaN, set `stat_method="masked_mean"`**. Without it,
+the per-pixel mask poisons every HRU it touches and defeats the point
+of the mask. See `docs/architecture/transformation-pipeline.md` for
+the full rule and `docs/references/lessons-learned.md` § "`mean` vs
+`masked_mean`, and where NN-fill belongs" for the journey that led
+here.
+
+**The aggregated NCs preserve NaN HRUs honestly.** No imputation
+happens at the aggregation stage. NaN at the HRU level is the explicit
+"no useful data" signal under the `stat_method` policy.
+
+### Multi-source combination is NaN-aware
+
+For `multi_source_minmax` targets (runoff, AET), the per-HRU per-time
+bound uses NaN-aware reduction so it's defined whenever ≥1 source is
+finite:
+
+```python
+stacked = xr.concat([source_a, source_b, source_c], dim="source")
+lower = stacked.min(dim="source", skipna=True)   # equivalently np.fmin
+upper = stacked.max(dim="source", skipna=True)   # equivalently np.fmax
+# NaN result only when every source is NaN at that HRU/time.
+```
+
+For `normalized_minmax` targets (recharge, soil moisture), the same
+applies after each source has been normalised 0–1 over the calibration
+window: the bound is defined whenever ≥1 normalised source is finite.
+
+### NN-fill (when applied) lives at the target stage
+
+Earlier iterations of this doc described an NN-fill step on aggregated
+DataArrays in `normalize/methods.py`, called by each target builder
+before combination. **That plan was revised** during the PR #88 work —
+NN-fill is now a target-stage concern:
+
+- Aggregated NCs preserve NaN HRUs as-is.
+- The target builder reads each source, applies linear conversions,
+  combines via NaN-aware reduction.
+- *Optionally*, the target builder NN-fills the resulting per-HRU
+  per-time *bound* (not the aggregated NCs) for HRUs that are still
+  NaN after combination — i.e. HRUs where every source had no data.
+
+This split keeps the aggregated NCs as the canonical "what each
+source covers" record and concentrates imputation policy alongside
+the target's combination and unit-conversion logic, where it's most
+auditable.
 
 ---
 
