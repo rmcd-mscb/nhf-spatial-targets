@@ -1,0 +1,11 @@
+{
+  // Marp slide decks intentionally use constructs that standard markdown linters flag.
+  // Rules disabled here are false positives for .slides.md files.
+  "config": {
+    "MD001": false,  // heading-increment — title slide jumps h1→h3 intentionally
+    "MD013": false,  // line-length — captions and speaker notes exceed 80 chars by design
+    "MD025": false,  // single-h1 — each Marp slide section uses h1 as a divider
+    "MD033": false,  // no-inline-html — <span class="caption">, <div class="callout"> required by Marp
+    "MD060": false   // table-column-style — |---|---| compact separator is valid GFM; Marp renders it correctly
+  }
+}
