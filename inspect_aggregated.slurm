@@ -6,7 +6,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=128G
-#SBATCH --time=04:00:00
+#SBATCH --time=01:00:00
 #SBATCH --output=logs/inspect_%a_%A.out
 #SBATCH --error=logs/inspect_%a_%A.err
 
