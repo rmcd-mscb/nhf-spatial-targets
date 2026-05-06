@@ -17,6 +17,7 @@ keeps ``mm_per_month_to_cfs``); this module is unit-agnostic.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -199,3 +200,49 @@ def multi_source_nanminmax(
     upper = stacked.max(dim="source", skipna=True)
     n_sources = stacked.notnull().sum(dim="source").astype(np.int8)
     return lower, upper, n_sources
+
+
+def compute_hru_area_and_centroids(project: Project) -> "pd.DataFrame":
+    """Compute per-HRU area (m²) and centroid coords from the fabric.
+
+    Always recomputes from geometry (no fabric-column fallback) so the area
+    cannot drift from the geometry actually being processed. Reprojects to
+    ``project.area_crs`` (e.g. EPSG:5070 for CONUS) to compute area and
+    equal-area centroids; reprojects centroids to EPSG:4326 for ancillary
+    lat/lon coords.
+
+    The returned DataFrame is indexed by ``project.id_col`` so callers can
+    align to xarray's HRU dim trivially.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns: ``area_m2``, ``centroid_x``, ``centroid_y`` (in
+        ``area_crs``), ``centroid_lat``, ``centroid_lon`` (EPSG:4326).
+    """
+    import geopandas as gpd
+
+    fabric_path = Path(project.config["fabric"]["path"])
+    if fabric_path.suffix.lower() in (".parquet", ".geoparquet"):
+        gdf = gpd.read_parquet(fabric_path)
+    else:
+        gdf = gpd.read_file(fabric_path)
+    id_col = project.id_col
+    if id_col not in gdf.columns:
+        raise ValueError(
+            f"Column '{id_col}' not found in fabric {fabric_path}. "
+            f"Available: {list(gdf.columns)}"
+        )
+
+    gdf_eq = gdf.to_crs(project.area_crs)
+    centroids_eq = gdf_eq.geometry.centroid
+    centroids_ll = centroids_eq.to_crs("EPSG:4326")
+
+    df = gdf_eq[[id_col]].copy()
+    df["area_m2"] = gdf_eq.geometry.area.astype(float)
+    df["centroid_x"] = centroids_eq.x.astype(float)
+    df["centroid_y"] = centroids_eq.y.astype(float)
+    df["centroid_lon"] = centroids_ll.x.astype(float)
+    df["centroid_lat"] = centroids_ll.y.astype(float)
+    df = df.set_index(id_col)
+    return df

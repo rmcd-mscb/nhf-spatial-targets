@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+import yaml
 
 from nhf_spatial_targets.workspace import load
 from tests.conftest import make_minimal_project, write_year_nc
@@ -200,3 +202,82 @@ def test_multi_source_nanminmax_raises_on_hru_mismatch():
     b = _da_with_time(["2000-01-01"], hrus=(1, 2, 4))
     with pytest.raises(ValueError, match="HRU coords differ"):
         multi_source_nanminmax({"a": a, "b": b})
+
+
+def _write_synthetic_fabric(path: Path, id_col: str = "nhm_id"):
+    """Write a 3-polygon GeoPackage in EPSG:4326."""
+    import geopandas as gpd
+    from shapely.geometry import box
+
+    gdf = gpd.GeoDataFrame(
+        {id_col: [1, 2, 3]},
+        geometry=[
+            box(-105.0, 40.0, -104.9, 40.1),  # ~10x10 km in mid-CONUS
+            box(-104.9, 40.0, -104.8, 40.1),
+            box(-104.8, 40.0, -104.7, 40.1),
+        ],
+        crs="EPSG:4326",
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    gdf.to_file(path, driver="GPKG")
+
+
+def _make_project_with_fabric(tmp_path: Path) -> Path:
+    workdir = tmp_path / "proj"
+    workdir.mkdir()
+    fabric_path = tmp_path / "fabric.gpkg"
+    _write_synthetic_fabric(fabric_path)
+    (workdir / "config.yml").write_text(
+        yaml.safe_dump(
+            {
+                "datastore": str(tmp_path / "store"),
+                "fabric": {"path": str(fabric_path), "id_col": "nhm_id"},
+            }
+        )
+    )
+    (workdir / "fabric.json").write_text(json.dumps({"id_col": "nhm_id"}))
+    return workdir
+
+
+def test_compute_hru_area_and_centroids_returns_expected_columns(tmp_path: Path):
+    from nhf_spatial_targets.targets._common import compute_hru_area_and_centroids
+
+    workdir = _make_project_with_fabric(tmp_path)
+    project = load(workdir)
+    df = compute_hru_area_and_centroids(project)
+    assert df.index.name == "nhm_id"
+    assert set(df.columns) == {
+        "area_m2",
+        "centroid_x",
+        "centroid_y",
+        "centroid_lat",
+        "centroid_lon",
+    }
+    assert len(df) == 3
+
+
+def test_compute_hru_area_and_centroids_areas_within_1pct(tmp_path: Path):
+    """Each polygon is ~0.1 deg square at lat 40 N ≈ ~85 km² (varies by lat)."""
+    from nhf_spatial_targets.targets._common import compute_hru_area_and_centroids
+
+    workdir = _make_project_with_fabric(tmp_path)
+    project = load(workdir)
+    df = compute_hru_area_and_centroids(project)
+    # All three polygons are the same size at this latitude.
+    areas = df["area_m2"].values
+    assert (areas > 50e6).all() and (areas < 150e6).all()
+    # Adjacent polygons should agree to within 1% in area.
+    assert abs(areas[0] - areas[1]) / areas[0] < 0.01
+
+
+def test_compute_hru_area_and_centroids_lat_lon_in_range(tmp_path: Path):
+    from nhf_spatial_targets.targets._common import compute_hru_area_and_centroids
+
+    workdir = _make_project_with_fabric(tmp_path)
+    project = load(workdir)
+    df = compute_hru_area_and_centroids(project)
+    assert df["centroid_lon"].between(-180, 180).all()
+    assert df["centroid_lat"].between(-90, 90).all()
+    # Should be near 40N, -105E given the polygons:
+    assert df["centroid_lat"].between(39, 41).all()
+    assert df["centroid_lon"].between(-106, -104).all()
