@@ -384,6 +384,98 @@ def test_reindex_to_month_start_rejects_non_ms_freq():
         reindex_to_month_start(da, bad)
 
 
+def _write_year_nc_unsorted(
+    path: Path,
+    year: int,
+    var: str,
+    hrus: list[int],
+    id_col: str = "nhm_id",
+):
+    """Write a per-year NC with HRUs in caller-specified (possibly unsorted) order."""
+    times = pd.date_range(f"{year}-01-01", f"{year}-12-01", freq="MS")
+    data = np.arange(len(times) * len(hrus), dtype=np.float32).reshape(
+        len(times), len(hrus)
+    )
+    ds = xr.Dataset(
+        {var: (("time", id_col), data)},
+        coords={"time": times, id_col: hrus},
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ds.to_netcdf(path)
+
+
+def test_read_aggregated_source_sorts_hru_ascending(tmp_path: Path):
+    """Source NCs written in non-monotonic HRU order come back canonically sorted.
+
+    Mirrors the GFv2 era5_land case (#94) where gdptools wrote rows in a VPU-
+    grouped (non-monotonic) order; downstream alignment against a sorted
+    fabric requires the reader to canonicalise the order.
+    """
+    from nhf_spatial_targets.targets._common import read_aggregated_source
+
+    workdir = make_minimal_project(tmp_path)
+    src = "era5_land"
+    var = "ro"
+    src_dir = workdir / "data" / "aggregated" / src
+    _write_year_nc_unsorted(src_dir / f"{src}_2000_agg.nc", 2000, var, hrus=[3, 1, 2])
+
+    project = load(workdir)
+    da = read_aggregated_source(
+        project, src, var, period=("2000-01-01", "2000-12-31"), chunks={"time": 12}
+    )
+    np.testing.assert_array_equal(da["nhm_id"].values, [1, 2, 3])
+    # Values must follow the coord — i.e. rows are reordered, not just relabelled.
+    # Original month-0 row was [0, 1, 2] (HRUs [3, 1, 2]); after sort it should
+    # be [1, 2, 0] (values for HRUs [1, 2, 3]).
+    np.testing.assert_array_equal(da.values[0], [1.0, 2.0, 0.0])
+
+
+def test_compute_hru_area_and_centroids_returns_sorted_index(tmp_path: Path):
+    """A fabric with rows in non-monotonic id_col order returns a sorted DataFrame.
+
+    Mirrors gfv2_nhru_merged.gpkg (#94), which is a permutation of 1..N with
+    a handful of out-of-order rows in the middle.
+    """
+    import geopandas as gpd
+    from shapely.geometry import box
+
+    from nhf_spatial_targets.targets._common import compute_hru_area_and_centroids
+
+    fabric_path = tmp_path / "fabric.gpkg"
+    gdf = gpd.GeoDataFrame(
+        {"nhm_id": [3, 1, 2]},  # deliberately unsorted
+        geometry=[
+            box(-104.8, 40.0, -104.7, 40.1),
+            box(-105.0, 40.0, -104.9, 40.1),
+            box(-104.9, 40.0, -104.8, 40.1),
+        ],
+        crs="EPSG:4326",
+    )
+    fabric_path.parent.mkdir(parents=True, exist_ok=True)
+    gdf.to_file(fabric_path, driver="GPKG")
+
+    workdir = tmp_path / "proj"
+    workdir.mkdir()
+    (workdir / "config.yml").write_text(
+        yaml.safe_dump(
+            {
+                "datastore": str(tmp_path / "store"),
+                "fabric": {"path": str(fabric_path), "id_col": "nhm_id"},
+            }
+        )
+    )
+    (workdir / "fabric.json").write_text(json.dumps({"id_col": "nhm_id"}))
+
+    project = load(workdir)
+    df = compute_hru_area_and_centroids(project)
+    np.testing.assert_array_equal(df.index.values, [1, 2, 3])
+    # The centroid_lon for HRU 1 should match the polygon at lon ~-104.95
+    # (the second row of the input GeoDataFrame).
+    assert -105.0 < df.loc[1, "centroid_lon"] < -104.9
+    assert -104.9 < df.loc[2, "centroid_lon"] < -104.8
+    assert -104.8 < df.loc[3, "centroid_lon"] < -104.7
+
+
 def test_compute_hru_area_and_centroids_raises_on_duplicate_id_col(tmp_path: Path):
     """A fabric with duplicate HRU IDs must raise, not silently produce a
     non-unique-index DataFrame."""
