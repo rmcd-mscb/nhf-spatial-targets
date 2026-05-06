@@ -40,13 +40,25 @@ def _write_config(
     workdir: Path,
     overrides: dict | None = None,
 ) -> Path:
-    """Write a minimal config.yml, merging any *overrides* on top."""
+    """Write a minimal config.yml, merging any *overrides* on top.
+
+    Includes a ``period`` for each enabled target so tests focused on other
+    failure modes (fabric, credentials, datastore) are not blocked by the
+    required-period check added in T3.
+    """
     cfg: dict = {
         "fabric": {
             "path": "/nonexistent/fabric.gpkg",
             "id_col": "nhm_id",
         },
         "datastore": str(workdir / "datastore"),
+        "targets": {
+            "runoff": {"period": "2000-01-01/2010-12-31"},
+            "aet": {"period": "2000-01-01/2010-12-31"},
+            "recharge": {"period": "2000-01-01/2010-12-31"},
+            "soil_moisture": {"period": "2000-01-01/2010-12-31"},
+            "snow_covered_area": {"period": "2000-01-01/2010-12-31"},
+        },
     }
     if overrides:
         for key, val in overrides.items():
