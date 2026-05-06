@@ -56,11 +56,13 @@ def test_report_unknown_keys_warns(tmp_path: Path, capsys):
 
 
 def test_write_effective_config_writes_merged_yaml(tmp_path: Path):
+    from nhf_spatial_targets.defaults import apply_defaults
     from nhf_spatial_targets.validate import _write_effective_config
 
     workdir = _make_minimal_project(tmp_path)
     user_cfg = yaml.safe_load((workdir / "config.yml").read_text())
-    _write_effective_config(workdir, user_cfg)
+    merged = apply_defaults(user_cfg)
+    _write_effective_config(workdir, merged)
 
     out = workdir / "config.effective.yml"
     assert out.exists()
@@ -77,11 +79,12 @@ def test_write_effective_config_writes_merged_yaml(tmp_path: Path):
 
 @pytest.mark.skipif(platform.system() == "Windows", reason="POSIX file modes only")
 def test_write_effective_config_is_read_only(tmp_path: Path):
+    from nhf_spatial_targets.defaults import apply_defaults
     from nhf_spatial_targets.validate import _write_effective_config
 
     workdir = _make_minimal_project(tmp_path)
     user_cfg = yaml.safe_load((workdir / "config.yml").read_text())
-    _write_effective_config(workdir, user_cfg)
+    _write_effective_config(workdir, apply_defaults(user_cfg))
 
     mode = (workdir / "config.effective.yml").stat().st_mode & 0o777
     assert mode == 0o444
@@ -89,15 +92,16 @@ def test_write_effective_config_is_read_only(tmp_path: Path):
 
 def test_write_effective_config_overwrites_existing(tmp_path: Path):
     """Read-only mode on the existing file must not block re-write."""
+    from nhf_spatial_targets.defaults import apply_defaults
     from nhf_spatial_targets.validate import _write_effective_config
 
     workdir = _make_minimal_project(tmp_path)
     user_cfg = yaml.safe_load((workdir / "config.yml").read_text())
-    _write_effective_config(workdir, user_cfg)
+    _write_effective_config(workdir, apply_defaults(user_cfg))
 
     # Mutate the user config and write again — must succeed.
     user_cfg["fabric"]["area_crs"] = "EPSG:3338"
-    _write_effective_config(workdir, user_cfg)
+    _write_effective_config(workdir, apply_defaults(user_cfg))
     body = yaml.safe_load((workdir / "config.effective.yml").read_text())
     assert body["fabric"]["area_crs"] == "EPSG:3338"
 
