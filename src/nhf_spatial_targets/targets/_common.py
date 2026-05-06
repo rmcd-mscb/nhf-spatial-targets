@@ -246,3 +246,78 @@ def compute_hru_area_and_centroids(project: Project) -> "pd.DataFrame":
     df["centroid_lat"] = centroids_ll.y.astype(float)
     df = df.set_index(id_col)
     return df
+
+
+def write_target_nc(
+    ds: xr.Dataset,
+    output_path: Path,
+    title: str,
+    extra_global_attrs: dict | None = None,
+) -> None:
+    """Write a target Dataset to NetCDF atomically with CF-1.6 metadata.
+
+    The Dataset is expected to already carry the data variables, ancillary
+    coordinates (``time_bnds``, ``centroid_lat``, ``centroid_lon``), and
+    per-variable attrs (``units``, ``long_name``, ``cell_methods``, etc.).
+    This helper sets the global ``Conventions`` / ``title`` / ``history`` /
+    ``software_version`` attrs, applies float32+zlib encoding for the bound
+    variables and int8+zlib encoding for the diagnostic variables, and
+    writes via tempfile + rename so a partial NetCDF never lands at the
+    final path.
+    """
+    from datetime import datetime, timezone
+
+    from nhf_spatial_targets import __version__
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    ds = ds.copy()
+    ds.attrs.setdefault("Conventions", "CF-1.6")
+    ds.attrs["title"] = title
+    ds.attrs["history"] = (
+        f"{datetime.now(timezone.utc).isoformat()} created by "
+        f"nhf_spatial_targets v{__version__}"
+    )
+    ds.attrs.setdefault("institution", "USGS")
+    ds.attrs.setdefault("software_version", __version__)
+    if extra_global_attrs:
+        ds.attrs.update(extra_global_attrs)
+
+    encoding: dict = {}
+    for v in ("lower_bound", "upper_bound"):
+        if v in ds.data_vars:
+            encoding[v] = {
+                "dtype": "float32",
+                "zlib": True,
+                "complevel": 4,
+                "_FillValue": np.float32("nan"),
+            }
+    for v in ("n_sources", "nn_filled"):
+        if v in ds.data_vars:
+            encoding[v] = {
+                "dtype": "int8",
+                "zlib": True,
+                "complevel": 4,
+                "_FillValue": None,
+            }
+    encoding["time"] = {
+        "dtype": "float64",
+        "units": "days since 1970-01-01 00:00:00",
+        "calendar": "proleptic_gregorian",
+    }
+    if "time_bnds" in ds.variables:
+        encoding["time_bnds"] = {
+            "dtype": "float64",
+            "units": "days since 1970-01-01 00:00:00",
+            "calendar": "proleptic_gregorian",
+        }
+
+    tmp = output_path.with_suffix(output_path.suffix + ".tmp")
+    try:
+        ds.to_netcdf(tmp, format="NETCDF4", encoding=encoding)
+        tmp.rename(output_path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    logger.info("Wrote %s (%.1f MB)", output_path, output_path.stat().st_size / 1e6)

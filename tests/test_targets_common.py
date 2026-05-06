@@ -281,3 +281,72 @@ def test_compute_hru_area_and_centroids_lat_lon_in_range(tmp_path: Path):
     # Should be near 40N, -105E given the polygons:
     assert df["centroid_lat"].between(39, 41).all()
     assert df["centroid_lon"].between(-106, -104).all()
+
+
+def _toy_target_dataset(
+    id_col: str = "nhm_id",
+) -> xr.Dataset:
+    """Toy 3-month / 3-HRU dataset with the bound vars and an n_sources."""
+    times = pd.date_range("2000-01-01", "2000-03-01", freq="MS")
+    bnds = np.stack([times.values, (times + pd.offsets.MonthBegin(1)).values], axis=1)
+    hrus = np.array([1, 2, 3])
+    lower = np.array(
+        [[1.0, 2.0, np.nan], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float32
+    )
+    upper = lower + 1.0
+    n = np.array([[2, 2, 0], [2, 2, 2], [2, 2, 2]], dtype=np.int8)
+    ds = xr.Dataset(
+        {
+            "lower_bound": (("time", id_col), lower),
+            "upper_bound": (("time", id_col), upper),
+            "n_sources": (("time", id_col), n),
+        },
+        coords={
+            "time": times,
+            id_col: hrus,
+            "time_bnds": (("time", "nv"), bnds),
+            "centroid_lat": ((id_col,), np.array([40.0, 40.1, 40.2])),
+            "centroid_lon": ((id_col,), np.array([-105.0, -104.9, -104.8])),
+        },
+    )
+    ds["time"].attrs["bounds"] = "time_bnds"
+    return ds
+
+
+def test_write_target_nc_round_trips_via_xarray(tmp_path: Path):
+    from nhf_spatial_targets.targets._common import write_target_nc
+
+    ds = _toy_target_dataset()
+    # Set units on lower_bound so the round-trip can verify it survives.
+    ds["lower_bound"].attrs["units"] = "cfs"
+    out = tmp_path / "runoff_targets.nc"
+    write_target_nc(ds, out, title="Test runoff target")
+    assert out.exists()
+    with xr.open_dataset(out, decode_cf=True) as got:
+        assert got.attrs["Conventions"] == "CF-1.6"
+        assert got.attrs["title"] == "Test runoff target"
+        assert "lower_bound" in got.data_vars
+        assert "upper_bound" in got.data_vars
+        assert "n_sources" in got.data_vars
+        assert got["lower_bound"].dtype == np.float32
+        assert got["n_sources"].dtype == np.int8
+        assert got["time"].attrs["bounds"] == "time_bnds"
+        assert "time_bnds" in got.variables
+        assert got["lower_bound"].attrs["units"] == "cfs"
+        # NaN preserved (decode_cf maps _FillValue back to NaN):
+        assert np.isnan(got["lower_bound"].values[0, 2])
+
+
+def test_write_target_nc_atomic_no_partial_on_failure(tmp_path: Path, monkeypatch):
+    """If to_netcdf raises, the final path must not exist (tempfile cleanup)."""
+    from nhf_spatial_targets.targets._common import write_target_nc
+
+    out = tmp_path / "runoff_targets.nc"
+
+    def _boom(self, *a, **kw):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(xr.Dataset, "to_netcdf", _boom)
+    with pytest.raises(RuntimeError, match="disk full"):
+        write_target_nc(_toy_target_dataset(), out, title="x")
+    assert not out.exists()
