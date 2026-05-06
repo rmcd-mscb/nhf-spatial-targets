@@ -44,7 +44,7 @@ def workdir(tmp_path: Path) -> Path:
     }
     (rd / "fabric.json").write_text(json.dumps(fabric))
     config = {
-        "fabric": {"path": "", "id_col": "nhm_id"},
+        "fabric": {"path": "/fake/fabric.gpkg", "id_col": "nhm_id"},
         "datastore": str(rd / "data" / "raw"),
         "dir_mode": "2775",
     }
@@ -140,7 +140,7 @@ def test_malformed_fabric_raises(mock_login, tmp_path):
     import yaml as _yaml
 
     _cfg = {
-        "fabric": {"path": "", "id_col": "nhm_id"},
+        "fabric": {"path": "/fake/fabric.gpkg", "id_col": "nhm_id"},
         "datastore": str(workdir),
         "dir_mode": "2775",
     }
@@ -493,7 +493,7 @@ def test_fetch_nldas_mosaic_real_download(tmp_path):
     import yaml as _yaml
 
     _cfg = {
-        "fabric": {"path": "", "id_col": "nhm_id"},
+        "fabric": {"path": "/fake/fabric.gpkg", "id_col": "nhm_id"},
         "datastore": str(workdir / "data" / "raw"),
         "dir_mode": "2775",
     }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import platform
@@ -68,12 +69,14 @@ class Project:
     def target(self, name: str) -> dict:
         """Return the merged config sub-dict for a calibration target.
 
-        Raises ``KeyError`` if ``name`` is not a recognized target.
+        Returns a deep copy so callers cannot mutate the underlying
+        ``Project.config`` by editing the returned dict. Raises
+        ``KeyError`` if ``name`` is not a recognized target.
         """
         targets = self.config.get("targets", {})
         if name not in targets:
             raise KeyError(f"Unknown target '{name}'. Known: {sorted(targets.keys())}")
-        return targets[name]
+        return copy.deepcopy(targets[name])
 
 
 def load(workdir: Path) -> Project:
@@ -109,6 +112,14 @@ def load(workdir: Path) -> Project:
         raise ValueError(
             f"'datastore' key missing from config.yml in {workdir}. "
             f"This field is required. Edit config.yml and add the datastore path."
+        )
+
+    fabric_cfg = config.get("fabric", {})
+    if not fabric_cfg.get("path"):
+        raise ValueError(
+            f"'fabric.path' missing from config.yml in {workdir}. "
+            f"This field is required. Edit config.yml and add the absolute "
+            f"path to your HRU fabric (GeoPackage / shapefile / parquet)."
         )
 
     fabric_path = workdir / "fabric.json"

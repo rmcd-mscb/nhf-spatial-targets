@@ -80,3 +80,32 @@ def test_load_unknown_target_raises(tmp_path: Path):
     project = load(workdir)
     with pytest.raises(KeyError, match="not_a_target"):
         project.target("not_a_target")
+
+
+def test_target_returns_independent_copy(tmp_path: Path):
+    """Mutating the returned dict must not affect subsequent target() calls."""
+    workdir = _write_project(
+        tmp_path,
+        config={
+            "datastore": str(tmp_path / "store"),
+            "fabric": {"path": "/p", "id_col": "nhm_id"},
+        },
+    )
+    project = load(workdir)
+    first = project.target("runoff")
+    first["sources"].append("INJECTED")
+    second = project.target("runoff")
+    assert "INJECTED" not in second["sources"]
+
+
+def test_load_raises_on_missing_fabric_path(tmp_path: Path):
+    """fabric.path is required (the docstring claims so; enforce it)."""
+    workdir = _write_project(
+        tmp_path,
+        config={
+            "datastore": str(tmp_path / "store"),
+            "fabric": {"id_col": "nhm_id"},  # no path
+        },
+    )
+    with pytest.raises(ValueError, match="fabric.path"):
+        load(workdir)

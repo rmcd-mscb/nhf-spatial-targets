@@ -78,7 +78,7 @@ def project(tmp_path):
     (tmp_path / "config.yml").write_text(
         yaml.dump(
             {
-                "fabric": {"path": "", "id_col": "hru_id"},
+                "fabric": {"path": "/fake/fabric.gpkg", "id_col": "hru_id"},
                 "datastore": str(datastore),
             }
         )
