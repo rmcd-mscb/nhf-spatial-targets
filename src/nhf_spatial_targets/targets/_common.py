@@ -102,6 +102,12 @@ def read_aggregated_source(
             f"Variable '{var}' not found in aggregated NCs for source "
             f"'{source_key}'. Available variables: {available}."
         )
+    # Canonical row order: HRU dim ascending by id_col. The aggregator (gdptools)
+    # writes rows in whatever order its upstream geometry table happens to use
+    # (often VPU-grouped); sorting here gives downstream code a stable invariant
+    # so positional checks against the fabric do not break on order alone.
+    # Tracked for emission-time enforcement in #93.
+    ds = ds.sortby(project.id_col)
     sliced = ds[var].sel(time=slice(period[0], period[1]))
     if sliced.sizes.get("time", 0) == 0:
         # Years parsed from sorted filenames -- avoids triggering dask compute
@@ -262,7 +268,7 @@ def compute_hru_area_and_centroids(project: Project) -> "pd.DataFrame":
     df["centroid_y"] = centroids_eq.y.astype(float)
     df["centroid_lon"] = centroids_ll.x.astype(float)
     df["centroid_lat"] = centroids_ll.y.astype(float)
-    df = df.set_index(id_col)
+    df = df.set_index(id_col).sort_index()
     return df
 
 

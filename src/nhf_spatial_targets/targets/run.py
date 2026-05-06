@@ -190,14 +190,32 @@ def build(project: Project) -> None:
         )
         # Validate that the source's HRU IDs match the fabric before any
         # arithmetic that would silently broadcast/intersect mismatched coords.
+        # Both sides are canonically sorted ascending by id_col upstream
+        # (compute_hru_area_and_centroids and read_aggregated_source); a
+        # remaining mismatch is therefore a true set difference, not an
+        # ordering artifact. Distinguish the two cases in the error so a
+        # regression in the canonical-sort invariant is diagnosable from the
+        # log alone.
         src_hru_ids = da_native[id_col].values
         if not np.array_equal(src_hru_ids, fabric_hru_ids):
+            same_set = len(src_hru_ids) == len(fabric_hru_ids) and np.array_equal(
+                np.sort(src_hru_ids), np.sort(fabric_hru_ids)
+            )
+            if same_set:
+                raise ValueError(
+                    f"HRU coords for source '{src}' have the same set as the "
+                    f"fabric ({len(fabric_hru_ids)} HRUs) but a different "
+                    f"order. Both sides are expected to be sorted ascending by "
+                    f"id_col='{id_col}' — this indicates a regression in the "
+                    f"canonical-sort invariant in targets/_common.py."
+                )
             raise ValueError(
-                f"HRU coords differ between fabric and source '{src}'. "
-                f"Fabric has {len(fabric_hru_ids)} HRUs "
-                f"({fabric_hru_ids[0]}..{fabric_hru_ids[-1]}); source has "
-                f"{len(src_hru_ids)}. Re-aggregate '{src}' against the "
-                f"current fabric."
+                f"HRU coords differ between fabric and source '{src}' as "
+                f"sets. Fabric has {len(fabric_hru_ids)} HRUs "
+                f"(first={fabric_hru_ids[0]}, last={fabric_hru_ids[-1]}); "
+                f"source has {len(src_hru_ids)} "
+                f"(first={src_hru_ids[0]}, last={src_hru_ids[-1]}). "
+                f"Re-aggregate '{src}' against the current fabric."
             )
         da_mm = _TO_MM[src](da_native)
         da_cfs = mm_per_month_to_cfs(da_mm, hru_area_da)

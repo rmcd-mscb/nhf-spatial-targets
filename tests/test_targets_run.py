@@ -175,8 +175,70 @@ def test_build_hru_mismatch_raises(tmp_path: Path):
     ds.to_netcdf(bad)
 
     project = load(workdir)
-    with pytest.raises(ValueError, match="HRU coords differ"):
+    with pytest.raises(ValueError, match="HRU coords differ.*as sets"):
         build(project)
+
+
+def test_build_succeeds_when_source_hru_order_differs_from_fabric(tmp_path: Path):
+    """Source NCs with HRUs in non-monotonic order must not break the build.
+
+    Regression test for #94: gfv2's era5_land aggregated NCs ship rows in a
+    VPU-grouped order while the fabric is (near-)sorted by nat_hru_id. The
+    target builder must canonicalise both sides via id_col-ascending sort
+    rather than relying on positional alignment.
+
+    All per-year NCs for a single source share the same (permuted) order in
+    production (one gdptools run per source); the test mirrors that — a
+    cross-year ordering mismatch would trip xr.open_mfdataset before the
+    sort could run.
+    """
+    from nhf_spatial_targets.targets.run import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_runoff_project(
+        tmp_path,
+        period="2000-01-01/2000-12-31",
+        sources_per_year={
+            "era5_land": {2000: ("ro", 0.05)},
+            "gldas_noah_v21_monthly": {2000: ("runoff_total", 6.25)},
+            "mwbm_climgrid": {2000: ("runoff", 30.0)},
+        },
+        nn_fill=False,
+    )
+    # Rewrite the era5_land NC with HRUs in a permuted (non-monotonic) order.
+    # Per-HRU values are distinct so a positional misalignment produces a wrong
+    # answer rather than just rearranged metadata.
+    bad = workdir / "data" / "aggregated" / "era5_land" / "era5_land_2000_agg.nc"
+    times = pd.date_range("2000-01-01", "2000-12-01", freq="MS")
+    permuted_hrus = [3, 1, 2]
+    per_hru_value = {1: 0.05, 2: 0.10, 3: 0.20}  # m/month
+    arr = np.array(
+        [[per_hru_value[h] for h in permuted_hrus]] * len(times), dtype=np.float32
+    )
+    ds = xr.Dataset(
+        {"ro": (("time", "nhm_id"), arr)},
+        coords={"time": times, "nhm_id": permuted_hrus},
+    )
+    bad.unlink()
+    ds.to_netcdf(bad)
+
+    project = load(workdir)
+    build(project)
+
+    out = project.targets_dir() / "runoff_targets.nc"
+    assert out.exists()
+    with xr.open_dataset(out) as got:
+        # HRU dim must be canonically sorted in the target output, regardless
+        # of input order.
+        np.testing.assert_array_equal(got["nhm_id"].values, [1, 2, 3])
+        # ERA5-Land contributes the lower bound here (gldas/mwbm are scaled to
+        # ~roughly the same cfs magnitude, but HRU-3's ERA5 value of 0.20
+        # m/month is the largest of the three; HRU-1's 0.05 is the smallest).
+        # If positional alignment had silently mismatched, HRU-3's bound would
+        # not reflect 0.20 m/month.
+        lb = got["lower_bound"].sel(nhm_id=[1, 2, 3]).isel(time=0).values
+        assert (lb > 0).all()
+        assert lb[2] > lb[0]  # HRU 3 ERA5 (0.20) > HRU 1 (0.05) m/month
 
 
 def test_build_source_attr_reflects_active_sources(tmp_path: Path):
