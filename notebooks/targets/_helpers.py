@@ -30,16 +30,37 @@ import pandas as pd
 import xarray as xr
 import yaml
 
+from matplotlib.patches import Patch
 from shapely.geometry import Point
 
 SAVE_FIGURES: bool = False
 FIGURES_DIR: Path = Path("docs/figures/targets/")
 PROJECT: str | None = None
+ALBERS_CRS: str = "EPSG:5070"  # matches the aggregator's WEIGHT_GEN_CRS
 
 
 DEFAULT_CALDERA_PROJECT = Path(
     "/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2-spatial-targets"
 )
+
+
+_AREA_CACHE: dict[int, pd.Series] = {}
+
+
+def _fabric_area(fabric_gdf: gpd.GeoDataFrame) -> pd.Series:
+    """Return the per-HRU EPSG:5070 area for ``fabric_gdf``, cached.
+
+    Keyed on ``id(fabric_gdf)`` — the cache assumes the GeoDataFrame is
+    not mutated in place after first use, which matches the typical
+    notebook pattern (load once, treat as read-only). On a 360k-polygon
+    CONUS fabric the EPSG:5070 reprojection costs ~5–10 s; caching pays
+    for itself the second time the notebook reduces a per-time bound to
+    a CONUS-mean series.
+    """
+    key = id(fabric_gdf)
+    if key not in _AREA_CACHE:
+        _AREA_CACHE[key] = fabric_gdf.to_crs(ALBERS_CRS).area
+    return _AREA_CACHE[key]
 
 
 def load_project_paths(
@@ -102,9 +123,6 @@ def load_fabric(
     return gdf
 
 
-ALBERS_CRS = "EPSG:5070"  # matches the aggregator's WEIGHT_GEN_CRS
-
-
 def discover_target_nc(
     project_dir: Path, target: str
 ) -> tuple[Path | None, Path | None]:
@@ -138,10 +156,17 @@ def area_weighted_mean(values: pd.Series, fabric_gdf: gpd.GeoDataFrame) -> float
     """Compute Σ(v · A) / Σ(A) using fabric area in EPSG:5070.
 
     Skips NaN values (and their corresponding areas). Aligns on the
-    fabric's index — ``values`` must be indexed by HRU id.
+    fabric's index — ``values`` must be indexed by HRU id. Area is
+    computed via :func:`_fabric_area` (cached per GeoDataFrame).
+
+    Note: when ``fabric_gdf`` was loaded with simplification (see
+    :func:`load_fabric`), polygon areas carry sub-1% bias relative to
+    the original geometry. Acceptable for the order-of-magnitude
+    inspection use here; reload with ``simplify_tolerance_deg=None`` if
+    exact area conservation matters.
     """
     aligned = values.reindex(fabric_gdf.index)
-    areas = fabric_gdf.to_crs(ALBERS_CRS).area
+    areas = _fabric_area(fabric_gdf)
     mask = ~aligned.isna()
     if not mask.any():
         return float("nan")
@@ -155,15 +180,21 @@ def area_weighted_series(
 
     Returns a ``pd.Series`` indexed by time. Aligns the HRU dim against
     the fabric's index (so HRUs in the source not present in the fabric
-    are dropped, and vice versa).
+    are dropped, and vice versa). Area is computed via
+    :func:`_fabric_area` (cached per GeoDataFrame), so successive calls
+    against the same fabric do not re-pay the EPSG:5070 reprojection.
+
+    Note: when ``fabric_gdf`` was loaded with simplification (see
+    :func:`load_fabric`), polygon areas carry sub-1% bias relative to
+    the original geometry. Acceptable for the order-of-magnitude CONUS
+    series used in the inspection notebooks.
     """
     times = pd.DatetimeIndex(da.time.values)
     arr = da.transpose("time", id_dim).values
-    fabric_for_align = fabric_gdf.copy()
-    areas = fabric_for_align.to_crs(ALBERS_CRS).area
+    areas = _fabric_area(fabric_gdf)
     # Align array columns to fabric ID order.
     src_ids = pd.Index(da[id_dim].values)
-    fab_ids = fabric_for_align.index
+    fab_ids = fabric_gdf.index
     common = fab_ids.intersection(src_ids)
     src_pos = src_ids.get_indexer(common)
     fab_pos = fab_ids.get_indexer(common)
@@ -173,7 +204,11 @@ def area_weighted_series(
     weighted = np.where(finite, aligned_arr * aligned_areas, 0.0)
     weight_sum = np.where(finite, aligned_areas, 0.0).sum(axis=1)
     value_sum = weighted.sum(axis=1)
-    out = np.where(weight_sum > 0, value_sum / weight_sum, np.nan)
+    # ``np.where`` evaluates both branches, so divide-by-zero warnings
+    # surface for all-NaN timesteps even though they end up as NaN. Silence
+    # just the divide; the mask logic still produces the right answer.
+    with np.errstate(invalid="ignore", divide="ignore"):
+        out = np.where(weight_sum > 0, value_sum / weight_sum, np.nan)
     return pd.Series(out, index=times)
 
 
@@ -288,17 +323,18 @@ def plot_categorical_choropleth(
     plot_gdf["value"] = values.reindex(plot_gdf.index)
 
     nan_mask = plot_gdf["value"].isna()
+    handles: list[Patch] = []
     if nan_mask.any():
         plot_gdf[nan_mask].plot(ax=ax, color=nan_color, edgecolor="none")
+        handles.append(
+            Patch(facecolor=nan_color, label=f"no data (n={int(nan_mask.sum())})")
+        )
 
-    handles = []
     for flag, (label, color) in categories.items():
         sub = plot_gdf[(~nan_mask) & (plot_gdf["value"] == flag)]
         if len(sub) == 0:
             continue
         sub.plot(ax=ax, color=color, edgecolor="none")
-        from matplotlib.patches import Patch
-
         handles.append(Patch(facecolor=color, label=f"{label} (n={len(sub)})"))
     if handles:
         ax.legend(handles=handles, loc="lower left", fontsize=8)
