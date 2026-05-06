@@ -1,34 +1,64 @@
-"""Build runoff calibration targets from ERA5-Land + GLDAS-2.1 NOAH.
+"""Build runoff calibration targets from ERA5-Land + GLDAS-2.1 NOAH + MWBM.
 
-Two reanalysis sources are used to produce per-HRU per-month bounds:
-  - ERA5-Land 'ro' (m water equivalent / month, ECMWF)
-  - GLDAS-2.1 NOAH 'runoff_total' = Qs_acc + Qsb_acc (kg m-2, monthly mean
-    of 3-hourly accumulations, NASA — multiplied by 8 × days_in_month to
-    recover mm/month)
+Three monthly sources contribute to per-HRU per-month bounds in cfs:
 
-Unit chain: source native units → mm/month → m³/day → cfs, using HRU area
-and days-in-month.  Per-HRU per-month:
-  lower_bound = min(era5_cfs, gldas_cfs)
-  upper_bound = max(era5_cfs, gldas_cfs)
+  - ERA5-Land ``ro``               (m water-equivalent / month)
+  - GLDAS-2.1 NOAH ``runoff_total`` (kg/m², mean of 3-hourly accumulations;
+                                    multiply by 8 × days_in_month for mm/month)
+  - MWBM ClimGrid ``runoff``       (mm/month, native)
+
+Per-source unit shims convert each to mm/month, ``mm_per_month_to_cfs`` then
+converts to cfs using the per-HRU equal-area area and days-in-month. Sources
+are stacked on a ``source`` dim and reduced with NaN-aware min/max so a bound
+is defined whenever >=1 source is finite at that (HRU, time). An int8
+``n_sources`` diagnostic is also written.
+
+If ``runoff.nn_fill`` is True (default), a second file
+``<output>_nn_filled.nc`` is written with bound NaNs filled by the nearest
+finite HRU's value at the same time step (cKDTree donor walk in
+``project.area_crs``).
 """
 
 from __future__ import annotations
 
 import logging
-from pathlib import Path
+from typing import Callable
 
+import numpy as np
 import pandas as pd
 import xarray as xr
 
+from nhf_spatial_targets.normalize.methods import nn_fill_bounds
+from nhf_spatial_targets.targets._common import (
+    compute_hru_area_and_centroids,
+    multi_source_nanminmax,
+    read_aggregated_source,
+    reindex_to_month_start,
+    write_target_nc,
+)
+from nhf_spatial_targets.workspace import Project
+
 logger = logging.getLogger(__name__)
 
+
 # 1 m³/day = (1/86400) m³/s = (35.3147/86400) ft³/s
-# i.e. multiply m³/day by (35.3147 / 86400) to get cfs
 _M3_PER_DAY_TO_CFS = 35.3146667 / 86400.0
+
+# Per-source variable name in the aggregated NC.
+_SOURCE_VAR: dict[str, str] = {
+    "era5_land": "ro",
+    "gldas_noah_v21_monthly": "runoff_total",
+    "mwbm_climgrid": "runoff",
+}
+
+
+# ---------------------------------------------------------------------------
+# Per-source unit shims (mm/month is the common intermediate)
+# ---------------------------------------------------------------------------
 
 
 def era5_to_mm_per_month(da: xr.DataArray) -> xr.DataArray:
-    """ERA5-Land runoff (m water-eq / month) → mm/month."""
+    """ERA5-Land runoff (m water-eq / month) -> mm/month."""
     out = da * 1000.0
     out.attrs = dict(da.attrs)
     out.attrs["units"] = "mm"
@@ -36,16 +66,12 @@ def era5_to_mm_per_month(da: xr.DataArray) -> xr.DataArray:
 
 
 def gldas_to_mm_per_month(da: xr.DataArray) -> xr.DataArray:
-    """GLDAS Qs_acc + Qsb_acc → mm/month.
+    """GLDAS Qs_acc + Qsb_acc -> mm/month.
 
-    GLDAS-2.1 monthly products store ``_acc`` variables (including ``Qs_acc``
-    and ``Qsb_acc``) as the *mean* of 3-hourly accumulations across the
-    month, NOT as monthly sums. Per NASA GES DISC's GLDAS-2.1 README, the
-    monthly total is recovered by multiplying by ``8 × days_in_month``
-    (8 three-hour intervals per day).
-
-    1 kg m-2 of water ≡ 1 mm depth, so after the temporal scaling the units
-    are mm/month.
+    GLDAS-2.1 ``_acc`` monthly values are the *mean* of 3-hourly
+    accumulations (NOT a monthly sum). Per the NASA GES DISC GLDAS-2.1
+    README, the monthly total is recovered via x 8 x days_in_month.
+    1 kg/m^2 = 1 mm depth.
     """
     days = da["time"].dt.days_in_month
     out = da * 8.0 * days
@@ -54,14 +80,23 @@ def gldas_to_mm_per_month(da: xr.DataArray) -> xr.DataArray:
     return out
 
 
-def mm_per_month_to_cfs(
-    da: xr.DataArray, hru_area_m2: float | xr.DataArray
-) -> xr.DataArray:
-    """Convert mm/month → cfs given HRU area and the month length.
+def mwbm_to_mm_per_month(da: xr.DataArray) -> xr.DataArray:
+    """MWBM ClimGrid runoff is already mm/month -- pass through."""
+    out = da.copy()
+    out.attrs = dict(da.attrs)
+    out.attrs["units"] = "mm"
+    return out
 
-    mm/month × 1e-3 m/mm × area_m2 / days_in_month → m³/day → cfs.
-    Days-in-month is read from ``da.time.dt.days_in_month``.
-    """
+
+_TO_MM: dict[str, Callable[[xr.DataArray], xr.DataArray]] = {
+    "era5_land": era5_to_mm_per_month,
+    "gldas_noah_v21_monthly": gldas_to_mm_per_month,
+    "mwbm_climgrid": mwbm_to_mm_per_month,
+}
+
+
+def mm_per_month_to_cfs(da: xr.DataArray, hru_area_m2: xr.DataArray) -> xr.DataArray:
+    """Convert mm/month -> cfs given per-HRU area and the month length."""
     days = da["time"].dt.days_in_month
     m_per_day = (da * 1e-3) / days
     m3_per_day = m_per_day * hru_area_m2
@@ -71,119 +106,237 @@ def mm_per_month_to_cfs(
     return cfs
 
 
-def multi_source_runoff_bounds(
-    sources: list[xr.DataArray],
-) -> tuple[xr.DataArray, xr.DataArray]:
-    """Per-coord minimum and maximum across input sources.
-
-    All inputs must share dimensions and coords. Returns (lower, upper).
-    """
-    stacked = xr.concat(sources, dim="source")
-    return stacked.min("source"), stacked.max("source")
+# ---------------------------------------------------------------------------
+# Orchestration
+# ---------------------------------------------------------------------------
 
 
-def _validate_alignment(
-    era5: xr.DataArray, gldas: xr.DataArray
-) -> tuple[xr.DataArray, xr.DataArray]:
-    """Validate that two DataArrays are compatible and return overlap-sliced copies.
-
-    Checks:
-    - Both have the same dimension names.
-    - HRU coordinates are identical.
-    - Time ranges overlap; raises ValueError if disjoint.
-
-    Returns the two arrays sliced to the overlapping time range.
-    """
-    if set(era5.dims) != set(gldas.dims):
+def _parse_period(period_str: str) -> tuple[str, str]:
+    """Parse 'YYYY-MM-DD/YYYY-MM-DD' (or 'YYYY/YYYY') into (start, end)."""
+    if "/" not in period_str:
         raise ValueError(
-            f"ERA5-Land and GLDAS have different dimension names: "
-            f"{list(era5.dims)} vs {list(gldas.dims)}"
+            f"Invalid period {period_str!r}. Expected 'YYYY-MM-DD/YYYY-MM-DD'."
+        )
+    start, end = period_str.split("/", 1)
+    return start.strip(), end.strip()
+
+
+def build(project: Project) -> None:
+    """Build the runoff calibration target.
+
+    Reads each enabled source's per-year aggregated NCs, harmonizes time
+    coords onto a master month-start index over ``runoff.period``,
+    converts each to cfs using per-HRU area, combines via NaN-aware
+    min/max, and writes a CF-1.6 NetCDF. If ``runoff.nn_fill`` is True,
+    additionally writes ``runoff_targets_nn_filled.nc``.
+    """
+    runoff_cfg = project.target("runoff")
+    period = _parse_period(runoff_cfg["period"])
+    sources = list(runoff_cfg["sources"])
+    chunk_months = int(runoff_cfg["chunk_months"])
+
+    logger.info(
+        "Building runoff target: %d sources (%s), period %s .. %s, fabric=%s",
+        len(sources),
+        ",".join(sources),
+        period[0],
+        period[1],
+        project.config["fabric"]["path"],
+    )
+
+    # 1. Per-HRU area + centroids (computed once from fabric).
+    hru_meta = compute_hru_area_and_centroids(project)
+    id_col = project.id_col
+    hru_area_da = xr.DataArray(
+        hru_meta["area_m2"].values,
+        dims=(id_col,),
+        coords={id_col: hru_meta.index.values},
+        name="area_m2",
+    )
+
+    # 2. Master month-start index over the requested period.
+    master_idx = pd.date_range(period[0], period[1], freq="MS")
+    if len(master_idx) == 0:
+        raise ValueError(
+            f"runoff.period {runoff_cfg['period']} produces no months at "
+            f"freq='MS'. Check the date range."
         )
 
-    era5_hrus = era5.coords.get("hru")
-    gldas_hrus = gldas.coords.get("hru")
-    if era5_hrus is not None and gldas_hrus is not None:
-        if not era5_hrus.equals(gldas_hrus):
+    # 3. Read, convert, reindex each source.
+    # Fabric HRU IDs as a numpy array for coord-agreement checks.
+    fabric_hru_ids = hru_meta.index.values
+
+    sources_cfs: dict[str, xr.DataArray] = {}
+    for src in sources:
+        if src not in _SOURCE_VAR:
             raise ValueError(
-                "ERA5-Land and GLDAS HRU coordinates differ. "
-                "Ensure both were aggregated to the same fabric."
+                f"runoff.sources includes unknown source '{src}'. "
+                f"Known: {sorted(_SOURCE_VAR.keys())}"
             )
-
-    era5_start = pd.Timestamp(era5.time.min().values)
-    era5_end = pd.Timestamp(era5.time.max().values)
-    gldas_start = pd.Timestamp(gldas.time.min().values)
-    gldas_end = pd.Timestamp(gldas.time.max().values)
-
-    overlap_start = max(era5_start, gldas_start)
-    overlap_end = min(era5_end, gldas_end)
-
-    if overlap_start > overlap_end:
-        raise ValueError(
-            f"ERA5-Land and GLDAS time ranges do not overlap. "
-            f"ERA5-Land: {era5_start} – {era5_end}. "
-            f"GLDAS: {gldas_start} – {gldas_end}."
+        var = _SOURCE_VAR[src]
+        da_native = read_aggregated_source(
+            project, src, var, period, chunks={"time": chunk_months, id_col: -1}
         )
+        # Validate that the source's HRU IDs match the fabric before any
+        # arithmetic that would silently broadcast/intersect mismatched coords.
+        src_hru_ids = da_native[id_col].values
+        if not np.array_equal(src_hru_ids, fabric_hru_ids):
+            raise ValueError(
+                f"HRU coords differ between fabric and source '{src}'. "
+                f"Fabric has {len(fabric_hru_ids)} HRUs "
+                f"({fabric_hru_ids[0]}..{fabric_hru_ids[-1]}); source has "
+                f"{len(src_hru_ids)}. Re-aggregate '{src}' against the "
+                f"current fabric."
+            )
+        da_mm = _TO_MM[src](da_native)
+        da_cfs = mm_per_month_to_cfs(da_mm, hru_area_da)
+        sources_cfs[src] = reindex_to_month_start(da_cfs, master_idx)
 
-    logger.info("Runoff target overlap window: %s – %s", overlap_start, overlap_end)
-    era5 = era5.sel(time=slice(overlap_start, overlap_end))
-    gldas = gldas.sel(time=slice(overlap_start, overlap_end))
-    return era5, gldas
-
-
-def build(config: dict, output_path: str) -> None:
-    """Build runoff target dataset.
-
-    Reads HRU-aggregated monthly runoff for ERA5-Land (``ro``) and GLDAS
-    (``runoff_total``), validates alignment (same dims, HRU coords, overlapping
-    time ranges), harmonizes units to cfs, computes per-HRU per-month
-    min/max bounds, and writes a CF-compliant NetCDF atomically (via ``.tmp``
-    rename) with ``lower_bound`` and ``upper_bound`` variables, dims
-    ``(time, hru)``.
-
-    Aggregated input convention: ``<aggregated_dir>/<source_key>/<var>.nc``
-
-    config keys:
-      aggregated_dir : str | Path
-          Directory containing per-source per-variable aggregated NCs at
-          ``<aggregated_dir>/<source_key>/<var>.nc``.
-      hru_area_m2 : xr.DataArray
-          Per-HRU area in m², dims=('hru',), coord aligned with the
-          aggregated outputs.
-    """
-    agg_dir = Path(config["aggregated_dir"])
-    hru_area = config["hru_area_m2"]
-
-    with xr.open_dataset(agg_dir / "era5_land" / "ro.nc") as ds:
-        era5 = ds["ro"].load()
-    with xr.open_dataset(agg_dir / "gldas_noah_v21_monthly" / "runoff_total.nc") as ds:
-        gldas = ds["runoff_total"].load()
-
-    era5, gldas = _validate_alignment(era5, gldas)
-
-    era5_cfs = mm_per_month_to_cfs(era5_to_mm_per_month(era5), hru_area)
-    gldas_cfs = mm_per_month_to_cfs(gldas_to_mm_per_month(gldas), hru_area)
-
-    lower, upper = multi_source_runoff_bounds([era5_cfs, gldas_cfs])
+    # 4. NaN-aware combination.
+    lower, upper, n_sources = multi_source_nanminmax(sources_cfs)
     lower.name = "lower_bound"
     upper.name = "upper_bound"
-    lower.attrs["units"] = "cfs"
-    lower.attrs["cell_methods"] = "time: sum"
-    upper.attrs["units"] = "cfs"
-    upper.attrs["cell_methods"] = "time: sum"
-    out_ds = xr.Dataset(
-        {"lower_bound": lower, "upper_bound": upper},
+    n_sources.name = "n_sources"
+
+    # 5. Assemble Dataset with CF metadata + ancillary coords.
+    time_bnds = xr.DataArray(
+        list(zip(master_idx.values, (master_idx + pd.offsets.MonthBegin(1)).values)),
+        dims=("time", "nv"),
+        coords={"time": master_idx.values},
+        name="time_bnds",
+    )
+    centroid_lat = xr.DataArray(
+        hru_meta["centroid_lat"].values,
+        dims=(id_col,),
+        coords={id_col: hru_meta.index.values},
         attrs={
-            "title": "NHM runoff calibration target (ERA5-Land + GLDAS-2.1)",
-            "Conventions": "CF-1.6",
+            "units": "degrees_north",
+            "standard_name": "latitude",
+            "long_name": "HRU centroid latitude",
         },
     )
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = output_path.with_suffix(".nc.tmp")
-    try:
-        out_ds.to_netcdf(tmp, format="NETCDF4")
-        tmp.rename(output_path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
-    logger.info("Wrote runoff target: %s", output_path)
+    centroid_lon = xr.DataArray(
+        hru_meta["centroid_lon"].values,
+        dims=(id_col,),
+        coords={id_col: hru_meta.index.values},
+        attrs={
+            "units": "degrees_east",
+            "standard_name": "longitude",
+            "long_name": "HRU centroid longitude",
+        },
+    )
+
+    lower.attrs.update(
+        {
+            "units": "cfs",
+            "long_name": (
+                "lower bound of monthly runoff (NaN-aware min across sources)"
+            ),
+            "cell_methods": "time: sum",
+            "coordinates": "centroid_lat centroid_lon",
+        }
+    )
+    upper.attrs.update(
+        {
+            "units": "cfs",
+            "long_name": (
+                "upper bound of monthly runoff (NaN-aware max across sources)"
+            ),
+            "cell_methods": "time: sum",
+            "coordinates": "centroid_lat centroid_lon",
+        }
+    )
+    n_sources.attrs.update(
+        {
+            "units": "1",
+            "long_name": "number of finite source contributions",
+            "flag_values": list(range(0, len(sources) + 1)),
+            "flag_meanings": " ".join(
+                ["none", "one", "two", "three", "four", "five"][: len(sources) + 1]
+            ),
+            "coordinates": "centroid_lat centroid_lon",
+        }
+    )
+
+    ds = xr.Dataset(
+        {
+            "lower_bound": lower,
+            "upper_bound": upper,
+            "n_sources": n_sources,
+        },
+        coords={
+            "time": master_idx,
+            id_col: lower[id_col],
+            "time_bnds": time_bnds,
+            "centroid_lat": centroid_lat,
+            "centroid_lon": centroid_lon,
+        },
+    )
+    ds["time"].attrs["bounds"] = "time_bnds"
+    ds["time"].attrs["axis"] = "T"
+    ds["time"].attrs["standard_name"] = "time"
+    ds["time"].attrs["long_name"] = "time at month start"
+    ds[id_col].attrs["long_name"] = "HRU identifier"
+    ds[id_col].attrs["cf_role"] = "timeseries_id"
+
+    extra_attrs = {
+        "source": ("ERA5-Land ro; GLDAS-2.1 NOAH Qs_acc+Qsb_acc; MWBM ClimGrid runoff"),
+        "references": "Hay et al. 2022, doi:10.3133/tm6B10",
+        "fabric": project.config["fabric"]["path"],
+        "fabric_sha256": project.fabric.get("sha256", ""),
+        "period": runoff_cfg["period"],
+        "area_crs": project.area_crs,
+    }
+
+    output_path = project.targets_dir() / runoff_cfg["output_file"]
+    write_target_nc(
+        ds,
+        output_path,
+        title="NHM runoff calibration target (lower/upper bounds in cfs)",
+        extra_global_attrs=extra_attrs,
+    )
+
+    # Coverage summary log line.
+    n = ds["n_sources"].values
+    total = n.size
+    none = int((n == 0).sum())
+    logger.info(
+        "Coverage: %d/%d cells have >=1 finite source (%.2f%% all-NaN)",
+        total - none,
+        total,
+        100.0 * none / total if total else 0.0,
+    )
+
+    # 6. NN-fill (optional).
+    if runoff_cfg["nn_fill"]:
+        # Materialize the bounds for the in-memory NN walk.
+        ds_loaded = ds.compute()
+        centroids_xy = hru_meta[["centroid_x", "centroid_y"]].values
+        filled_ds, nn_diag = nn_fill_bounds(
+            ds_loaded,
+            centroids_xy,
+            max_candidates=int(runoff_cfg["nn_max_candidates"]),
+        )
+        nn_diag.attrs.update(
+            {
+                "units": "1",
+                "long_name": "nearest-neighbor fill flag",
+                "flag_values": [0, 1],
+                "flag_meanings": "not_filled filled",
+                "coordinates": "centroid_lat centroid_lon",
+            }
+        )
+        filled_ds["nn_filled"] = nn_diag
+        filled_attrs = dict(extra_attrs)
+        filled_attrs["nn_fill_max_candidates"] = int(runoff_cfg["nn_max_candidates"])
+        filled_attrs["nn_fill_distance_crs"] = project.area_crs
+
+        nn_path = output_path.with_name(
+            output_path.stem + "_nn_filled" + output_path.suffix
+        )
+        write_target_nc(
+            filled_ds,
+            nn_path,
+            title="NHM runoff calibration target (NN-filled, cfs)",
+            extra_global_attrs=filled_attrs,
+        )
