@@ -81,6 +81,26 @@ def test_iter_default_diff_lists_filled_keys():
     assert "targets.runoff.nn_fill" in paths
     # Keys the user did set should NOT appear:
     assert "datastore" not in paths
+    # Yielded values must be the actual defaults (not None sentinel):
+    values = dict(diff)
+    assert values["fabric.area_crs"] == "EPSG:5070"
+    assert values["targets.runoff.nn_fill"] is True
+    assert values["targets.runoff.nn_max_candidates"] == 10
+
+
+def test_iter_default_diff_skips_required_sentinel_none():
+    """Keys whose default is None (required-sentinel) are not yielded."""
+    user = {}  # nothing set; both required and default keys are absent
+    diff = list(iter_default_diff(user))
+    paths = {p for p, _ in diff}
+    # Real defaults appear:
+    assert "fabric.area_crs" in paths
+    # Required-sentinel keys (whose default is None) do NOT appear:
+    assert "datastore" not in paths
+    assert "fabric.path" not in paths
+    assert "targets.runoff.period" not in paths
+    # And no yielded value is None:
+    assert all(v is not None for _, v in diff)
 
 
 def test_find_unknown_keys_returns_typos():

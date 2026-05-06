@@ -140,8 +140,11 @@ def apply_defaults(user: dict | None) -> dict:
 def iter_default_diff(user: dict | None) -> Iterator[tuple[str, object]]:
     """Yield ``(dotted_path, default_value)`` for every key the user did not set.
 
-    Walks the merged dict and reports leaves where ``user`` had no value.
-    Used by ``validate`` to print which defaults took effect.
+    Walks the merged dict and reports leaves where ``user`` had no value
+    *and* a real default exists. Required-sentinel leaves (default value
+    ``None``) are skipped — use :func:`missing_required` to discover those.
+    Callers (such as ``validate``) can therefore print every yielded entry
+    as "default applied" without filtering.
     """
     user = user or {}
     yield from _walk_diff(DEFAULTS, user, prefix=())
@@ -207,7 +210,7 @@ def _walk_diff(
                 # User did not set this whole subtree; report each leaf default.
                 yield from _walk_diff(dv, {}, path)
         else:
-            if uv is None:
+            if uv is None and dv is not None:
                 yield (".".join(path), dv)
 
 
