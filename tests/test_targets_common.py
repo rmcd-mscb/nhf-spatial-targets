@@ -141,3 +141,62 @@ def test_reindex_to_month_start_already_ms_is_idempotent():
     master = pd.date_range("2000-01-01", "2000-03-01", freq="MS")
     reindexed = reindex_to_month_start(ms, master)
     np.testing.assert_array_equal(reindexed.values, ms.values)
+
+
+def test_multi_source_nanminmax_three_finite_sources():
+    from nhf_spatial_targets.targets._common import multi_source_nanminmax
+
+    a = _da_with_time(["2000-01-01"], values=np.array([[10, 20, 30]], dtype=np.float32))
+    b = _da_with_time(["2000-01-01"], values=np.array([[15, 25, 35]], dtype=np.float32))
+    c = _da_with_time(["2000-01-01"], values=np.array([[20, 30, 40]], dtype=np.float32))
+    lower, upper, n = multi_source_nanminmax({"a": a, "b": b, "c": c})
+    np.testing.assert_array_equal(lower.values, [[10, 20, 30]])
+    np.testing.assert_array_equal(upper.values, [[20, 30, 40]])
+    np.testing.assert_array_equal(n.values, [[3, 3, 3]])
+
+
+def test_multi_source_nanminmax_partial_nan_uses_finite_only():
+    from nhf_spatial_targets.targets._common import multi_source_nanminmax
+
+    a = _da_with_time(
+        ["2000-01-01"], values=np.array([[10.0, np.nan, 30.0]], dtype=np.float32)
+    )
+    b = _da_with_time(
+        ["2000-01-01"], values=np.array([[15.0, 25.0, np.nan]], dtype=np.float32)
+    )
+    lower, upper, n = multi_source_nanminmax({"a": a, "b": b})
+    np.testing.assert_array_equal(lower.values, [[10, 25, 30]])
+    np.testing.assert_array_equal(upper.values, [[15, 25, 30]])
+    np.testing.assert_array_equal(n.values, [[2, 1, 1]])
+
+
+def test_multi_source_nanminmax_all_nan_returns_nan_and_zero():
+    from nhf_spatial_targets.targets._common import multi_source_nanminmax
+
+    a = _da_with_time(
+        ["2000-01-01"], hrus=(1,), values=np.array([[np.nan]], dtype=np.float32)
+    )
+    b = _da_with_time(
+        ["2000-01-01"], hrus=(1,), values=np.array([[np.nan]], dtype=np.float32)
+    )
+    lower, upper, n = multi_source_nanminmax({"a": a, "b": b})
+    assert np.isnan(lower.values[0, 0])
+    assert np.isnan(upper.values[0, 0])
+    assert n.values[0, 0] == 0
+
+
+def test_multi_source_nanminmax_n_sources_is_int8():
+    from nhf_spatial_targets.targets._common import multi_source_nanminmax
+
+    a = _da_with_time(["2000-01-01"], values=np.array([[10.0, 20.0, 30.0]], np.float32))
+    _, _, n = multi_source_nanminmax({"a": a})
+    assert n.dtype == np.int8
+
+
+def test_multi_source_nanminmax_raises_on_hru_mismatch():
+    from nhf_spatial_targets.targets._common import multi_source_nanminmax
+
+    a = _da_with_time(["2000-01-01"], hrus=(1, 2, 3))
+    b = _da_with_time(["2000-01-01"], hrus=(1, 2, 4))
+    with pytest.raises(ValueError, match="HRU coords differ"):
+        multi_source_nanminmax({"a": a, "b": b})

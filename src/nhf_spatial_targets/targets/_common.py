@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 
+import numpy as np
 import pandas as pd
 import xarray as xr
 
@@ -148,3 +149,53 @@ def reindex_to_month_start(
     ms_times = pd.DatetimeIndex(da.time.values).to_period("M").to_timestamp()
     canon = da.assign_coords(time=ms_times)
     return canon.reindex(time=master_index)
+
+
+def multi_source_nanminmax(
+    sources: dict[str, xr.DataArray],
+) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
+    """NaN-aware per-cell min, max, and finite-source count.
+
+    All input DataArrays must share dims and coords (typically
+    ``(time, id_col)``). They are stacked on a new ``source`` dim and
+    reduced with ``skipna=True``.
+
+    A bound is defined whenever ≥1 source is finite at that cell; the result
+    is NaN only when *every* source is NaN there, which is exactly when
+    ``n_sources == 0``.
+
+    Parameters
+    ----------
+    sources
+        Mapping from source key to per-source DataArray.
+
+    Returns
+    -------
+    lower, upper, n_sources
+        ``(time, id_col)`` arrays. ``n_sources`` is int8 with values in
+        ``[0, len(sources)]``; ``lower`` / ``upper`` preserve the input
+        dtype (typically float32).
+
+    Raises
+    ------
+    ValueError
+        If any two sources have different HRU coords (different fabrics).
+    """
+    keys = list(sources.keys())
+    if not keys:
+        raise ValueError("multi_source_nanminmax: empty sources dict")
+    ref = sources[keys[0]]
+    hru_dim = next(d for d in ref.dims if d != "time")
+    for k in keys[1:]:
+        other = sources[k]
+        if not other[hru_dim].equals(ref[hru_dim]):
+            raise ValueError(
+                f"HRU coords differ between sources '{keys[0]}' and '{k}'. "
+                "All sources must be aggregated to the same fabric."
+            )
+
+    stacked = xr.concat([sources[k] for k in keys], dim=xr.Variable("source", keys))
+    lower = stacked.min(dim="source", skipna=True)
+    upper = stacked.max(dim="source", skipna=True)
+    n_sources = stacked.notnull().sum(dim="source").astype(np.int8)
+    return lower, upper, n_sources
