@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Tuple
 
 import numpy as np
 import xarray as xr
@@ -35,7 +34,7 @@ def nn_fill_bounds(
     ds: xr.Dataset,
     centroids_xy: np.ndarray,
     max_candidates: int = 10,
-) -> Tuple[xr.Dataset, xr.DataArray]:
+) -> tuple[xr.Dataset, xr.DataArray]:
     """Fill NaN bound cells with the nearest *finite* HRU at the same time step.
 
     For every HRU position that is NaN in *both* ``lower_bound`` and

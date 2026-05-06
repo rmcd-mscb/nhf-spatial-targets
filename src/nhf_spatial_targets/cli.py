@@ -7,7 +7,10 @@ import sys
 from collections.abc import Callable
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
+
+if TYPE_CHECKING:
+    from nhf_spatial_targets.workspace import Project
 
 
 import yaml
@@ -101,7 +104,7 @@ def run(
             sys.exit(1)
         print(f"Building target: {name}")
         try:
-            _dispatch(name, targets_cfg[name], project.config, workdir=workdir)
+            _dispatch(name, targets_cfg[name], project)
         except NotImplementedError as exc:
             print(
                 f"WARNING: target '{name}' not yet implemented; skipping ({exc})",
@@ -117,21 +120,12 @@ def run(
 def _dispatch(
     name: str,
     target_cfg: dict,
-    pipeline_cfg: dict,
-    workdir: Path | None = None,
+    project: "Project",
 ) -> None:
     """Dispatch to the appropriate target builder module."""
     from nhf_spatial_targets.targets import aet, rch, run, sca, som
-    from nhf_spatial_targets.workspace import load as load_project
 
     if name == "runoff":
-        if workdir is None:
-            print(
-                "Error: --project-dir is required for runoff target",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        project = load_project(workdir)
         run.build(project)
         return
 
@@ -145,12 +139,8 @@ def _dispatch(
         print(f"Error: No builder registered for target: {name}", file=sys.stderr)
         sys.exit(1)
 
-    fabric_path = pipeline_cfg["fabric"]["path"]
-    if workdir is not None:
-        output_path = str(workdir / "targets")
-    else:
-        output_path = pipeline_cfg["output"]["dir"]
-
+    fabric_path = project.config["fabric"]["path"]
+    output_path = str(project.targets_dir())
     builders[name](target_cfg, fabric_path, output_path)
 
 

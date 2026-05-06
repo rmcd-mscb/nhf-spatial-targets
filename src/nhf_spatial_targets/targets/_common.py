@@ -148,6 +148,17 @@ def reindex_to_month_start(
     master_index
         Target index. Must be ``DatetimeIndex`` with ``freq="MS"``.
     """
+    if not isinstance(master_index, pd.DatetimeIndex):
+        raise TypeError(
+            f"master_index must be a pandas.DatetimeIndex, got "
+            f"{type(master_index).__name__}"
+        )
+    if master_index.freqstr != "MS":
+        raise ValueError(
+            f"master_index must have freq='MS' (month-start); got "
+            f"freq={master_index.freqstr!r}. Build it with "
+            f"pd.date_range(start, end, freq='MS')."
+        )
     ms_times = pd.DatetimeIndex(da.time.values).to_period("M").to_timestamp()
     canon = da.assign_coords(time=ms_times)
     return canon.reindex(time=master_index)
@@ -233,6 +244,12 @@ def compute_hru_area_and_centroids(project: Project) -> "pd.DataFrame":
         raise ValueError(
             f"Column '{id_col}' not found in fabric {fabric_path}. "
             f"Available: {list(gdf.columns)}"
+        )
+    if not gdf[id_col].is_unique:
+        n_dupes = (gdf[id_col].value_counts() > 1).sum()
+        raise ValueError(
+            f"Fabric column '{id_col}' has {n_dupes} duplicate values "
+            f"in {fabric_path}. Each HRU must have a unique ID."
         )
 
     gdf_eq = gdf.to_crs(project.area_crs)

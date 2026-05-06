@@ -372,3 +372,51 @@ def test_write_target_nc_atomic_no_partial_on_failure(tmp_path: Path, monkeypatc
     with pytest.raises(RuntimeError, match="disk full"):
         write_target_nc(_toy_target_dataset(), out, title="x")
     assert not out.exists()
+
+
+def test_reindex_to_month_start_rejects_non_ms_freq():
+    """A freq='ME' master_index must raise, not silently produce all-NaN."""
+    from nhf_spatial_targets.targets._common import reindex_to_month_start
+
+    da = _da_with_time(["2000-01-01", "2000-02-01"])
+    bad = pd.date_range("2000-01-31", "2000-02-29", freq="ME")
+    with pytest.raises(ValueError, match="freq='MS'"):
+        reindex_to_month_start(da, bad)
+
+
+def test_compute_hru_area_and_centroids_raises_on_duplicate_id_col(tmp_path: Path):
+    """A fabric with duplicate HRU IDs must raise, not silently produce a
+    non-unique-index DataFrame."""
+    import geopandas as gpd
+    from shapely.geometry import box
+
+    from nhf_spatial_targets.targets._common import compute_hru_area_and_centroids
+
+    fabric_path = tmp_path / "fabric.gpkg"
+    gdf = gpd.GeoDataFrame(
+        {"nhm_id": [1, 2, 1]},  # duplicate
+        geometry=[
+            box(-105.0, 40.0, -104.9, 40.1),
+            box(-104.9, 40.0, -104.8, 40.1),
+            box(-104.8, 40.0, -104.7, 40.1),
+        ],
+        crs="EPSG:4326",
+    )
+    fabric_path.parent.mkdir(parents=True, exist_ok=True)
+    gdf.to_file(fabric_path, driver="GPKG")
+
+    workdir = tmp_path / "proj"
+    workdir.mkdir()
+    (workdir / "config.yml").write_text(
+        yaml.safe_dump(
+            {
+                "datastore": str(tmp_path / "store"),
+                "fabric": {"path": str(fabric_path), "id_col": "nhm_id"},
+            }
+        )
+    )
+    (workdir / "fabric.json").write_text(json.dumps({"id_col": "nhm_id"}))
+
+    project = load(workdir)
+    with pytest.raises(ValueError, match="duplicate"):
+        compute_hru_area_and_centroids(project)

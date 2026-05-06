@@ -114,7 +114,14 @@ def load(workdir: Path) -> Project:
             f"This field is required. Edit config.yml and add the datastore path."
         )
 
-    fabric_cfg = config.get("fabric", {})
+    fabric_cfg = config.get("fabric") or {}
+    if not fabric_cfg.get("id_col"):
+        raise ValueError(
+            f"'fabric.id_col' is empty in config.yml in {workdir}. "
+            f"This field is required and must be a non-empty string. "
+            f"The default is 'nhm_id'; remove the explicit empty value to "
+            f"use the default, or set it to your fabric's HRU column name."
+        )
     if not fabric_cfg.get("path"):
         raise ValueError(
             f"'fabric.path' missing from config.yml in {workdir}. "

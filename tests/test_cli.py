@@ -82,7 +82,12 @@ def test_run_dispatches_enabled_targets(tmp_path):
         _run("run", "--project-dir", str(workdir))
 
     mock_dispatch.assert_called_once()
-    assert mock_dispatch.call_args[0][0] == "runoff"
+    args = mock_dispatch.call_args[0]
+    assert args[0] == "runoff"
+    # Third positional is now a Project, not a dict
+    from nhf_spatial_targets.workspace import Project
+
+    assert isinstance(args[2], Project)
 
 
 def test_run_single_target(tmp_path):
@@ -97,7 +102,12 @@ def test_run_single_target(tmp_path):
         _run("run", "--project-dir", str(workdir), "--target", "aet")
 
     mock_dispatch.assert_called_once()
-    assert mock_dispatch.call_args[0][0] == "aet"
+    args = mock_dispatch.call_args[0]
+    assert args[0] == "aet"
+    # Third positional is now a Project, not a dict
+    from nhf_spatial_targets.workspace import Project
+
+    assert isinstance(args[2], Project)
 
 
 def test_run_unknown_target(tmp_path):
@@ -570,13 +580,13 @@ def test_default_no_verbose():
 
 
 def test_run_runoff_smoke(tmp_path):
-    """Invoking _dispatch for runoff calls run.build via the new Project path."""
+    """Invoking _dispatch for runoff calls run.build via the Project."""
     from tests.test_targets_run import _make_runoff_project
 
     from nhf_spatial_targets.cli import _dispatch
+    from nhf_spatial_targets.workspace import load
 
     workdir = _make_runoff_project(tmp_path)
-    target_cfg: dict = {}  # _dispatch doesn't use target_cfg for runoff
-    pipeline_cfg = {"fabric": {"path": str(tmp_path / "fabric.gpkg")}}
-    _dispatch("runoff", target_cfg, pipeline_cfg, workdir=workdir)
+    project = load(workdir)
+    _dispatch("runoff", {}, project)
     assert (workdir / "targets" / "runoff_targets.nc").exists()

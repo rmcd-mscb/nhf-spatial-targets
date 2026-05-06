@@ -109,3 +109,16 @@ def test_load_raises_on_missing_fabric_path(tmp_path: Path):
     )
     with pytest.raises(ValueError, match="fabric.path"):
         load(workdir)
+
+
+def test_load_raises_on_empty_id_col(tmp_path: Path):
+    """An explicit empty id_col bypasses the default and must error."""
+    workdir = _write_project(
+        tmp_path,
+        config={
+            "datastore": str(tmp_path / "store"),
+            "fabric": {"path": "/p", "id_col": ""},
+        },
+    )
+    with pytest.raises(ValueError, match="fabric.id_col"):
+        load(workdir)
