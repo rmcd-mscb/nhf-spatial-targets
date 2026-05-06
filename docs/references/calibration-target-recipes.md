@@ -38,9 +38,10 @@ the recipes below are guidance for filling them in.
   Multiply by `8 × days_in_month` → mm/month. The summation `Qs_acc + Qsb_acc`
   is performed at consolidation time; the target builder consumes the already-
   summed `runoff_total` variable.
-- MWBM ClimGrid `runoff`: already mm/month native — no conversion. The catalog is
-  authoritative for this unit; the builder validates against
-  `catalog.source("mwbm_climgrid")["variables"]`.
+- MWBM ClimGrid `runoff`: already mm/month native — no conversion. The catalog
+  is authoritative for this unit. Catalog-vs-file validation runs at fetch time
+  in `fetch/mwbm_climgrid.py:_validate_nc`; the target builder trusts the
+  aggregated NC directly.
 
 **mm/month → cfs**
 

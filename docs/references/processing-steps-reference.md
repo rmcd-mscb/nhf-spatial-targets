@@ -400,7 +400,15 @@ over absolute mm/month values (no normalization); converted to cfs before writin
 
 ### Aggregation driver
 
-- **`stat_method="mean"`** (not `masked_mean`) — produces NaN for any HRU with no source-grid coverage, making gaps explicit and auditable
+- **`stat_method` per source.** Two flavors are used; the choice is mechanical:
+  - **`stat_method="mean"`** (default) for sources without per-pixel masking.
+    NaN propagates: any NaN pixel contributing to an HRU makes the HRU NaN —
+    the honest "no source data here" signal for partial coverage / true gaps.
+  - **`stat_method="masked_mean"`** for sources whose `pre_aggregate_hook`
+    deliberately sets pixels to NaN (fill-value masks, quality gates). The
+    HRU value is the area-weighted mean of the survivors. Currently used by
+    `aggregate/mod16a2.py` (fill mask) and `aggregate/mod10c1.py` (CI > 70).
+    See the per-source sections above for what each pre-hook masks.
 - **Spatial batching:** ~500-HRU batches via KD-tree recursive bisection; weights cached per batch as CSV + SHA-256 sidecar
 - **Weight reuse:** weights valid across all years for a given source (grid invariance enforced at startup)
 - **Idempotent:** per-year output NC skipped if already exists
