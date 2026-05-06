@@ -5,7 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
+import xarray as xr
 
 from nhf_spatial_targets.workspace import load
 from tests.conftest import make_minimal_project, write_year_nc
@@ -87,3 +89,55 @@ def test_read_aggregated_source_raises_diagnostic_on_missing_var(tmp_path: Path)
         read_aggregated_source(
             project, src, "not_a_var", period=("2000-01-01", "2000-12-31")
         )
+
+
+def _da_with_time(times, hrus=(1, 2, 3), values=None) -> xr.DataArray:
+    if values is None:
+        values = np.arange(len(times) * len(hrus), dtype=np.float32).reshape(
+            len(times), len(hrus)
+        )
+    return xr.DataArray(
+        values,
+        dims=("time", "nhm_id"),
+        coords={"time": pd.DatetimeIndex(times), "nhm_id": list(hrus)},
+    )
+
+
+def test_reindex_to_month_start_maps_eom_to_ms():
+    from nhf_spatial_targets.targets._common import reindex_to_month_start
+
+    eom = _da_with_time(["2000-01-31", "2000-02-29", "2000-03-31"])
+    master = pd.date_range("2000-01-01", "2000-03-01", freq="MS")
+    reindexed = reindex_to_month_start(eom, master)
+    assert list(reindexed.time.values) == list(master.values)
+    np.testing.assert_array_equal(reindexed.values, eom.values)
+
+
+def test_reindex_to_month_start_maps_mid_month_to_ms():
+    from nhf_spatial_targets.targets._common import reindex_to_month_start
+
+    mid = _da_with_time(["2000-01-15", "2000-02-15", "2000-03-15"])
+    master = pd.date_range("2000-01-01", "2000-03-01", freq="MS")
+    reindexed = reindex_to_month_start(mid, master)
+    np.testing.assert_array_equal(reindexed.values, mid.values)
+
+
+def test_reindex_to_month_start_pads_missing_months_with_nan():
+    """Months in master_index but absent from the source come out as NaN."""
+    from nhf_spatial_targets.targets._common import reindex_to_month_start
+
+    partial = _da_with_time(["2000-01-01", "2000-02-01"])
+    master = pd.date_range("2000-01-01", "2000-04-01", freq="MS")
+    reindexed = reindex_to_month_start(partial, master)
+    assert len(reindexed.time) == 4
+    assert np.isnan(reindexed.values[2:]).all()
+    np.testing.assert_array_equal(reindexed.values[:2], partial.values)
+
+
+def test_reindex_to_month_start_already_ms_is_idempotent():
+    from nhf_spatial_targets.targets._common import reindex_to_month_start
+
+    ms = _da_with_time(["2000-01-01", "2000-02-01", "2000-03-01"])
+    master = pd.date_range("2000-01-01", "2000-03-01", freq="MS")
+    reindexed = reindex_to_month_start(ms, master)
+    np.testing.assert_array_equal(reindexed.values, ms.values)

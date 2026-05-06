@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 
+import pandas as pd
 import xarray as xr
 
 from nhf_spatial_targets.workspace import Project
@@ -119,3 +120,31 @@ def read_aggregated_source(
         len(paths),
     )
     return sliced
+
+
+def reindex_to_month_start(
+    da: xr.DataArray, master_index: pd.DatetimeIndex
+) -> xr.DataArray:
+    """Reindex a monthly DataArray onto a master ``freq="MS"`` index.
+
+    Source timestamps may be end-of-month (ERA5-Land), start-of-month (GLDAS,
+    MWBM), or mid-month (MERRA-2 etc.). All three convey "which calendar
+    month" unambiguously. This helper converts the source's time coordinate
+    via ``dt.to_period("M").dt.to_timestamp()`` (yielding the month-start),
+    then reindexes onto ``master_index``.
+
+    Months in ``master_index`` that the source does not cover come back as
+    NaN — this is what gives the runoff target its period-union semantics:
+    a source that ends in 2020 but is asked through 2024 simply contributes
+    nothing for the post-2020 cells.
+
+    Parameters
+    ----------
+    da
+        Monthly DataArray to reindex.
+    master_index
+        Target index. Must be ``DatetimeIndex`` with ``freq="MS"``.
+    """
+    ms_times = pd.DatetimeIndex(da.time.values).to_period("M").to_timestamp()
+    canon = da.assign_coords(time=ms_times)
+    return canon.reindex(time=master_index)
