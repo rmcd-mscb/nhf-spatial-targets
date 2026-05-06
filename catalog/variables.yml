@@ -32,7 +32,10 @@ variables:
       (mm/month) are aggregated to HRU polygons via gdptools, harmonized
       to mm/month, then converted to cfs using HRU area and days-in-month.
       Per-HRU per-month:
-        lower_bound = min(era5, gldas, mwbm), upper_bound = max(era5, gldas, mwbm).
+        lower_bound = nanmin(era5, gldas, mwbm), upper_bound = nanmax(era5, gldas, mwbm).
+        nanmin/nanmax (xr.concat([...]).min(skipna=True)) means a bound is
+        defined whenever >=1 source is finite at that (HRU, time); only
+        all-NaN cells produce NaN.
       mwbm_climgrid (Wieczorek et al. 2024, ClimGrid-forced) is the third
       source; all three are consumed by targets/run.py.
     normalize: false
