@@ -65,14 +65,16 @@ pixi run -e dev pre-commit install
 catalog/           # YAML data source registry and variable definitions
 config/            # pipeline.yml reference configuration
 src/nhf_spatial_targets/
+  _logging.py      # Structured logging setup
   catalog.py       # Python API for catalog/ YAML files
   cli.py           # Cyclopts CLI: nhf-targets init | materialize-credentials | validate | run | fetch | catalog
   credentials.py   # materialize_cdsapirc / materialize_netrc_earthdata helpers
+  defaults.py      # Default config schema and merge logic
   workspace.py     # Project path resolution, Project dataclass, make_dir()
   validate.py      # Preflight checks (fabric, datastore, credentials, catalog)
   init_run.py      # Project skeleton creation
-  fetch/           # per-source download modules (one file per source)
-  aggregate/       # gdptools area-weighted aggregation
+  fetch/           # per-source download modules (one file per source, ~10 modules)
+  aggregate/       # gdptools area-weighted aggregation (one file per source, ~15 modules)
   normalize/       # normalization and range-bound methods
   targets/         # per-variable target builders (run/aet/rch/som/sca)
 tests/
@@ -243,23 +245,10 @@ intentionally differs from the report in two ways:
 ## Known Gaps (do not implement until resolved)
 
 See `catalog/sources.yml` `status:` and `notes:` fields for per-source gaps.
-
-**Resolved:**
-- Reitz 2017 ScienceBase item ID — confirmed: `56c49126e4b0946c65219231`, doi:10.5066/F7PN93P0
-- Runoff source replacement — NHM-MWBM removed; replaced by ERA5-Land (CDS) + GLDAS-2.1 NOAH monthly. ERA5-Land ssro also added as third recharge source. Closes issue #41.
-- Recharge normalization window — confirmed **2000-2009** from TM 6-B10 body text
-- MOD16A2 / MOD10C1 v006 → v061: both decommissioned; use v061 in all new runs
-- MERRA-2 variable — use `GWETTOP` (0-0.05m, dimensionless); product M2TMNXLND
-- MERRA-2 layer depths — dzsf=0.05m (constant globally), dzrz=1.00m (per GMAO FAQ), dzpr=spatially varying (surface to bedrock, ~1.3-8.5m). Thicknesses in M2CONXLND collection.
-- NLDAS NOAH variable names — confirmed from file inspection: SoilM_0_10cm, SoilM_10_40cm, SoilM_40_100cm, SoilM_100_200cm
-- WaterGAP 2.2d — confirmed: doi:10.1594/PANGAEA.918447, variable qrdif (diffuse groundwater recharge), 1901-2016 monthly, 0.5° global, CC BY-NC 4.0
+See `docs/references/known-gaps-resolved.md` for resolved items.
 
 **Still open:**
 - SCA CI-bounds formula — PRMSobjfun.f not publicly available; formula unconfirmed
-
-**Resolved (previously open):**
-- SSEBop — accessed via USGS NHGF STAC catalog (collection `ssebopeta_monthly`, doi:10.5066/P9L2YMV, 2000–2023 monthly, 1km). Aggregated directly to HRU fabric via gdptools — no local download. See PR #34.
-- MOD16A2 v061 flat-on-CONUS+ seasonality — root cause was fill-value contamination at the consolidate-time sinusoidal→4 km reprojection: `rioxarray`'s `masked=True` only masks the declared `_FillValue`, leaving the other special codes (water=32761, barren=32762, snow/ice=32763, cloudy=32764, no-data=32766) to be averaged into valid neighbours by `Resampling.average`. Fixed in PR #88 by masking ET_500m fills *before* reprojection. Existing consolidated/aggregated NCs are invalid; re-fetch + re-aggregate to recover real seasonality. See `docs/references/lessons-learned.md` § MOD16A2 v061 flat-on-CONUS+.
 
 ## Testing
 
@@ -280,6 +269,11 @@ All work follows issue-branch-PR flow:
 4. Open PR referencing the issue (e.g., "Closes #12")
 5. CI must pass; squash merge after review
 
+**Claude guardrails:**
+- NEVER commit specs, plans, or code directly to main. Always create a feature branch first.
+- Rebase feature branches against origin/main before opening PRs.
+- Before every commit, run: `git branch --show-current` (must not be main/master), `git status` (review untracked), `git diff --cached --stat` (review staged). Stage files explicitly by path — never use `git add -A` or `git add .`.
+
 ## Pre-commit Quality Gate
 
 Before suggesting a commit, always run:
@@ -291,6 +285,11 @@ pixi run -e dev fmt && pixi run -e dev lint && pixi run -e dev test
 Pre-commit hooks enforce this automatically, but Claude should run these proactively.
 
 **Always commit via `pixi run git commit`, not bare `git commit`.** The pre-commit config runs ruff and pytest through `pixi run`; invoking `git commit` outside a pixi shell forces every hook to re-resolve the pixi environment, which is slow and prone to stalling on long-running hooks. A PreToolUse hook in `.claude/settings.json` blocks bare `git commit` for Claude sessions — humans should follow the same convention.
+
+## Subagent Dispatch Rules
+- Verify subagent prompts list ONLY the cells/files actually being changed - do not include unchanged items.
+- NEVER allow subagents to force-push to PR branches; require explicit user approval before any force-push operation.
+- After subagent completes, verify their changes match the spec before proceeding.
 
 ## Test Coverage Rule
 
@@ -315,6 +314,12 @@ The hard line is the **PR boundary**, not the first line of code:
 - Exploratory notebooks and scratch scripts are not a substitute for tests —
   they are scaffolding to be discarded or moved into `notebooks/` once the
   characterization work is done.
+
+## Test Execution Discipline
+- Do NOT use `pkill` to terminate pytest runs - let them complete or use Ctrl+C semantics.
+- Batch test execution: run the full suite once at the end of a multi-step task rather than after every sub-step.
+- For docs-only changes, skip running the full pytest suite when possible.
+- When executing a multi-task plan, only run the full test suite at the end of each task (not between sub-steps within a task). Use targeted test selection for incremental verification.
 
 ## Dependencies
 
