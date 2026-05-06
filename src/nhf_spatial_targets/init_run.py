@@ -18,6 +18,9 @@ fabric:
   id_col: nhm_id
   crs: EPSG:4326
   buffer_deg: 0.1                    # degrees to buffer bbox for downloads
+  # Equal-area CRS used for HRU area + NN-fill distances. EPSG:5070 is
+  # CONUS Albers — override for AK / HI / PR (e.g. EPSG:3338 for Alaska).
+  area_crs: "EPSG:5070"
 
 # ---------------------------------------------------------------------------
 # Datastore — shared directory for raw source downloads
@@ -53,11 +56,15 @@ targets:
     sources:
       - era5_land
       - gldas_noah_v21_monthly
+      - mwbm_climgrid
     time_step: monthly
     period: "2000-01-01/2010-12-31"
     prms_variable: basin_cfs
     range_method: multi_source_minmax
     output_file: runoff_targets.nc
+    nn_fill: true
+    nn_max_candidates: 10
+    chunk_months: 12
 
   aet:
     enabled: true
