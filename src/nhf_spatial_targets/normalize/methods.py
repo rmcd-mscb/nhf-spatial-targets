@@ -38,7 +38,7 @@ def nn_fill_bounds(
 ) -> Tuple[xr.Dataset, xr.DataArray]:
     """Fill NaN bound cells with the nearest *finite* HRU at the same time step.
 
-    For every HRU position that is NaN in either ``lower_bound`` or
+    For every HRU position that is NaN in *both* ``lower_bound`` and
     ``upper_bound`` at any time step, this walks ``cKDTree`` neighbors in
     increasing-distance order and adopts the bound values of the first
     donor that is finite *at that time step*. If no donor among the first
@@ -91,7 +91,7 @@ def nn_fill_bounds(
         neighbor_idx = neighbor_idx[:, None]
 
     diag = np.zeros((n_time, n_hru), dtype=np.int8)
-    nan_mask = np.isnan(lower) | np.isnan(upper)
+    nan_mask = np.isnan(lower) & np.isnan(upper)
 
     if not nan_mask.any():
         nn_diag = xr.DataArray(

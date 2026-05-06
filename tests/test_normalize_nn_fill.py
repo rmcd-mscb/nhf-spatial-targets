@@ -106,3 +106,22 @@ def test_nn_fill_bounds_preserves_finite_cells():
         filled["upper_bound"].values, ds["upper_bound"].values
     )
     assert (diag.values == 0).all()
+
+
+def test_nn_fill_bounds_does_not_fill_asymmetric_nan():
+    """If only one bound is NaN at a cell, leave both alone (preserves the
+    valid finite bound). Per spec: fill only when *both* are NaN."""
+    from nhf_spatial_targets.normalize.methods import nn_fill_bounds
+
+    centroids_xy = np.array([[0.0, 0.0], [1.0, 0.0]])
+    ds = _bounds_dataset(
+        values_lower=[[10.0, np.nan]],  # HRU 2 lower is NaN
+        values_upper=[[20.0, 30.0]],  # HRU 2 upper is finite
+        hrus=[1, 2],
+        times=["2000-01-01"],
+    )
+    filled, diag = nn_fill_bounds(ds, centroids_xy, max_candidates=10)
+    # HRU 2's bounds must be left unchanged because upper is finite:
+    assert np.isnan(filled["lower_bound"].values[0, 1])
+    assert filled["upper_bound"].values[0, 1] == 30.0
+    assert diag.values[0, 1] == 0  # not filled
