@@ -1,6 +1,7 @@
 {
   "permissions": {
     "allow": [
+      "Bash(pixi run:*)",
       "WebFetch(domain:claude.ai)",
       "Bash(git config --global --add safe.directory '%\\(prefix\\)///wsl.localhost/Ubuntu/home/rmcd/projects/usgs/nhf-spatial-targets')",
       "Bash(.pixi/envs/dev/bin/pytest tests/test_nldas.py -v -m \"not integration\" 2>&1)",
@@ -46,10 +47,12 @@
       "Bash(python -c \"import json,sys; m=json.load\\(sys.stdin\\); s=m.get\\('sources',{}\\).get\\('mod16a2_v061',{}\\); print\\(json.dumps\\(s, indent=2\\)\\)\")",
       "Bash(python -c \"import json,sys; m=json.load\\(sys.stdin\\); print\\('keys:', list\\(m.keys\\(\\)\\)\\); print\\('source keys:', list\\(m.get\\('sources',{}\\).keys\\(\\)\\)\\)\")",
       "Bash(awk -F_ '{src=$1\"_\"$2; if \\(NF>=5\\) src=$1\"_\"$2\"_\"$3; print src}')",
-      "Bash(gh --version)",
-      "Bash(gh auth *)",
-      "Bash(bash -n /caldera/hovenweep/projects/usgs/water/impd/nhgf/nhf-spatial-targets/fetch_all.slurm)",
-      "Bash(shellcheck /caldera/hovenweep/projects/usgs/water/impd/nhgf/nhf-spatial-targets/fetch_all.slurm)"
+      "Bash(marp \"2026-collaborator-overview-gfv2-spatial-targets.slides.md\" --pdf --pdf-outlines --allow-local-files -o gfv2-spatial-targets-presentation.pdf)",
+      "Bash(npx @marp-team/marp-cli --version)",
+      "Bash(npx @marp-team/marp-cli \"2026-collaborator-overview-gfv2-spatial-targets.slides.md\" --pdf --pdf-outlines --allow-local-files -o gfv2-spatial-targets-presentation.pdf)",
+      "Bash(wsl bash -c 'export PATH=\"$HOME/.pixi/bin:$PATH\" && cd /home/rmcd/projects/usgs/nhf-spatial-targets && pixi run git commit -m '\\\\''docs\\(presentations\\): expand collaborator deck + add reference docs \\(#89\\) *)",
+      "Bash(xargs cat)",
+      "Bash(awk '{print $2}')"
     ]
   }
 }

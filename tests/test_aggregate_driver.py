@@ -22,7 +22,7 @@ def project(tmp_path):
     datastore = tmp_path / "datastore"
     datastore.mkdir()
     config = {
-        "fabric": {"path": "", "id_col": "hru_id"},
+        "fabric": {"path": "/fake/fabric.gpkg", "id_col": "hru_id"},
         "datastore": str(datastore),
     }
     (tmp_path / "config.yml").write_text(yaml.dump(config))

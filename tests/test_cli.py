@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -45,55 +46,102 @@ def test_run_missing_fabric_json(tmp_path):
         _run("run", "--project-dir", str(workdir))
 
 
-def test_run_dispatches_enabled_targets(tmp_path):
-    """Dispatches to builder for each enabled target."""
+def _make_minimal_project(tmp_path: Path, config_extra: str = "") -> Path:
+    """Build a minimal valid project workdir for CLI run-command tests."""
+    import json as json_mod
+
     workdir = tmp_path / "workspace"
     workdir.mkdir()
+    datastore = tmp_path / "store"
+    datastore.mkdir()
+    fabric_path = tmp_path / "fabric.gpkg"
+    # Write a config that satisfies workspace.load() (datastore + fabric.path required)
     (workdir / "config.yml").write_text(
-        "fabric:\n  path: /fake/fabric.gpkg\n"
-        "output:\n  dir: /fake/out\n"
-        "targets:\n  runoff:\n    enabled: true\n  aet:\n    enabled: false\n"
+        f"datastore: {datastore}\n"
+        f"fabric:\n  path: {fabric_path}\n"
+        "output:\n  dir: /fake/out\n" + config_extra
     )
-    (workdir / "fabric.json").write_text("{}")
+    (workdir / "fabric.json").write_text(json_mod.dumps({"id_col": "nhm_id"}))
+    return workdir
+
+
+def test_run_dispatches_enabled_targets(tmp_path):
+    """Dispatches to builder for each enabled target."""
+    # Disable all defaults except runoff so defaults-merge doesn't add extras.
+    workdir = _make_minimal_project(
+        tmp_path,
+        "targets:\n"
+        "  runoff:\n    enabled: true\n    period: 2000-01-01/2000-12-31\n"
+        "  aet:\n    enabled: false\n"
+        "  recharge:\n    enabled: false\n"
+        "  soil_moisture:\n    enabled: false\n"
+        "  snow_covered_area:\n    enabled: false\n",
+    )
 
     with patch("nhf_spatial_targets.cli._dispatch") as mock_dispatch:
         _run("run", "--project-dir", str(workdir))
 
     mock_dispatch.assert_called_once()
-    assert mock_dispatch.call_args[0][0] == "runoff"
+    args = mock_dispatch.call_args[0]
+    assert args[0] == "runoff"
+    # Third positional is now a Project, not a dict
+    from nhf_spatial_targets.workspace import Project
+
+    assert isinstance(args[2], Project)
 
 
 def test_run_single_target(tmp_path):
     """--target selects a single target by name."""
-    workdir = tmp_path / "workspace"
-    workdir.mkdir()
-    (workdir / "config.yml").write_text(
-        "fabric:\n  path: /fake/fabric.gpkg\n"
-        "output:\n  dir: /fake/out\n"
-        "targets:\n  runoff:\n    enabled: true\n  aet:\n    enabled: true\n"
+    workdir = _make_minimal_project(
+        tmp_path,
+        "targets:\n  runoff:\n    enabled: true\n    period: 2000-01-01/2000-12-31\n"
+        "  aet:\n    enabled: true\n    period: 2000-01-01/2000-12-31\n",
     )
-    (workdir / "fabric.json").write_text("{}")
 
     with patch("nhf_spatial_targets.cli._dispatch") as mock_dispatch:
         _run("run", "--project-dir", str(workdir), "--target", "aet")
 
     mock_dispatch.assert_called_once()
-    assert mock_dispatch.call_args[0][0] == "aet"
+    args = mock_dispatch.call_args[0]
+    assert args[0] == "aet"
+    # Third positional is now a Project, not a dict
+    from nhf_spatial_targets.workspace import Project
+
+    assert isinstance(args[2], Project)
 
 
 def test_run_unknown_target(tmp_path):
     """Exit code 1 for an unknown target name."""
-    workdir = tmp_path / "workspace"
-    workdir.mkdir()
-    (workdir / "config.yml").write_text(
-        "fabric:\n  path: /fake/fabric.gpkg\n"
-        "output:\n  dir: /fake/out\n"
-        "targets:\n  runoff:\n    enabled: true\n"
+    workdir = _make_minimal_project(
+        tmp_path,
+        "targets:\n  runoff:\n    enabled: true\n    period: 2000-01-01/2000-12-31\n",
     )
-    (workdir / "fabric.json").write_text("{}")
 
     with pytest.raises(SystemExit, match="1"):
         _run("run", "--project-dir", str(workdir), "--target", "bogus")
+
+
+def test_run_skips_not_implemented_targets(tmp_path, capsys):
+    """NotImplementedError from a stub target is logged + the run continues."""
+    workdir = _make_minimal_project(
+        tmp_path,
+        "targets:\n"
+        "  runoff:\n    enabled: true\n    period: 2000-01-01/2000-12-31\n"
+        "  aet:\n    enabled: true\n    period: 2000-01-01/2000-12-31\n",
+    )
+
+    def _fake_dispatch(name, *a, **kw):
+        if name == "aet":
+            raise NotImplementedError("aet is a stub")
+
+    with patch("nhf_spatial_targets.cli._dispatch", side_effect=_fake_dispatch) as md:
+        _run("run", "--project-dir", str(workdir))
+    # Both targets should have been attempted; aet skipped, runoff dispatched.
+    called_names = [c.args[0] for c in md.call_args_list]
+    assert "aet" in called_names
+    assert "runoff" in called_names
+    err = capsys.readouterr().err
+    assert "WARNING" in err and "aet" in err and "skipping" in err
 
 
 # ---- init command ----------------------------------------------------------
@@ -526,3 +574,19 @@ def test_default_no_verbose():
         _run_meta("catalog", "sources")
 
     mock_setup.assert_called_once_with(False)
+
+
+# ---- _dispatch runoff smoke test -------------------------------------------
+
+
+def test_run_runoff_smoke(tmp_path):
+    """Invoking _dispatch for runoff calls run.build via the Project."""
+    from tests.test_targets_run import _make_runoff_project
+
+    from nhf_spatial_targets.cli import _dispatch
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_runoff_project(tmp_path)
+    project = load(workdir)
+    _dispatch("runoff", {}, project)
+    assert (workdir / "targets" / "runoff_targets.nc").exists()

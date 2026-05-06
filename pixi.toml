@@ -26,6 +26,7 @@ cdsapi = "*"
 # OFF by the conda activation script — required behind firewalls where
 # PROJ's CDN fetch fails.
 proj-data = "*"
+scipy = ">=1.17.1,<2"
 # gdptools: spatial aggregation (install from PyPI if not on conda-forge)
 # sciencebasepy: ScienceBase access
 # earthaccess: NASA EDL access for MODIS, MERRA-2, NLDAS

@@ -7,7 +7,10 @@ import sys
 from collections.abc import Callable
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
+
+if TYPE_CHECKING:
+    from nhf_spatial_targets.workspace import Project
 
 
 import yaml
@@ -69,6 +72,8 @@ def run(
     ] = None,
 ):
     """Run the calibration target pipeline."""
+    from nhf_spatial_targets.workspace import load as load_project
+
     if not workdir.exists():
         print(f"Error: Project not found: {workdir}", file=sys.stderr)
         sys.exit(2)
@@ -81,16 +86,12 @@ def run(
         sys.exit(2)
 
     try:
-        cfg = yaml.safe_load((workdir / "config.yml").read_text())
-    except yaml.YAMLError as exc:
-        print(f"Error: Cannot parse config.yml: {exc}", file=sys.stderr)
-        sys.exit(1)
-    if not isinstance(cfg, dict):
-        print("Error: config.yml is empty or malformed.", file=sys.stderr)
+        project = load_project(workdir)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    targets_cfg = cfg.get("targets", {})
-
+    targets_cfg = project.config.get("targets", {})
     to_run = (
         [target]
         if target
@@ -103,7 +104,13 @@ def run(
             sys.exit(1)
         print(f"Building target: {name}")
         try:
-            _dispatch(name, targets_cfg[name], cfg, workdir=workdir)
+            _dispatch(name, targets_cfg[name], project)
+        except NotImplementedError as exc:
+            print(
+                f"WARNING: target '{name}' not yet implemented; skipping ({exc})",
+                file=sys.stderr,
+            )
+            continue
         except Exception as exc:
             _logger.exception("Error building target '%s'", name)
             print(f"Error building target '{name}': {exc}", file=sys.stderr)
@@ -113,14 +120,16 @@ def run(
 def _dispatch(
     name: str,
     target_cfg: dict,
-    pipeline_cfg: dict,
-    workdir: Path | None = None,
+    project: "Project",
 ) -> None:
     """Dispatch to the appropriate target builder module."""
     from nhf_spatial_targets.targets import aet, rch, run, sca, som
 
+    if name == "runoff":
+        run.build(project)
+        return
+
     builders = {
-        "runoff": run.build,
         "aet": aet.build,
         "recharge": rch.build,
         "soil_moisture": som.build,
@@ -130,17 +139,9 @@ def _dispatch(
         print(f"Error: No builder registered for target: {name}", file=sys.stderr)
         sys.exit(1)
 
-    fabric_path = pipeline_cfg["fabric"]["path"]
-    if workdir is not None:
-        output_path = str(workdir / "targets")
-    else:
-        output_path = pipeline_cfg["output"]["dir"]
-
-    if name == "runoff":
-        # run.build does not use fabric_path (HRU area comes from config)
-        builders[name](target_cfg, output_path)
-    else:
-        builders[name](target_cfg, fabric_path, output_path)
+    fabric_path = project.config["fabric"]["path"]
+    output_path = str(project.targets_dir())
+    builders[name](target_cfg, fabric_path, output_path)
 
 
 @app.command

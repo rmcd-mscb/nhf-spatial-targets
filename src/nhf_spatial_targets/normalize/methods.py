@@ -2,43 +2,140 @@
 
 from __future__ import annotations
 
+import logging
+
+import numpy as np
+import xarray as xr
+
+logger = logging.getLogger(__name__)
+
 
 def normalize_0_1(da, dim: str = "time") -> object:
     """Normalize an xarray DataArray to [0, 1] over the given dimension."""
-    # (x - min) / (max - min)
     raise NotImplementedError
 
 
 def normalize_by_calendar_month(da) -> object:
     """Normalize per calendar month: each month normalized independently."""
-    # For each month m in {1..12}:
-    #   subset = da.sel(time=da.time.dt.month == m)
-    #   normalized[m] = (subset - subset.min()) / (subset.max() - subset.min())
     raise NotImplementedError
 
 
 def multi_source_minmax(datasets: list) -> tuple:
-    """
-    Compute lower/upper bounds as min/max across a list of DataArrays.
-
-    Returns (lower_bound, upper_bound) DataArrays.
-    """
+    """Compute lower/upper bounds as min/max across a list of DataArrays."""
     raise NotImplementedError
 
 
 def modis_ci_bounds(sca, ci, ci_threshold: float = 0.70) -> tuple:
-    """
-    Construct SCA calibration bounds from MODIS confidence interval.
+    """Construct SCA calibration bounds from MODIS confidence interval."""
+    raise NotImplementedError
+
+
+def nn_fill_bounds(
+    ds: xr.Dataset,
+    centroids_xy: np.ndarray,
+    max_candidates: int = 10,
+) -> tuple[xr.Dataset, xr.DataArray]:
+    """Fill NaN bound cells with the nearest *finite* HRU at the same time step.
+
+    For every HRU position that is NaN in *both* ``lower_bound`` and
+    ``upper_bound`` at any time step, this walks ``cKDTree`` neighbors in
+    increasing-distance order and adopts the bound values of the first
+    donor that is finite *at that time step*. If no donor among the first
+    ``max_candidates`` neighbors is finite, the cell stays NaN.
+
+    Cells where both bounds are already finite are untouched.
 
     Parameters
     ----------
-    sca : DataArray of fractional snow cover (0-1)
-    ci  : DataArray of confidence interval (0-1)
-    ci_threshold : minimum CI to include a cell/day
+    ds
+        Dataset with ``lower_bound(time, id_col)`` and
+        ``upper_bound(time, id_col)`` float vars.
+    centroids_xy
+        Array of shape ``(n_hrus, 2)`` with HRU centroids in an equal-area
+        CRS (matching ``ds[id_col]`` order).
+    max_candidates
+        Maximum number of donor neighbors to consider per (time, hru)
+        before giving up.
 
     Returns
     -------
-    (lower_bound, upper_bound) DataArrays
-    NOTE: exact formula TBD — verify against PRMSobjfun.f
+    filled_ds, nn_filled
+        ``filled_ds`` is a copy of ``ds`` with ``lower_bound`` /
+        ``upper_bound`` updated; ``nn_filled`` is an int8
+        ``(time, id_col)`` flag array (0 = not filled, 1 = filled).
     """
-    raise NotImplementedError
+    from scipy.spatial import cKDTree
+
+    if "lower_bound" not in ds or "upper_bound" not in ds:
+        raise ValueError(
+            "nn_fill_bounds requires 'lower_bound' and 'upper_bound' in ds"
+        )
+    id_col = next(d for d in ds["lower_bound"].dims if d != "time")
+    if centroids_xy.shape != (ds.sizes[id_col], 2):
+        raise ValueError(
+            f"centroids_xy shape {centroids_xy.shape} does not match "
+            f"({ds.sizes[id_col]}, 2)"
+        )
+
+    lower = ds["lower_bound"].values.copy()
+    upper = ds["upper_bound"].values.copy()
+    n_time, n_hru = lower.shape
+
+    # Use up to (1 + max_candidates) neighbors so that index 0 (the cell itself)
+    # can be skipped without losing donor budget.
+    k = min(1 + max_candidates, n_hru)
+    tree = cKDTree(centroids_xy)
+    _, neighbor_idx = tree.query(centroids_xy, k=k)
+    if k == 1:
+        neighbor_idx = neighbor_idx[:, None]
+
+    diag = np.zeros((n_time, n_hru), dtype=np.int8)
+    nan_mask = np.isnan(lower) & np.isnan(upper)
+
+    if not nan_mask.any():
+        nn_diag = xr.DataArray(
+            diag,
+            dims=ds["lower_bound"].dims,
+            coords={d: ds[d] for d in ds["lower_bound"].dims},
+            name="nn_filled",
+        )
+        return ds.copy(), nn_diag
+
+    # Iterate only HRUs that ever go NaN.
+    nan_hrus = np.where(nan_mask.any(axis=0))[0]
+    n_unfilled = 0
+    for h in nan_hrus:
+        candidates = neighbor_idx[h]
+        # Skip self (index 0 in the kNN result).
+        candidates = candidates[candidates != h]
+        for t in np.where(nan_mask[:, h])[0]:
+            for cand in candidates[:max_candidates]:
+                lo = lower[t, cand]
+                up = upper[t, cand]
+                if np.isfinite(lo) and np.isfinite(up):
+                    lower[t, h] = lo
+                    upper[t, h] = up
+                    diag[t, h] = 1
+                    break
+            else:
+                n_unfilled += 1
+    if n_unfilled:
+        logger.warning(
+            "nn_fill_bounds: %d (time, hru) cells stayed NaN after exhausting "
+            "%d donor candidates.",
+            n_unfilled,
+            max_candidates,
+        )
+
+    out = ds.copy()
+    out["lower_bound"] = (ds["lower_bound"].dims, lower)
+    out["upper_bound"] = (ds["upper_bound"].dims, upper)
+    out["lower_bound"].attrs = dict(ds["lower_bound"].attrs)
+    out["upper_bound"].attrs = dict(ds["upper_bound"].attrs)
+    nn_diag = xr.DataArray(
+        diag,
+        dims=ds["lower_bound"].dims,
+        coords={d: ds[d] for d in ds["lower_bound"].dims},
+        name="nn_filled",
+    )
+    return out, nn_diag

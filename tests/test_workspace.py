@@ -21,7 +21,10 @@ def _write_config(
     dir_mode: str | None = None,
 ) -> Path:
     """Write a minimal config.yml and return its path."""
-    cfg: dict = {"datastore": str(datastore)}
+    cfg: dict = {
+        "datastore": str(datastore),
+        "fabric": {"path": "/fake/fabric.gpkg", "id_col": "nhm_id"},
+    }
     if dir_mode is not None:
         cfg["dir_mode"] = dir_mode
     config_path = workdir / "config.yml"
@@ -94,7 +97,8 @@ def test_load_returns_project(tmp_path: Path) -> None:
     assert ws.workdir == tmp_path
     assert ws.datastore == datastore
     assert ws.fabric["id"] == "gfv11"
-    assert ws.dir_mode is None
+    # No dir_mode in config.yml → default "2775" is applied by apply_defaults.
+    assert ws.dir_mode == 0o2775
 
 
 def test_load_fails_without_config(tmp_path: Path) -> None:

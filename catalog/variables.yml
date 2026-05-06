@@ -32,7 +32,10 @@ variables:
       (mm/month) are aggregated to HRU polygons via gdptools, harmonized
       to mm/month, then converted to cfs using HRU area and days-in-month.
       Per-HRU per-month:
-        lower_bound = min(era5, gldas, mwbm), upper_bound = max(era5, gldas, mwbm).
+        lower_bound = nanmin(era5, gldas, mwbm), upper_bound = nanmax(era5, gldas, mwbm).
+        nanmin/nanmax (xr.concat([...]).min(skipna=True)) means a bound is
+        defined whenever >=1 source is finite at that (HRU, time); only
+        all-NaN cells produce NaN.
       mwbm_climgrid (Wieczorek et al. 2024, ClimGrid-forced) is the third
       source; all three are consumed by targets/run.py.
     normalize: false
@@ -72,9 +75,11 @@ variables:
   recharge:
     prms_variable: recharge
     description: >
-      Annual groundwater recharge. Both sources normalized 0-1 over the
-      calibration period via min-max normalization. Optimization targets
-      relative year-to-year change, not absolute magnitude.
+      Annual groundwater recharge. Three sources (Reitz 2017 total recharge,
+      WaterGAP 2.2d diffuse recharge, ERA5-Land sub-surface runoff as
+      recharge proxy) each normalized 0-1 over the calibration period via
+      min-max normalization. Optimization targets relative year-to-year
+      change, not absolute magnitude.
     prms_reference: "TM 6-B7 (Markstrom et al. 2015)"
     time_step: annual
     period: "2000/2009"
@@ -89,8 +94,10 @@ variables:
       Normalization confirmed as 2000-2009 per TM 6-B10 text.
       Each source normalized independently: norm = (x - min) / (max - min)
       over the 2000-2009 period after aggregation to HRU polygons.
-      lower_bound = min(norm_src1, norm_src2),
-      upper_bound = max(norm_src1, norm_src2).
+      lower_bound = nanmin(norm_reitz, norm_watergap, norm_era5_ssro),
+      upper_bound = nanmax(norm_reitz, norm_watergap, norm_era5_ssro).
+      nanmin/nanmax means a bound is defined whenever >=1 normalized
+      source is finite at that (HRU, year); only all-NaN cells produce NaN.
       NOTE: PRMSobjfun.f is not publicly available; normalization period
       2000-2009 is confirmed from TM 6-B10 body text (not Appendix 1).
       ERA5-Land contribution: ssro is summed monthly→annual in mm,

@@ -853,7 +853,7 @@ def _minimal_workdir(tmp_path: Path) -> Path:
     wd = tmp_path / "run"
     wd.mkdir()
     config = {
-        "fabric": {"path": "", "id_col": "nhm_id"},
+        "fabric": {"path": "/fake/fabric.gpkg", "id_col": "nhm_id"},
         "datastore": str(wd / "datastore"),
         "dir_mode": "2775",
     }
@@ -1080,7 +1080,7 @@ def test_fetch_era5_land_writes_partial_manifest_on_failure(tmp_path, monkeypatc
     (wd / "config.yml").write_text(
         yaml.dump(
             {
-                "fabric": {"path": "", "id_col": "nhm_id"},
+                "fabric": {"path": "/fake/fabric.gpkg", "id_col": "nhm_id"},
                 "datastore": str(wd / "datastore"),
                 "dir_mode": "2775",
             }
@@ -1245,7 +1245,7 @@ def _make_fetch_project(tmp_path: Path) -> Path:
     (wd / "config.yml").write_text(
         yaml.dump(
             {
-                "fabric": {"path": "", "id_col": "nhm_id"},
+                "fabric": {"path": "/fake/fabric.gpkg", "id_col": "nhm_id"},
                 "datastore": str(wd / "datastore"),
                 "dir_mode": "2775",
             }
