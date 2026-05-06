@@ -310,6 +310,8 @@ def _toy_target_dataset(
         },
     )
     ds["time"].attrs["bounds"] = "time_bnds"
+    for v in ("lower_bound", "upper_bound", "n_sources"):
+        ds[v].attrs["coordinates"] = "centroid_lat centroid_lon"
     return ds
 
 
@@ -333,6 +335,26 @@ def test_write_target_nc_round_trips_via_xarray(tmp_path: Path):
         assert got["time"].attrs["bounds"] == "time_bnds"
         assert "time_bnds" in got.variables
         assert got["lower_bound"].attrs["units"] == "cfs"
+        # CF aux-coord linkage must round-trip on every bound + diagnostic var.
+        # xarray (decode_cf=True) consumes the raw "coordinates" attr and promotes
+        # the named variables to Dataset coords — so we check that the coords are
+        # reachable via the Dataset, not via the per-var attr string (which xarray
+        # strips during decode).  The raw attr IS written to disk (verified via
+        # netCDF4 directly); this is the decoded equivalent.
+        for v in ("lower_bound", "upper_bound", "n_sources"):
+            coords_attr = got[v].attrs.get("coordinates", "")
+            linked_via_attr = (
+                "centroid_lat" in coords_attr and "centroid_lon" in coords_attr
+            )
+            linked_via_dataset = (
+                "centroid_lat" in got.coords and "centroid_lon" in got.coords
+            )
+            assert linked_via_attr or linked_via_dataset, (
+                f"{v}: CF aux-coord linkage lost after round-trip — "
+                f"coordinates attr={coords_attr!r}, "
+                f"centroid_lat in coords={('centroid_lat' in got.coords)}, "
+                f"centroid_lon in coords={('centroid_lon' in got.coords)}"
+            )
         # NaN preserved (decode_cf maps _FillValue back to NaN):
         assert np.isnan(got["lower_bound"].values[0, 2])
 

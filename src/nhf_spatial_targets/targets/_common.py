@@ -301,11 +301,12 @@ def write_target_nc(
                 "complevel": 4,
                 "_FillValue": None,
             }
-    encoding["time"] = {
-        "dtype": "float64",
-        "units": "days since 1970-01-01 00:00:00",
-        "calendar": "proleptic_gregorian",
-    }
+    if "time" in ds.coords or "time" in ds.dims or "time" in ds.variables:
+        encoding["time"] = {
+            "dtype": "float64",
+            "units": "days since 1970-01-01 00:00:00",
+            "calendar": "proleptic_gregorian",
+        }
     if "time_bnds" in ds.variables:
         encoding["time_bnds"] = {
             "dtype": "float64",
