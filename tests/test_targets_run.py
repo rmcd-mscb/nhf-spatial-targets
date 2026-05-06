@@ -207,3 +207,206 @@ def test_build_source_attr_reflects_active_sources(tmp_path: Path):
         assert "ERA5-Land" in src_attr
         assert "GLDAS" in src_attr
         assert "MWBM" not in src_attr  # not in active sources list
+
+
+# ---------------------------------------------------------------------------
+# C1 — Numeric unit-chain tests
+# ---------------------------------------------------------------------------
+
+
+def test_era5_to_mm_per_month_exact():
+    """ERA5-Land ro is m/month -> mm/month is x1000."""
+    from nhf_spatial_targets.targets.run import era5_to_mm_per_month
+
+    times = pd.date_range("2000-01-01", "2000-03-01", freq="MS")
+    da = xr.DataArray(
+        np.array([[0.05], [0.10], [0.025]], dtype=np.float32),
+        dims=("time", "nhm_id"),
+        coords={"time": times, "nhm_id": [1]},
+        attrs={"units": "m"},
+    )
+    out = era5_to_mm_per_month(da)
+    np.testing.assert_allclose(out.values, [[50.0], [100.0], [25.0]], rtol=1e-6)
+    assert out.attrs["units"] == "mm"
+
+
+def test_gldas_to_mm_per_month_exact_jan_and_leap_feb():
+    """GLDAS runoff_total is mean of 3-hourly accums -> mm/month is x8 x days_in_month.
+
+    Jan 2000: 31 days -> factor 8*31 = 248
+    Feb 2000: 29 days (leap) -> factor 8*29 = 232
+    """
+    from nhf_spatial_targets.targets.run import gldas_to_mm_per_month
+
+    times = pd.date_range("2000-01-01", "2000-02-01", freq="MS")
+    da = xr.DataArray(
+        np.array([[0.20], [0.20]], dtype=np.float32),
+        dims=("time", "nhm_id"),
+        coords={"time": times, "nhm_id": [1]},
+        attrs={"units": "kg m-2"},
+    )
+    out = gldas_to_mm_per_month(da)
+    # 0.20 * 8 * 31 = 49.6 ; 0.20 * 8 * 29 = 46.4 (leap-year February)
+    np.testing.assert_allclose(out.values, [[49.6], [46.4]], rtol=1e-6)
+    assert out.attrs["units"] == "mm"
+
+
+def test_gldas_to_mm_per_month_non_leap_february():
+    """Non-leap February (28 days) -> factor 8*28 = 224."""
+    from nhf_spatial_targets.targets.run import gldas_to_mm_per_month
+
+    da = xr.DataArray(
+        np.array([[0.10]], dtype=np.float32),
+        dims=("time", "nhm_id"),
+        coords={"time": pd.DatetimeIndex(["2001-02-01"]), "nhm_id": [1]},
+        attrs={"units": "kg m-2"},
+    )
+    out = gldas_to_mm_per_month(da)
+    # 0.10 * 8 * 28 = 22.4
+    np.testing.assert_allclose(out.values, [[22.4]], rtol=1e-6)
+
+
+def test_mwbm_to_mm_per_month_passthrough():
+    """MWBM runoff is already mm/month; values unchanged, units re-stamped."""
+    from nhf_spatial_targets.targets.run import mwbm_to_mm_per_month
+
+    da = xr.DataArray(
+        np.array([[10.5, 20.0, 5.25]], dtype=np.float32),
+        dims=("time", "nhm_id"),
+        coords={"time": pd.DatetimeIndex(["2000-01-01"]), "nhm_id": [1, 2, 3]},
+        attrs={"units": "mm"},
+    )
+    out = mwbm_to_mm_per_month(da)
+    np.testing.assert_array_equal(out.values, da.values)
+    assert out.attrs["units"] == "mm"
+
+
+def test_mm_per_month_to_cfs_exact_january():
+    """31 mm/mo over a 1 km2 (1e6 m2) HRU in January.
+
+    cfs = (31 * 1e-3 / 31) * 1e6 * 35.3146667 / 86400
+        = 1e-3 * 1e6 * 35.3146667 / 86400
+        = 1000 * 35.3146667 / 86400
+        ~= 0.408734
+    """
+    from nhf_spatial_targets.targets.run import mm_per_month_to_cfs
+
+    da = xr.DataArray(
+        np.array([[31.0]], dtype=np.float32),
+        dims=("time", "nhm_id"),
+        coords={"time": pd.DatetimeIndex(["2000-01-01"]), "nhm_id": [1]},
+        attrs={"units": "mm"},
+    )
+    area = xr.DataArray(
+        np.array([1e6], dtype=np.float64),
+        dims=("nhm_id",),
+        coords={"nhm_id": [1]},
+    )
+    out = mm_per_month_to_cfs(da, area)
+    expected = (31 * 1e-3 / 31) * 1e6 * 35.3146667 / 86400
+    np.testing.assert_allclose(out.values, [[expected]], rtol=1e-4)
+    assert out.attrs["units"] == "cfs"
+
+
+def test_mm_per_month_to_cfs_february_uses_28_or_29_days():
+    """February's days_in_month must come from the time coord, not be hardcoded."""
+    from nhf_spatial_targets.targets.run import mm_per_month_to_cfs
+
+    # Non-leap Feb: 28 days
+    da_2001 = xr.DataArray(
+        np.array([[28.0]], dtype=np.float32),
+        dims=("time", "nhm_id"),
+        coords={"time": pd.DatetimeIndex(["2001-02-01"]), "nhm_id": [1]},
+        attrs={"units": "mm"},
+    )
+    # Leap Feb: 29 days
+    da_2000 = xr.DataArray(
+        np.array([[29.0]], dtype=np.float32),
+        dims=("time", "nhm_id"),
+        coords={"time": pd.DatetimeIndex(["2000-02-01"]), "nhm_id": [1]},
+        attrs={"units": "mm"},
+    )
+    area = xr.DataArray(
+        np.array([1e6], dtype=np.float64),
+        dims=("nhm_id",),
+        coords={"nhm_id": [1]},
+    )
+    # Both should produce identical cfs (numerator and denominator scale together):
+    # 28 mm / 28 days = 1 mm/day  ;  29 mm / 29 days = 1 mm/day  -> same cfs.
+    out_2001 = mm_per_month_to_cfs(da_2001, area)
+    out_2000 = mm_per_month_to_cfs(da_2000, area)
+    np.testing.assert_allclose(out_2001.values, out_2000.values, rtol=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# C2 — End-to-end NN-fill path
+# ---------------------------------------------------------------------------
+
+
+def test_build_nn_fill_actually_fills_nan_cells(tmp_path: Path):
+    """End-to-end NN-fill: an aggregated NC with NaN at one HRU/month
+    must produce a *_nn_filled.nc with that cell filled and nn_filled=1."""
+    import json
+
+    from nhf_spatial_targets.targets.run import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = tmp_path / "proj"
+    workdir.mkdir()
+    fabric_path = tmp_path / "fabric.gpkg"
+    _write_synthetic_fabric(fabric_path)
+    (workdir / "fabric.json").write_text(json.dumps({"id_col": "nhm_id"}))
+    cfg = {
+        "datastore": str(tmp_path / "store"),
+        "fabric": {"path": str(fabric_path), "id_col": "nhm_id"},
+        "targets": {
+            "runoff": {
+                "period": "2000-01-01/2000-03-31",
+                "nn_fill": True,
+                "sources": ["era5_land"],  # single source so any NaN in source
+                # propagates to NaN bounds
+            }
+        },
+    }
+    (workdir / "config.yml").write_text(yaml.safe_dump(cfg))
+
+    # Build a synthetic ERA5 NC where HRU 2 is NaN at all 3 months but HRU 1
+    # and HRU 3 are finite — the NN-fill should adopt HRU 1's values for
+    # HRU 2 (HRU 1 is the geometrically-nearest finite donor at x=0 vs HRU
+    # 3 at x=2 in the synthetic fabric layout where polygons are adjacent
+    # at lon=-105, -104.9, -104.8).
+    src = "era5_land"
+    src_dir = workdir / "data" / "aggregated" / src
+    src_dir.mkdir(parents=True)
+    times = pd.date_range("2000-01-01", "2000-03-01", freq="MS")
+    arr = np.full((3, 3), 0.05, dtype=np.float32)  # 50 mm/mo
+    arr[:, 1] = np.nan  # HRU 2 NaN throughout
+    ds = xr.Dataset(
+        {"ro": (("time", "nhm_id"), arr)},
+        coords={"time": times, "nhm_id": [1, 2, 3]},
+    )
+    ds.to_netcdf(src_dir / f"{src}_2000_agg.nc")
+
+    project = load(workdir)
+    build(project)
+
+    # Honest-NaN file: HRU 2 stays NaN, n_sources=0 there.
+    with xr.open_dataset(project.targets_dir() / "runoff_targets.nc") as out:
+        assert np.isnan(out["lower_bound"].values[:, 1]).all()
+        assert (out["n_sources"].values[:, 1] == 0).all()
+
+    # NN-filled file: HRU 2 now has finite values, nn_filled=1 there.
+    nn_path = project.targets_dir() / "runoff_targets_nn_filled.nc"
+    assert nn_path.exists()
+    with xr.open_dataset(nn_path) as filled:
+        assert "nn_filled" in filled.data_vars
+        assert np.isfinite(filled["lower_bound"].values[:, 1]).all()
+        assert (filled["nn_filled"].values[:, 1] == 1).all()
+        # HRUs 1 and 3 were already finite; nn_filled=0 there:
+        assert (filled["nn_filled"].values[:, 0] == 0).all()
+        assert (filled["nn_filled"].values[:, 2] == 0).all()
+        # The filled value should match HRU 1's (geometrically closer than HRU 3):
+        np.testing.assert_allclose(
+            filled["lower_bound"].values[:, 1],
+            filled["lower_bound"].values[:, 0],
+        )
