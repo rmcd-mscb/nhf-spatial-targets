@@ -409,9 +409,17 @@ over absolute mm/month values (no normalization); converted to cfs before writin
 
 ### NaN HRU fill
 
-- NaN HRUs after aggregation (partial or no source coverage) filled by nearest-neighbor in HRU space
-- Fill runs as a shared post-processing step in `normalize/` before any combination or normalization
-- Keeps aggregation stage honest about coverage; fill location is single auditable place
+- NaN HRUs after aggregation (partial or no source coverage) are honest:
+  the aggregated NCs preserve NaN, no imputation happens at the aggregation stage.
+- NN-fill is a **target-stage post-processing step** on the per-HRU per-time
+  *bounds* (after the multi-source NaN-aware min/max combination), not on the
+  aggregated NCs themselves. When `target.nn_fill` is true (default), the
+  target builder writes a separate `<target>_nn_filled.nc` alongside the
+  honest-NaN `<target>.nc`. Donor walk in equal-area space (`project.area_crs`).
+- Diagnostics written by every multi-source-minmax target:
+  - `n_sources(time, id_col)` int8 (0/1/2/3) — finite-source count per cell
+  - `nn_filled(time, id_col)` int8 (0/1) — only present in the `*_nn_filled.nc`
+    file; flags which cells were imputed
 
 ### Timestamp alignment across sources
 
