@@ -111,6 +111,29 @@ def test_run_unknown_target(tmp_path):
         _run("run", "--project-dir", str(workdir), "--target", "bogus")
 
 
+def test_run_skips_not_implemented_targets(tmp_path, capsys):
+    """NotImplementedError from a stub target is logged + the run continues."""
+    workdir = _make_minimal_project(
+        tmp_path,
+        "targets:\n"
+        "  runoff:\n    enabled: true\n    period: 2000-01-01/2000-12-31\n"
+        "  aet:\n    enabled: true\n    period: 2000-01-01/2000-12-31\n",
+    )
+
+    def _fake_dispatch(name, *a, **kw):
+        if name == "aet":
+            raise NotImplementedError("aet is a stub")
+
+    with patch("nhf_spatial_targets.cli._dispatch", side_effect=_fake_dispatch) as md:
+        _run("run", "--project-dir", str(workdir))
+    # Both targets should have been attempted; aet skipped, runoff dispatched.
+    called_names = [c.args[0] for c in md.call_args_list]
+    assert "aet" in called_names
+    assert "runoff" in called_names
+    err = capsys.readouterr().err
+    assert "WARNING" in err and "aet" in err and "skipping" in err
+
+
 # ---- init command ----------------------------------------------------------
 
 

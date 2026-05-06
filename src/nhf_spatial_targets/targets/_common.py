@@ -91,6 +91,7 @@ def read_aggregated_source(
     ds = xr.open_mfdataset(
         [str(p) for p in paths],
         combine="by_coords",
+        join="outer",
         chunks=chunks,
         engine="netcdf4",
     )
