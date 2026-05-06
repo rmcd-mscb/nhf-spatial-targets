@@ -10,6 +10,8 @@ from pathlib import Path
 
 import yaml
 
+from nhf_spatial_targets.defaults import apply_defaults
+
 _IS_UNIX = platform.system() != "Windows"
 
 
@@ -53,9 +55,38 @@ class Project:
         """Return path to .credentials.yml."""
         return self.workdir / ".credentials.yml"
 
+    @property
+    def area_crs(self) -> str:
+        """Equal-area CRS used for HRU area + NN-fill distances."""
+        return self.config["fabric"]["area_crs"]
+
+    @property
+    def id_col(self) -> str:
+        """Fabric ID column name (also the HRU dim in aggregated NCs)."""
+        return self.config["fabric"]["id_col"]
+
+    def target(self, name: str) -> dict:
+        """Return the merged config sub-dict for a calibration target.
+
+        Raises ``KeyError`` if ``name`` is not a recognized target.
+        """
+        targets = self.config.get("targets", {})
+        if name not in targets:
+            raise KeyError(f"Unknown target '{name}'. Known: {sorted(targets.keys())}")
+        return targets[name]
+
 
 def load(workdir: Path) -> Project:
-    """Load a validated project from config.yml + fabric.json."""
+    """Load a project, merging user config over defaults from ``defaults.py``.
+
+    Reads ``config.yml`` and ``fabric.json``, deep-merges the user config over
+    :data:`nhf_spatial_targets.defaults.DEFAULTS` (user wins at every leaf;
+    lists replace wholesale; ``None`` user values fall through to defaults),
+    and returns a :class:`Project` carrying the merged config.
+
+    Required keys (``datastore``, ``fabric.path``) are checked here so that
+    every consumer of ``Project`` can assume they exist.
+    """
     config_path = workdir / "config.yml"
     if not config_path.exists():
         raise FileNotFoundError(
@@ -63,16 +94,18 @@ def load(workdir: Path) -> Project:
             f"Run 'nhf-targets init --project-dir {workdir}' first."
         )
     try:
-        config = yaml.safe_load(config_path.read_text())
+        user_config = yaml.safe_load(config_path.read_text())
     except yaml.YAMLError as exc:
         raise ValueError(f"Cannot parse config.yml in {workdir}: {exc}") from exc
-    if not isinstance(config, dict):
+    if user_config is not None and not isinstance(user_config, dict):
         raise ValueError(
             f"config.yml in {workdir} is empty or malformed. "
             f"It must contain YAML key-value pairs."
         )
 
-    if "datastore" not in config:
+    config = apply_defaults(user_config)
+
+    if not config.get("datastore"):
         raise ValueError(
             f"'datastore' key missing from config.yml in {workdir}. "
             f"This field is required. Edit config.yml and add the datastore path."

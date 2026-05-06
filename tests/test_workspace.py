@@ -94,7 +94,8 @@ def test_load_returns_project(tmp_path: Path) -> None:
     assert ws.workdir == tmp_path
     assert ws.datastore == datastore
     assert ws.fabric["id"] == "gfv11"
-    assert ws.dir_mode is None
+    # No dir_mode in config.yml → default "2775" is applied by apply_defaults.
+    assert ws.dir_mode == 0o2775
 
 
 def test_load_fails_without_config(tmp_path: Path) -> None:
