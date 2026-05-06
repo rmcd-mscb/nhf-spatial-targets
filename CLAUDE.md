@@ -18,7 +18,8 @@ pixi run validate -- --project-dir /data/nhf-runs/my-run
 # Run the full pipeline against a project
 pixi run run -- --project-dir /data/nhf-runs/my-run
 
-# Run a single target
+# Run a single target (runoff is implemented; aet/rch/som/sca are stubs)
+pixi run run-runoff -- --project-dir /data/nhf-runs/my-run
 pixi run run-aet -- --project-dir /data/nhf-runs/my-run
 
 # Aggregate sources to fabric (full source period; clipping happens in targets)
@@ -119,7 +120,11 @@ Full architectural reference: `docs/architecture/transformation-pipeline.md`.
   fraction), attach attrs. Do not modify aggregated source values.
 - **Per-HRU transforms (`normalize/methods.py`):** 0–1 normalization,
   multi-source min/max, NN-fill of NaN HRUs (when applied at all, see below).
-  Defined at HRU scale, must run post-aggregation.
+  Defined at HRU scale, must run post-aggregation. NN-fill, when applied,
+  is a **target-stage post-processing step** on the multi-source-combined
+  bounds (not on aggregated NCs); the target builder writes a parallel
+  ``<target>_nn_filled.nc`` alongside the honest-NaN ``<target>.nc``. See
+  ``targets/run.py`` for the canonical implementation.
 - **Linear unit conversions (`targets/<tgt>.py`):** `× 1000`, `÷ 100`,
   `× 8 × days_in_month`, mm/month → cfs, etc. These commute with
   aggregation; we put them downstream so the aggregated NC stays in native
