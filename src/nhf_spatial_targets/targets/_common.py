@@ -91,15 +91,25 @@ def read_aggregated_source(
         chunks=chunks,
         engine="netcdf4",
     )
+    if var not in ds:
+        available = sorted(ds.data_vars)
+        ds.close()
+        raise KeyError(
+            f"Variable '{var}' not found in aggregated NCs for source "
+            f"'{source_key}'. Available variables: {available}."
+        )
     sliced = ds[var].sel(time=slice(period[0], period[1]))
     if sliced.sizes.get("time", 0) == 0:
-        ds_t0 = str(ds["time"].min().values)[:10]
-        ds_t1 = str(ds["time"].max().values)[:10]
+        # Years parsed from sorted filenames -- avoids triggering dask compute
+        # on a possibly large coordinate array, and is robust to time-coord
+        # corruption inside the NCs.
+        first_year = paths[0].name.rsplit("_", 2)[-2]
+        last_year = paths[-1].name.rsplit("_", 2)[-2]
         ds.close()
         raise ValueError(
             f"Requested period {period[0]} .. {period[1]} is entirely "
             f"outside source coverage for '{source_key}' "
-            f"({ds_t0} .. {ds_t1})."
+            f"(years {first_year} .. {last_year})."
         )
     logger.info(
         "Loaded %s/%s: %d months from %d per-year NCs",
