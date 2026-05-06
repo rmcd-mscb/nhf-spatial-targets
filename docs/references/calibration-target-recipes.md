@@ -25,47 +25,103 @@ the recipes below are guidance for filling them in.
 ### 1. Runoff (RUN)
 
 - **PRMS variable:** `runoff`
-- **Sources:** ERA5-Land `ro`, GLDAS-2.1 NOAH `runoff_total = Qs_acc + Qsb_acc`
+- **Sources:** ERA5-Land `ro`, GLDAS-2.1 NOAH `runoff_total = Qs_acc + Qsb_acc`,
+  MWBM ClimGrid `runoff` — **all three**
 - **Builder:** `src/nhf_spatial_targets/targets/run.py` (implemented)
 
 **Native-unit conversion to mm/month**
 
 - ERA5-Land `ro`: m of water / month (monthly accumulation, `cell_methods: time: sum`).
-  Multiply by 1000 to get mm/month.
+  Multiply by 1000 → mm/month.
 - GLDAS NOAH `runoff_total`: kg m⁻², stored as the **mean of 3-hourly accumulations**
   for the month (NOT a monthly sum), per the NASA GES DISC GLDAS-2.1 README.
-  Multiply by `8 × days_in_month` to recover mm/month. Implemented in
-  `gldas_to_mm_per_month`. Earlier versions of the builder used an identity
-  transform here, which made GLDAS values 224–248× too small.
+  Multiply by `8 × days_in_month` → mm/month. The summation `Qs_acc + Qsb_acc`
+  is performed at consolidation time; the target builder consumes the already-
+  summed `runoff_total` variable.
+- MWBM ClimGrid `runoff`: already mm/month native — no conversion. The catalog is
+  authoritative for this unit; the builder validates against
+  `catalog.source("mwbm_climgrid")["variables"]`.
 
 **mm/month → cfs**
 
-`mm/month × 1e-3 m/mm × HRU_area_m² / days_in_month × 35.3147 ÷ 86400`. Implemented
-in `mm_per_month_to_cfs`.
+`mm/month × 1e-3 m/mm × HRU_area_m² / days_in_month × 35.3147 ÷ 86400`,
+implemented in `mm_per_month_to_cfs`. HRU area is computed by the builder
+from the fabric, reprojecting to `project.area_crs` (EPSG:5070 default,
+configurable for AK/HI/PR).
 
-**Time conventions (cross-source)**
+**Period semantics (period union, not period intersection)**
 
-ERA5-Land timestamps are at end-of-month (e.g. `2000-01-31`); GLDAS at start-of-month
-(`2000-01-01`). Both refer to January's accumulation. `time.sel(method="nearest")`
-with a mid-month target picks the right month for each, but downstream code aligning
-the two sources should slice to a calendar month rather than match exact dates.
+The builder takes a single `runoff.period: "<start>/<end>"` from project
+config and constructs a master month-start time index covering it. Each
+source contributes for `[period_min, period_max] ∩ source_native_range` —
+months in the master index that a source does not cover come back as NaN
+after `reindex_to_month_start`. The `multi_source_nanminmax` reduction is
+NaN-aware, so a source that ends in 2020 simply contributes nothing for
+post-2020 cells; the bound is still well-defined as long as ≥1 other
+source is finite there.
+
+**Time canonicalization**
+
+ERA5-Land timestamps are end-of-month, GLDAS start-of-month, MWBM
+start-of-month. `reindex_to_month_start` converts every source's time
+coord via `dt.to_period("M").dt.to_timestamp()` (implemented through
+`pd.DatetimeIndex(...).to_period("M").to_timestamp()` because xarray's
+`.dt` accessor lacks `to_period`) so all three land on the same
+month-start slot regardless of native convention. The output NC carries
+`time_bnds(time, nv=2)` recording `[month_start, next_month_start)` per
+CF convention.
 
 **Spatial extent**
 
-ERA5-Land is already subset to CONUS plus contributing watersheds (lon −125 to −66,
-lat 24.7 to 53). GLDAS is global and gets aggregated through gdptools onto the same
-HRU fabric, so spatial alignment lands at HRU resolution.
+ERA5-Land is subset to CONUS+contributing-watersheds at fetch time
+(lon −125 to −66, lat 24.7 to 53). GLDAS is global, MWBM is CONUS at
+2.5 arcmin; both are aggregated through gdptools onto the same HRU
+fabric, so spatial alignment lands at HRU resolution. The builder raises
+if the three sources do not agree on the HRU coord set after reindex —
+that indicates different fabrics, a real upstream bug.
 
 **Combination rule**
 
-Per-HRU per-month: `lower_bound = min(era5_cfs, gldas_cfs)`,
-`upper_bound = max(era5_cfs, gldas_cfs)`.
+Per-HRU per-month: `lower_bound = nanmin(era5_cfs, gldas_cfs, mwbm_cfs)`,
+`upper_bound = nanmax(era5_cfs, gldas_cfs, mwbm_cfs)` via
+`xr.concat([...], dim="source").min(skipna=True)` (and `.max`). An int8
+`n_sources(time, id_col)` diagnostic records how many sources contributed
+at each cell (0 / 1 / 2 / 3). Cross-link: see "Aggregation, masked_mean,
+and target-time NN-fill" later in this document.
+
+**NN-fill (optional, default-on)**
+
+When `runoff.nn_fill: true` (default), the builder writes a second file
+`runoff_targets_nn_filled.nc` alongside the honest-NaN
+`runoff_targets.nc`. The fill is purely additive: a cKDTree donor walk
+in `project.area_crs` finds the nearest finite HRU at each time step and
+adopts its bound values; if the nearest is also NaN, the walk continues
+until a finite donor is found or `runoff.nn_max_candidates` (default 10)
+is exhausted (in which case the cell stays NaN). Fill triggers only when
+*both* `lower_bound` and `upper_bound` are NaN at a (HRU, time) cell —
+asymmetric NaN (one bound finite, the other NaN, which the upstream
+`multi_source_nanminmax` will not produce) is left untouched. The
+filled file carries an int8 `nn_filled(time, id_col)` flag (0/1) so
+analysts can see which cells were imputed. The honest-NaN file is the
+canonical output; NN-fill is a downstream-friendly artifact.
+
+**Project config keys**
+
+- `runoff.sources`, `runoff.period`, `runoff.nn_fill`, `runoff.nn_max_candidates`,
+  `runoff.chunk_months`, `runoff.output_file`
+- Project-level: `fabric.area_crs`
+
+All carry defaults — see `src/nhf_spatial_targets/defaults.py` for the
+authoritative source. After `nhf-targets validate`, the fully merged
+config is written to `<project>/config.effective.yml` (read-only), and
+the diff between user config and defaults is logged to stderr.
 
 **Open / verify**
 
 - ERA5-Land's CONUS-and-contributing-watersheds bbox is in
-  `src/nhf_spatial_targets/fetch/era5_land.py`. Confirm that GLDAS aggregation is
-  using the same fabric so the multi-source min/max is per-HRU consistent.
+  `src/nhf_spatial_targets/fetch/era5_land.py`. Confirm GLDAS and MWBM
+  aggregations use the same fabric so the multi-source min/max is
+  per-HRU consistent (the builder will raise on mismatch).
 
 ---
 
