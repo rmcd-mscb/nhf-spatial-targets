@@ -51,6 +51,13 @@ _SOURCE_VAR: dict[str, str] = {
     "mwbm_climgrid": "runoff",
 }
 
+# Per-source human-readable description for the output NC's global ``source`` attr.
+_SOURCE_DESCRIPTION: dict[str, str] = {
+    "era5_land": "ERA5-Land ro",
+    "gldas_noah_v21_monthly": "GLDAS-2.1 NOAH runoff_total (Qs_acc + Qsb_acc, summed at consolidation)",
+    "mwbm_climgrid": "MWBM ClimGrid runoff",
+}
+
 
 # ---------------------------------------------------------------------------
 # Per-source unit shims (mm/month is the common intermediate)
@@ -66,12 +73,16 @@ def era5_to_mm_per_month(da: xr.DataArray) -> xr.DataArray:
 
 
 def gldas_to_mm_per_month(da: xr.DataArray) -> xr.DataArray:
-    """GLDAS Qs_acc + Qsb_acc -> mm/month.
+    """GLDAS ``runoff_total`` (kg m⁻²) → mm/month.
+
+    ``runoff_total`` is the consolidation-time sum of ``Qs_acc + Qsb_acc``;
+    this function does NOT perform the sum, it only converts the already-
+    summed variable's units.
 
     GLDAS-2.1 ``_acc`` monthly values are the *mean* of 3-hourly
     accumulations (NOT a monthly sum). Per the NASA GES DISC GLDAS-2.1
-    README, the monthly total is recovered via x 8 x days_in_month.
-    1 kg/m^2 = 1 mm depth.
+    README, the monthly total is recovered via × 8 × days_in_month.
+    1 kg/m² ≡ 1 mm depth.
     """
     days = da["time"].dt.days_in_month
     out = da * 8.0 * days
@@ -280,7 +291,7 @@ def build(project: Project) -> None:
     ds[id_col].attrs["cf_role"] = "timeseries_id"
 
     extra_attrs = {
-        "source": ("ERA5-Land ro; GLDAS-2.1 NOAH Qs_acc+Qsb_acc; MWBM ClimGrid runoff"),
+        "source": "; ".join(_SOURCE_DESCRIPTION[s] for s in sources),
         "references": "Hay et al. 2022, doi:10.3133/tm6B10",
         "fabric": project.config["fabric"]["path"],
         "fabric_sha256": project.fabric.get("sha256", ""),
@@ -288,16 +299,20 @@ def build(project: Project) -> None:
         "area_crs": project.area_crs,
     }
 
+    # Materialize once: the bound vars + diagnostic are needed for the log
+    # line, the unfilled-file write, and (optionally) the NN-fill walk.
+    ds_loaded = ds.compute()
+
     output_path = project.targets_dir() / runoff_cfg["output_file"]
     write_target_nc(
-        ds,
+        ds_loaded,
         output_path,
         title="NHM runoff calibration target (lower/upper bounds in cfs)",
         extra_global_attrs=extra_attrs,
     )
 
-    # Coverage summary log line.
-    n = ds["n_sources"].values
+    # Coverage summary log line (read from the in-memory materialized array).
+    n = ds_loaded["n_sources"].values
     total = n.size
     none = int((n == 0).sum())
     logger.info(
@@ -309,8 +324,6 @@ def build(project: Project) -> None:
 
     # 6. NN-fill (optional).
     if runoff_cfg["nn_fill"]:
-        # Materialize the bounds for the in-memory NN walk.
-        ds_loaded = ds.compute()
         centroids_xy = hru_meta[["centroid_x", "centroid_y"]].values
         filled_ds, nn_diag = nn_fill_bounds(
             ds_loaded,

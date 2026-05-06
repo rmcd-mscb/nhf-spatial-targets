@@ -177,3 +177,33 @@ def test_build_hru_mismatch_raises(tmp_path: Path):
     project = load(workdir)
     with pytest.raises(ValueError, match="HRU coords differ"):
         build(project)
+
+
+def test_build_source_attr_reflects_active_sources(tmp_path: Path):
+    """Global 'source' attr names exactly the sources actually consumed."""
+    from nhf_spatial_targets.targets.run import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_runoff_project(
+        tmp_path,
+        # Only era5_land and gldas, drop mwbm:
+        sources_per_year={
+            "era5_land": {2000: ("ro", 0.05)},
+            "gldas_noah_v21_monthly": {2000: ("runoff_total", 2.0)},
+        },
+        period="2000-01-01/2000-12-31",
+        nn_fill=False,
+    )
+    # Override config to only enable the two sources we have:
+    cfg_path = workdir / "config.yml"
+    cfg = yaml.safe_load(cfg_path.read_text())
+    cfg["targets"]["runoff"]["sources"] = ["era5_land", "gldas_noah_v21_monthly"]
+    cfg_path.write_text(yaml.safe_dump(cfg))
+
+    project = load(workdir)
+    build(project)
+    with xr.open_dataset(project.targets_dir() / "runoff_targets.nc") as ds:
+        src_attr = ds.attrs["source"]
+        assert "ERA5-Land" in src_attr
+        assert "GLDAS" in src_attr
+        assert "MWBM" not in src_attr  # not in active sources list
