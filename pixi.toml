@@ -87,6 +87,9 @@ fetch-reitz2017 = { cmd = "nhf-targets fetch reitz2017", description = "Download
 fetch-mod16a2 = { cmd = "nhf-targets fetch mod16a2", description = "Download MOD16A2 v061 AET data via earthaccess" }
 fetch-mod10c1 = { cmd = "nhf-targets fetch mod10c1", description = "Download MOD10C1 v061 snow cover data via earthaccess" }
 fetch-mwbm-climgrid = { cmd = "nhf-targets fetch mwbm-climgrid", description = "Download USGS MWBM (ClimGrid-forced) monthly outputs from ScienceBase" }
+fetch-daymet = { cmd = "nhf-targets fetch daymet", description = "Register operator-staged Daymet V4 R1 regional zarr stores (verify-only)" }
+fetch-snodas = { cmd = "nhf-targets fetch snodas", description = "Download SNODAS daily SWE granules from NSIDC (G02158) via earthaccess" }
+fetch-margulis-wus-sr = { cmd = "nhf-targets fetch margulis-wus-sr", description = "Download Margulis Western US Snow Reanalysis (NSIDC-0719) via earthaccess" }
 fetch-all = { cmd = "nhf-targets fetch all", description = "Download all source datasets sequentially" }
 
 # Aggregation

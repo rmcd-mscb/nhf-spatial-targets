@@ -36,6 +36,20 @@
 #
 # To fetch a subset of years only:
 #   PERIOD=2000/2010 sbatch fetch_era5_land.slurm
+#
+# GOTCHA — `sd` (snow depth water equivalent) backfill on old projects:
+#   ERA5-Land grew a 4th variable `sd` in PR #100 (SWE category fetch
+#   scaffolding). Years whose daily/monthly NCs predate that PR will
+#   be SKIPPED on re-run because `_completed_years_from_manifest`
+#   keys on path existence, not declared-variable membership.  To
+#   backfill `sd` on those years, delete the affected daily/monthly
+#   NCs first so the consolidator rebuilds with the full variable list:
+#
+#     rm <datastore>/era5_land/daily/era5_land_daily_{2020..2024}.nc
+#     rm <datastore>/era5_land/monthly/era5_land_monthly_{2020..2024}.nc
+#
+#   Then re-submit this job; the hourly chunks are already on disk so
+#   the rebuild is fast (no CDS traffic).
 
 set -euo pipefail
 

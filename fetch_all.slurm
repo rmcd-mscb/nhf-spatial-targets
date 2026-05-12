@@ -2,7 +2,7 @@
 #SBATCH --job-name=nhf-fetch
 #SBATCH --account=impd
 #SBATCH --partition=cpu
-#SBATCH --array=0-10
+#SBATCH --array=0-13
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=128G
@@ -11,7 +11,7 @@
 #SBATCH --error=logs/fetch_%a_%A.err
 
 # NHF Spatial Targets — parallel fetch array
-# Submits one SLURM job per source dataset (11 total).
+# Submits one SLURM job per source dataset (14 total).
 # Each job downloads independently; they can run concurrently.
 #
 # Usage (REPO_DIR and PROJECT_DIR are overridable via environment):
@@ -35,6 +35,19 @@
 #
 # Use this after a pipeline change has invalidated the existing
 # consolidated NCs (e.g. PR #88's MOD16A2 fill-mask fix).
+#
+# Daymet (index 11) is verify-only — it does not download. The fetch
+# expects the three regional zarrs (NA/HI/PR) pre-staged on a shared
+# filesystem. Configure ONE of:
+#   - `daymet_root: /path/to/zarr/parent` in <project>/config.yml, OR
+#   - DAYMET_ROOT env var, which this script forwards as --source-path.
+# Missing zarrs raise FileNotFoundError per region. See
+# docs/sources/daymet.md.
+#
+# Margulis WUS-SR (index 13) is fabric-scoped to Oregon. Non-Oregon
+# projects can still fetch it (raw downloads stay reusable across
+# projects sharing a datastore) but expect zero granules per year and
+# a one-line warning. See docs/sources/margulis_wus_sr.md.
 
 set -euo pipefail
 
@@ -59,6 +72,9 @@ FETCH_TASKS=(
     "fetch-mod16a2"        # 8  — 2000–present at 500m, 8-day (LP DAAC/earthaccess)
     "fetch-mod10c1"        # 9  — 2000–present at 0.05°, daily (NSIDC/earthaccess)
     "fetch-mwbm-climgrid"  # 10 — 1900–2020 at 2.5 arcmin, monthly (ScienceBase, MANUAL DOWNLOAD; see docs/sources/mwbm_climgrid.md) — ends 2020
+    "fetch-daymet"         # 11 — 1980–2024 at 1 km, daily (ORNL DAAC zarr, MANUAL STAGING; see docs/sources/daymet.md)
+    "fetch-snodas"         # 12 — 2003–present at 1 km, daily (NSIDC G02158 via earthaccess)
+    "fetch-margulis-wus-sr" # 13 — 1985–2021 at 90 m, daily (NSIDC-0719 via earthaccess) — Oregon-fabric only
 )
 
 # Map array index → fetch period (YYYY/YYYY)
@@ -77,6 +93,9 @@ FETCH_PERIODS=(
     "2000/2025"   # 8  mod16a2     (MODIS starts 2000)
     "2000/2025"   # 9  mod10c1     (MODIS starts 2000)
     "1979/2020"   # 10 mwbm-climgrid (publisher ends 2020; 1895-1899 spinup excluded)
+    "1980/2024"   # 11 daymet      (publisher ends 2024; V4 R1)
+    "2003/2025"   # 12 snodas      (daily archive starts 2003-09-30)
+    "1985/2021"   # 13 margulis-wus-sr (water years 1985-2021)
 )
 
 TASK="${FETCH_TASKS[$SLURM_ARRAY_TASK_ID]}"
@@ -103,6 +122,16 @@ case "${FORCE:-}" in
         esac
         ;;
 esac
+
+# fetch-daymet is verify-only and needs to locate the staged regional
+# zarrs. Two ways: `daymet_root:` in <project>/config.yml (preferred)
+# or pass the directory via DAYMET_ROOT env → --source-path here.
+# If neither is set, the fetch raises FileNotFoundError with operator
+# instructions.
+if [ "$TASK" = "fetch-daymet" ] && [ -n "${DAYMET_ROOT:-}" ]; then
+    EXTRA_ARGS+=("--source-path" "$DAYMET_ROOT")
+    echo "=== DAYMET_ROOT=$DAYMET_ROOT: appending --source-path to $TASK ==="
+fi
 
 pixi run "$TASK" -- --project-dir "$PROJECT_DIR" --period "$PERIOD" \
     ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
