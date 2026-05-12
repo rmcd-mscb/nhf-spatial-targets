@@ -371,8 +371,10 @@ def fetch_all_cmd(
     # Import all fetch functions
     import nhf_spatial_targets.catalog as _catalog
     from nhf_spatial_targets.fetch._period import clamp_period
+    from nhf_spatial_targets.fetch.daymet import fetch_daymet
     from nhf_spatial_targets.fetch.era5_land import fetch_era5_land
     from nhf_spatial_targets.fetch.gldas import fetch_gldas
+    from nhf_spatial_targets.fetch.margulis_wus_sr import fetch_margulis_wus_sr
     from nhf_spatial_targets.fetch.merra2 import fetch_merra2
     from nhf_spatial_targets.fetch.modis import fetch_mod10c1, fetch_mod16a2
     from nhf_spatial_targets.fetch.mwbm_climgrid import fetch_mwbm_climgrid
@@ -380,6 +382,7 @@ def fetch_all_cmd(
     from nhf_spatial_targets.fetch.nldas import fetch_nldas_mosaic, fetch_nldas_noah
     from nhf_spatial_targets.fetch.pangaea import fetch_watergap22d
     from nhf_spatial_targets.fetch.reitz2017 import fetch_reitz2017
+    from nhf_spatial_targets.fetch.snodas import fetch_snodas
 
     # (display name, catalog source key, fetch function)
     sources = [
@@ -394,6 +397,11 @@ def fetch_all_cmd(
         ("watergap22d", "watergap22d", fetch_watergap22d),
         ("reitz2017", "reitz2017", fetch_reitz2017),
         ("mwbm-climgrid", "mwbm_climgrid", fetch_mwbm_climgrid),
+        # SWE category (issue #99) — fetch scaffolding only; aggregate +
+        # target wiring deferred to per-source follow-up issues.
+        ("daymet", "daymet", fetch_daymet),
+        ("snodas", "snodas", fetch_snodas),
+        ("margulis-wus-sr", "margulis_wus_sr", fetch_margulis_wus_sr),
     ]
 
     results = {}
@@ -425,14 +433,20 @@ def fetch_all_cmd(
             results[name] = result
             console.print(f"[green]{name}: downloaded to datastore[/green]")
         except FileNotFoundError as exc:
-            # mwbm-climgrid requires a manual (CAPTCHA-gated) download;
-            # treat its absence as a skip rather than a fatal error so
-            # the rest of the pipeline can still run when the operator
-            # hasn't placed the file yet.
-            if name == "mwbm-climgrid":
+            # Manual-placement / operator-staged sources can legitimately
+            # be missing on a freshly-bootstrapped project — skip them
+            # rather than fail the whole `fetch all` run so the rest of
+            # the pipeline can proceed. Operators inspect the per-source
+            # skip lines and stage the missing inputs as needed.
+            #   - mwbm-climgrid: CAPTCHA-gated ScienceBase download.
+            #   - daymet: pre-staged zarr root not yet configured.
+            #   - margulis-wus-sr: Oregon-only; legitimately absent for
+            #     non-Oregon projects.
+            manual_skip = {"mwbm-climgrid", "daymet", "margulis-wus-sr"}
+            if name in manual_skip:
                 console.print(
                     f"[yellow]{name}: skipped (manual download not yet "
-                    f"placed; see docs/sources/mwbm_climgrid.md)[/yellow]"
+                    f"placed; see docs/sources/{name.replace('-', '_')}.md)[/yellow]"
                 )
                 continue
             print(f"Error fetching {name}: {exc}", file=sys.stderr)
@@ -836,7 +850,12 @@ def fetch_era5_land_cmd(
         ),
     ] = 1,
 ):
-    """Download ERA5-Land hourly runoff (ro, sro, ssro) via CDS API and consolidate to daily/monthly NetCDFs."""
+    """Download ERA5-Land hourly fields (ro, sro, ssro, sd) via CDS API and consolidate to daily/monthly NetCDFs.
+
+    The runoff variables (ro/sro/ssro) are accumulated and aggregated as
+    daily/monthly sums; sd (snow depth water equivalent) is instantaneous
+    and aggregated as daily/monthly means.
+    """
     import json as json_mod
 
     from rich.console import Console
@@ -1018,6 +1037,209 @@ def fetch_mwbm_climgrid_cmd(
         sys.exit(1)
 
     console.print("[green]MWBM ClimGrid: registered in manifest[/green]")
+    console.print(json_mod.dumps(result, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# SWE category (issue #99) — fetch scaffolding
+# Aggregate + target wiring deferred to per-source follow-up issues.
+# ---------------------------------------------------------------------------
+
+
+@fetch_app.command(name="daymet")
+def fetch_daymet_cmd(
+    workdir: Annotated[
+        Path,
+        Parameter(
+            name=["--project-dir"],
+            help="Project created by 'nhf-targets init'.",
+        ),
+    ],
+    period: Annotated[
+        str,
+        Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
+    ] = "1980/2024",
+    source_path: Annotated[
+        Path | None,
+        Parameter(
+            name=["--source-path"],
+            help="Directory containing daymet_{na,hi,pr}.zarr. Overrides "
+            "'daymet_root' from config.yml.",
+        ),
+    ] = None,
+    region: Annotated[
+        str,
+        Parameter(
+            name=["--region"],
+            help="One of 'na' | 'hi' | 'pr' | 'all' (default: all).",
+        ),
+    ] = "all",
+):
+    """Register operator-staged Daymet V4 R1 regional zarr stores.
+
+    Daymet zarrs are pre-staged on a shared filesystem; this command
+    fingerprints the structural metadata of each region and records a
+    per-region manifest entry. No downloading or copying. See
+    docs/sources/daymet.md for the staging procedure.
+    """
+    import json as json_mod
+
+    from rich.console import Console
+
+    from nhf_spatial_targets.fetch.daymet import fetch_daymet
+
+    if not workdir.exists():
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
+        sys.exit(2)
+
+    console = Console()
+    console.print(
+        f"[bold]Registering Daymet (region={region}, period {period})...[/bold]"
+    )
+
+    try:
+        result = fetch_daymet(
+            workdir=workdir,
+            period=period,
+            source_path=source_path,
+            region=region,
+        )
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        _logger.exception("Unexpected error during Daymet registration")
+        print(
+            f"Unexpected error ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    console.print("[green]Daymet: registered in manifest[/green]")
+    console.print(json_mod.dumps(result, indent=2))
+
+
+@fetch_app.command(name="snodas")
+def fetch_snodas_cmd(
+    workdir: Annotated[
+        Path,
+        Parameter(
+            name=["--project-dir"],
+            help="Project created by 'nhf-targets init'.",
+        ),
+    ],
+    period: Annotated[
+        str,
+        Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
+    ] = "2003/2024",
+    worker_index: Annotated[
+        int,
+        Parameter(
+            name=["--worker-index"],
+            help="0-based index of this worker within the pool (default 0).",
+        ),
+    ] = 0,
+    n_workers: Annotated[
+        int,
+        Parameter(
+            name=["--n-workers"],
+            help="Total number of parallel workers (default 1 = serial).",
+        ),
+    ] = 1,
+):
+    """Download SNODAS daily SWE granules from NSIDC (G02158) via earthaccess.
+
+    Fetch-only: raw tar/.Hdr bundles land in <datastore>/snodas/raw/<year>/.
+    Decoding into CF NetCDFs is deferred to the SNODAS aggregate follow-up.
+    """
+    import json as json_mod
+
+    from rich.console import Console
+
+    from nhf_spatial_targets.fetch.snodas import fetch_snodas
+
+    if not workdir.exists():
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
+        sys.exit(2)
+
+    console = Console()
+    if n_workers > 1:
+        console.print(
+            f"[bold]Fetching SNODAS for period {period} "
+            f"(worker {worker_index}/{n_workers})...[/bold]"
+        )
+    else:
+        console.print(f"[bold]Fetching SNODAS for period {period}...[/bold]")
+
+    try:
+        result = fetch_snodas(
+            workdir=workdir,
+            period=period,
+            worker_index=worker_index,
+            n_workers=n_workers,
+        )
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        _logger.exception("Unexpected error during SNODAS fetch")
+        print(
+            f"Unexpected error ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    console.print("[green]SNODAS: downloaded to datastore[/green]")
+    console.print(json_mod.dumps(result, indent=2))
+
+
+@fetch_app.command(name="wus-sr")
+def fetch_wus_sr_cmd(
+    workdir: Annotated[
+        Path,
+        Parameter(
+            name=["--project-dir"],
+            help="Project created by 'nhf-targets init'.",
+        ),
+    ],
+    period: Annotated[
+        str,
+        Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
+    ] = "1985/2021",
+):
+    """Download Margulis Western US Snow Reanalysis (NSIDC-0719) via earthaccess.
+
+    Fabric-scoped to Oregon only (catalog `fabric_scope`); the scope is
+    recorded in manifest.json but not enforced at fetch time. Fetch-only:
+    consolidation is deferred to the Margulis aggregate follow-up.
+    """
+    import json as json_mod
+
+    from rich.console import Console
+
+    from nhf_spatial_targets.fetch.margulis_wus_sr import fetch_margulis_wus_sr
+
+    if not workdir.exists():
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
+        sys.exit(2)
+
+    console = Console()
+    console.print(f"[bold]Fetching Margulis WUS-SR for period {period}...[/bold]")
+
+    try:
+        result = fetch_margulis_wus_sr(workdir=workdir, period=period)
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        _logger.exception("Unexpected error during Margulis WUS-SR fetch")
+        print(
+            f"Unexpected error ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    console.print("[green]Margulis WUS-SR: downloaded to datastore[/green]")
     console.print(json_mod.dumps(result, indent=2))
 
 

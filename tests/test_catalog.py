@@ -57,9 +57,22 @@ def test_era5_land_source_present():
     assert s["access"]["type"] == "copernicus_cds"
     assert s["access"]["dataset"] == "reanalysis-era5-land"
     var_names = [v["name"] for v in s["variables"]]
-    assert var_names == ["ro", "sro", "ssro"]
+    assert var_names == ["ro", "sro", "ssro", "sd"]
     assert s["time_step"] == "hourly (aggregated to daily and monthly)"
     assert s["status"] == "current"
+
+
+def test_era5_land_sd_is_instantaneous():
+    """`sd` (snow depth water equivalent) is instantaneous, not accumulated.
+
+    cell_methods must mark it as a point-in-time field so the consolidation
+    pipeline picks the .mean() reducer rather than the diff-of-accumulations
+    sum used for ro/sro/ssro.
+    """
+    s = source("era5_land")
+    sd = next(v for v in s["variables"] if v["name"] == "sd")
+    assert sd["cell_methods"] == "time: point"
+    assert sd["cf_units"] == "m"
 
 
 def test_gldas_source_present():
@@ -133,3 +146,69 @@ def test_aet_lists_mwbm_climgrid():
     # Existing sources still present
     assert "mod16a2_v061" in v["sources"]
     assert "ssebop" in v["sources"]
+
+
+# ---------------------------------------------------------------------------
+# SWE category — fetch-layer scaffolding (issue #99)
+# ---------------------------------------------------------------------------
+
+
+def test_snow_water_equivalent_variable_present():
+    v = variable("snow_water_equivalent")
+    assert v["prms_variable"] == "pkwater_equiv"
+    assert v["range_method"] == "multi_source_minmax"
+    assert v["normalize"] is False
+    assert v["sources"] == ["daymet", "snodas", "era5_land", "margulis_wus_sr"]
+
+
+def test_daymet_source_present():
+    s = source("daymet")
+    assert s["status"] == "current"
+    assert s["access"]["type"] == "zarr_verify"
+    stores = s["access"]["stores"]
+    assert set(stores.keys()) == {"na", "hi", "pr"}
+    # Stores keyed via the {daymet_root} template so projects can override.
+    for region_path in stores.values():
+        assert "{daymet_root}" in region_path
+    var_names = {v["name"] for v in s["variables"]}
+    assert "swe" in var_names
+    assert s["doi"] == "10.3334/ORNLDAAC/2129"
+
+
+def test_snodas_source_present():
+    s = source("snodas")
+    assert s["status"] == "current"
+    assert s["access"]["type"] == "nasa_nsidc"
+    assert s["access"]["short_name"] == "G02158"
+    var_names = {v["name"] for v in s["variables"]}
+    assert "swe" in var_names
+    assert s["period"] == "2003/present"
+
+
+def test_margulis_wus_sr_source_present():
+    s = source("margulis_wus_sr")
+    assert s["status"] == "current"
+    assert s["access"]["type"] == "nasa_nsidc"
+    assert s["access"]["short_name"] == "WUS_UCLA_SR"
+    assert s["doi"] == "10.5067/PP7T2GBI52I2"
+    assert s["period"] == "1985/2021"
+    var_names = {v["name"] for v in s["variables"]}
+    assert "SWE" in var_names
+
+
+def test_margulis_wus_sr_fabric_scope_oregon_only():
+    """Margulis WUS-SR carries the new optional fabric_scope field."""
+    s = source("margulis_wus_sr")
+    scope = s["fabric_scope"]
+    assert scope["fabrics"] == ["or"]
+    assert "notes" in scope
+
+
+def test_fabric_scope_field_only_on_scoped_sources():
+    """No other current source declares fabric_scope.
+
+    Defensive: catches accidental copy/paste of the field onto sources
+    that should be available to all fabrics.
+    """
+    scoped = {key for key, src in sources().items() if "fabric_scope" in src}
+    assert scoped == {"margulis_wus_sr"}

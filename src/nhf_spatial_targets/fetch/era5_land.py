@@ -1,9 +1,12 @@
-"""Fetch ERA5-Land hourly runoff from Copernicus CDS.
+"""Fetch ERA5-Land hourly fields from Copernicus CDS.
 
-Downloads hourly accumulated runoff variables (ro, sro, ssro) for the
-CONUS+contributing-watersheds bbox, then aggregates hourly→daily and
-daily→monthly. Both daily and monthly consolidated NetCDFs are written
-to the shared datastore.
+Downloads hourly accumulated runoff variables (ro, sro, ssro) and the
+instantaneous snow depth water equivalent (sd) for the CONUS+contributing-
+watersheds bbox, then aggregates hourly→daily and daily→monthly. Both
+daily and monthly consolidated NetCDFs are written to the shared
+datastore. The accumulated and instantaneous variables use different
+reducers (see :data:`_VARIABLE_KIND` and the dispatch in
+:func:`consolidate_year` and :func:`daily_to_monthly`).
 """
 
 from __future__ import annotations
@@ -38,7 +41,23 @@ logger = logging.getLogger(__name__)
 # Encompasses CONUS contributing watersheds (Canada/Mexico) + ~10 km buffer.
 BBOX_NWSE = [53.0, -125.0, 24.7, -66.0]
 
-VARIABLES = ("ro", "sro", "ssro")
+VARIABLES = ("ro", "sro", "ssro", "sd")
+
+# Variable semantics for hourly→daily and daily→monthly aggregation.
+#   accumulated : midnight-resetting accumulation; aggregate via the
+#                 diff-of-accumulations sum (see hourly_to_daily) and
+#                 daily→monthly sum.
+#   instantaneous : point-in-time field with no midnight reset; aggregate
+#                   via .mean() at both hourly→daily and daily→monthly.
+# The accumulated reducer applied to an instantaneous field would produce
+# physically meaningless values; the dispatch in consolidate_year and
+# daily_to_monthly is keyed on this table.
+_VARIABLE_KIND = {
+    "ro": "accumulated",
+    "sro": "accumulated",
+    "ssro": "accumulated",
+    "sd": "instantaneous",
+}
 
 
 def hourly_to_daily(da: xr.DataArray) -> xr.DataArray:
@@ -85,17 +104,59 @@ def hourly_to_daily(da: xr.DataArray) -> xr.DataArray:
     return daily
 
 
-def daily_to_monthly(da: xr.DataArray) -> xr.DataArray:
-    """Sum daily totals to monthly totals.
+def hourly_to_daily_instantaneous(da: xr.DataArray) -> xr.DataArray:
+    """Aggregate ERA5-Land hourly instantaneous fields to daily means.
+
+    For point-in-time fields like ``sd`` (snow depth water equivalent) which
+    carry no midnight reset and are NOT accumulated, the daily aggregation
+    is a simple ``.resample("1D").mean()``. The accumulated counterpart
+    :func:`hourly_to_daily` must NOT be used for these fields — its
+    diff-of-accumulations sum would produce nonsense.
+
+    Parameters
+    ----------
+    da : xr.DataArray
+        Hourly instantaneous values with a 'time' dimension.
+
+    Returns
+    -------
+    xr.DataArray
+        Daily-mean values. Time coordinate is the date (00:00) of each
+        complete day. Original attrs are preserved.
+    """
+    daily = da.resample(time="1D").mean()
+    daily.attrs = dict(da.attrs)
+    return daily
+
+
+def daily_to_monthly(da: xr.DataArray, kind: str = "accumulated") -> xr.DataArray:
+    """Aggregate daily values to monthly.
 
     Uses month-end frequency ('1ME') so the time coordinate marks the
     last day of each month — consistent with other monthly products in
     this codebase. Original attrs are preserved.
 
+    Parameters
+    ----------
+    da : xr.DataArray
+    kind : str, default "accumulated"
+        ``"accumulated"`` uses ``.sum()`` (appropriate for ro/sro/ssro
+        whose daily values are within-day totals). ``"instantaneous"``
+        uses ``.mean()`` (appropriate for ``sd``).
+
     Note: called by ``consolidate_year``, which also deletes any stale
     monthly NCs whose filenames fall outside the updated year range.
     """
-    monthly = da.resample(time="1ME").sum()
+    resampler = da.resample(time="1ME")
+    if kind == "instantaneous":
+        monthly = resampler.mean()
+    elif kind == "accumulated":
+        monthly = resampler.sum()
+    else:
+        raise ValueError(
+            f"daily_to_monthly: unknown kind {kind!r}; expected 'accumulated' "
+            f"or 'instantaneous'."
+        )
     monthly.attrs = dict(da.attrs)
     return monthly
 
@@ -105,6 +166,7 @@ _VARIABLE_REQUEST_NAME = {
     "ro": "runoff",
     "sro": "surface_runoff",
     "ssro": "sub_surface_runoff",
+    "sd": "snow_depth_water_equivalent",
 }
 
 
@@ -425,13 +487,16 @@ def consolidate_year(
                 )
             da = ds[var].load()
             ds.close()
-            daily_arrays[var] = hourly_to_daily(da)
+            if _VARIABLE_KIND[var] == "instantaneous":
+                daily_arrays[var] = hourly_to_daily_instantaneous(da)
+            else:
+                daily_arrays[var] = hourly_to_daily(da)
 
         daily_ds = xr.Dataset(daily_arrays)
         daily_ds = apply_cf_metadata(daily_ds, _SOURCE_KEY, "daily")
         daily_ds.attrs.update(
             {
-                "title": f"ERA5-Land daily runoff (CONUS+ buffered) {year}",
+                "title": f"ERA5-Land daily runoff and snow (CONUS+ buffered) {year}",
                 "institution": "ECMWF",
                 "source": "reanalysis-era5-land",
                 "references": "doi:10.5194/essd-13-4349-2021",
@@ -469,12 +534,14 @@ def consolidate_year(
         with xr.open_dataset(daily_path) as ds_year:
             monthly_arrays: dict[str, xr.DataArray] = {}
             for var in VARIABLES:
-                monthly_arrays[var] = daily_to_monthly(ds_year[var].load())
+                monthly_arrays[var] = daily_to_monthly(
+                    ds_year[var].load(), kind=_VARIABLE_KIND[var]
+                )
         monthly_ds = xr.Dataset(monthly_arrays)
         monthly_ds = apply_cf_metadata(monthly_ds, _SOURCE_KEY, "monthly")
         monthly_ds.attrs.update(
             {
-                "title": f"ERA5-Land monthly runoff (CONUS+ buffered) {year}",
+                "title": f"ERA5-Land monthly runoff and snow (CONUS+ buffered) {year}",
                 "institution": "ECMWF",
                 "source": "reanalysis-era5-land",
                 "references": "doi:10.5194/essd-13-4349-2021",
