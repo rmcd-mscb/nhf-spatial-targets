@@ -13,10 +13,11 @@ sources:
     name: ECMWF ERA5-Land Reanalysis
     description: >
       ECMWF ERA5-Land hourly reanalysis. Total runoff (ro), surface runoff
-      (sro), and sub-surface runoff (ssro) downloaded for CONUS plus
-      contributing watersheds (Canada/Mexico). Used as a source for the
-      runoff calibration target (ro) and the recharge calibration target
-      (ssro, as drainage proxy).
+      (sro), sub-surface runoff (ssro), and snow depth water equivalent
+      (sd) downloaded for CONUS plus contributing watersheds (Canada/
+      Mexico). Used as a source for the runoff calibration target (ro),
+      the recharge calibration target (ssro, as drainage proxy), and the
+      snow water equivalent calibration target (sd).
     citations:
       - "Muñoz-Sabater, J., and others, 2021, doi:10.5194/essd-13-4349-2021"
     access:
@@ -53,6 +54,18 @@ sources:
         cf_units: "m"
         cell_methods: "time: sum"
         notes: Used as recharge proxy in recharge target.
+      - name: sd
+        long_name: snow depth water equivalent
+        cf_units: "m"
+        cell_methods: "time: point"
+        notes: >
+          Instantaneous snowpack water equivalent (NOT accumulated like
+          ro/sro/ssro). The midnight reset and diff-of-accumulations
+          logic that produces the runoff vars does not apply here.
+          Hourly→daily consolidation uses .mean() rather than .sum();
+          daily→monthly likewise uses .mean(). See
+          fetch/era5_land.py `_VARIABLE_KIND` for the dispatch table.
+          Used for the snow water equivalent calibration target.
     time_step: hourly (aggregated to daily and monthly)
     period: "1979/present"
     spatial_extent: CONUS+contributing-watersheds
@@ -653,4 +666,164 @@ sources:
     units: percent (convert to fraction 0-1)
     ci_threshold: 70
     license: public domain (NASA)
+    status: current
+
+  # ---------------------------------------------------------------------------
+  # SNOW WATER EQUIVALENT
+  # ---------------------------------------------------------------------------
+  daymet:
+    name: Daymet V4 R1 Daily Surface Weather and Climatological Summaries
+    description: >
+      ORNL DAAC Daymet V4 R1 daily 1 km gridded surface weather over
+      three regional domains: North America (na), Hawaii (hi), and
+      Puerto Rico (pr). Used as a source for the snow water equivalent
+      calibration target ('swe'). All six native variables are documented
+      below for completeness; only 'swe' is consumed by default.
+    citations:
+      - "Thornton, M.M., Shrestha, R., Wei, Y., Thornton, P.E., Kao, S.-C., and Wilson, B.E., 2022, doi:10.3334/ORNLDAAC/2129"
+    doi: "10.3334/ORNLDAAC/2129"
+    access:
+      type: zarr_verify
+      url: https://daac.ornl.gov/cgi-bin/dsviewer.pl?ds_id=2129
+      stores:
+        na: "{daymet_root}/daymet_na.zarr"
+        hi: "{daymet_root}/daymet_hi.zarr"
+        pr: "{daymet_root}/daymet_pr.zarr"
+      notes: >
+        Three regional zarr stores are pre-staged on the shared filesystem
+        (e.g. `/caldera/.../data_creation/daymet/source/zarr/`). The fetch
+        module does NOT download or copy data; it verifies each zarr opens
+        cleanly, records sha256 of the `.zmetadata` file plus the total
+        on-disk byte count, and writes a per-region manifest entry. The
+        root path is configurable via `config.yml -> daymet_root` or the
+        `--source-path` CLI flag. Operator places the zarrs once; fetch
+        is then idempotent (matching fingerprint = no-op).
+    variables:
+      - name: swe
+        long_name: snow water equivalent
+        cf_units: "kg m-2"
+        cell_methods: "time: point"
+        notes: Used for snow water equivalent target.
+      - name: prcp
+        long_name: daily total precipitation
+        cf_units: "kg m-2"
+        cell_methods: "time: sum"
+        notes: Available in source; not aggregated by default.
+      - name: tmax
+        long_name: daily maximum 2 m air temperature
+        cf_units: "degC"
+        cell_methods: "time: maximum"
+      - name: tmin
+        long_name: daily minimum 2 m air temperature
+        cf_units: "degC"
+        cell_methods: "time: minimum"
+      - name: srad
+        long_name: daylight-average shortwave radiation
+        cf_units: "W m-2"
+        cell_methods: "time: mean"
+      - name: vp
+        long_name: daily water vapor pressure
+        cf_units: "Pa"
+        cell_methods: "time: mean"
+    time_step: daily
+    period: "1980/2024"
+    spatial_extent: "North America (NA), Hawaii (HI), Puerto Rico (PR)"
+    spatial_resolution: 1 km (Lambert Conformal Conic)
+    units: "kg m-2 (swe, prcp); degC (tmax, tmin); W m-2 (srad); Pa (vp)"
+    license: public domain (NASA / ORNL DAAC)
+    status: current
+
+  snodas:
+    name: SNODAS Snow Data Assimilation System Data Products (NSIDC G02158)
+    description: >
+      NOAA NOHRSC SNODAS daily snow products distributed by NSIDC
+      (collection G02158). Daily 1 km CONUS analysis combining
+      satellite observations, ground stations, and an energy-balance
+      snow model. Used as one source for the SWE calibration target.
+    citations:
+      - "National Operational Hydrologic Remote Sensing Center, 2004, doi:10.7265/N5TB14TC"
+    doi: "10.7265/N5TB14TC"
+    access:
+      type: nasa_nsidc
+      short_name: G02158
+      version: "1"
+      url: https://nsidc.org/data/g02158
+      bbox_nwse: [53.0, -125.0, 24.7, -66.0]
+      notes: >
+        Access via earthaccess (NASA Earthdata login required). Daily
+        granules are tar/gz bundles containing flat int16 binary files
+        plus ENVI-style `.Hdr` headers; the SWE field is in mm with a
+        fill value of -9999 (scale_factor 1). Apply scale + fill mask
+        before any quantitative aggregation. The masked product is used
+        (CONUS only); the unmasked variant covering parts of southern
+        Canada is NOT used. Short_name/version should be confirmed via
+        an earthaccess CMR query at implementation time.
+    variables:
+      - name: swe
+        long_name: snow water equivalent
+        cf_units: "kg m-2"
+        cell_methods: "time: point"
+        notes: >
+          Native SNODAS SWE is a flat int16 field in mm (≡ kg m-2 of
+          water at density 1000) with fill value -9999. Apply fill
+          mask before any HRU aggregation.
+    time_step: daily
+    period: "2003/present"
+    spatial_extent: CONUS
+    spatial_resolution: 30 arcsec (~1 km)
+    units: kg m-2 (mm water equivalent)
+    license: public domain (NSIDC / NOAA)
+    status: current
+
+  margulis_wus_sr:
+    name: Margulis Western US Snow Reanalysis (NSIDC-0719)
+    description: >
+      UCLA/Margulis Western US Snow Reanalysis, daily 90 m posterior
+      snow water equivalent over the Sierra Nevada, Cascades, Rockies
+      and adjacent ranges for water years 1985-2021. Used as a SWE
+      calibration source for the Oregon fabric only; for other fabrics
+      the SWE target builder excludes this source (see fabric_scope).
+    citations:
+      - "Fang, Y., Liu, Y., and Margulis, S.A., 2022, doi:10.5067/PP7T2GBI52I2"
+    doi: "10.5067/PP7T2GBI52I2"
+    access:
+      type: nasa_nsidc
+      short_name: WUS_UCLA_SR
+      version: "1"
+      url: https://nsidc.org/data/nsidc-0719
+      notes: >
+        Access via earthaccess (NASA Earthdata login required).
+        Granules are per-water-year per-tile NetCDFs covering the
+        Western US domain; the fetch module subsets to the fabric
+        bounding box at search time. Confirm short_name via an
+        earthaccess CMR query at implementation time — historically
+        the NSIDC-0719 short_name has been WUS_UCLA_SR but the value
+        is subject to NSIDC bookkeeping.
+    fabric_scope:
+      # `fabrics:` is the list of fabric tokens for which this source
+      # should be aggregated. Allowed tokens (kept in sync with the
+      # known fabric set this pipeline targets): "or" (Oregon).
+      # Token names quoted to avoid YAML reserved-word edge cases.
+      fabrics: ["or"]
+      notes: >
+        Spatial extent is the Western US (CA, OR, WA, ID, NV, UT, and
+        parts of MT, WY, CO, AZ, NM). This catalog scopes the source
+        to fabric "or" because the SWE target builder is keyed on the
+        Oregon HRU set in the current pipeline; enforcement happens at
+        target-build time, not at fetch time. Raw downloads remain
+        reusable by any project pointing at the same datastore.
+    variables:
+      - name: SWE
+        long_name: posterior snow water equivalent
+        cf_units: "m"
+        cell_methods: "time: point"
+        notes: >
+          Posterior SWE in meters water equivalent. Convert to mm
+          before harmonisation with the other SWE sources.
+    time_step: daily
+    period: "1985/2021"
+    spatial_extent: Western US (Sierra Nevada, Cascades, Rockies and adjacent ranges)
+    spatial_resolution: 90 m
+    units: m water equivalent
+    license: public domain (NASA NSIDC)
     status: current

@@ -97,6 +97,7 @@ tests/
 - `catalog.py` is the single Python interface to both YAML files — do not read YAML directly elsewhere
 - When adding a new source, add it to `catalog/sources.yml` first, then write the fetch module
 - Mark superseded sources with `superseded_by:` key and `status: superseded`
+- Fabric-restricted sources (e.g. Margulis WUS-SR for Oregon) carry an optional `fabric_scope: {fabrics: [<token>], notes: ...}` block. Allowed fabric tokens are enumerated by `catalog.FABRIC_SCOPE_TOKENS` and validated by `catalog.validate_fabric_scope`; adding a new fabric means extending that set and the matching check in target builders. Raw downloads remain reusable across projects sharing a datastore — `fabric_scope` is enforced at the target-build stage, not at fetch time
 
 ## Aggregation Transformation Policy
 

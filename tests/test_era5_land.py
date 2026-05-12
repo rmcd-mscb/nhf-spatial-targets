@@ -588,7 +588,7 @@ def test_consolidate_year_writes_daily_and_updates_monthly(tmp_path, monkeypatch
     hourly_dir.mkdir()
 
     times = pd.date_range("2020-01-01", "2020-01-03 23:00", freq="1h")
-    for var in ("ro", "sro", "ssro"):
+    for var in ("ro", "sro", "ssro", "sd"):
         vals = np.tile(
             np.arange(24, dtype=float).reshape(24, 1, 1) * 0.001,
             (len(times) // 24, 1, 1),
@@ -614,7 +614,7 @@ def test_consolidate_year_writes_daily_and_updates_monthly(tmp_path, monkeypatch
     assert daily_path.exists()
     daily = xr.open_dataset(daily_path)
     try:
-        assert {"ro", "sro", "ssro"}.issubset(set(daily.data_vars))
+        assert {"ro", "sro", "ssro", "sd"}.issubset(set(daily.data_vars))
         assert daily.sizes["time"] >= 2
     finally:
         daily.close()
@@ -633,7 +633,7 @@ def test_consolidate_year_valid_time_dim(tmp_path):
 
     # Write hourly NCs using 'valid_time' (CDS API ≥0.7 output convention)
     times = pd.date_range("2020-01-01", "2020-01-03 23:00", freq="1h")
-    for var in ("ro", "sro", "ssro"):
+    for var in ("ro", "sro", "ssro", "sd"):
         vals = np.tile(
             np.arange(24, dtype=float).reshape(24, 1, 1) * 0.001,
             (len(times) // 24, 1, 1),
@@ -660,7 +660,7 @@ def test_consolidate_year_valid_time_dim(tmp_path):
     assert daily_path.exists()
     with xr.open_dataset(daily_path) as ds:
         assert "time" in ds.dims, "daily NC must have 'time' dimension"
-        assert {"ro", "sro", "ssro"}.issubset(set(ds.data_vars))
+        assert {"ro", "sro", "ssro", "sd"}.issubset(set(ds.data_vars))
 
     assert monthly_path.exists()
     with xr.open_dataset(monthly_path) as ds:
@@ -668,10 +668,10 @@ def test_consolidate_year_valid_time_dim(tmp_path):
 
 
 def _write_hourly_ncs(hourly_dir: Path, year: int) -> None:
-    """Write synthetic hourly NCs for all three ERA5-Land runoff variables."""
+    """Write synthetic hourly NCs for all four ERA5-Land variables (ro/sro/ssro/sd)."""
 
     times = pd.date_range(f"{year}-01-01", f"{year}-01-03 23:00", freq="1h")
-    for var in ("ro", "sro", "ssro"):
+    for var in ("ro", "sro", "ssro", "sd"):
         vals = np.tile(
             np.arange(24, dtype=float).reshape(24, 1, 1) * 0.001,
             (len(times) // 24, 1, 1),
@@ -1416,3 +1416,161 @@ def test_fetch_era5_land_returns_empty_when_no_years_assigned(tmp_path, monkeypa
     assert result["files"] == []
     assert result["worker_index"] == 1
     assert result["n_workers"] == 2
+
+
+# ---------------------------------------------------------------------------
+# `sd` (snow depth water equivalent) — instantaneous variable dispatch
+# ---------------------------------------------------------------------------
+
+
+def _make_hourly_instantaneous(
+    start: str, hours: int, level: float = 0.50
+) -> xr.DataArray:
+    """Synthetic hourly instantaneous snow depth water equivalent.
+
+    Constant level (in m water-eq) across the day; daily mean should equal
+    that level exactly. Mirrors the (time, lat, lon) shape of the accumulated
+    test fixture.
+    """
+    times = pd.date_range(start, periods=hours, freq="1h")
+    vals = np.full((hours, 1, 1), level)
+    return xr.DataArray(
+        vals,
+        dims=("time", "latitude", "longitude"),
+        coords={"time": times, "latitude": [40.0], "longitude": [-100.0]},
+        name="sd",
+        attrs={"units": "m"},
+    )
+
+
+def test_variable_kind_table_covers_all_variables():
+    """Defensive: every entry in VARIABLES must be keyed in _VARIABLE_KIND."""
+    from nhf_spatial_targets.fetch.era5_land import VARIABLES, _VARIABLE_KIND
+
+    for v in VARIABLES:
+        assert v in _VARIABLE_KIND, f"{v} missing from _VARIABLE_KIND"
+    assert _VARIABLE_KIND["sd"] == "instantaneous"
+    assert _VARIABLE_KIND["ro"] == "accumulated"
+
+
+def test_hourly_to_daily_instantaneous_means_per_day():
+    """Daily mean of a flat-level instantaneous field equals that level."""
+    from nhf_spatial_targets.fetch.era5_land import hourly_to_daily_instantaneous
+
+    da = _make_hourly_instantaneous("2020-01-01 00:00", hours=48, level=0.50)
+    daily = hourly_to_daily_instantaneous(da)
+    assert daily.sizes["time"] == 2
+    np.testing.assert_allclose(daily.values, 0.50, rtol=1e-12)
+
+
+def test_hourly_to_daily_instantaneous_preserves_attrs():
+    from nhf_spatial_targets.fetch.era5_land import hourly_to_daily_instantaneous
+
+    da = _make_hourly_instantaneous("2020-01-01 00:00", hours=48, level=0.50)
+    da.attrs["units"] = "m"
+    daily = hourly_to_daily_instantaneous(da)
+    assert daily.attrs["units"] == "m"
+
+
+def test_daily_to_monthly_kind_accumulated_sums():
+    """`kind="accumulated"` (default) sums daily values into the month."""
+    times = pd.date_range("2020-01-01", periods=31, freq="1D")
+    vals = np.full((31, 1, 1), 0.001)
+    da = xr.DataArray(
+        vals,
+        dims=("time", "latitude", "longitude"),
+        coords={"time": times, "latitude": [40.0], "longitude": [-100.0]},
+        name="ro",
+        attrs={"units": "m"},
+    )
+    monthly = daily_to_monthly(da)  # default kind="accumulated"
+    np.testing.assert_allclose(monthly.isel(time=0).values, 0.031, rtol=1e-9)
+
+
+def test_daily_to_monthly_kind_instantaneous_means():
+    """`kind="instantaneous"` returns the calendar-month mean."""
+    times = pd.date_range("2020-01-01", periods=31, freq="1D")
+    vals = np.full((31, 1, 1), 0.50)
+    da = xr.DataArray(
+        vals,
+        dims=("time", "latitude", "longitude"),
+        coords={"time": times, "latitude": [40.0], "longitude": [-100.0]},
+        name="sd",
+        attrs={"units": "m"},
+    )
+    monthly = daily_to_monthly(da, kind="instantaneous")
+    np.testing.assert_allclose(monthly.isel(time=0).values, 0.50, rtol=1e-12)
+
+
+def test_daily_to_monthly_rejects_unknown_kind():
+    times = pd.date_range("2020-01-01", periods=5, freq="1D")
+    vals = np.zeros((5, 1, 1))
+    da = xr.DataArray(
+        vals,
+        dims=("time", "latitude", "longitude"),
+        coords={"time": times, "latitude": [40.0], "longitude": [-100.0]},
+    )
+    with pytest.raises(ValueError, match="unknown kind"):
+        daily_to_monthly(da, kind="bogus")
+
+
+def test_consolidate_year_dispatches_by_variable_kind(tmp_path):
+    """consolidate_year picks the right reducer for ro (sum) vs sd (mean).
+
+    Build per-variable hourly NCs covering a full 2-day window: a flat
+    instantaneous level for ``sd`` and a midnight-resetting accumulation
+    for the three runoff vars. Confirm the resulting daily NC has
+    sd ≈ level and ro/sro/ssro ≈ within-day accumulated totals.
+    """
+    from nhf_spatial_targets.fetch.era5_land import consolidate_year
+
+    hourly = tmp_path / "hourly"
+    daily = tmp_path / "daily"
+    monthly = tmp_path / "monthly"
+    hourly.mkdir()
+
+    year = 2020
+
+    def _write(da: xr.DataArray, var: str) -> None:
+        path = hourly / f"era5_land_{var}_{year}.nc"
+        ds = xr.Dataset({var: da})
+        ds.to_netcdf(path)
+
+    # ro/sro/ssro accumulate 0.001 per hour resetting at midnight
+    for var in ("ro", "sro", "ssro"):
+        acc = _make_era5_midnight_reset(n_days=2, value_per_hour=0.001)
+        acc = acc.rename(var).reset_coords(drop=True)
+        acc.name = var
+        _write(acc, var)
+    # sd is instantaneous at 0.30 m water-eq for the same window
+    sd = _make_hourly_instantaneous("2020-01-01 00:00", hours=2 * 24 + 1, level=0.30)
+    _write(sd, "sd")
+
+    daily_path, monthly_path = consolidate_year(year, hourly, daily, monthly)
+
+    with xr.open_dataset(daily_path) as ds_daily:
+        # Daily ro should be the full-day accumulation (~24 * 0.001 = 0.024 m)
+        np.testing.assert_allclose(
+            ds_daily["ro"].isel(time=0).values.flatten()[0],
+            0.024,
+            rtol=1e-6,
+        )
+        # Daily sd should equal the constant 0.30 (mean, not sum)
+        np.testing.assert_allclose(
+            ds_daily["sd"].isel(time=0).values.flatten()[0],
+            0.30,
+            rtol=1e-9,
+        )
+    with xr.open_dataset(monthly_path) as ds_month:
+        # January 2020: ro is sum across 2 days ~= 0.048
+        np.testing.assert_allclose(
+            ds_month["ro"].isel(time=0).values.flatten()[0],
+            0.048,
+            rtol=1e-6,
+        )
+        # sd is the calendar-month mean = 0.30
+        np.testing.assert_allclose(
+            ds_month["sd"].isel(time=0).values.flatten()[0],
+            0.30,
+            rtol=1e-9,
+        )

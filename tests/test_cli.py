@@ -505,6 +505,117 @@ def test_fetch_mwbm_climgrid_calls_fetch(mock_fetch, tmp_path):
     mock_fetch.assert_called_once_with(workdir=workdir, period="1980/2015")
 
 
+# ---- SWE fetch commands (issue #99) ----------------------------------------
+
+
+@patch("nhf_spatial_targets.fetch.daymet.fetch_daymet")
+def test_fetch_daymet_calls_fetch(mock_fetch, tmp_path):
+    """CLI wires --project-dir, --period, --source-path, --region to fetch_daymet()."""
+    mock_fetch.return_value = {"regions": {}}
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    zroot = tmp_path / "zarrs"
+    zroot.mkdir()
+    _run(
+        "fetch",
+        "daymet",
+        "--project-dir",
+        str(workdir),
+        "--period",
+        "2020/2020",
+        "--source-path",
+        str(zroot),
+        "--region",
+        "na",
+    )
+    mock_fetch.assert_called_once_with(
+        workdir=workdir,
+        period="2020/2020",
+        source_path=zroot,
+        region="na",
+    )
+
+
+def test_fetch_daymet_nonexistent_project_dir(tmp_path):
+    """Exit code 2 when --project-dir does not exist."""
+    with pytest.raises(SystemExit, match="2"):
+        _run(
+            "fetch",
+            "daymet",
+            "--project-dir",
+            str(tmp_path / "missing"),
+            "--period",
+            "2020/2020",
+        )
+
+
+@patch("nhf_spatial_targets.fetch.snodas.fetch_snodas")
+def test_fetch_snodas_calls_fetch(mock_fetch, tmp_path):
+    """CLI wires --project-dir, --period, --worker-index, --n-workers to fetch_snodas()."""
+    mock_fetch.return_value = {"years": []}
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    _run(
+        "fetch",
+        "snodas",
+        "--project-dir",
+        str(workdir),
+        "--period",
+        "2020/2020",
+        "--worker-index",
+        "0",
+        "--n-workers",
+        "1",
+    )
+    mock_fetch.assert_called_once_with(
+        workdir=workdir,
+        period="2020/2020",
+        worker_index=0,
+        n_workers=1,
+    )
+
+
+def test_fetch_snodas_nonexistent_project_dir(tmp_path):
+    with pytest.raises(SystemExit, match="2"):
+        _run(
+            "fetch",
+            "snodas",
+            "--project-dir",
+            str(tmp_path / "missing"),
+            "--period",
+            "2020/2020",
+        )
+
+
+@patch("nhf_spatial_targets.fetch.margulis_wus_sr.fetch_margulis_wus_sr")
+def test_fetch_margulis_wus_sr_calls_fetch(mock_fetch, tmp_path):
+    """CLI wires --project-dir and --period to fetch_margulis_wus_sr()."""
+    mock_fetch.return_value = {"years": []}
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    _run(
+        "fetch",
+        "margulis-wus-sr",
+        "--project-dir",
+        str(workdir),
+        "--period",
+        "2000/2000",
+    )
+    mock_fetch.assert_called_once_with(workdir=workdir, period="2000/2000")
+
+
+def test_fetch_margulis_wus_sr_nonexistent_project_dir(tmp_path):
+    with pytest.raises(SystemExit, match="2"):
+        _run(
+            "fetch",
+            "margulis-wus-sr",
+            "--project-dir",
+            str(tmp_path / "missing"),
+            "--period",
+            "2000/2000",
+        )
+
+
 # ---- agg ssebop command ----------------------------------------------------
 
 

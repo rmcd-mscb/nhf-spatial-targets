@@ -44,6 +44,46 @@ def years_in_period(period: str) -> list[int]:
     return list(range(start_year, end_year + 1))
 
 
+def period_bounds(period: str) -> tuple[int, int]:
+    """Return ``(start_year, end_year)`` integers for a catalog period string.
+
+    Accepts both ``"YYYY/YYYY"`` and ``"YYYY/present"``. ``"present"`` is
+    treated as year 9999 so callers can use the value as an inclusive
+    upper bound on user-requested years without further branching.
+
+    This helper lets fetch modules read their valid year range from the
+    catalog (the source of truth for source metadata) rather than
+    hardcoding it. Use it in place of module-level ``_DATA_PERIOD``
+    constants.
+    """
+    parts = period.split("/")
+    if len(parts) != 2:
+        raise ValueError(
+            f"period must be 'YYYY/YYYY' or 'YYYY/present', got: {period!r}"
+        )
+    try:
+        start = int(parts[0])
+    except ValueError:
+        raise ValueError(
+            f"period start year must be an integer, got: {period!r}"
+        ) from None
+    if parts[1] == "present":
+        end = 9999
+    else:
+        try:
+            end = int(parts[1].split("-")[0])
+        except ValueError:
+            raise ValueError(
+                f"period end year must be an integer or 'present', got: {period!r}"
+            ) from None
+    if end < start:
+        raise ValueError(
+            f"period end year ({parts[1]}) is before start year ({parts[0]}). "
+            f"Use 'YYYY/YYYY' (or 'YYYY/present') with start <= end."
+        )
+    return (start, end)
+
+
 def clamp_period(requested: str, available: str) -> str | None:
     """Clamp *requested* period to the *available* range from the catalog.
 
