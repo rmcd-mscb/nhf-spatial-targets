@@ -192,8 +192,12 @@ variables:
       three sources. Absolute values used (not normalized).
     prms_reference: "TM 6-B7 (Markstrom et al. 2015)"
     time_step: daily
+    # SNODAS-limited: intersection of all four sources. Non-Oregon
+    # fabrics use a 3-source bound (daymet 1980+, era5_land 1979+,
+    # snodas 2003+), so the intersection is still 2003-present.
     period: "2003/present"
-    units: mm water equivalent
+    units: inches
+    original_units: varies by source (mm water-eq, m water-eq)
     sources:
       - daymet
       - snodas
@@ -203,7 +207,9 @@ variables:
     range_notes: >
       Daymet 'swe' (kg/m² ≡ mm), SNODAS 'swe' (kg/m² ≡ mm), ERA5-Land 'sd'
       (m water-eq → mm), Margulis WUS-SR 'SWE' (m water-eq → mm) are
-      aggregated to HRU polygons via gdptools and harmonized to mm.
+      aggregated to HRU polygons via gdptools and harmonized to mm,
+      then converted to inches in the target builder to match the PRMS
+      variable pkwater_equiv (per TM 6-B7).
       Per-HRU per-day:
         lower_bound = nanmin(daymet, snodas, era5_sd, margulis),
         upper_bound = nanmax(daymet, snodas, era5_sd, margulis).
@@ -213,7 +219,5 @@ variables:
       Oregon (see catalog/sources.yml fabric_scope); for non-OR fabrics
       it is excluded by the target builder so the bound reduces to a
       3-source min/max.
-      PRMS variable pkwater_equiv (per TM 6-B7) is in inches; conversion
-      from mm to inches is applied in the target builder.
     normalize: false
     output_format: netcdf

@@ -588,14 +588,14 @@ def test_fetch_snodas_nonexistent_project_dir(tmp_path):
 
 
 @patch("nhf_spatial_targets.fetch.margulis_wus_sr.fetch_margulis_wus_sr")
-def test_fetch_wus_sr_calls_fetch(mock_fetch, tmp_path):
+def test_fetch_margulis_wus_sr_calls_fetch(mock_fetch, tmp_path):
     """CLI wires --project-dir and --period to fetch_margulis_wus_sr()."""
     mock_fetch.return_value = {"years": []}
     workdir = tmp_path / "workspace"
     workdir.mkdir()
     _run(
         "fetch",
-        "wus-sr",
+        "margulis-wus-sr",
         "--project-dir",
         str(workdir),
         "--period",
@@ -604,11 +604,11 @@ def test_fetch_wus_sr_calls_fetch(mock_fetch, tmp_path):
     mock_fetch.assert_called_once_with(workdir=workdir, period="2000/2000")
 
 
-def test_fetch_wus_sr_nonexistent_project_dir(tmp_path):
+def test_fetch_margulis_wus_sr_nonexistent_project_dir(tmp_path):
     with pytest.raises(SystemExit, match="2"):
         _run(
             "fetch",
-            "wus-sr",
+            "margulis-wus-sr",
             "--project-dir",
             str(tmp_path / "missing"),
             "--period",

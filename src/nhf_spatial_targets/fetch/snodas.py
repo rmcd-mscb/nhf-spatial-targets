@@ -31,19 +31,16 @@ except ImportError:  # Windows fallback (not used on HPC).
     _HAVE_FLOCK = False
 
 import nhf_spatial_targets.catalog as _catalog
-from nhf_spatial_targets.fetch._period import parse_period, years_in_period
+from nhf_spatial_targets.fetch._period import (
+    parse_period,
+    period_bounds,
+    years_in_period,
+)
 from nhf_spatial_targets.workspace import load as _load_project
 
 logger = logging.getLogger(__name__)
 
 _SOURCE_KEY = "snodas"
-# Publisher-usable window. SNODAS daily archives begin 2003-09-30; the
-# year-level gate uses 2003 as the lower bound and accepts "present"
-# years up to the current calendar year + 1 (the plan records "present"
-# in the catalog rather than a fixed terminal year).
-_DATA_PERIOD_START = 2003
-# CONUS+contributing-watersheds bbox; matches the project convention.
-BBOX_NWSE = [53.0, -125.0, 24.7, -66.0]
 
 
 def _assign_worker_years(
@@ -110,17 +107,24 @@ def fetch_snodas(
     import earthaccess
 
     parse_period(period)
-    years = years_in_period(period)
-    for y in years:
-        if y < _DATA_PERIOD_START:
-            raise ValueError(
-                f"Year {y} is before the SNODAS publisher start "
-                f"({_DATA_PERIOD_START}). Adjust --period."
-            )
-
     ws = _load_project(workdir)
     meta = _catalog.source(_SOURCE_KEY)
     access = meta["access"]
+    data_lo, data_hi = period_bounds(meta["period"])
+    years = years_in_period(period)
+    for y in years:
+        if y < data_lo or y > data_hi:
+            raise ValueError(
+                f"Year {y} is outside the SNODAS publisher window "
+                f"({data_lo}-{data_hi}, from catalog `sources.yml[{_SOURCE_KEY}]"
+                f".period`). Adjust --period."
+            )
+    bbox_nwse = access.get("bbox_nwse")
+    if not bbox_nwse:
+        raise ValueError(
+            f"catalog `sources.yml[{_SOURCE_KEY}].access.bbox_nwse` is missing. "
+            f"Add a [N, W, S, E] bbox before running the SNODAS fetch."
+        )
 
     raw_root = ws.raw_dir(_SOURCE_KEY) / "raw"
     raw_root.mkdir(parents=True, exist_ok=True)
@@ -128,7 +132,17 @@ def fetch_snodas(
     now_utc = datetime.now(timezone.utc).isoformat()
 
     earthaccess.login(strategy="netrc")
-    assigned = _assign_worker_years(years, worker_index, n_workers)
+    # Pre-filter against the manifest: years already fully downloaded
+    # in a prior run are skipped before any CMR search/download work.
+    completed = _completed_years_from_manifest(workdir)
+    pending = [y for y in years if y not in completed]
+    if completed:
+        logger.info(
+            "snodas: skipping %d year(s) already in manifest: %s",
+            len(completed & set(years)),
+            sorted(completed & set(years)),
+        )
+    assigned = _assign_worker_years(pending, worker_index, n_workers)
     if not assigned:
         logger.info(
             "snodas: worker %d/%d has no years to process for period %s",
@@ -143,7 +157,7 @@ def fetch_snodas(
             "license": meta.get("license", "public domain (NSIDC)"),
             "variables": [v["name"] for v in meta["variables"]],
             "period": period,
-            "bbox": BBOX_NWSE,
+            "bbox": bbox_nwse,
             "worker_index": worker_index,
             "n_workers": n_workers,
             "years": [],
@@ -159,7 +173,7 @@ def fetch_snodas(
             short_name=access["short_name"],
             version=access.get("version"),
             temporal=(f"{year}-01-01", f"{year}-12-31"),
-            bounding_box=tuple(access.get("bbox_nwse", BBOX_NWSE)),
+            bounding_box=tuple(bbox_nwse),
         )
         n_found = len(results)
         if n_found == 0:
@@ -194,7 +208,7 @@ def fetch_snodas(
             }
         )
 
-    _update_manifest(workdir, period, meta, year_records)
+    _update_manifest(workdir, period, meta, year_records, bbox_nwse)
 
     return {
         "source_key": _SOURCE_KEY,
@@ -203,11 +217,41 @@ def fetch_snodas(
         "license": meta.get("license", "public domain (NSIDC)"),
         "variables": [v["name"] for v in meta["variables"]],
         "period": period,
-        "bbox": BBOX_NWSE,
+        "bbox": bbox_nwse,
         "worker_index": worker_index,
         "n_workers": n_workers,
         "years": year_records,
         "download_timestamp": now_utc,
+    }
+
+
+def _completed_years_from_manifest(workdir: Path) -> set[int]:
+    """Return the set of years already recorded in manifest.json.
+
+    A year counts as complete when its manifest entry has ``n_granules > 0``;
+    years recorded with ``n_granules: 0`` (no CMR hits) are NOT considered
+    complete — re-runs will retry them, which is intentional because CMR
+    coverage can fill in retroactively.
+
+    Returns an empty set (with a warning) if the manifest is absent or
+    unparseable so the caller falls through to a clean fresh fetch.
+    """
+    ws = _load_project(workdir)
+    manifest_path = ws.manifest_path
+    if not manifest_path.exists():
+        return set()
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except json.JSONDecodeError:
+        logger.warning(
+            "snodas: manifest.json could not be parsed; treating all years as pending."
+        )
+        return set()
+    entry = manifest.get("sources", {}).get(_SOURCE_KEY, {})
+    return {
+        int(rec["year"])
+        for rec in entry.get("years", [])
+        if int(rec.get("n_granules", 0)) > 0
     }
 
 
@@ -216,6 +260,7 @@ def _update_manifest(
     period: str,
     meta: dict,
     year_records: list[dict],
+    bbox_nwse: list,
 ) -> None:
     """Merge SNODAS provenance into manifest.json (flock-protected).
 
@@ -255,7 +300,7 @@ def _update_manifest(
                 "doi": meta.get("doi"),
                 "license": meta.get("license", "public domain (NSIDC)"),
                 "period": period,
-                "bbox": BBOX_NWSE,
+                "bbox": list(bbox_nwse),
                 "variables": [v["name"] for v in meta["variables"]],
                 "years": merged_years,
             }

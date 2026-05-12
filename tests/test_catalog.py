@@ -159,20 +159,46 @@ def test_snow_water_equivalent_variable_present():
     assert v["range_method"] == "multi_source_minmax"
     assert v["normalize"] is False
     assert v["sources"] == ["daymet", "snodas", "era5_land", "margulis_wus_sr"]
+    # Required-fields sanity check (matches the existing target-variable
+    # schema across runoff/aet/recharge/soil_moisture/sca).
+    for field in (
+        "description",
+        "prms_reference",
+        "time_step",
+        "period",
+        "units",
+        "range_notes",
+        "output_format",
+    ):
+        assert field in v, f"snow_water_equivalent missing required field {field!r}"
+    # Units rework (C8): post-conversion units alongside original.
+    assert v["units"] == "inches"
+    assert v.get("original_units")
+    assert v["time_step"] == "daily"
 
 
 def test_daymet_source_present():
     s = source("daymet")
     assert s["status"] == "current"
     assert s["access"]["type"] == "zarr_verify"
+    assert s["access"]["url"].startswith("https://")
     stores = s["access"]["stores"]
     assert set(stores.keys()) == {"na", "hi", "pr"}
-    # Stores keyed via the {daymet_root} template so projects can override.
-    for region_path in stores.values():
+    # Stores keyed via the {daymet_root} template so projects can override,
+    # and the resolved per-region path must end with a `.zarr` directory.
+    for r, region_path in stores.items():
         assert "{daymet_root}" in region_path
+        assert region_path.endswith(f"daymet_{r}.zarr"), region_path
     var_names = {v["name"] for v in s["variables"]}
     assert "swe" in var_names
+    # The SWE variable carries a unit and cell_methods (drift-prevention).
+    swe = next(v for v in s["variables"] if v["name"] == "swe")
+    assert swe["cf_units"] == "kg m-2"
+    assert swe["cell_methods"] == "time: point"
     assert s["doi"] == "10.3334/ORNLDAAC/2129"
+    assert s["citations"]
+    assert s["units"]
+    assert s["spatial_resolution"]
 
 
 def test_snodas_source_present():
@@ -180,9 +206,18 @@ def test_snodas_source_present():
     assert s["status"] == "current"
     assert s["access"]["type"] == "nasa_nsidc"
     assert s["access"]["short_name"] == "G02158"
+    assert s["access"]["url"].startswith("https://")
+    # bbox is read from the catalog by fetch/snodas.py; required.
+    bbox = s["access"]["bbox_nwse"]
+    assert isinstance(bbox, list) and len(bbox) == 4
     var_names = {v["name"] for v in s["variables"]}
     assert "swe" in var_names
+    swe = next(v for v in s["variables"] if v["name"] == "swe")
+    assert swe["cf_units"] == "kg m-2"
+    assert swe["cell_methods"] == "time: point"
     assert s["period"] == "2003/present"
+    assert s["citations"]
+    assert s["units"]
 
 
 def test_margulis_wus_sr_source_present():
@@ -190,10 +225,19 @@ def test_margulis_wus_sr_source_present():
     assert s["status"] == "current"
     assert s["access"]["type"] == "nasa_nsidc"
     assert s["access"]["short_name"] == "WUS_UCLA_SR"
+    assert s["access"]["url"].startswith("https://")
     assert s["doi"] == "10.5067/PP7T2GBI52I2"
     assert s["period"] == "1985/2021"
     var_names = {v["name"] for v in s["variables"]}
     assert "SWE" in var_names
+    swe = next(v for v in s["variables"] if v["name"] == "SWE")
+    assert swe["cf_units"] == "m"
+    assert swe["cell_methods"] == "time: point"
+    assert s["citations"]
+    assert s["units"]
+    # N7 — spatial_extent is now a pure source-extent string, not a
+    # project-scoping mention. Fabric scoping lives in fabric_scope.
+    assert "Oregon-fabric only" not in s["spatial_extent"]
 
 
 def test_margulis_wus_sr_fabric_scope_oregon_only():
@@ -212,3 +256,43 @@ def test_fabric_scope_field_only_on_scoped_sources():
     """
     scoped = {key for key, src in sources().items() if "fabric_scope" in src}
     assert scoped == {"margulis_wus_sr"}
+
+
+def test_every_fabric_scope_block_validates():
+    """Every declared `fabric_scope` block passes the validator.
+
+    Catches typos like `fabrics: [oregon]` that would otherwise
+    silently disable scoping at the target-builder boundary.
+    """
+    from nhf_spatial_targets.catalog import validate_fabric_scope
+
+    for key, src in sources().items():
+        validate_fabric_scope(key, src.get("fabric_scope"))
+
+
+def test_validate_fabric_scope_rejects_unknown_token():
+    from nhf_spatial_targets.catalog import validate_fabric_scope
+
+    with pytest.raises(ValueError, match="unknown token"):
+        validate_fabric_scope("test_src", {"fabrics": ["oregon"]})
+
+
+def test_validate_fabric_scope_rejects_non_list_fabrics():
+    from nhf_spatial_targets.catalog import validate_fabric_scope
+
+    with pytest.raises(ValueError, match="non-empty list"):
+        validate_fabric_scope("test_src", {"fabrics": "or"})
+
+
+def test_validate_fabric_scope_rejects_empty_fabrics():
+    from nhf_spatial_targets.catalog import validate_fabric_scope
+
+    with pytest.raises(ValueError, match="non-empty list"):
+        validate_fabric_scope("test_src", {"fabrics": []})
+
+
+def test_validate_fabric_scope_none_is_ok():
+    """`fabric_scope: None` (i.e. field absent) is the global default and OK."""
+    from nhf_spatial_targets.catalog import validate_fabric_scope
+
+    validate_fabric_scope("test_src", None)

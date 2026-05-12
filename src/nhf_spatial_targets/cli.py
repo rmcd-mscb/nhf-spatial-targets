@@ -1193,8 +1193,8 @@ def fetch_snodas_cmd(
     console.print(json_mod.dumps(result, indent=2))
 
 
-@fetch_app.command(name="wus-sr")
-def fetch_wus_sr_cmd(
+@fetch_app.command(name="margulis-wus-sr")
+def fetch_margulis_wus_sr_cmd(
     workdir: Annotated[
         Path,
         Parameter(

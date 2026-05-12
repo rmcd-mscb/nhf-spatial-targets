@@ -209,6 +209,35 @@ def test_manifest_records_fabric_scope(tmp_path, monkeypatch):
     entry = manifest["sources"]["margulis_wus_sr"]
     assert entry["fabric_scope"]["fabrics"] == ["or"]
     assert entry["variables"] == ["SWE"]
+    # Manifest field is `search_bbox` (the fabric-buffered search bbox),
+    # distinct from SNODAS's fixed `bbox`.
+    assert entry["search_bbox"] == [-124.2, 41.9, -115.8, 46.6]
+
+
+def test_completed_years_skipped_on_rerun(tmp_path, monkeypatch):
+    """Re-running the same period with a non-empty manifest skips done years."""
+    workdir = _make_project(tmp_path)
+    calls = _stub_earthaccess(monkeypatch, granules_per_year=1)
+    fetch_margulis_wus_sr(workdir=workdir, period="2000/2000")
+    n_searches_first = len(calls["search"])
+    # Second run for the same period should issue NO new CMR searches.
+    fetch_margulis_wus_sr(workdir=workdir, period="2000/2000")
+    assert len(calls["search"]) == n_searches_first
+
+
+def test_zero_granule_years_not_treated_as_complete(tmp_path, monkeypatch):
+    """Years with zero CMR hits are retried on the next run.
+
+    A year recorded with `n_granules: 0` means no CMR coverage was
+    available; coverage can fill in retroactively, so re-runs should
+    retry rather than treat the year as done.
+    """
+    workdir = _make_project(tmp_path)
+    calls = _stub_earthaccess(monkeypatch, granules_per_year=0)
+    fetch_margulis_wus_sr(workdir=workdir, period="2000/2000")
+    n_searches_first = len(calls["search"])
+    fetch_margulis_wus_sr(workdir=workdir, period="2000/2000")
+    assert len(calls["search"]) == n_searches_first + 1
 
 
 def test_manifest_accumulates_years_across_calls(tmp_path, monkeypatch):

@@ -18,12 +18,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-from nhf_spatial_targets.fetch import snodas as _snodas_module
 from nhf_spatial_targets.fetch.snodas import fetch_snodas
 
 
 def _make_project(tmp_path: Path) -> Path:
     """Materialize a minimal valid project directory."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
     datastore = tmp_path / "datastore"
     datastore.mkdir()
     (tmp_path / "config.yml").write_text(
@@ -87,16 +87,22 @@ def _stub_earthaccess(
 def test_period_before_2003_rejected(tmp_path, monkeypatch):
     workdir = _make_project(tmp_path)
     _stub_earthaccess(monkeypatch)
-    with pytest.raises(ValueError, match="before the SNODAS publisher start"):
+    with pytest.raises(ValueError, match="outside the SNODAS publisher window"):
         fetch_snodas(workdir=workdir, period="2000/2002")
 
 
 def test_worker_partitioning_3_years_3_workers(tmp_path, monkeypatch):
-    """Three workers across three years each take one distinct year."""
-    workdir = _make_project(tmp_path)
+    """Three workers across three years each take one distinct year.
+
+    Each worker gets its own project directory so the partitioning logic
+    is exercised against an empty manifest — i.e. exactly the state every
+    worker sees at startup when they're launched in parallel against the
+    shared real manifest.
+    """
     _stub_earthaccess(monkeypatch, granules_per_year=1)
     seen_years: list[int] = []
     for wi in range(3):
+        workdir = _make_project(tmp_path / f"worker_{wi}")
         result = fetch_snodas(
             workdir=workdir,
             period="2020/2022",
@@ -185,7 +191,10 @@ def test_manifest_records_bbox_and_metadata(tmp_path, monkeypatch):
     fetch_snodas(workdir=workdir, period="2020/2020")
     manifest = json.loads((workdir / "manifest.json").read_text())
     entry = manifest["sources"]["snodas"]
-    assert entry["bbox"] == _snodas_module.BBOX_NWSE
+    # Bbox is read from the catalog (sources.yml[snodas].access.bbox_nwse).
+    from nhf_spatial_targets import catalog as _catalog
+
+    assert entry["bbox"] == list(_catalog.source("snodas")["access"]["bbox_nwse"])
     assert entry["variables"] == ["swe"]
     assert entry["period"] == "2020/2020"
 

@@ -229,7 +229,7 @@ def download_month_variable(
     year : int
     month : int
         Calendar month (1–12).
-    variable : {"ro", "sro", "ssro"}
+    variable : {"ro", "sro", "ssro", "sd"}
     output_path : Path
         Target NetCDF file. Parent directory is created if missing.
 
@@ -326,7 +326,7 @@ def download_year_variable(
     Parameters
     ----------
     year : int
-    variable : {"ro", "sro", "ssro"}
+    variable : {"ro", "sro", "ssro", "sd"}
     output_path : Path
         Target per-year NetCDF file. Parent directory is created if missing.
 

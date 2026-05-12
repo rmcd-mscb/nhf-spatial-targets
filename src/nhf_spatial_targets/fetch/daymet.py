@@ -14,6 +14,22 @@ the metadata already encodes (every chunk rewrite changes either a
 ``.zarray`` shape/dtype/chunks block, an attribute file, or the
 directory's total byte count).
 
+**Residual risk in the fingerprint.** A chunk file rewritten in place
+with **identical compressed length** but different content bytes (e.g.
+the operator re-ran the publisher's converter and got a different
+floating-point shuffle, or an ``rsync --inplace`` overlaid a
+same-length corruption) is invisible to both the metadata hash and
+the directory byte count. In practice this is improbable for V4 R1
+(blosc-shuffled chunks producing the exact same compressed length
+from different input is statistically rare), and zarr v2 records no
+per-chunk checksums. Operators who suspect chunk-level tampering
+should re-stage the zarrs from the ORNL DAAC distribution.
+
+Concurrent invocation: ``fetch daymet --region <r>`` is safe to run
+in parallel across regions; the per-region manifest update takes an
+exclusive ``flock`` on a ``manifest.json.lock`` sibling so two
+processes never lose each other's region records.
+
 See ``docs/sources/daymet.md`` for the operator workflow.
 """
 
@@ -28,20 +44,27 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    import fcntl as _fcntl
+
+    _HAVE_FLOCK = True
+except ImportError:  # Windows fallback (not used on HPC).
+    _HAVE_FLOCK = False
+
 import xarray as xr
 
 import nhf_spatial_targets.catalog as _catalog
-from nhf_spatial_targets.fetch._period import parse_period, years_in_period
+from nhf_spatial_targets.fetch._period import (
+    parse_period,
+    period_bounds,
+    years_in_period,
+)
 from nhf_spatial_targets.workspace import load as _load_project
 
 logger = logging.getLogger(__name__)
 
 _SOURCE_KEY = "daymet"
 _REGIONS = ("na", "hi", "pr")
-# Publisher-usable window; the catalog declares "1980/2024" but the
-# fetch step records whatever the staged zarrs actually carry. The
-# clamp here just rejects obvious operator typos before any work runs.
-_DATA_PERIOD = (1980, 2024)
 # Stability window for detecting concurrent writes: stat the .zmetadata
 # file twice, sleep, compare. Tunable for tests.
 _STABILITY_SECONDS = 0.5
@@ -156,8 +179,10 @@ def _validate_zarr(zroot: Path, region: str) -> dict:
             f"or corrupt; verify the operator staging step completed."
         ) from exc
     try:
-        present_vars = set(ds.data_vars) | set(ds.coords)
-        missing = _REQUIRED_VARS - present_vars
+        # Required vars must be data_vars, not coords. A coord coincidentally
+        # named "swe" should not mask a missing data variable.
+        present_data_vars = set(ds.data_vars)
+        missing = _REQUIRED_VARS - present_data_vars
         if missing:
             raise RuntimeError(
                 f"{zroot} (region={region}) is missing required variables "
@@ -176,7 +201,9 @@ def _validate_zarr(zroot: Path, region: str) -> dict:
                     f"{zroot}: zarr has no '{axis}' coordinate; "
                     f"Daymet uses (time, y, x) projected coords."
                 )
-        if "lambert_conformal_conic" not in present_vars:
+        # The CRS spec is a scalar var that can show up under data_vars or
+        # coords depending on how the zarr was written; check both.
+        if "lambert_conformal_conic" not in (present_data_vars | set(ds.coords)):
             logger.warning(
                 "%s (region=%s): missing CRS variable "
                 "'lambert_conformal_conic'. Aggregation steps will likely "
@@ -288,11 +315,14 @@ def fetch_daymet(
         missing required variables.
     """
     parse_period(period)
+    meta = _catalog.source(_SOURCE_KEY)
+    data_lo, data_hi = period_bounds(meta["period"])
     for y in years_in_period(period):
-        if y < _DATA_PERIOD[0] or y > _DATA_PERIOD[1]:
+        if y < data_lo or y > data_hi:
             raise ValueError(
                 f"Year {y} is outside the Daymet V4 R1 publisher window "
-                f"({_DATA_PERIOD[0]}-{_DATA_PERIOD[1]}). Adjust --period."
+                f"({data_lo}-{data_hi}, from catalog `sources.yml[{_SOURCE_KEY}]"
+                f".period`). Adjust --period."
             )
 
     if region not in (*_REGIONS, "all"):
@@ -329,7 +359,6 @@ def fetch_daymet(
             region_paths[r],
         )
 
-    meta = _catalog.source(_SOURCE_KEY)
     license_str = meta.get("license", "unknown")
     now_utc = datetime.now(timezone.utc).isoformat()
 
@@ -407,49 +436,72 @@ def _update_manifest(
     license_str: str,
     region_records: dict[str, dict],
 ) -> None:
-    """Merge daymet provenance into manifest.json (per-region entries)."""
+    """Merge daymet provenance into manifest.json (per-region entries).
+
+    Operators may invoke ``fetch daymet --region na`` and
+    ``fetch daymet --region hi`` concurrently; the read-merge-write
+    cycle takes an exclusive ``flock`` on a ``manifest.json.lock``
+    sibling so parallel processes never lose each other's region
+    records.
+    """
     ws = _load_project(workdir)
     manifest_path = ws.manifest_path
-    if manifest_path.exists():
+    lock_path = manifest_path.with_suffix(manifest_path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _do_update() -> None:
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text())
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"manifest.json in {workdir} is corrupt and cannot be "
+                    f"parsed. Delete it and re-run the fetch step. "
+                    f"Original error: {exc}"
+                ) from exc
+        else:
+            manifest = {"sources": {}, "steps": []}
+
+        manifest.setdefault("sources", {})
+        entry = manifest["sources"].get(_SOURCE_KEY, {})
+        existing_regions = entry.get("regions", {}) or {}
+        # Merge: keep regions we didn't touch this run, overwrite the ones we did.
+        merged_regions = {**existing_regions, **region_records}
+        access = meta["access"]
+        entry.update(
+            {
+                "source_key": _SOURCE_KEY,
+                "access_url": access["url"],
+                "doi": meta.get("doi"),
+                "license": license_str,
+                "period": period,
+                "spatial_extent": meta.get("spatial_extent"),
+                "variables": [v["name"] for v in meta["variables"]],
+                "regions": merged_regions,
+            }
+        )
+        manifest["sources"][_SOURCE_KEY] = entry
+
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=manifest_path.parent, suffix=".json.tmp"
+        )
         try:
-            manifest = json.loads(manifest_path.read_text())
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"manifest.json in {workdir} is corrupt and cannot be "
-                f"parsed. Delete it and re-run the fetch step. "
-                f"Original error: {exc}"
-            ) from exc
+            with os.fdopen(tmp_fd, "w") as f:
+                json.dump(manifest, f, indent=2)
+            Path(tmp_path).replace(manifest_path)
+        except BaseException:
+            Path(tmp_path).unlink(missing_ok=True)
+            raise
+
+    if _HAVE_FLOCK:
+        with open(lock_path, "a") as _lock_f:
+            _fcntl.flock(_lock_f, _fcntl.LOCK_EX)
+            try:
+                _do_update()
+            finally:
+                _fcntl.flock(_lock_f, _fcntl.LOCK_UN)
     else:
-        manifest = {"sources": {}, "steps": []}
-
-    manifest.setdefault("sources", {})
-    entry = manifest["sources"].get(_SOURCE_KEY, {})
-    existing_regions = entry.get("regions", {}) or {}
-    # Merge: keep regions we didn't touch this run, overwrite the ones we did.
-    merged_regions = {**existing_regions, **region_records}
-    access = meta["access"]
-    entry.update(
-        {
-            "source_key": _SOURCE_KEY,
-            "access_url": access["url"],
-            "doi": meta.get("doi"),
-            "license": license_str,
-            "period": period,
-            "spatial_extent": meta.get("spatial_extent"),
-            "variables": [v["name"] for v in meta["variables"]],
-            "regions": merged_regions,
-        }
-    )
-    manifest["sources"][_SOURCE_KEY] = entry
-
-    tmp_fd, tmp_path = tempfile.mkstemp(dir=manifest_path.parent, suffix=".json.tmp")
-    try:
-        with os.fdopen(tmp_fd, "w") as f:
-            json.dump(manifest, f, indent=2)
-        Path(tmp_path).replace(manifest_path)
-    except BaseException:
-        Path(tmp_path).unlink(missing_ok=True)
-        raise
+        _do_update()
     logger.info(
         "Updated manifest.json with daymet provenance for regions %s",
         sorted(region_records.keys()),

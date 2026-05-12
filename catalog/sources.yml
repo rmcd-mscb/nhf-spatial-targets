@@ -13,10 +13,11 @@ sources:
     name: ECMWF ERA5-Land Reanalysis
     description: >
       ECMWF ERA5-Land hourly reanalysis. Total runoff (ro), surface runoff
-      (sro), and sub-surface runoff (ssro) downloaded for CONUS plus
-      contributing watersheds (Canada/Mexico). Used as a source for the
-      runoff calibration target (ro) and the recharge calibration target
-      (ssro, as drainage proxy).
+      (sro), sub-surface runoff (ssro), and snow depth water equivalent
+      (sd) downloaded for CONUS plus contributing watersheds (Canada/
+      Mexico). Used as a source for the runoff calibration target (ro),
+      the recharge calibration target (ssro, as drainage proxy), and the
+      snow water equivalent calibration target (sd).
     citations:
       - "Muñoz-Sabater, J., and others, 2021, doi:10.5194/essd-13-4349-2021"
     access:
@@ -69,7 +70,7 @@ sources:
     period: "1979/present"
     spatial_extent: CONUS+contributing-watersheds
     spatial_resolution: 0.1 degree
-    units: m of water equivalent (ro/sro/ssro) and m water equivalent (sd)
+    units: m of water equivalent
     license: Copernicus license (free, attribution)
     status: current
 
@@ -799,7 +800,11 @@ sources:
         the NSIDC-0719 short_name has been WUS_UCLA_SR but the value
         is subject to NSIDC bookkeeping.
     fabric_scope:
-      fabrics: [or]
+      # `fabrics:` is the list of fabric tokens for which this source
+      # should be aggregated. Allowed tokens (kept in sync with the
+      # known fabric set this pipeline targets): "or" (Oregon).
+      # Token names quoted to avoid YAML reserved-word edge cases.
+      fabrics: ["or"]
       notes: >
         Spatial extent is the Western US (CA, OR, WA, ID, NV, UT, and
         parts of MT, WY, CO, AZ, NM). This catalog scopes the source
@@ -817,7 +822,7 @@ sources:
           before harmonisation with the other SWE sources.
     time_step: daily
     period: "1985/2021"
-    spatial_extent: Western US (Oregon-fabric only in this pipeline)
+    spatial_extent: Western US (Sierra Nevada, Cascades, Rockies and adjacent ranges)
     spatial_resolution: 90 m
     units: m water equivalent
     license: public domain (NASA NSIDC)
