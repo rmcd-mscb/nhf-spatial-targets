@@ -102,11 +102,12 @@ def read_aggregated_source(
             f"Variable '{var}' not found in aggregated NCs for source "
             f"'{source_key}'. Available variables: {available}."
         )
-    # Canonical row order: HRU dim ascending by id_col. The aggregator (gdptools)
-    # writes rows in whatever order its upstream geometry table happens to use
-    # (often VPU-grouped); sorting here gives downstream code a stable invariant
-    # so positional checks against the fabric do not break on order alone.
-    # Tracked for emission-time enforcement in #93.
+    # Canonical row order: HRU dim ascending by id_col. Emission-time
+    # enforcement landed with issue #93, so per-year NCs aggregated after
+    # that change arrive here already sorted (this call is a no-op for
+    # them). For pre-#93 NCs already on disk — where gdptools wrote rows
+    # in VPU-grouped batch order — this defensive sort keeps positional
+    # checks against the fabric correct without forcing a re-aggregate.
     ds = ds.sortby(project.id_col)
     sliced = ds[var].sel(time=slice(period[0], period[1]))
     if sliced.sizes.get("time", 0) == 0:
@@ -277,6 +278,7 @@ def write_target_nc(
     output_path: Path,
     title: str,
     extra_global_attrs: dict | None = None,
+    sort_dim: str | None = None,
 ) -> None:
     """Write a target Dataset to NetCDF atomically with CF-1.6 metadata.
 
@@ -288,6 +290,13 @@ def write_target_nc(
     variables and int8+zlib encoding for the diagnostic variables, and
     writes via tempfile + rename so a partial NetCDF never lands at the
     final path.
+
+    When ``sort_dim`` is given, the Dataset is sorted ascending on that
+    dimension before write. Target builders pass ``project.id_col`` here
+    to enforce the canonical HRU row order at the emission boundary
+    (issue #93). Upstream helpers (``read_aggregated_source``,
+    ``compute_hru_area_and_centroids``) already produce sorted data; the
+    explicit sort here makes the invariant unmistakable at the file boundary.
     """
     from datetime import datetime, timezone
 
@@ -297,6 +306,8 @@ def write_target_nc(
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     ds = ds.copy()
+    if sort_dim is not None:
+        ds = ds.sortby(sort_dim)
     ds.attrs.setdefault("Conventions", "CF-1.6")
     ds.attrs["title"] = title
     ds.attrs["history"] = (

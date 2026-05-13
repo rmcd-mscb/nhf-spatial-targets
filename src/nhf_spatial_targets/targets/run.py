@@ -327,6 +327,7 @@ def build(project: Project) -> None:
         output_path,
         title="NHM runoff calibration target (lower/upper bounds in cfs)",
         extra_global_attrs=extra_attrs,
+        sort_dim=id_col,
     )
 
     # Coverage summary log line (read from the in-memory materialized array).
@@ -370,4 +371,5 @@ def build(project: Project) -> None:
             nn_path,
             title="NHM runoff calibration target (NN-filled, cfs)",
             extra_global_attrs=filled_attrs,
+            sort_dim=id_col,
         )

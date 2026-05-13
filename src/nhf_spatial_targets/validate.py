@@ -397,6 +397,22 @@ def _fabric_metadata(fabric_path: Path, id_col: str, buffer_deg: float) -> dict:
     # Check id_col here to avoid reading the fabric twice
     _check_id_column(gdf, id_col)
 
+    # Canonical row order across the pipeline is id_col ascending (issue #93).
+    # We don't rewrite the .gpkg; the aggregator and target writers enforce
+    # the sort at emission. Record whether the source fabric is already
+    # canonical so operators can see it in fabric.json / manifest.json.
+    id_col_sorted = bool(gdf[id_col].is_monotonic_increasing)
+    if not id_col_sorted:
+        n_transitions = int((gdf[id_col].diff() < 0).sum())
+        logger.warning(
+            "Fabric %s rows are not sorted ascending by '%s' "
+            "(%d out-of-order transitions). The aggregator and target "
+            "writers will canonicalize at emission time.",
+            fabric_path,
+            id_col,
+            n_transitions,
+        )
+
     native_crs = gdf.crs.to_string() if gdf.crs else "unknown"
     hru_count = len(gdf)
 
@@ -419,6 +435,7 @@ def _fabric_metadata(fabric_path: Path, id_col: str, buffer_deg: float) -> dict:
         "sha256": sha256,
         "crs": native_crs,
         "id_col": id_col,
+        "id_col_sorted": id_col_sorted,
         "hru_count": hru_count,
         "bbox": {
             "minx": float(wgs84_bounds[0]),
@@ -487,6 +504,7 @@ def _write_manifest(workdir: Path, fabric_meta: dict) -> None:
         "sha256": fabric_meta["sha256"],
         "crs": fabric_meta["crs"],
         "id_col": fabric_meta["id_col"],
+        "id_col_sorted": fabric_meta["id_col_sorted"],
         "hru_count": fabric_meta["hru_count"],
     }
 

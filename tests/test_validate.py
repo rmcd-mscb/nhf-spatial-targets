@@ -289,6 +289,8 @@ def test_validate_writes_fabric_json(tmp_path, minimal_fabric, no_system_cred_ch
     # Buffered box should be wider than the raw bbox
     assert fabric["bbox_buffered"]["minx"] < fabric["bbox"]["minx"]
     assert fabric["bbox_buffered"]["maxy"] > fabric["bbox"]["maxy"]
+    # Issue #93: canonical-sort status is recorded on fabric.json.
+    assert fabric["id_col_sorted"] is True
 
 
 def test_validate_writes_manifest_json(tmp_path, minimal_fabric, no_system_cred_checks):
@@ -301,9 +303,34 @@ def test_validate_writes_manifest_json(tmp_path, minimal_fabric, no_system_cred_
     assert "fabric" in manifest
     assert manifest["fabric"]["id_col"] == "nhm_id"
     assert manifest["fabric"]["hru_count"] == 3
+    # Issue #93: sort status flows through to the manifest fabric block.
+    assert manifest["fabric"]["id_col_sorted"] is True
     assert "nhf_spatial_targets_version" in manifest
     assert "created_utc" in manifest
     assert "last_validated_utc" in manifest
+
+
+def test_validate_records_unsorted_fabric(tmp_path, no_system_cred_checks, caplog):
+    """A non-monotonic fabric is flagged (False) and warned about (#93)."""
+    import logging
+
+    gdf = gpd.GeoDataFrame(
+        {"nhm_id": [3, 1, 2]},
+        geometry=[box(0, 0, 1, 1), box(1, 1, 2, 2), box(2, 2, 3, 3)],
+        crs="EPSG:4326",
+    )
+    fabric_path = tmp_path / "unsorted_fabric.gpkg"
+    gdf.to_file(fabric_path, driver="GPKG")
+    _full_setup(tmp_path, fabric_path)
+
+    with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.validate"):
+        validate_workspace(tmp_path)
+
+    fabric = json.loads((tmp_path / "fabric.json").read_text())
+    assert fabric["id_col_sorted"] is False
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    assert manifest["fabric"]["id_col_sorted"] is False
+    assert any("not sorted ascending" in record.message for record in caplog.records)
 
 
 # ---------------------------------------------------------------------------

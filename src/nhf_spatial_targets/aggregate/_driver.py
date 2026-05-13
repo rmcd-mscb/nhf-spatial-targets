@@ -432,6 +432,12 @@ def aggregate_year(
     )
     _attach_cf_global_attrs(year_ds, adapter.source_key, meta)
 
+    # Canonical row order on emission: HRU dim ascending by id_col (issue #93).
+    # gdptools concatenates batches in iteration order, which is typically
+    # VPU-grouped rather than id_col-ascending. Sorting once at emission gives
+    # downstream consumers a stable invariant.
+    year_ds = year_ds.sortby(id_col)
+
     _atomic_write_netcdf(year_ds, out_path)
     logger.info("%s: year %d: wrote %s", adapter.source_key, year, out_path)
     return out_path
