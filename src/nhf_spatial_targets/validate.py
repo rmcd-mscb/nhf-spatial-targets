@@ -328,9 +328,23 @@ def _check_credentials(workdir: Path) -> None:
         (src.get("access") or {}).get("type") == "copernicus_cds"
         for src in srcs.values()
     )
+    # Every NASA-Earthdata-authenticated `access.type` value used in the
+    # catalog. Keep in sync with the fetch modules — any new EDL-using
+    # type needs to be added here so `nhf-targets validate` still
+    # catches missing creds before the operator hits a runtime auth
+    # failure inside earthaccess. `nasa_nsidc` is retained as a defensive
+    # fallback for historical entries even though current entries use
+    # the cleaner `nsidc` / `nsidc_https` tags.
+    _EDL_TYPES = (
+        "nasa_gesdisc",
+        "nasa_earthdata",
+        "nasa_nsidc",
+        "nsidc",
+        "nsidc_https",
+        "lpdaac",
+    )
     needs_earthdata = any(
-        (src.get("access") or {}).get("type") in ("nasa_gesdisc", "nasa_earthdata")
-        for src in srcs.values()
+        (src.get("access") or {}).get("type") in _EDL_TYPES for src in srcs.values()
     )
     if needs_cds:
         required.append("cds")
