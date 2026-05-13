@@ -37,7 +37,28 @@ def _make_project(tmp_path: Path) -> Path:
             }
         )
     )
-    (tmp_path / "fabric.json").write_text(json.dumps({"sha256": "f00"}))
+    # A buffered fabric bbox is required by the CMR-search path of
+    # fetch_snodas (matches merra2 / nldas / margulis). Pick a small
+    # CONUS-overlapping rectangle.
+    (tmp_path / "fabric.json").write_text(
+        json.dumps(
+            {
+                "sha256": "f00",
+                "bbox": {
+                    "minx": -110.0,
+                    "miny": 40.0,
+                    "maxx": -105.0,
+                    "maxy": 45.0,
+                },
+                "bbox_buffered": {
+                    "minx": -110.2,
+                    "miny": 39.9,
+                    "maxx": -104.8,
+                    "maxy": 45.1,
+                },
+            }
+        )
+    )
     return tmp_path
 
 
@@ -191,12 +212,40 @@ def test_manifest_records_bbox_and_metadata(tmp_path, monkeypatch):
     fetch_snodas(workdir=workdir, period="2020/2020")
     manifest = json.loads((workdir / "manifest.json").read_text())
     entry = manifest["sources"]["snodas"]
-    # Bbox is read from the catalog (sources.yml[snodas].access.bbox_nwse).
-    from nhf_spatial_targets import catalog as _catalog
-
-    assert entry["bbox"] == list(_catalog.source("snodas")["access"]["bbox_nwse"])
+    # search_bbox is the buffered fabric bbox, ordered (W, S, E, N) for CMR.
+    assert entry["search_bbox"] == [-110.2, 39.9, -104.8, 45.1]
     assert entry["variables"] == ["swe"]
     assert entry["period"] == "2020/2020"
+
+
+def test_search_uses_fabric_buffered_bbox_in_wsen_order(tmp_path, monkeypatch):
+    """CMR rejects bboxes whose 2nd coord (South) is outside [-90, 90].
+
+    This is a regression guard for #105: the catalog's `bbox_nwse` is
+    CDS convention `[N, W, S, E]`. Passing it directly to
+    `earthaccess.search_data` puts -125.0 (West) in the South slot and
+    CMR refuses. We use the fabric's `bbox_buffered` `(minx, miny,
+    maxx, maxy)` which is already in CMR's `(W, S, E, N)` order.
+    """
+    workdir = _make_project(tmp_path)
+    calls = _stub_earthaccess(monkeypatch, granules_per_year=1)
+    fetch_snodas(workdir=workdir, period="2020/2020")
+    bbox = calls["search"][-1]["bounding_box"]
+    assert bbox == (-110.2, 39.9, -104.8, 45.1)
+    # Second slot (South) MUST be a latitude in [-90, 90].
+    assert -90.0 <= bbox[1] <= 90.0
+
+
+def test_missing_bbox_buffered_raises(tmp_path, monkeypatch):
+    """Stale fabric.json without `bbox_buffered` fails fast with instructions."""
+    workdir = _make_project(tmp_path)
+    fabric_path = workdir / "fabric.json"
+    fabric = json.loads(fabric_path.read_text())
+    fabric.pop("bbox_buffered", None)
+    fabric_path.write_text(json.dumps(fabric))
+    _stub_earthaccess(monkeypatch, granules_per_year=1)
+    with pytest.raises(ValueError, match="bbox_buffered"):
+        fetch_snodas(workdir=workdir, period="2020/2020")
 
 
 def test_raw_directory_created_under_datastore(tmp_path, monkeypatch):

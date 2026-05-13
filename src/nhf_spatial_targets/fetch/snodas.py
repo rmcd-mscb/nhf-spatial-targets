@@ -119,12 +119,24 @@ def fetch_snodas(
                 f"({data_lo}-{data_hi}, from catalog `sources.yml[{_SOURCE_KEY}]"
                 f".period`). Adjust --period."
             )
-    bbox_nwse = access.get("bbox_nwse")
-    if not bbox_nwse:
+    # Use the project's buffered fabric bbox as the CMR search bounding
+    # box (matches the pattern in merra2.py / nldas.py / margulis_wus_sr.py).
+    # The catalog's `bbox_nwse` is CDS-convention metadata (kept for the
+    # ERA5-Land fetch); CMR / earthaccess want `(W, S, E, N)`, which is
+    # exactly the (minx, miny, maxx, maxy) order fabric.json records.
+    bbox_buffered = ws.fabric.get("bbox_buffered") or {}
+    if not bbox_buffered:
         raise ValueError(
-            f"catalog `sources.yml[{_SOURCE_KEY}].access.bbox_nwse` is missing. "
-            f"Add a [N, W, S, E] bbox before running the SNODAS fetch."
+            "SNODAS fetch needs a buffered fabric bbox; fabric.json has "
+            "no 'bbox_buffered' key. Re-run `nhf-targets validate` to "
+            "regenerate fabric.json."
         )
+    search_bbox = (
+        float(bbox_buffered["minx"]),
+        float(bbox_buffered["miny"]),
+        float(bbox_buffered["maxx"]),
+        float(bbox_buffered["maxy"]),
+    )
 
     raw_root = ws.raw_dir(_SOURCE_KEY) / "raw"
     raw_root.mkdir(parents=True, exist_ok=True)
@@ -157,7 +169,7 @@ def fetch_snodas(
             "license": meta.get("license", "public domain (NSIDC)"),
             "variables": [v["name"] for v in meta["variables"]],
             "period": period,
-            "bbox": bbox_nwse,
+            "search_bbox": list(search_bbox),
             "worker_index": worker_index,
             "n_workers": n_workers,
             "years": [],
@@ -173,7 +185,7 @@ def fetch_snodas(
             short_name=access["short_name"],
             version=access.get("version"),
             temporal=(f"{year}-01-01", f"{year}-12-31"),
-            bounding_box=tuple(bbox_nwse),
+            bounding_box=search_bbox,
         )
         n_found = len(results)
         if n_found == 0:
@@ -208,7 +220,7 @@ def fetch_snodas(
             }
         )
 
-    _update_manifest(workdir, period, meta, year_records, bbox_nwse)
+    _update_manifest(workdir, period, meta, year_records, search_bbox)
 
     return {
         "source_key": _SOURCE_KEY,
@@ -217,7 +229,7 @@ def fetch_snodas(
         "license": meta.get("license", "public domain (NSIDC)"),
         "variables": [v["name"] for v in meta["variables"]],
         "period": period,
-        "bbox": bbox_nwse,
+        "search_bbox": list(search_bbox),
         "worker_index": worker_index,
         "n_workers": n_workers,
         "years": year_records,
@@ -260,7 +272,7 @@ def _update_manifest(
     period: str,
     meta: dict,
     year_records: list[dict],
-    bbox_nwse: list,
+    search_bbox: tuple[float, float, float, float],
 ) -> None:
     """Merge SNODAS provenance into manifest.json (flock-protected).
 
@@ -300,7 +312,7 @@ def _update_manifest(
                 "doi": meta.get("doi"),
                 "license": meta.get("license", "public domain (NSIDC)"),
                 "period": period,
-                "bbox": list(bbox_nwse),
+                "search_bbox": list(search_bbox),
                 "variables": [v["name"] for v in meta["variables"]],
                 "years": merged_years,
             }
