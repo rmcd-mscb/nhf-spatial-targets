@@ -1,8 +1,9 @@
 """Fetch SNODAS daily snow water equivalent from NSIDC's HTTPS archive.
 
-This is the **fetch-only** scaffolding for SNODAS (NSIDC collection
-G02158). NSIDC's CMR record for G02158 is a metadata-only stub with
-**zero granule-level records** (verified in issue #107):
+This module both downloads the raw ``SNODAS_YYYYMMDD.tar`` bundles from
+NSIDC and decodes them into per-year daily CF NetCDFs. NSIDC's CMR
+record for G02158 is a metadata-only stub with **zero granule-level
+records** (verified in issue #107):
 ``earthaccess.search_data(short_name='G02158')`` returns 0 hits, no
 matter the bbox or temporal filter. The data actually lives behind
 NSIDC's Earthdata-Login-gated HTTPS archive at:
@@ -13,21 +14,29 @@ NSIDC's Earthdata-Login-gated HTTPS archive at:
 The fetch module constructs daily URLs from each date and streams the
 ``.tar`` bundle via the earthaccess HTTPS auth session
 (``earthaccess.login(strategy='netrc').get_session()``). Each bundle
-contains flat int16 binary fields plus ENVI-style ``.Hdr`` headers;
-decoding to a CF NetCDF is **deferred** to the SNODAS aggregate
-follow-up issue.
+contains flat int16 binary fields plus ENVI-style ``.Hdr`` headers.
+After all of a year's ``.tars`` are on disk, :func:`consolidate_year_snodas`
+decodes product 1034 (SWE) from each day and writes a single per-year
+NetCDF at ``<datastore>/snodas/daily/snodas_daily_<year>.nc``. Raw
+``.tars`` are preserved on disk after consolidation for provenance and
+future re-decode if catalog metadata changes.
 """
 
 from __future__ import annotations
 
+import gzip
 import json
 import logging
 import os
+import re
+import tarfile
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
+import xarray as xr
 
 try:
     import fcntl as _fcntl
@@ -37,11 +46,13 @@ except ImportError:  # Windows fallback (not used on HPC).
     _HAVE_FLOCK = False
 
 import nhf_spatial_targets.catalog as _catalog
+from nhf_spatial_targets import __version__
 from nhf_spatial_targets.fetch._period import (
     parse_period,
     period_bounds,
     years_in_period,
 )
+from nhf_spatial_targets.fetch.consolidate import apply_cf_metadata
 from nhf_spatial_targets.workspace import load as _load_project
 
 logger = logging.getLogger(__name__)
@@ -59,6 +70,23 @@ _DOWNLOAD_CHUNK_BYTES = 8 * 1024 * 1024
 # integrity check in `_download_tar` is the primary defense; this
 # minimum is a fallback for cases where the server omits Content-Length.
 _MIN_VALID_TAR_BYTES = 1 * 1024 * 1024  # 1 MiB
+
+# Per-day .tar member regex for the SWE product (NSIDC code 1034). The
+# pattern is stable across all years 2003-2024; verified by inspecting
+# headers from 2003, 2009, 2013, 2014, 2024 (notebook
+# inspect_consolidated_snodas.ipynb).
+_SWE_PRODUCT_REGEX = re.compile(r"us_ssmv11034.*\.dat\.gz$")
+_SWE_HEADER_REGEX = re.compile(r"us_ssmv11034.*\.txt\.gz$")
+# Per the NSIDC user guide: -9999 is the only documented fill code for
+# the masked product. No "saturated" sentinel is documented; pixels at
+# the int16 max of 32767 are valid (typically glaciated peaks).
+_SNODAS_FILL = -9999
+# Within-year header coord tolerance. Cells are ~0.00833° (30 arcsec)
+# wide; 1e-6 deg (~0.1 m) is well below cell width and absorbs the
+# sub-µdeg text-representation noise observed between headers within a
+# year, while still flagging real mid-year format changes loudly.
+_SNODAS_GRID_TOL_DEG = 1e-6
+_SNODAS_DAILY_FILENAME_TEMPLATE = "snodas_daily_{year}.nc"
 
 # Locale-independent month abbreviations for URL construction. The NSIDC
 # archive uses fixed English short names (e.g. ``01_Jan``); using
@@ -284,6 +312,387 @@ def _earthaccess_session():
     return session
 
 
+def _parse_snodas_header(text: str) -> dict[str, str]:
+    """Parse a SNODAS ENVI ``.Hdr`` header text into a flat ``dict``.
+
+    Headers are key/value lines joined by ``:``. Trailing whitespace and
+    the trailing-comment style ``Not applicable`` placeholders are left
+    as-is; callers reach for the specific keys they need (rows, cols,
+    bbox, resolution).
+    """
+    out: dict[str, str] = {}
+    for line in text.splitlines():
+        if ":" not in line:
+            continue
+        key, _, val = line.partition(":")
+        out[key.strip()] = val.strip()
+    return out
+
+
+def _date_from_tar_filename(tar_path: Path) -> pd.Timestamp:
+    """Extract ``YYYYMMDD`` from ``SNODAS_YYYYMMDD.tar``."""
+    m = re.search(r"SNODAS_(\d{8})\.tar$", tar_path.name)
+    if not m:
+        raise ValueError(
+            f"{tar_path.name}: cannot parse YYYYMMDD from filename "
+            f"(expected SNODAS_YYYYMMDD.tar)."
+        )
+    return pd.Timestamp(m.group(1))
+
+
+def _read_snodas_swe_header(tar_path: Path) -> dict[str, str]:
+    """Open ``tar_path`` in-memory and return the SWE product's parsed header.
+
+    Cheap by comparison to the binary decode: only the ``us_ssmv11034*.txt.gz``
+    member (typically <1 KB compressed) is read. Used by the streaming
+    consolidator to validate grid stability across an entire year before
+    decoding any binary.
+
+    Raises
+    ------
+    ValueError
+        No SWE header member, or header missing the rows/cols keys.
+    """
+    with tarfile.open(tar_path, "r") as tf:
+        members = tf.getnames()
+        hdr = next((m for m in members if _SWE_HEADER_REGEX.search(m)), None)
+        if hdr is None:
+            raise ValueError(
+                f"{tar_path.name}: no SWE header (code 1034) member. "
+                f"Tar members: {members}"
+            )
+        hdr_member = tf.extractfile(hdr)
+        if hdr_member is None:
+            raise ValueError(f"{tar_path.name}: cannot extract {hdr}")
+        header_text = gzip.decompress(hdr_member.read()).decode("latin-1")
+    header = _parse_snodas_header(header_text)
+    for required in ("Number of rows", "Number of columns"):
+        if required not in header:
+            raise ValueError(
+                f"{tar_path.name}: SWE header missing required key {required!r}"
+            )
+    return header
+
+
+def _read_snodas_swe_array(
+    tar_path: Path, expected_rows: int, expected_cols: int
+) -> np.ndarray:
+    """Decode just the SWE binary from ``tar_path`` to an ``int16`` array.
+
+    Called once per day during the dask-streaming consolidation write.
+    Memory footprint per call: ~one day's worth (≈ 46 MB at native CONUS
+    resolution); released as soon as the chunk is compressed and written.
+
+    Raises
+    ------
+    ValueError
+        Member missing, binary size disagrees with ``(expected_rows, expected_cols)``.
+    """
+    with tarfile.open(tar_path, "r") as tf:
+        members = tf.getnames()
+        dat = next((m for m in members if _SWE_PRODUCT_REGEX.search(m)), None)
+        if dat is None:
+            raise ValueError(
+                f"{tar_path.name}: no SWE product (code 1034) member. "
+                f"Tar members: {members}"
+            )
+        dat_member = tf.extractfile(dat)
+        if dat_member is None:
+            raise ValueError(f"{tar_path.name}: cannot extract {dat}")
+        raw = gzip.decompress(dat_member.read())
+
+    expected_bytes = expected_rows * expected_cols * 2
+    if len(raw) != expected_bytes:
+        raise ValueError(
+            f"{tar_path.name}: SWE binary has {len(raw)} bytes, expected "
+            f"{expected_bytes} for ({expected_rows}, {expected_cols}) big-endian int16."
+        )
+    # `.astype(np.int16)` already returns a new owned array (with native
+    # byte order on little-endian hosts), so the gzip buffer is released
+    # as soon as this function returns.
+    return (
+        np.frombuffer(raw, dtype=">i2")
+        .reshape(expected_rows, expected_cols)
+        .astype(np.int16)
+    )
+
+
+def _decode_snodas_swe_tar(
+    tar_path: Path,
+) -> tuple[pd.Timestamp, np.ndarray, dict[str, str]]:
+    """Decode the SWE product (NSIDC code 1034) out of one daily ``.tar``.
+
+    Returns ``(date, swe_int16_2d, header_dict)``. Convenience wrapper
+    around :func:`_read_snodas_swe_header` + :func:`_read_snodas_swe_array`
+    for callers that want both halves in one round trip. The streaming
+    consolidator uses the two helpers separately so the (large) binary
+    decode is lazy.
+
+    Raises
+    ------
+    ValueError
+        Member missing, binary size mismatch, or unparseable date.
+    """
+    date = _date_from_tar_filename(tar_path)
+    header = _read_snodas_swe_header(tar_path)
+    rows = int(header["Number of rows"])
+    cols = int(header["Number of columns"])
+    arr = _read_snodas_swe_array(tar_path, rows, cols)
+    return date, arr, header
+
+
+def _coords_from_snodas_header(
+    header: dict[str, str],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute (lat_descending, lon_ascending) cell-center coords."""
+    rows = int(header["Number of rows"])
+    cols = int(header["Number of columns"])
+    lon_min = float(header["Minimum x-axis coordinate"])
+    lat_max = float(header["Maximum y-axis coordinate"])
+    dx = float(header["X-axis resolution"])
+    dy = float(header["Y-axis resolution"])
+    lon = lon_min + dx * (np.arange(cols) + 0.5)
+    lat = lat_max - dy * (np.arange(rows) + 0.5)
+    return lat.astype(np.float64), lon.astype(np.float64)
+
+
+def _grids_match(
+    h1: dict[str, str],
+    h2: dict[str, str],
+    tol: float = _SNODAS_GRID_TOL_DEG,
+) -> bool:
+    """Whether two SNODAS headers describe the same grid within ``tol`` deg."""
+    if h1.get("Number of rows") != h2.get("Number of rows"):
+        return False
+    if h1.get("Number of columns") != h2.get("Number of columns"):
+        return False
+    for k in (
+        "Minimum x-axis coordinate",
+        "Maximum y-axis coordinate",
+        "X-axis resolution",
+        "Y-axis resolution",
+    ):
+        try:
+            d = abs(float(h1[k]) - float(h2[k]))
+        except KeyError:
+            return False
+        if d > tol:
+            return False
+    return True
+
+
+def consolidate_year_snodas(year: int, raw_dir: Path, daily_dir: Path) -> Path:
+    """Decode every ``SNODAS_YYYYMMDD.tar`` in ``raw_dir`` into one year NC.
+
+    Mirrors :func:`nhf_spatial_targets.fetch.era5_land.consolidate_year`:
+
+    - **Idempotent**: skips rebuild when the output exists and is newer
+      than every input ``.tar`` (mtime check, same pattern as ERA5-Land).
+    - **Atomic**: writes to ``.nc.tmp`` then renames; an interrupted run
+      never leaves a half-written NC at the canonical path.
+    - **CF metadata**: applies :func:`apply_cf_metadata` with
+      ``time_step="daily"``, so the variable carries ``units`` from
+      catalog ``cf_units`` (``kg m-2``), ``cell_methods``, ``grid_mapping``,
+      and a WGS84 ``crs`` ancillary variable.
+    - **Storage**: SWE stored as native ``int16`` with
+      ``_FillValue=-9999`` plus zlib (level 4). xarray's default
+      ``mask_and_scale=True`` on read converts fills to NaN
+      transparently for downstream consumers.
+
+    The per-year NC carries the first day's grid metadata as a global
+    attribute (``snodas_first_day_header``) for provenance — SNODAS has
+    re-georeferenced the masked product at least twice (between
+    2003/2004 and 2013/2014), with sub-pixel shifts (< 1e-3 deg). The
+    consolidator verifies every day within the year shares the same
+    grid; cross-year shifts are expected and live at the file boundary.
+
+    Parameters
+    ----------
+    year : int
+    raw_dir : Path
+        Directory containing the ``SNODAS_YYYYMMDD.tar`` files for one year
+        (typically ``<datastore>/snodas/raw/<year>/``).
+    daily_dir : Path
+        Output directory (typically ``<datastore>/snodas/daily/``). Created
+        if missing.
+
+    Returns
+    -------
+    Path
+        ``daily_dir / "snodas_daily_<year>.nc"``.
+
+    Raises
+    ------
+    FileNotFoundError
+        No ``SNODAS_*.tar`` files in ``raw_dir``.
+    ValueError
+        Any day fails to decode, or a within-year header mismatch is
+        detected.
+    """
+    raw_dir = Path(raw_dir)
+    daily_dir = Path(daily_dir)
+    daily_dir.mkdir(parents=True, exist_ok=True)
+    out_path = daily_dir / _SNODAS_DAILY_FILENAME_TEMPLATE.format(year=year)
+
+    tar_paths = sorted(raw_dir.glob("SNODAS_*.tar"))
+    if not tar_paths:
+        raise FileNotFoundError(
+            f"No SNODAS_*.tar files found in {raw_dir}. "
+            f"Run 'nhf-targets fetch snodas' for year {year} first."
+        )
+
+    if out_path.exists():
+        out_mtime = out_path.stat().st_mtime
+        newest_tar_mtime = max(p.stat().st_mtime for p in tar_paths)
+        if newest_tar_mtime <= out_mtime:
+            logger.info(
+                "snodas: daily NC up-to-date for %d (%d tars older than NC); skipping: %s",
+                year,
+                len(tar_paths),
+                out_path,
+            )
+            return out_path
+        logger.info(
+            "snodas: raw .tars newer than daily NC for %d; re-consolidating: %s",
+            year,
+            out_path,
+        )
+
+    logger.info(
+        "snodas: consolidating %d day(s) for year %d -> %s",
+        len(tar_paths),
+        year,
+        out_path,
+    )
+
+    # Phase 1 — eager, cheap: read every day's header to validate the
+    # within-year grid invariant before touching any binary. A SNODAS
+    # header is ~1 KB compressed; reading 366 of them is sub-second.
+    # `tar_paths` is already chronologically sorted (zero-padded
+    # YYYYMMDD filenames lex-sort = chronologically-sort), so we don't
+    # need a separate np.argsort after decode.
+    first_header = _read_snodas_swe_header(tar_paths[0])
+    rows = int(first_header["Number of rows"])
+    cols = int(first_header["Number of columns"])
+    lat, lon = _coords_from_snodas_header(first_header)
+    times = np.array(
+        [_date_from_tar_filename(p).to_datetime64() for p in tar_paths],
+        dtype="datetime64[ns]",
+    )
+
+    for p in tar_paths[1:]:
+        header = _read_snodas_swe_header(p)
+        if not _grids_match(first_header, header):
+            raise ValueError(
+                f"snodas: within-year grid mismatch in {year}: {p.name} "
+                f"differs from {tar_paths[0].name} (first day). "
+                f"first: rows={first_header.get('Number of rows')}, "
+                f"cols={first_header.get('Number of columns')}, "
+                f"min_x={first_header.get('Minimum x-axis coordinate')}, "
+                f"max_y={first_header.get('Maximum y-axis coordinate')}. "
+                f"mismatching: rows={header.get('Number of rows')}, "
+                f"cols={header.get('Number of columns')}, "
+                f"min_x={header.get('Minimum x-axis coordinate')}, "
+                f"max_y={header.get('Maximum y-axis coordinate')}. "
+                f"Re-consolidate after removing the mismatching .tar; "
+                f"cross-year shifts are expected at year boundaries, but "
+                f"within-year mismatches indicate a corrupt or mid-year-changed "
+                f"download that should not be silently absorbed."
+            )
+
+    # Phase 2 — lazy: build a dask-delayed stack of binary decodes. Each
+    # day's array (~46 MB int16 at native CONUS resolution) is materialized
+    # only when xarray asks for that chunk during `to_netcdf`, then released
+    # as soon as the zlib-compressed chunk is written to disk. Peak resident
+    # memory is bounded by a handful of in-flight chunks (~hundreds of MB),
+    # not by the full (n_days × rows × cols) int16 array (which would be
+    # ~17 GB for a full CONUS year and caused OOM kills under --mem=32G in
+    # SLURM job 17553331). The chunked storage layout `(1, rows, cols)`
+    # matches exactly one day per dask block, so each block survives a
+    # single read → compress → write cycle.
+    import dask
+    import dask.array as da
+
+    delayed_decodes = [
+        dask.delayed(_read_snodas_swe_array)(p, rows, cols) for p in tar_paths
+    ]
+    swe_stack = da.stack(
+        [
+            da.from_delayed(d, shape=(rows, cols), dtype=np.int16)
+            for d in delayed_decodes
+        ],
+        axis=0,
+    )
+
+    ds = xr.Dataset(
+        {"swe": (("time", "lat", "lon"), swe_stack)},
+        coords={"time": times, "lat": lat, "lon": lon},
+    )
+    ds = apply_cf_metadata(ds, _SOURCE_KEY, "daily")
+
+    # Record the first-day grid metadata as a global attr so future
+    # readers can detect cross-year drift without re-opening a .tar.
+    first_header_subset = {
+        k: first_header[k]
+        for k in (
+            "Minimum x-axis coordinate",
+            "Maximum x-axis coordinate",
+            "Minimum y-axis coordinate",
+            "Maximum y-axis coordinate",
+            "X-axis resolution",
+            "Y-axis resolution",
+            "Number of rows",
+            "Number of columns",
+        )
+        if k in first_header
+    }
+    ds.attrs.update(
+        {
+            "title": (f"SNODAS daily snow water equivalent (CONUS, masked) {year}"),
+            "institution": "NOAA NOHRSC / NSIDC",
+            "source": "SNODAS (NSIDC G02158)",
+            "references": "doi:10.7265/N5TB14TC",
+            "frequency": "day",
+            "history": f"Consolidated by nhf-spatial-targets v{__version__}",
+            "snodas_first_day_header": json.dumps(first_header_subset),
+        }
+    )
+
+    encoding = {
+        "swe": {
+            "zlib": True,
+            "complevel": 4,
+            "_FillValue": np.int16(_SNODAS_FILL),
+            "chunksizes": (1, rows, cols),
+            "dtype": "int16",
+        },
+    }
+
+    tmp = out_path.with_suffix(out_path.suffix + ".tmp")
+    try:
+        # Force the synchronous dask scheduler during write so chunks are
+        # decoded ONE AT A TIME instead of in parallel. xarray's default
+        # `to_netcdf` uses dask's threaded scheduler, which dispatches
+        # multiple chunk-decode tasks concurrently and balloons RAM with
+        # in-flight decoded chunks. For SNODAS each chunk is ~46 MB int16
+        # at native CONUS resolution; parallel decode of even 4 chunks
+        # would put ~200 MB in flight per chunk × ~3-4× working overhead
+        # ≈ multi-GB peak per year. Synchronous keeps peak bounded to
+        # ~1-2 chunks (~hundreds of MB total) regardless of n_days.
+        # The serialization cost is small for SNODAS (~1 s decode per
+        # day, ~6 min serial vs ~2 min parallel for a full year) and the
+        # memory savings turn 32 GB SLURM grants from "OOM at year 2003"
+        # into "comfortably fits in 4-8 GB".
+        with dask.config.set(scheduler="synchronous"):
+            ds.to_netcdf(tmp, format="NETCDF4", encoding=encoding)
+        tmp.replace(out_path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    logger.info("snodas: wrote daily NC: %s", out_path)
+    return out_path
+
+
 def fetch_snodas(
     workdir: Path,
     period: str,
@@ -291,14 +700,24 @@ def fetch_snodas(
     worker_index: int = 0,
     n_workers: int = 1,
 ) -> dict:
-    """Download SNODAS daily .tar bundles to the shared datastore.
+    """Download SNODAS daily .tar bundles and consolidate to per-year CF NetCDFs.
 
-    Fetch-only path: for each assigned year, walk the daily URLs at
+    Two-phase per year: (1) walk the daily URLs at
     ``<archive_url>/<year>/MM_Mon/SNODAS_YYYYMMDD.tar`` and stream each
-    bundle via the earthaccess HTTPS auth session. Per-day 404s are
+    bundle via the earthaccess HTTPS auth session — per-day 404s are
     recorded but do not fail the year (partial-year boundaries and
-    occasional gaps are normal). Decoding the int16 binary into CF
-    NetCDFs is deferred to the SNODAS aggregate follow-up.
+    occasional gaps are normal). (2) Once the year's .tars are on disk,
+    :func:`consolidate_year_snodas` decodes the SWE product out of every
+    bundle into a single per-year CF NetCDF at
+    ``<datastore>/snodas/daily/snodas_daily_<year>.nc``. Consolidation
+    failures are logged and stored on the per-year manifest record as
+    ``consolidate_error`` rather than aborting the run (the raw .tars are
+    preserved and the consolidation can be retried).
+
+    Backfill: years already downloaded by a prior run (manifest entry has
+    ``n_granules > 0`` but no ``daily_path``) are re-entered on the next
+    run; the new completion check requires ``daily_path`` to exist, so
+    only the consolidation step runs — no re-download.
 
     Parameters
     ----------
@@ -350,6 +769,8 @@ def fetch_snodas(
 
     raw_root = ws.raw_dir(_SOURCE_KEY) / "raw"
     raw_root.mkdir(parents=True, exist_ok=True)
+    daily_dir = ws.raw_dir(_SOURCE_KEY) / "daily"
+    daily_dir.mkdir(parents=True, exist_ok=True)
     now_utc = datetime.now(timezone.utc).isoformat()
 
     session = _earthaccess_session()
@@ -382,7 +803,6 @@ def fetch_snodas(
         year_dir.mkdir(parents=True, exist_ok=True)
         rec = _fetch_year(session, archive_url, year, year_dir)
         rec["downloaded_utc"] = now_utc
-        year_records.append(rec)
         logger.info(
             "snodas: year %d — downloaded=%d, already_present=%d, "
             "missing_404=%d, errors=%d",
@@ -392,6 +812,38 @@ def fetch_snodas(
             rec["n_missing_404"],
             rec["n_errors"],
         )
+        # Consolidation step: decode every .tar into a per-year daily NC
+        # and stash the path on the per-year record. Data-level failures
+        # (corrupt tar, missing inputs, header drift, disk full) are caught
+        # and recorded as `consolidate_error` so the run continues for
+        # other years — raw .tars are preserved for retry. Programming
+        # errors (AttributeError, ImportError, TypeError, ...) are NOT
+        # caught here so a real bug aborts the run loudly rather than
+        # silently degrading every year's record.
+        if rec["n_granules"] > 0:
+            try:
+                daily_path = consolidate_year_snodas(year, year_dir, daily_dir)
+                rec["daily_path"] = str(daily_path)
+                rec["consolidated_utc"] = datetime.now(timezone.utc).isoformat()
+            except (
+                ValueError,
+                FileNotFoundError,
+                OSError,
+                RuntimeError,
+                tarfile.TarError,
+            ) as exc:
+                logger.warning(
+                    "snodas: consolidation failed for year %d: %s",
+                    year,
+                    exc,
+                )
+                rec["consolidate_error"] = str(exc)
+        else:
+            logger.info(
+                "snodas: year %d has no granules on disk; skipping consolidation.",
+                year,
+            )
+        year_records.append(rec)
 
     _update_manifest(workdir, period, meta, year_records, archive_url)
     return _build_summary(
@@ -475,7 +927,14 @@ def _build_summary(
 
 
 def _completed_years_from_manifest(workdir: Path) -> set[int]:
-    """Return the set of years already recorded with ``n_granules > 0``.
+    """Return the set of years recorded as fully downloaded AND consolidated.
+
+    A year is considered complete only when its manifest record carries
+    both ``n_granules > 0`` AND a ``daily_path`` that exists on disk.
+    This dual check is the backfill mechanism: pre-existing manifest
+    entries from the download-only fetch (PRs #100 / #103 / #106 / #108)
+    have ``n_granules > 0`` but no ``daily_path``, so a re-run picks
+    them up and only the new consolidation step runs (no re-download).
 
     Years recorded with ``n_granules: 0`` are NOT considered complete —
     re-runs retry them (NSIDC coverage can fill in retroactively, and
@@ -495,11 +954,22 @@ def _completed_years_from_manifest(workdir: Path) -> set[int]:
         )
         return set()
     entry = manifest.get("sources", {}).get(_SOURCE_KEY, {})
-    return {
-        int(rec["year"])
-        for rec in entry.get("years", [])
-        if int(rec.get("n_granules", 0)) > 0
-    }
+    completed: set[int] = set()
+    for rec in entry.get("years", []):
+        try:
+            n_granules = int(rec.get("n_granules", 0))
+        except (TypeError, ValueError):
+            continue
+        if n_granules <= 0:
+            continue
+        daily_path = rec.get("daily_path")
+        if not daily_path or not Path(daily_path).exists():
+            continue
+        try:
+            completed.add(int(rec["year"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return completed
 
 
 def _update_manifest(
