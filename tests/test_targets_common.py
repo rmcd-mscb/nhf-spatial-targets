@@ -359,6 +359,32 @@ def test_write_target_nc_round_trips_via_xarray(tmp_path: Path):
         assert np.isnan(got["lower_bound"].values[0, 2])
 
 
+def test_write_target_nc_sort_dim_canonicalizes_hru_order(tmp_path: Path):
+    """sort_dim sorts the HRU dim ascending at emission (issue #93)."""
+    from nhf_spatial_targets.targets._common import write_target_nc
+
+    ds = _toy_target_dataset().isel(nhm_id=[2, 0, 1])  # shuffle to [3, 1, 2]
+    out = tmp_path / "shuffled.nc"
+    write_target_nc(ds, out, title="sort test", sort_dim="nhm_id")
+    with xr.open_dataset(out) as got:
+        np.testing.assert_array_equal(got["nhm_id"].values, [1, 2, 3])
+        # Values move with the coord, not by position.
+        original_for_hru_1 = ds["lower_bound"].sel(nhm_id=1, time=ds["time"].values[1])
+        round_tripped = got["lower_bound"].sel(nhm_id=1, time=got["time"].values[1])
+        assert float(original_for_hru_1) == float(round_tripped)
+
+
+def test_write_target_nc_no_sort_dim_preserves_caller_order(tmp_path: Path):
+    """Without sort_dim, the writer leaves caller order untouched (#93 opt-in)."""
+    from nhf_spatial_targets.targets._common import write_target_nc
+
+    ds = _toy_target_dataset().isel(nhm_id=[2, 0, 1])  # [3, 1, 2]
+    out = tmp_path / "no_sort.nc"
+    write_target_nc(ds, out, title="no-sort test")
+    with xr.open_dataset(out) as got:
+        np.testing.assert_array_equal(got["nhm_id"].values, [3, 1, 2])
+
+
 def test_write_target_nc_atomic_no_partial_on_failure(tmp_path: Path, monkeypatch):
     """If to_netcdf raises, the final path must not exist (tempfile cleanup)."""
     from nhf_spatial_targets.targets._common import write_target_nc

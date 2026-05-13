@@ -628,6 +628,48 @@ def test_year_coverage_gap_aborts_before_manifest(
     assert "ssebop" not in manifest.get("sources", {})
 
 
+@patch("nhf_spatial_targets.aggregate.ssebop.get_stac_collection")
+@patch("nhf_spatial_targets.aggregate.ssebop.WeightGen")
+@patch("nhf_spatial_targets.aggregate.ssebop.AggGen")
+@patch("nhf_spatial_targets.aggregate.ssebop.NHGFStacZarrData")
+def test_ssebop_emits_id_col_sorted(
+    mock_stac_data,
+    mock_agg_gen,
+    mock_weight_gen,
+    mock_get_col,
+    workdir,
+    tiny_fabric,
+):
+    """Per-year NC from the ssebop custom path is sorted ascending by id_col (#93)."""
+    mock_get_col.return_value = MagicMock()
+
+    mock_wg_instance = MagicMock()
+    mock_wg_instance.calculate_weights.return_value = pd.DataFrame(
+        {"src_idx": [0, 1], "tgt_idx": [0, 1], "weight": [0.5, 0.5]}
+    )
+    mock_weight_gen.return_value = mock_wg_instance
+
+    # Return rows shuffled so the canonical sort step has to do real work.
+    mock_agg_instance = MagicMock()
+    mock_agg_instance.calculate_agg.return_value = _make_mock_agg_result(
+        [3, 1, 2, 0], year=2000
+    )
+    mock_agg_gen.return_value = mock_agg_instance
+
+    aggregate_ssebop(
+        fabric_path=tiny_fabric,
+        id_col="hru_id",
+        period="2000/2000",
+        workdir=workdir,
+    )
+
+    out_path = workdir / "data" / "aggregated" / "ssebop" / "ssebop_2000_agg.nc"
+    with xr.open_dataset(out_path) as ds:
+        ids = ds["hru_id"].values
+        assert list(ids) == [0, 1, 2, 3]
+        assert np.all(np.diff(ids) > 0)
+
+
 @pytest.mark.integration
 def test_integration_tiny_fabric(workdir, tiny_fabric):
     """End-to-end test with real STAC endpoint (4 HRUs, 1 year)."""

@@ -101,6 +101,29 @@ def test_build_writes_unfilled_and_filled_files(tmp_path: Path):
     assert (project.targets_dir() / "runoff_targets_nn_filled.nc").exists()
 
 
+def test_build_emits_id_col_sorted_target_ncs(tmp_path: Path):
+    """Both unfilled and NN-filled target NCs emerge sorted ascending by id_col (#93).
+
+    Distinct from test_build_succeeds_when_source_hru_order_differs_from_fabric:
+    that test exercises end-to-end recovery from upstream disorder; this one
+    pins the emission-boundary invariant on the happy path (sorted inputs in,
+    sorted outputs out) for both target files.
+    """
+    from nhf_spatial_targets.targets.run import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_runoff_project(tmp_path)
+    project = load(workdir)
+    build(project)
+
+    for fname in ("runoff_targets.nc", "runoff_targets_nn_filled.nc"):
+        with xr.open_dataset(project.targets_dir() / fname) as ds:
+            ids = ds["nhm_id"].values
+            assert np.all(np.diff(ids) > 0), (
+                f"{fname}: HRU dim not strictly ascending; got {ids}"
+            )
+
+
 def test_build_period_union_n_sources_diagnostic(tmp_path: Path):
     """MWBM only covers 2000 -> 2001 cells should have n_sources=2."""
     from nhf_spatial_targets.targets.run import build

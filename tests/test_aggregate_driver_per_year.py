@@ -362,6 +362,61 @@ def test_aggregate_year_runs_post_aggregate_hook(project, tiny_batched_fabric):
         assert "v" not in written.data_vars
 
 
+def test_aggregate_year_emits_id_col_sorted(project, tiny_batched_fabric):
+    """Per-year NC emerges with HRU dim ascending by id_col, regardless of
+    the order gdptools returns (issue #93)."""
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import (
+        aggregate_year,
+        per_year_output_path,
+    )
+
+    src_dir = project.raw_dir("merra2")
+    src_dir.mkdir(parents=True, exist_ok=True)
+    src_file = src_dir / "src_2005_consolidated.nc"
+    _write_nc(src_file, pd.date_range("2005-01-01", periods=12, freq="MS"))
+
+    adapter = SourceAdapter(
+        source_key="merra2", output_name="merra2_agg.nc", variables=["v"]
+    )
+    fake_weights = pd.DataFrame({"i": [0], "j": [0], "wght": [1.0], "hru_id": [0]})
+    # Return rows in DESCENDING hru_id so the sort step has to do real work.
+    shuffled_year_ds = xr.Dataset(
+        {"v": (["time", "hru_id"], np.array([[42.0, 7.0]]))},
+        coords={
+            "time": (
+                "time",
+                pd.date_range("2005-01-01", periods=1, freq="MS"),
+                {"standard_name": "time"},
+            ),
+            "hru_id": [1, 0],
+        },
+    )
+    with (
+        patch(
+            "nhf_spatial_targets.aggregate._driver.catalog_source",
+            return_value={"access": {"type": "local_nc"}},
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.compute_or_load_weights",
+            return_value=fake_weights,
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.aggregate_variables_for_batch",
+            return_value=shuffled_year_ds,
+        ),
+    ):
+        aggregate_year(adapter, project, 2005, src_file, tiny_batched_fabric, "hru_id")
+
+    with xr.open_dataset(per_year_output_path(project, "merra2", 2005)) as written:
+        ids = written["hru_id"].values
+        assert list(ids) == [0, 1]
+        assert np.all(np.diff(ids) > 0)
+        # Values must move with the sort, not be re-bound by position.
+        assert float(written["v"].sel(hru_id=0).isel(time=0)) == 7.0
+        assert float(written["v"].sel(hru_id=1).isel(time=0)) == 42.0
+
+
 def test_migrate_legacy_layout_moves_by_year_files(project):
     from nhf_spatial_targets.aggregate._driver import _migrate_legacy_layout
 
