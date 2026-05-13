@@ -320,9 +320,17 @@ def consolidate_calendar_year_margulis_wus_sr(
             cy_tiles.append(ds_tile_cy)
 
     # Mosaic all (per-tile, per-WY-half) datasets into one WUS-wide
-    # (time, lat, lon) dataset.
+    # (time, lat, lon) dataset. ``combine_by_coords`` already returns
+    # coords sorted ascending — no `sortby` needed (and explicit sorts
+    # over a 732-tile dask graph trigger O(n) chunk-rebalancing
+    # blockwise ops, with `dask` emitting PerformanceWarnings about
+    # 14x chunk-count growth). Flip latitude to descending via a cheap
+    # `isel` view; the time axis already lands in chronological order
+    # because we appended WY *X* (Jan–Sep) before WY *X+1* (Oct–Dec)
+    # and combine_by_coords preserves that.
     merged = _mosaic_tiles(cy_tiles)
-    merged = merged.sortby("time").sortby("lat", ascending=False).sortby("lon")
+    if float(merged.lat.values[0]) < float(merged.lat.values[-1]):
+        merged = merged.isel(lat=slice(None, None, -1))
 
     # Sanity-check the assembled time axis: every day of the calendar
     # year must be present, no duplicates.
@@ -362,8 +370,19 @@ def consolidate_calendar_year_margulis_wus_sr(
     # with per-timestep chunking so downstream consumers can stream
     # single-day reads. The shared `_write_netcdf` handles atomic
     # temp-file + rename.
+    #
+    # Rechunk dask blocks to match the NetCDF encoding chunks BEFORE
+    # write. With ~732 lazily-opened tile granules feeding into
+    # ``combine_by_coords``, the resulting dask array carries thousands
+    # of small (per-tile, per-WY-time-slice) blocks. Writing that to
+    # NetCDF encoding ``(1, nlat, nlon)`` without an intermediate
+    # rechunk drives dask to do a blockwise rebalance over the whole
+    # graph (the 14x-chunk-growth PerformanceWarning). Rechunking to
+    # ``(time=1, lat=-1, lon=-1)`` produces one dask block per
+    # timestep, aligned 1:1 with the output NetCDF chunks.
     nlat = int(merged.sizes["lat"])
     nlon = int(merged.sizes["lon"])
+    merged = merged.chunk({"time": 1, "lat": -1, "lon": -1})
     encoding = {
         "SWE": {
             "zlib": True,
