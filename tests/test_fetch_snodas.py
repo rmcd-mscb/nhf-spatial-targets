@@ -974,8 +974,9 @@ def test_fetch_records_consolidation_error_but_does_not_abort(tmp_path, monkeypa
     so the fetch run still completes with raw .tars preserved on disk.
     """
     workdir = _make_project(tmp_path)
-    # 2 MiB junk body — passes the size floor but not a real tar.
-    junk = b"\x00" * (2 * 1024 * 1024)
+    # Just-over-1-MiB junk body — passes the size floor without inflating
+    # tmp_path I/O across 366 days of testing.
+    junk = b"\x00" * (1024 * 1024 + 1)
     _stub_session(monkeypatch, responder=lambda url: _FakeResponse(200, body=junk))
     result = fetch_snodas(workdir=workdir, period="2020/2020")
     rec = result["years"][0]

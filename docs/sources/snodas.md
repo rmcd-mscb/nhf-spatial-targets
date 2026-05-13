@@ -51,6 +51,12 @@ The fetch module constructs daily URLs from each date and streams the
   (`nhf-targets materialize-credentials --project-dir <project>`).
 - A few hundred GB of free space in `<datastore>/snodas/raw/` for the
   full 2003-present period (~8k .tars × 10-30 MB each).
+- **~24 GB RAM per worker** for the consolidation step. A full year of
+  CONUS SNODAS is `(365, 3351, 6935)` int16 = ~17 GB held as a single
+  numpy array while the year NC is being assembled; peak RSS during
+  `to_netcdf` runs higher. The default `fetch_snodas.slurm` memory
+  grant must accommodate this — bump `--mem` per worker if a SLURM
+  array job OOM-kills during consolidation.
 
 ## Procedure
 
@@ -163,6 +169,19 @@ carries:
   `source`, `references`, `frequency=day`, `history`, and a
   `snodas_first_day_header` JSON string capturing the original ENVI
   grid metadata for cross-year drift forensics.
+
+## For the SNODAS aggregator (sub-task 2b of #101)
+
+When wiring the aggregate adapter, use `stat_method="masked_mean"` on
+the `SourceAdapter` so the gdptools area-weighted mean **skips** the
+NaN pixels at the CONUS analysis mask edge rather than letting them
+poison every HRU that touches the mask. SNODAS deliberately ships
+`-9999` for off-CONUS pixels (oceans, the Mexico/Canada portions of
+the bbox, the Great Lakes); after consolidation those arrive at the
+aggregator as NaN. Without `masked_mean` an HRU whose footprint
+intersects even one masked pixel collapses to NaN. Same pattern as
+[`aggregate/mod10c1.py`](../../src/nhf_spatial_targets/aggregate/mod10c1.py)
+and [`aggregate/mod16a2.py`](../../src/nhf_spatial_targets/aggregate/mod16a2.py).
 
 ## Grid drift across years
 

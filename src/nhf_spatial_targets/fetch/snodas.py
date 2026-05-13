@@ -376,9 +376,10 @@ def _decode_snodas_swe_tar(
             f"{tar_path.name}: SWE binary has {len(raw)} bytes, expected "
             f"{expected} for ({rows}, {cols}) big-endian int16."
         )
-    # `.copy()` so the returned array owns its memory (the gzip buffer
-    # can be released as soon as this function returns).
-    arr = np.frombuffer(raw, dtype=">i2").reshape(rows, cols).astype(np.int16).copy()
+    # `.astype(np.int16)` already returns a new owned array (with native
+    # byte order on little-endian hosts), so the gzip buffer is released
+    # as soon as this function returns.
+    arr = np.frombuffer(raw, dtype=">i2").reshape(rows, cols).astype(np.int16)
 
     m = re.search(r"SNODAS_(\d{8})\.tar$", tar_path.name)
     if not m:
@@ -728,16 +729,25 @@ def fetch_snodas(
             rec["n_errors"],
         )
         # Consolidation step: decode every .tar into a per-year daily NC
-        # and stash the path on the per-year record. Failures here do NOT
-        # abort the run — the raw .tars are preserved on disk and the
-        # consolidation can be retried later. The manifest carries
-        # `consolidate_error` so operators can grep failed years.
+        # and stash the path on the per-year record. Data-level failures
+        # (corrupt tar, missing inputs, header drift, disk full) are caught
+        # and recorded as `consolidate_error` so the run continues for
+        # other years — raw .tars are preserved for retry. Programming
+        # errors (AttributeError, ImportError, TypeError, ...) are NOT
+        # caught here so a real bug aborts the run loudly rather than
+        # silently degrading every year's record.
         if rec["n_granules"] > 0:
             try:
                 daily_path = consolidate_year_snodas(year, year_dir, daily_dir)
                 rec["daily_path"] = str(daily_path)
                 rec["consolidated_utc"] = datetime.now(timezone.utc).isoformat()
-            except Exception as exc:
+            except (
+                ValueError,
+                FileNotFoundError,
+                OSError,
+                RuntimeError,
+                tarfile.TarError,
+            ) as exc:
                 logger.warning(
                     "snodas: consolidation failed for year %d: %s",
                     year,
