@@ -304,6 +304,54 @@ transformations are split between stages, run the inspect notebooks (via
 `inspect_aggregated.slurm` for memory) before and after — the % diff
 column in each validation cell should be unchanged within rounding.
 
+## Canonical row order on emission
+
+Separate from value transformations, the pipeline carries a second
+invariant: every fabric-aligned NetCDF (consolidated source NCs are
+exempt — they live on native grids) emerges with its HRU dimension
+**sorted ascending by `id_col`**. This invariant is enforced at the
+point of emission, not at the point of consumption, so downstream
+code may rely on positional alignment without runtime sort checks.
+
+Background: `gdptools.AggGen.calculate_agg` concatenates batches in
+the iteration order of the input geometry table, which is typically
+VPU-grouped rather than `id_col`-ascending. Without enforcement, the
+GFv2 fabric (`nat_hru_id` is a near-permutation of 1..361,471) and
+its aggregated NCs ended up in different orders, surfacing as a
+runtime failure in `targets/run.py` (issue #94). Issue #93 closed the
+gap by enforcing canonical sort at every emission point.
+
+**Enforcement sites (one `sortby(id_col)` per emission):**
+
+- `aggregate/_driver.py:aggregate_year` — sorts `year_ds` immediately
+  before `_atomic_write_netcdf`. Covers all sources that route
+  through the shared driver (10 of 11).
+- `aggregate/ssebop.py:aggregate_ssebop` — same sort before its
+  custom write site; ssebop bypasses the shared driver.
+- `targets/_common.py:write_target_nc` — accepts an optional
+  `sort_dim: str | None = None`. Target builders pass
+  `project.id_col` (see `targets/run.py`). Future target modules
+  (`aet.py`, `rch.py`, `som.py`, `sca.py`) inherit the invariant by
+  doing the same.
+
+**Diagnostic recorded at validate time:**
+
+- `validate._fabric_metadata` records `id_col_sorted: bool` on
+  `fabric.json` and (via `_write_manifest`) on `manifest.json`. If
+  the source `.gpkg` is not monotonic, validate logs a `WARNING`
+  naming the count of out-of-order transitions but does **not**
+  fail — the aggregator canonicalizes downstream regardless.
+
+**Legacy on-disk artifacts:** `targets/_common.py:read_aggregated_source`
+retains a defensive `ds.sortby(project.id_col)` so per-year NCs
+aggregated before #93 (in VPU-grouped order) continue to work
+without re-aggregation. For #93-and-later NCs this is a no-op.
+
+**Non-goals:** the fabric `.gpkg` itself is not rewritten; alternate
+sort keys (VPU grouping) may live as additional columns/coords but
+are never the row order; existing aggregated NCs are not migrated
+(the read-time defensive sort handles them).
+
 ## Cross-references
 
 - `CLAUDE.md` — concise policy summary for AI assistants.
