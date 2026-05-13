@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import os
 import platform
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,6 +16,8 @@ import yaml
 
 from nhf_spatial_targets import __version__
 from nhf_spatial_targets.workspace import make_dir
+
+logger = logging.getLogger(__name__)
 
 # The source keys whose raw-data subdirectories are created.
 _SOURCE_KEYS: list[str] = [
@@ -440,18 +445,66 @@ def _write_fabric_json(workdir: Path, fabric_meta: dict) -> None:
 
 
 def _write_manifest(workdir: Path, fabric_meta: dict) -> None:
-    manifest = {
-        "created_utc": datetime.now(timezone.utc).isoformat(),
-        "nhf_spatial_targets_version": __version__,
-        "fabric": {
-            "path": fabric_meta["path"],
-            "sha256": fabric_meta["sha256"],
-            "crs": fabric_meta["crs"],
-            "id_col": fabric_meta["id_col"],
-            "hru_count": fabric_meta["hru_count"],
-        },
-        "sources": {},
-        "steps": [],
+    """Write `manifest.json`, preserving any prior `sources` and `steps`.
+
+    Re-running validate must NOT clobber the provenance recorded by
+    prior fetch/agg runs (issue #97). When `manifest.json` exists and is
+    parseable:
+
+    - ``created_utc`` is preserved (true first-creation time).
+    - ``sources`` and ``steps`` are carried over byte-for-byte.
+    - ``fabric`` block is refreshed (fabric file may have changed).
+    - ``nhf_spatial_targets_version`` is refreshed (validate "blesses"
+      the manifest with the current pipeline version).
+    - ``last_validated_utc`` is set to now so operators can tell when
+      the last validate happened.
+
+    When `manifest.json` is absent OR cannot be parsed, a fresh skeleton
+    is written. (We don't try to recover a partially-corrupt manifest;
+    the operator's options at that point are to inspect the file or
+    delete it.)
+
+    Write is atomic (tempfile + rename) so a concurrent reader never
+    sees a half-written manifest.
+    """
+    now_utc = datetime.now(timezone.utc).isoformat()
+    fabric_block = {
+        "path": fabric_meta["path"],
+        "sha256": fabric_meta["sha256"],
+        "crs": fabric_meta["crs"],
+        "id_col": fabric_meta["id_col"],
+        "hru_count": fabric_meta["hru_count"],
     }
+
     path = workdir / "manifest.json"
-    path.write_text(json.dumps(manifest, indent=2))
+    preserved: dict = {}
+    if path.exists():
+        try:
+            preserved = json.loads(path.read_text())
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "manifest.json in %s could not be parsed (%s); writing a "
+                "fresh skeleton. Inspect the file manually if you need "
+                "to recover any prior provenance.",
+                workdir,
+                exc,
+            )
+            preserved = {}
+
+    manifest = {
+        "created_utc": preserved.get("created_utc") or now_utc,
+        "last_validated_utc": now_utc,
+        "nhf_spatial_targets_version": __version__,
+        "fabric": fabric_block,
+        "sources": preserved.get("sources") or {},
+        "steps": preserved.get("steps") or [],
+    }
+
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".json.tmp")
+    try:
+        with os.fdopen(tmp_fd, "w") as f:
+            json.dump(manifest, f, indent=2)
+        Path(tmp_path).replace(path)
+    except BaseException:
+        Path(tmp_path).unlink(missing_ok=True)
+        raise
