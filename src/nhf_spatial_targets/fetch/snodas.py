@@ -52,6 +52,13 @@ _SOURCE_KEY = "snodas"
 _HTTP_TIMEOUT_SECONDS = 60
 # Chunk size for streaming downloads.
 _DOWNLOAD_CHUNK_BYTES = 8 * 1024 * 1024
+# Defense in depth against truncated bodies (issue #107 review): a real
+# SNODAS .tar is 10-30 MB, never below ~5 MB even for the early sparse
+# years. Anything smaller is either a 404 HTML body that slipped past
+# the status check or a mid-stream connection drop. The Content-Length
+# integrity check in `_download_tar` is the primary defense; this
+# minimum is a fallback for cases where the server omits Content-Length.
+_MIN_VALID_TAR_BYTES = 1 * 1024 * 1024  # 1 MiB
 
 
 def _assign_worker_years(
@@ -99,18 +106,39 @@ def _download_tar(
     """Stream a single .tar from *url* to *out_path*. Returns a status code.
 
     Status codes (manifest-friendly):
-      - ``"downloaded"`` — file streamed and written this call.
-      - ``"already_present"`` — file exists on disk with non-zero size; skipped.
+      - ``"downloaded"`` — file streamed AND verified against Content-Length
+        (or, if the server omits Content-Length, written through to a
+        non-zero non-truncated-looking length) and written this call.
+      - ``"already_present"`` — file exists on disk with size above
+        :data:`_MIN_VALID_TAR_BYTES`; skipped.
       - ``"missing_404"`` — server returned 404; not an error (partial years
         and gaps are normal in SNODAS).
       - ``"error"`` — any other failure; logged, not raised.
 
     Atomic: streams to a ``.tar.tmp`` sibling, then renames on success.
-    The ``.tar.tmp`` is unlinked on any failure path so resume sees a
-    clean directory.
+    The ``.tar.tmp`` is unlinked on any failure path (including a
+    Content-Length mismatch) so resume sees a clean directory.
+
+    Assumes the caller has partitioned writers so only one worker
+    targets any given year directory (mirrors ``fetch_era5_land``'s
+    contract). The atomic rename is per-file race-free even within a
+    worker.
     """
-    if out_path.exists() and out_path.stat().st_size > 0:
-        return "already_present"
+    # Treat existing files smaller than _MIN_VALID_TAR_BYTES as suspect
+    # — SNODAS .tars are 10-30 MB; a few-hundred-byte stub is the
+    # signature of a pre-fix #107 truncated write that the now-stricter
+    # path would have rejected. Re-download on the next run.
+    if out_path.exists():
+        sz = out_path.stat().st_size
+        if sz >= _MIN_VALID_TAR_BYTES:
+            return "already_present"
+        logger.warning(
+            "snodas: existing %s is suspiciously small (%d bytes < %d); redownloading.",
+            out_path.name,
+            sz,
+            _MIN_VALID_TAR_BYTES,
+        )
+        out_path.unlink(missing_ok=True)
     tmp = out_path.with_suffix(out_path.suffix + ".tmp")
     try:
         resp = session.get(url, timeout=timeout, stream=True, allow_redirects=True)
@@ -128,10 +156,53 @@ def _download_tar(
                 url,
             )
             return "error"
+
+        # Capture the advertised body size BEFORE streaming so we can
+        # verify integrity on close. NSIDC's archive sets Content-Length
+        # on tarball responses; if it ever stops doing so (gzip transfer
+        # encoding, etc.) we fall back to a minimum-size check.
+        declared_len = resp.headers.get("Content-Length")
+        try:
+            declared_bytes: int | None = int(declared_len) if declared_len else None
+        except ValueError:
+            declared_bytes = None
+
+        bytes_written = 0
         with tmp.open("wb") as f:
             for chunk in resp.iter_content(chunk_size=_DOWNLOAD_CHUNK_BYTES):
                 if chunk:
                     f.write(chunk)
+                    bytes_written += len(chunk)
+
+        # Integrity gate: requests' iter_content does NOT raise on a
+        # short read — a mid-stream connection close that delivers
+        # fewer bytes than promised leaves a truncated file looking
+        # "complete". Prefer Content-Length when the server provided
+        # one (NSIDC's archive does); fall back to a minimum-size
+        # check otherwise. Either way, a failed check unlinks the tmp
+        # and returns "error" so the next run retries the day cleanly.
+        if declared_bytes is not None:
+            if bytes_written != declared_bytes:
+                logger.warning(
+                    "snodas: short read for %s — wrote %d of %d declared bytes",
+                    url,
+                    bytes_written,
+                    declared_bytes,
+                )
+                tmp.unlink(missing_ok=True)
+                return "error"
+        elif bytes_written < _MIN_VALID_TAR_BYTES:
+            logger.warning(
+                "snodas: truncated response for %s — wrote %d bytes "
+                "(< %d minimum and no Content-Length header to confirm); "
+                "discarding",
+                url,
+                bytes_written,
+                _MIN_VALID_TAR_BYTES,
+            )
+            tmp.unlink(missing_ok=True)
+            return "error"
+
         tmp.replace(out_path)
         return "downloaded"
     except Exception as exc:

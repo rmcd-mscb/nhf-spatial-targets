@@ -107,12 +107,33 @@ so parallel workers do not lose each other's year records.
   in umbrella issue #101: characterise the int16+`.Hdr` layout in a
   notebook, then write the decoder, then write the aggregate adapter.
 
+## Known limitations
+
+- **EDL token expiry on multi-hour runs.** The auth'd session is built
+  once per worker via `earthaccess.login(strategy='netrc').get_session()`.
+  Earthdata bearer tokens typically live 1-2 hours, refreshable up to a
+  few days. For single-worker fetches of the full 2003-present archive
+  (which can run 24+ hours), the token may expire mid-run. When that
+  happens the next `session.get()` returns 401 and the day is recorded
+  as `n_errors += 1`. Workarounds: (1) bump `--n-workers` so no worker's
+  share exceeds ~1 hour, or (2) re-submit the job — failed days have
+  no `out_path` on disk and are picked up cleanly on the next run.
+
 ## Troubleshooting
 
 - `RuntimeError: earthaccess login failed for SNODAS` — Earthdata
   credentials are missing or wrong. Re-run
   `nhf-targets materialize-credentials --project-dir <project>` after
   editing `.credentials.yml`.
+
+- All `n_errors` for a year, no `downloaded` or `already_present`, late
+  in a long run — most likely an expired EDL token (see above). Re-run
+  the job; the worker rebuilds its session and picks up where the
+  errors started.
+
+- `short read for <url> — wrote N of M declared bytes` log lines — NSIDC
+  closed the connection mid-stream. The `.tar.tmp` is unlinked and the
+  day is recorded as `error`. Re-run; transient.
 
 - `ValueError: outside the SNODAS publisher window` — the requested
   `--period` includes years before the catalog's start year. SNODAS

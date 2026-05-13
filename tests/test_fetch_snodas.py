@@ -53,14 +53,35 @@ def _make_project(tmp_path: Path) -> Path:
 
 
 class _FakeResponse:
-    """Tiny stand-in for ``requests.Response`` covering the bits we use."""
+    """Tiny stand-in for ``requests.Response`` covering the bits we use.
+
+    `Content-Length` is auto-derived from the body length unless an
+    explicit value is passed via ``content_length``. Pass
+    ``content_length=None`` to simulate a server that omits the header.
+    Pass an integer that *disagrees* with the body length to exercise
+    the short-read integrity path.
+    """
+
+    _UNSET = object()
 
     def __init__(
-        self, status_code: int, body: bytes = b"", chunks: list[bytes] | None = None
+        self,
+        status_code: int,
+        body: bytes = b"",
+        chunks: list[bytes] | None = None,
+        content_length: object = _UNSET,
     ):
         self.status_code = status_code
         self._body = body
         self._chunks = chunks if chunks is not None else [body]
+        self.headers: dict[str, str] = {}
+        if content_length is _FakeResponse._UNSET:
+            # Default: server sets Content-Length matching the body
+            # (NSIDC's archive does this on tarball responses).
+            self.headers["Content-Length"] = str(len(body))
+        elif content_length is not None:
+            self.headers["Content-Length"] = str(content_length)
+        # else: caller asked for no Content-Length header at all.
 
     def iter_content(self, chunk_size: int = 8192):
         for c in self._chunks:
@@ -239,11 +260,9 @@ def test_404_days_recorded_not_raised(tmp_path, monkeypatch):
     workdir = _make_project(tmp_path)
 
     def responder(url: str) -> _FakeResponse:
-        # First 30 days of the year are missing (mimics 2003 partial year).
+        # First 30 days of the year are missing (mimics a partial-year boundary).
         for d in range(1, 31):
-            if f"SNODAS_20200{d:02d}".replace("SNODAS_2020001", "X") and url.endswith(
-                f"SNODAS_202001{d:02d}.tar"
-            ):
+            if url.endswith(f"SNODAS_202001{d:02d}.tar"):
                 return _FakeResponse(404)
         return _FakeResponse(200, body=b"\x00")
 
@@ -256,13 +275,20 @@ def test_404_days_recorded_not_raised(tmp_path, monkeypatch):
 
 
 def test_already_present_files_are_skipped(tmp_path, monkeypatch):
-    """Pre-existing non-empty .tar files are accounted as ``already_present``."""
+    """Pre-existing realistically-sized .tar files are accounted as already_present.
+
+    The fetch now requires existing files to be at least
+    :data:`_MIN_VALID_TAR_BYTES` (1 MiB) to count as already-present,
+    so a few-byte stub from a pre-fix corrupted run gets re-downloaded
+    rather than silently treated as valid.
+    """
     workdir = _make_project(tmp_path)
     year_dir = tmp_path / "datastore" / "snodas" / "raw" / "2020"
     year_dir.mkdir(parents=True)
-    # Pre-stage 5 .tars on disk.
+    # Pre-stage 5 realistically-sized .tars (>= 1 MiB) on disk.
+    payload = b"PRE_STAGED" * (200 * 1024)  # ~2 MiB
     for day in range(1, 6):
-        (year_dir / f"SNODAS_202001{day:02d}.tar").write_bytes(b"PRE_STAGED")
+        (year_dir / f"SNODAS_202001{day:02d}.tar").write_bytes(payload)
     _stub_session(monkeypatch)
     result = fetch_snodas(workdir=workdir, period="2020/2020")
     rec = result["years"][0]
@@ -270,7 +296,77 @@ def test_already_present_files_are_skipped(tmp_path, monkeypatch):
     assert rec["n_downloaded_this_run"] == 366 - 5
     assert rec["n_granules"] == 366
     # Pre-staged files were NOT overwritten.
-    assert (year_dir / "SNODAS_20200101.tar").read_bytes() == b"PRE_STAGED"
+    assert (year_dir / "SNODAS_20200101.tar").read_bytes() == payload
+
+
+def test_suspiciously_small_existing_file_is_redownloaded(tmp_path, monkeypatch):
+    """A few-byte stub from a pre-fix corrupted run is redownloaded.
+
+    Defends against the truncated-body bug class flagged in PR #108
+    review: a previous, weaker `>0` predicate would lock such stubs
+    in forever. The new predicate requires `>= _MIN_VALID_TAR_BYTES`.
+    """
+    workdir = _make_project(tmp_path)
+    year_dir = tmp_path / "datastore" / "snodas" / "raw" / "2020"
+    year_dir.mkdir(parents=True)
+    stub_path = year_dir / "SNODAS_20200101.tar"
+    stub_path.write_bytes(b"oops")  # 4 bytes, way below 1 MiB
+    _stub_session(monkeypatch)
+    fetch_snodas(workdir=workdir, period="2020/2020")
+    # Stub was replaced by the (fake) full payload.
+    assert stub_path.read_bytes() != b"oops"
+
+
+def test_short_read_with_content_length_mismatch_recorded_as_error(
+    tmp_path, monkeypatch
+):
+    """A server that drops mid-stream below Content-Length yields `n_errors`.
+
+    Regression guard for the PR #108 review must-fix: `iter_content`
+    does not raise on a short read, so without an explicit
+    Content-Length check, a truncated body would be installed as
+    `downloaded` and the next run would skip it forever. The check
+    must catch the mismatch and unlink the .tar.tmp.
+    """
+    workdir = _make_project(tmp_path)
+    # Server claims 1000 bytes but delivers 10.
+    short_resp = _FakeResponse(200, body=b"\x00" * 10, content_length=1000)
+    _stub_session(monkeypatch, responder=lambda url: short_resp)
+    result = fetch_snodas(workdir=workdir, period="2020/2020")
+    rec = result["years"][0]
+    assert rec["n_errors"] == 366  # every day failed integrity
+    assert rec["n_downloaded_this_run"] == 0
+    # No partial .tar.tmp files left behind.
+    year_dir = tmp_path / "datastore" / "snodas" / "raw" / "2020"
+    leftovers = list(year_dir.glob("*.tmp"))
+    assert leftovers == []
+
+
+def test_no_content_length_small_body_recorded_as_error(tmp_path, monkeypatch):
+    """Server omits Content-Length AND the body is below the size floor.
+
+    Falls back to the `_MIN_VALID_TAR_BYTES` sanity check (1 MiB) and
+    discards the response.
+    """
+    workdir = _make_project(tmp_path)
+    no_cl_resp = _FakeResponse(200, body=b"\x00" * 10, content_length=None)
+    _stub_session(monkeypatch, responder=lambda url: no_cl_resp)
+    result = fetch_snodas(workdir=workdir, period="2020/2020")
+    rec = result["years"][0]
+    assert rec["n_errors"] == 366
+    assert rec["n_downloaded_this_run"] == 0
+
+
+def test_no_content_length_large_body_accepted(tmp_path, monkeypatch):
+    """Without Content-Length, a body >= 1 MiB is accepted (defense fallback)."""
+    workdir = _make_project(tmp_path)
+    big = b"\x00" * (2 * 1024 * 1024)
+    no_cl_resp = _FakeResponse(200, body=big, content_length=None)
+    _stub_session(monkeypatch, responder=lambda url: no_cl_resp)
+    result = fetch_snodas(workdir=workdir, period="2020/2020")
+    rec = result["years"][0]
+    assert rec["n_downloaded_this_run"] == 366
+    assert rec["n_errors"] == 0
 
 
 def test_other_status_recorded_as_error(tmp_path, monkeypatch):
