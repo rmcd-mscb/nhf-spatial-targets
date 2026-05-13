@@ -27,6 +27,7 @@ from nhf_spatial_targets.aggregate.ncep_ncar import aggregate_ncep_ncar
 from nhf_spatial_targets.aggregate.nldas_mosaic import aggregate_nldas_mosaic
 from nhf_spatial_targets.aggregate.nldas_noah import aggregate_nldas_noah
 from nhf_spatial_targets.aggregate.reitz2017 import aggregate_reitz2017
+from nhf_spatial_targets.aggregate.snodas import aggregate_snodas
 from nhf_spatial_targets.aggregate.watergap22d import aggregate_watergap22d
 
 _logger = logging.getLogger(__name__)
@@ -1494,6 +1495,27 @@ def agg_mod10c1_cmd(
     _run_tier_agg(aggregate_mod10c1, "MOD10C1", workdir, batch_size)
 
 
+@agg_app.command(name="snodas")
+def agg_snodas_cmd(
+    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    batch_size: Annotated[int, Parameter(name="--batch-size")] = 500,
+    period: Annotated[
+        str | None,
+        Parameter(
+            name=["--period", "-p"],
+            help=(
+                "Optional 'YYYY/YYYY' clip applied at agg time. SNODAS "
+                "consolidated NCs span 2003-present; pass e.g. '2003/2020' "
+                "to restrict aggregation. Omit to aggregate every year "
+                "present in the datastore."
+            ),
+        ),
+    ] = None,
+):
+    """Aggregate SNODAS daily SWE to HRU polygons."""
+    _run_tier_agg(aggregate_snodas, "SNODAS", workdir, batch_size, period=period)
+
+
 @agg_app.command(name="mwbm-climgrid")
 def agg_mwbm_climgrid_cmd(
     workdir: Annotated[Path, Parameter(name=["--project-dir"])],
@@ -1558,6 +1580,7 @@ def agg_all_cmd(
         ("reitz2017", aggregate_reitz2017),
         ("mod16a2", aggregate_mod16a2),
         ("mod10c1", aggregate_mod10c1),
+        ("snodas", aggregate_snodas),
         ("mwbm-climgrid", aggregate_mwbm_climgrid),
     ]
     for label, fn in sources:
