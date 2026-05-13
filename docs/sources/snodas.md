@@ -183,6 +183,66 @@ intersects even one masked pixel collapses to NaN. Same pattern as
 [`aggregate/mod10c1.py`](../../src/nhf_spatial_targets/aggregate/mod10c1.py)
 and [`aggregate/mod16a2.py`](../../src/nhf_spatial_targets/aggregate/mod16a2.py).
 
+## Archive gaps — missing days inside otherwise-complete years
+
+SNODAS's daily archive has **real day-gaps** even after the late-2003
+launch. The first SLURM consolidation run on hovenweep (job 17553331,
+2026-05-13) showed:
+
+| Year | On disk | Calendar days | Missing | Cause |
+| ---- | ------- | ------------- | ------- | ----- |
+| 2003 | 93      | 92 (from Sep 30) | 0    | partial start year |
+| 2004 | 363     | 366           | 3       | 02-25, 08-31, 09-27 |
+| 2005 | 362     | 365           | 3       | (NOHRSC publishing gaps) |
+| 2006 | 360     | 365           | 5       | (NOHRSC publishing gaps) |
+| 2007 | 363     | 365           | 2       | (NOHRSC publishing gaps) |
+
+These gaps trace to NSIDC HTTP 404s during the original fetch (PRs
+#100 / #103 / #106 / #108) — NOHRSC's model didn't publish those
+specific days, usually because of a processing outage, server
+downtime, or convergence failure. The fetch layer records them as
+`n_missing_404` in the manifest and the consolidator silently ingests
+only the `.tars` that exist, so each year NC's `time` axis is
+non-contiguous (e.g. 2004 has 363 daily timestamps, jumping over the
+three missing dates rather than NaN-filling them).
+
+**Implication for downstream consumers (aggregator and target):**
+
+- The SNODAS aggregator (sub-task 2b of #101) must enumerate its time
+  axis from the source NC's own `time` coord, not from a synthetic
+  daily range — most gdptools-based aggregators do this already.
+- Calibration targets that need a regular daily series must decide
+  per-target whether to (a) drop the missing days from the time
+  index, (b) NaN-fill them, or (c) interpolate. **TBD pending
+  colleague consultation** (2026-05-13): the missing-day count is
+  small (5 in the worst year of 2003–2007) and may be eligible for a
+  cheap linear-in-time interpolation post-processor at the target
+  stage. No decision is encoded in the consolidator itself — the year
+  NCs are deliberately "honest about gaps" so any downstream policy
+  is reversible.
+
+## Partial-bundle days — 2003-10-30 case
+
+Distinct from the gap problem: some early-SNODAS daily `.tars` are
+present on the archive but ship **only a subset of the 8 product
+pairs**. The first known case is `SNODAS_20031030.tar`, whose bundle
+carries only product 1025 (snowpack layer temperature), missing
+product 1034 (SWE).
+
+Current behavior: `consolidate_year_snodas` raises a `ValueError`
+("no SWE product (code 1034) member") the moment it hits such a day,
+which the fetch layer catches and records as `consolidate_error` for
+the year. **The whole year's daily NC is therefore not written** even
+though 91 of the 92 valid 2003 days are decodable. This is the
+correct fail-loud default for an unfamiliar data shape, but it is
+also brittle in production — a single bad day in a 366-day year
+should not block the other 365.
+
+A follow-up consolidator change (likely sub-task 2c on #101) should
+log-and-skip days that lack product 1034 the same way the download
+layer treats 404s. Decision pending the same colleague consultation
+that covers the missing-day fill policy.
+
 ## Grid drift across years
 
 NSIDC has re-georeferenced the masked product at least twice
