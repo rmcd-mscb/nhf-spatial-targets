@@ -204,12 +204,16 @@ def test_daymet_source_present():
 def test_snodas_source_present():
     s = source("snodas")
     assert s["status"] == "current"
-    assert s["access"]["type"] == "nasa_nsidc"
-    assert s["access"]["short_name"] == "G02158"
+    # SNODAS is fetched directly from NSIDC's HTTPS archive (issue #107).
+    # The CMR collection record is a granule-less stub, so earthaccess.
+    # search_data is not used; the catalog records both the human-facing
+    # landing URL and the machine-facing archive_url for the fetcher.
+    assert s["access"]["type"] == "nsidc_https"
     assert s["access"]["url"].startswith("https://")
-    # bbox is read from the catalog by fetch/snodas.py; required.
-    bbox = s["access"]["bbox_nwse"]
-    assert isinstance(bbox, list) and len(bbox) == 4
+    assert s["access"]["archive_url"].startswith(
+        "https://noaadata.apps.nsidc.org/NOAA/G02158/"
+    )
+    assert s["access"]["cmr_short_name"] == "G02158"
     var_names = {v["name"] for v in s["variables"]}
     assert "swe" in var_names
     swe = next(v for v in s["variables"] if v["name"] == "swe")

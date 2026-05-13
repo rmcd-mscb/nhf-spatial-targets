@@ -744,20 +744,31 @@ sources:
       - "National Operational Hydrologic Remote Sensing Center, 2004, doi:10.7265/N5TB14TC"
     doi: "10.7265/N5TB14TC"
     access:
-      type: nasa_nsidc
-      short_name: G02158
-      version: "1"
+      type: nsidc_https
       url: https://nsidc.org/data/g02158
-      bbox_nwse: [53.0, -125.0, 24.7, -66.0]
+      archive_url: https://noaadata.apps.nsidc.org/NOAA/G02158/masked/
+      # CMR collection record (granule-less metadata stub) — kept for
+      # provenance; do NOT use earthaccess.search_data on this short_name,
+      # it returns 0 hits.
+      cmr_short_name: G02158
+      cmr_version: "1"
+      cmr_concept_id: C1386246263-NSIDCV0
       notes: >
-        Access via earthaccess (NASA Earthdata login required). Daily
-        granules are tar/gz bundles containing flat int16 binary files
-        plus ENVI-style `.Hdr` headers; the SWE field is in mm with a
-        fill value of -9999 (scale_factor 1). Apply scale + fill mask
-        before any quantitative aggregation. The masked product is used
-        (CONUS only); the unmasked variant covering parts of southern
-        Canada is NOT used. Short_name/version should be confirmed via
-        an earthaccess CMR query at implementation time.
+        SNODAS is distributed by NSIDC via an Earthdata-Login-gated
+        HTTPS archive at https://noaadata.apps.nsidc.org/NOAA/G02158/.
+        The `masked/` subtree (CONUS-trimmed) covers 2003-present, daily
+        .tar bundles named SNODAS_YYYYMMDD.tar. Each tar contains flat
+        int16 binary fields plus ENVI-style `.Hdr` headers; the SWE
+        field is in mm with a fill value of -9999 (scale_factor 1).
+        Apply scale + fill mask before any quantitative aggregation.
+        IMPORTANT: although a CMR collection record exists
+        (concept-id C1386246263-NSIDCV0), CMR holds NO granule-level
+        metadata for this product (verified via direct CMR query in
+        issue #107). The fetch module constructs URLs from dates and
+        downloads through the earthaccess HTTPS auth session rather
+        than via earthaccess.search_data. The unmasked variant
+        (2009-present, ~60 N to 24.95 N including parts of Canada/
+        Mexico) is NOT used.
     variables:
       - name: swe
         long_name: snow water equivalent

@@ -1,17 +1,21 @@
-"""Fetch SNODAS daily snow water equivalent from NSIDC via earthaccess.
+"""Fetch SNODAS daily snow water equivalent from NSIDC's HTTPS archive.
 
 This is the **fetch-only** scaffolding for SNODAS (NSIDC collection
-G02158). It downloads raw daily granules (tar/gz bundles of flat int16
-binary fields plus ENVI ``.Hdr`` headers) into
-``<datastore>/snodas/raw/<year>/`` and records them in ``manifest.json``.
+G02158). NSIDC's CMR record for G02158 is a metadata-only stub with
+**zero granule-level records** (verified in issue #107):
+``earthaccess.search_data(short_name='G02158')`` returns 0 hits, no
+matter the bbox or temporal filter. The data actually lives behind
+NSIDC's Earthdata-Login-gated HTTPS archive at:
 
-Consolidation of the raw bundles into per-year daily and monthly CF
-NetCDFs is **deferred** to the SNODAS aggregate follow-up issue. The
-SNODAS native format (flat binary + ENVI ``.Hdr``) needs operator
-characterisation in a notebook before a robust parser can be written,
-per CLAUDE.md "characterise the data first" guidance. Until that work
-lands, the fetch module records the raw paths and lets downstream
-aggregate code raise loudly when it tries to consume them.
+    https://noaadata.apps.nsidc.org/NOAA/G02158/masked/YYYY/MM_Mon/
+        SNODAS_YYYYMMDD.tar
+
+The fetch module constructs daily URLs from each date and streams the
+``.tar`` bundle via the earthaccess HTTPS auth session
+(``earthaccess.login(strategy='netrc').get_session()``). Each bundle
+contains flat int16 binary fields plus ENVI-style ``.Hdr`` headers;
+decoding to a CF NetCDF is **deferred** to the SNODAS aggregate
+follow-up issue.
 """
 
 from __future__ import annotations
@@ -22,6 +26,8 @@ import os
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+import pandas as pd
 
 try:
     import fcntl as _fcntl
@@ -41,6 +47,11 @@ from nhf_spatial_targets.workspace import load as _load_project
 logger = logging.getLogger(__name__)
 
 _SOURCE_KEY = "snodas"
+# Per-request HTTP timeout (connect + first-byte). SNODAS .tar bundles
+# are O(10-30 MB); 60s is generous for a healthy network.
+_HTTP_TIMEOUT_SECONDS = 60
+# Chunk size for streaming downloads.
+_DOWNLOAD_CHUNK_BYTES = 8 * 1024 * 1024
 
 
 def _assign_worker_years(
@@ -52,9 +63,8 @@ def _assign_worker_years(
 
     Mirrors ``era5_land._assign_worker_years`` (without the manifest-merge
     behaviour, which is not needed here — SNODAS does no per-month chunk
-    pre-staging). Each worker takes a deterministic slice of ``all_years``
-    keyed by ``worker_index``; slicing the full list (not a remaining
-    set) keeps each worker's assignment independent of sibling progress.
+    pre-staging). Slicing the full list (not a remaining set) keeps each
+    worker's assignment independent of sibling progress.
     """
     if n_workers < 1:
         raise ValueError(f"n_workers must be >= 1, got {n_workers}")
@@ -65,6 +75,95 @@ def _assign_worker_years(
     return list(all_years[worker_index::n_workers])
 
 
+def _daily_urls(archive_url: str, year: int) -> list[tuple[pd.Timestamp, str]]:
+    """Yield (date, URL) pairs for every calendar day in ``year``.
+
+    Archive layout is ``<archive_url>/<year>/MM_Mon/SNODAS_YYYYMMDD.tar``,
+    e.g. ``.../2020/01_Jan/SNODAS_20200101.tar``. Not every date carries
+    a file — partial-year boundaries (2003 starts late September) and
+    occasional gaps are normal; 404s are handled upstream.
+    """
+    base = archive_url.rstrip("/")
+    days = pd.date_range(f"{year}-01-01", f"{year}-12-31", freq="1D")
+    out: list[tuple[pd.Timestamp, str]] = []
+    for d in days:
+        month_dir = f"{d.month:02d}_{d.strftime('%b')}"
+        fname = f"SNODAS_{d.strftime('%Y%m%d')}.tar"
+        out.append((d, f"{base}/{year}/{month_dir}/{fname}"))
+    return out
+
+
+def _download_tar(
+    session, url: str, out_path: Path, *, timeout: int = _HTTP_TIMEOUT_SECONDS
+) -> str:
+    """Stream a single .tar from *url* to *out_path*. Returns a status code.
+
+    Status codes (manifest-friendly):
+      - ``"downloaded"`` — file streamed and written this call.
+      - ``"already_present"`` — file exists on disk with non-zero size; skipped.
+      - ``"missing_404"`` — server returned 404; not an error (partial years
+        and gaps are normal in SNODAS).
+      - ``"error"`` — any other failure; logged, not raised.
+
+    Atomic: streams to a ``.tar.tmp`` sibling, then renames on success.
+    The ``.tar.tmp`` is unlinked on any failure path so resume sees a
+    clean directory.
+    """
+    if out_path.exists() and out_path.stat().st_size > 0:
+        return "already_present"
+    tmp = out_path.with_suffix(out_path.suffix + ".tmp")
+    try:
+        resp = session.get(url, timeout=timeout, stream=True, allow_redirects=True)
+    except Exception as exc:
+        logger.warning("snodas: GET failed for %s: %s", url, exc)
+        tmp.unlink(missing_ok=True)
+        return "error"
+    try:
+        if resp.status_code == 404:
+            return "missing_404"
+        if resp.status_code != 200:
+            logger.warning(
+                "snodas: unexpected status %d for %s; skipping",
+                resp.status_code,
+                url,
+            )
+            return "error"
+        with tmp.open("wb") as f:
+            for chunk in resp.iter_content(chunk_size=_DOWNLOAD_CHUNK_BYTES):
+                if chunk:
+                    f.write(chunk)
+        tmp.replace(out_path)
+        return "downloaded"
+    except Exception as exc:
+        logger.warning("snodas: write failed for %s → %s: %s", url, out_path, exc)
+        tmp.unlink(missing_ok=True)
+        return "error"
+    finally:
+        try:
+            resp.close()
+        except Exception:
+            pass
+
+
+def _earthaccess_session():
+    """Return an authenticated HTTPS session for noaadata.apps.nsidc.org.
+
+    Wrapped for monkeypatch in tests. Production calls
+    ``earthaccess.login(strategy='netrc').get_session()``.
+    """
+    import earthaccess
+
+    auth = earthaccess.login(strategy="netrc")
+    if not auth.authenticated:
+        raise RuntimeError(
+            "earthaccess login failed for SNODAS; check ~/.netrc has a "
+            "machine urs.earthdata.nasa.gov entry. Run "
+            "`nhf-targets materialize-credentials --project-dir <project>` "
+            "to refresh from .credentials.yml."
+        )
+    return auth.get_session()
+
+
 def fetch_snodas(
     workdir: Path,
     period: str,
@@ -72,13 +171,14 @@ def fetch_snodas(
     worker_index: int = 0,
     n_workers: int = 1,
 ) -> dict:
-    """Download SNODAS daily granules to the shared datastore.
+    """Download SNODAS daily .tar bundles to the shared datastore.
 
-    This is the fetch-only path: search NSIDC via ``earthaccess`` for daily
-    granules covering each requested year and download the tar/gz bundles
-    into ``<datastore>/snodas/raw/<year>/``. The bundles are NOT decoded
-    into CF NetCDFs in this PR (see module docstring); the consolidation
-    step lives in the SNODAS aggregate follow-up issue.
+    Fetch-only path: for each assigned year, walk the daily URLs at
+    ``<archive_url>/<year>/MM_Mon/SNODAS_YYYYMMDD.tar`` and stream each
+    bundle via the earthaccess HTTPS auth session. Per-day 404s are
+    recorded but do not fail the year (partial-year boundaries and
+    occasional gaps are normal). Decoding the int16 binary into CF
+    NetCDFs is deferred to the SNODAS aggregate follow-up.
 
     Parameters
     ----------
@@ -86,66 +186,56 @@ def fetch_snodas(
         Project directory.
     period : str
         Temporal window ``"YYYY/YYYY"`` (inclusive). Validated against the
-        SNODAS publisher start (2003).
+        catalog's ``period``.
     worker_index, n_workers : int
-        Round-robin year sharding for parallel workers (mirrors
-        ``fetch_era5_land``). Defaults to a single-worker run.
+        Round-robin year sharding for parallel workers. Default
+        single-worker (serial).
 
     Returns
     -------
     dict
-        Provenance summary.
+        Provenance summary including a per-year ``years`` list with
+        ``n_downloaded_this_run``, ``n_already_present``,
+        ``n_missing_404``, ``n_errors``, and the cumulative
+        ``n_granules`` (downloaded + already on disk).
 
     Raises
     ------
     ValueError
-        Period falls outside the publisher window or no granules match.
+        Period falls outside the catalog window or
+        ``access.archive_url`` is missing from the catalog.
     RuntimeError
-        ``earthaccess.download`` returned fewer files than the search
-        result count, or zero files at all.
+        Earthdata login failed.
     """
-    import earthaccess
-
     parse_period(period)
     ws = _load_project(workdir)
     meta = _catalog.source(_SOURCE_KEY)
     access = meta["access"]
+    archive_url = access.get("archive_url")
+    if not archive_url:
+        raise ValueError(
+            f"catalog `sources.yml[{_SOURCE_KEY}].access.archive_url` is "
+            f"missing. Set it to the NSIDC HTTPS archive root, e.g. "
+            f"https://noaadata.apps.nsidc.org/NOAA/G02158/masked/"
+        )
     data_lo, data_hi = period_bounds(meta["period"])
     years = years_in_period(period)
     for y in years:
         if y < data_lo or y > data_hi:
             raise ValueError(
                 f"Year {y} is outside the SNODAS publisher window "
-                f"({data_lo}-{data_hi}, from catalog `sources.yml[{_SOURCE_KEY}]"
-                f".period`). Adjust --period."
+                f"({data_lo}-{data_hi}, from catalog "
+                f"`sources.yml[{_SOURCE_KEY}].period`). Adjust --period."
             )
-    # Use the project's buffered fabric bbox as the CMR search bounding
-    # box (matches the pattern in merra2.py / nldas.py / margulis_wus_sr.py).
-    # The catalog's `bbox_nwse` is CDS-convention metadata (kept for the
-    # ERA5-Land fetch); CMR / earthaccess want `(W, S, E, N)`, which is
-    # exactly the (minx, miny, maxx, maxy) order fabric.json records.
-    bbox_buffered = ws.fabric.get("bbox_buffered") or {}
-    if not bbox_buffered:
-        raise ValueError(
-            "SNODAS fetch needs a buffered fabric bbox; fabric.json has "
-            "no 'bbox_buffered' key. Re-run `nhf-targets validate` to "
-            "regenerate fabric.json."
-        )
-    search_bbox = (
-        float(bbox_buffered["minx"]),
-        float(bbox_buffered["miny"]),
-        float(bbox_buffered["maxx"]),
-        float(bbox_buffered["maxy"]),
-    )
 
     raw_root = ws.raw_dir(_SOURCE_KEY) / "raw"
     raw_root.mkdir(parents=True, exist_ok=True)
-
     now_utc = datetime.now(timezone.utc).isoformat()
 
-    earthaccess.login(strategy="netrc")
+    session = _earthaccess_session()
+
     # Pre-filter against the manifest: years already fully downloaded
-    # in a prior run are skipped before any CMR search/download work.
+    # are skipped before any HTTP work.
     completed = _completed_years_from_manifest(workdir)
     pending = [y for y in years if y not in completed]
     if completed:
@@ -162,74 +252,85 @@ def fetch_snodas(
             n_workers,
             period,
         )
-        return {
-            "source_key": _SOURCE_KEY,
-            "access_url": access["url"],
-            "doi": meta.get("doi"),
-            "license": meta.get("license", "public domain (NSIDC)"),
-            "variables": [v["name"] for v in meta["variables"]],
-            "period": period,
-            "search_bbox": list(search_bbox),
-            "worker_index": worker_index,
-            "n_workers": n_workers,
-            "years": [],
-            "download_timestamp": now_utc,
-        }
+        return _build_summary(
+            meta, period, archive_url, worker_index, n_workers, [], now_utc
+        )
 
     year_records: list[dict] = []
     for year in assigned:
         year_dir = raw_root / f"{year}"
         year_dir.mkdir(parents=True, exist_ok=True)
-        logger.info("snodas: searching CMR for year %d", year)
-        results = earthaccess.search_data(
-            short_name=access["short_name"],
-            version=access.get("version"),
-            temporal=(f"{year}-01-01", f"{year}-12-31"),
-            bounding_box=search_bbox,
-        )
-        n_found = len(results)
-        if n_found == 0:
-            logger.warning("snodas: no granules found for year %d; skipping", year)
-            year_records.append(
-                {
-                    "year": year,
-                    "raw_dir": str(year_dir),
-                    "n_granules": 0,
-                    "downloaded_utc": now_utc,
-                    "note": "no_granules_in_CMR",
-                }
-            )
-            continue
-        downloaded = earthaccess.download(results, str(year_dir))
-        if not downloaded:
-            raise RuntimeError(
-                f"snodas: earthaccess.download returned no files for year {year}; "
-                f"check network connectivity and Earthdata credentials."
-            )
-        if len(downloaded) < n_found:
-            raise RuntimeError(
-                f"snodas: partial download for year {year}: "
-                f"{len(downloaded)}/{n_found} granules. Re-run to retry."
-            )
-        year_records.append(
-            {
-                "year": year,
-                "raw_dir": str(year_dir),
-                "n_granules": len(downloaded),
-                "downloaded_utc": now_utc,
-            }
+        rec = _fetch_year(session, archive_url, year, year_dir)
+        rec["downloaded_utc"] = now_utc
+        year_records.append(rec)
+        logger.info(
+            "snodas: year %d — downloaded=%d, already_present=%d, "
+            "missing_404=%d, errors=%d",
+            year,
+            rec["n_downloaded_this_run"],
+            rec["n_already_present"],
+            rec["n_missing_404"],
+            rec["n_errors"],
         )
 
-    _update_manifest(workdir, period, meta, year_records, search_bbox)
+    _update_manifest(workdir, period, meta, year_records, archive_url)
+    return _build_summary(
+        meta, period, archive_url, worker_index, n_workers, year_records, now_utc
+    )
 
+
+def _fetch_year(session, archive_url: str, year: int, year_dir: Path) -> dict:
+    """Download every available daily .tar for ``year`` into ``year_dir``.
+
+    Returns a per-year record dict. Per-day 404s are common at year
+    boundaries and not treated as errors.
+    """
+    n_downloaded = 0
+    n_already = 0
+    n_404 = 0
+    n_err = 0
+    for date, url in _daily_urls(archive_url, year):
+        fname = f"SNODAS_{date.strftime('%Y%m%d')}.tar"
+        out_path = year_dir / fname
+        status = _download_tar(session, url, out_path)
+        if status == "downloaded":
+            n_downloaded += 1
+        elif status == "already_present":
+            n_already += 1
+        elif status == "missing_404":
+            n_404 += 1
+        else:
+            n_err += 1
+    n_granules = n_downloaded + n_already
+    return {
+        "year": year,
+        "raw_dir": str(year_dir),
+        "n_granules": n_granules,
+        "n_downloaded_this_run": n_downloaded,
+        "n_already_present": n_already,
+        "n_missing_404": n_404,
+        "n_errors": n_err,
+    }
+
+
+def _build_summary(
+    meta: dict,
+    period: str,
+    archive_url: str,
+    worker_index: int,
+    n_workers: int,
+    year_records: list[dict],
+    now_utc: str,
+) -> dict:
+    access = meta["access"]
     return {
         "source_key": _SOURCE_KEY,
         "access_url": access["url"],
+        "archive_url": archive_url,
         "doi": meta.get("doi"),
         "license": meta.get("license", "public domain (NSIDC)"),
         "variables": [v["name"] for v in meta["variables"]],
         "period": period,
-        "search_bbox": list(search_bbox),
         "worker_index": worker_index,
         "n_workers": n_workers,
         "years": year_records,
@@ -238,15 +339,13 @@ def fetch_snodas(
 
 
 def _completed_years_from_manifest(workdir: Path) -> set[int]:
-    """Return the set of years already recorded in manifest.json.
+    """Return the set of years already recorded with ``n_granules > 0``.
 
-    A year counts as complete when its manifest entry has ``n_granules > 0``;
-    years recorded with ``n_granules: 0`` (no CMR hits) are NOT considered
-    complete — re-runs will retry them, which is intentional because CMR
-    coverage can fill in retroactively.
-
-    Returns an empty set (with a warning) if the manifest is absent or
-    unparseable so the caller falls through to a clean fresh fetch.
+    Years recorded with ``n_granules: 0`` are NOT considered complete —
+    re-runs retry them (NSIDC coverage can fill in retroactively, and
+    a year of all 404s usually means a transient archive issue).
+    Missing/corrupt manifest yields an empty set so the caller falls
+    through to a fresh fetch.
     """
     ws = _load_project(workdir)
     manifest_path = ws.manifest_path
@@ -272,7 +371,7 @@ def _update_manifest(
     period: str,
     meta: dict,
     year_records: list[dict],
-    search_bbox: tuple[float, float, float, float],
+    archive_url: str,
 ) -> None:
     """Merge SNODAS provenance into manifest.json (flock-protected).
 
@@ -309,10 +408,10 @@ def _update_manifest(
             {
                 "source_key": _SOURCE_KEY,
                 "access_url": access["url"],
+                "archive_url": archive_url,
                 "doi": meta.get("doi"),
                 "license": meta.get("license", "public domain (NSIDC)"),
                 "period": period,
-                "search_bbox": list(search_bbox),
                 "variables": [v["name"] for v in meta["variables"]],
                 "years": merged_years,
             }
