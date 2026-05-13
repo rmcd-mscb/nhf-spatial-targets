@@ -2,7 +2,7 @@
 #SBATCH --job-name=nhf-agg
 #SBATCH --account=impd
 #SBATCH --partition=cpu
-#SBATCH --array=0-10
+#SBATCH --array=0-11
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=128G
@@ -11,7 +11,7 @@
 #SBATCH --error=logs/agg_%a_%A.err
 
 # NHF Spatial Targets — parallel aggregation array (tier-1 + tier-2)
-# Submits one SLURM job per aggregation source (11 total). SSEBop is the
+# Submits one SLURM job per aggregation source (12 total). SSEBop is the
 # remote-STAC aggregator and has its own separate script (agg_ssebop.slurm).
 # Each job aggregates independently; they can run concurrently on separate
 # compute nodes.
@@ -58,7 +58,8 @@ AGG_TASKS=(
     "agg-reitz2017"     # 7 — Reitz 2017     (800m annual, recharge)
     "agg-mod16a2"       # 8 — MOD16A2 v061   (500m 8-day AET)  — memory-heavy
     "agg-mod10c1"       # 9 — MOD10C1 v061   (0.05° daily SCA) — memory-heavy
-    "agg-mwbm-climgrid" # 10 — USGS MWBM (ClimGrid) (2.5 arcmin monthly, 4 vars)
+    "agg-snodas"        # 10 — SNODAS         (~1 km daily SWE, CONUS)
+    "agg-mwbm-climgrid" # 11 — USGS MWBM (ClimGrid) (2.5 arcmin monthly, 4 vars)
 )
 
 # Optional --period override per task. Empty string means "no clip"; the
@@ -77,7 +78,8 @@ AGG_PERIODS=(
     ""              # 7  reitz2017
     ""              # 8  mod16a2
     ""              # 9  mod10c1
-    "1979/2020"     # 10 mwbm-climgrid (publisher: 1895-2020; clip to NHM window, drop spinup)
+    ""              # 10 snodas
+    "1979/2020"     # 11 mwbm-climgrid (publisher: 1895-2020; clip to NHM window, drop spinup)
 )
 
 if (( SLURM_ARRAY_TASK_ID < 0 || SLURM_ARRAY_TASK_ID >= ${#AGG_TASKS[@]} )); then
