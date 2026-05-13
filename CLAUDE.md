@@ -98,6 +98,7 @@ tests/
 - When adding a new source, add it to `catalog/sources.yml` first, then write the fetch module
 - Mark superseded sources with `superseded_by:` key and `status: superseded`
 - Fabric-restricted sources (e.g. Margulis WUS-SR for Oregon) carry an optional `fabric_scope: {fabrics: [<token>], notes: ...}` block. Allowed fabric tokens are enumerated by `catalog.FABRIC_SCOPE_TOKENS` and validated by `catalog.validate_fabric_scope`; adding a new fabric means extending that set and the matching check in target builders. Raw downloads remain reusable across projects sharing a datastore — `fabric_scope` is enforced at the target-build stage, not at fetch time
+- **CF-1.6 compliance is required for every NetCDF the pipeline writes** — consolidated source NCs in `<datastore>/<source>/{daily,monthly}/`, aggregated NCs in `<project>/data/aggregated/`, and final target NCs in `<project>/targets/`. Use `fetch/consolidate.py:apply_cf_metadata` as the single entry point for setting `Conventions=CF-1.6`, variable `units` / `long_name` / `cell_methods` / `grid_mapping` from the catalog, coordinate `standard_name` / `units` / `axis`, and the WGS84 `crs` ancillary variable. Do not set these attrs by hand in source-specific code — read everything from `catalog/sources.yml` so a unit correction in the catalog flows through every NC on the next consolidate. Each fetch/consolidate module should have a test that asserts the output NC carries the required CF-1.6 attribute set.
 
 ## Aggregation Transformation Policy
 
