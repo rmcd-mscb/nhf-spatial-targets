@@ -5,23 +5,33 @@
 #SBATCH --array=0-3          # 4 workers — adjust with --n-workers below
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=32G
+#SBATCH --mem=8G             # The consolidator streams via dask's synchronous
+                             # scheduler so peak RSS is bounded to ~hundreds of
+                             # MB regardless of n_days. 8G is generous headroom.
+                             # Pre-#110 used 32G and still OOM-killed because the
+                             # whole (366, 3351, 6935) int16 staging array (~17 GB)
+                             # was resident at once. See consolidate_year_snodas
+                             # comments + docs/sources/snodas.md "Prerequisites".
 #SBATCH --time=48:00:00      # SNODAS daily archive is ~1.7k granules/year × ~22 years
 #SBATCH --output=logs/snodas_%a_%A.out
 #SBATCH --error=logs/snodas_%a_%A.err
 
-# NHF Spatial Targets — parallel SNODAS fetch (NSIDC G02158)
+# NHF Spatial Targets — parallel SNODAS fetch + consolidate (NSIDC G02158)
 #
 # Each array task downloads a non-overlapping slice of years to
-# <datastore>/snodas/raw/<year>/. Years are round-robin assigned by
-# worker_index so load spreads evenly. Each worker reads manifest.json
-# at startup and skips years already recorded with n_granules > 0
-# (years recorded with n_granules: 0 are retried, in case CMR coverage
-# fills in retroactively).
+# <datastore>/snodas/raw/<year>/ AND consolidates each year's daily .tar
+# bundles into a CF-1.6 NetCDF at
+# <datastore>/snodas/daily/snodas_daily_<year>.nc.  Years are round-robin
+# assigned by worker_index so load spreads evenly. Each worker reads
+# manifest.json at startup and skips years already fully consolidated
+# (n_granules > 0 AND daily_path exists on disk); years recorded with
+# n_granules == 0 or without daily_path are retried.
 #
-# Decoding the raw int16 binary + ENVI .Hdr bundles into CF NetCDFs is
-# DEFERRED to the SNODAS aggregate follow-up issue (umbrella #101);
-# this script only stages the raw bytes. See docs/sources/snodas.md.
+# To re-consolidate an already-downloaded corpus without re-fetching, just
+# delete the daily NCs (or never let them be written in the first place)
+# and resubmit — the per-day already_present shortcut keeps HTTP traffic
+# to zero, and consolidation runs alone. See docs/sources/snodas.md
+# "Backfill" for details.
 #
 # Usage:
 #   mkdir -p logs

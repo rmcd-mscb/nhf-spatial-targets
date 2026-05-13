@@ -783,7 +783,12 @@ def test_decode_rejects_missing_swe_member(tmp_path):
         tf.addfile(info, io.BytesIO(b"\x00"))
     tar_path = tmp_path / "SNODAS_20200115.tar"
     tar_path.write_bytes(buf.getvalue())
-    with pytest.raises(ValueError, match="no SWE product"):
+    # Header is read first in the dask-streaming path, so the missing-header
+    # message can fire before the missing-binary one. Either is a valid
+    # "no SWE (product code 1034) member" signal.
+    with pytest.raises(
+        ValueError, match=r"no SWE (product|header) \(code 1034\) member"
+    ):
         _decode_snodas_swe_tar(tar_path)
 
 
@@ -862,6 +867,81 @@ def test_consolidate_year_writes_cf_netcdf(tmp_path):
         # First-day header captured in global attrs for provenance.
         assert "snodas_first_day_header" in ds.attrs
         assert "Number of rows" in json.loads(ds.attrs["snodas_first_day_header"])
+
+
+def test_daily_nc_is_cf_1_6_compliant(tmp_path):
+    """Daily NCs carry the full CF-1.6 attribute set required by CLAUDE.md.
+
+    Verifies the constraint "all NetCDFs the pipeline writes must be CF-1.6
+    compliant" from CLAUDE.md "Data & Catalog Conventions". This is the
+    light-weight in-test attribute audit; an external compliance-checker
+    pass is a separate dev-tool concern.
+    """
+    import xarray as xr
+
+    from nhf_spatial_targets.fetch.snodas import consolidate_year_snodas
+
+    raw_dir = tmp_path / "raw" / "2020"
+    raw_dir.mkdir(parents=True)
+    daily_dir = tmp_path / "daily"
+    for day in ("20200101", "20200102"):
+        (raw_dir / f"SNODAS_{day}.tar").write_bytes(_build_synthetic_snodas_tar(day))
+    out_path = consolidate_year_snodas(2020, raw_dir, daily_dir)
+
+    with xr.open_dataset(out_path, decode_cf=False) as ds:
+        # Global Conventions — CF section 2.6.1.
+        assert ds.attrs.get("Conventions") == "CF-1.6"
+
+        # Required ancillary CRS variable (CF section 5.6) with a
+        # populated grid_mapping_name + crs_wkt.
+        assert "crs" in ds.variables
+        crs_attrs = ds["crs"].attrs
+        assert crs_attrs.get("grid_mapping_name") == "latitude_longitude"
+        assert "crs_wkt" in crs_attrs
+
+        # Data variable attrs (CF section 3.1: units; 3.5: cell_methods;
+        # 5.6: grid_mapping; 3.2: long_name).
+        swe = ds["swe"]
+        assert swe.attrs.get("units") == "kg m-2"
+        assert swe.attrs.get("long_name") == "snow water equivalent"
+        assert swe.attrs.get("cell_methods") == "time: point"
+        assert swe.attrs.get("grid_mapping") == "crs"
+        # int16 + _FillValue=-9999 (CF section 2.5.1 + 3.4). With
+        # decode_cf=False the fill value lives in `attrs` as a CF
+        # attribute; the on-disk dtype is reported via `encoding`.
+        assert int(swe.attrs["_FillValue"]) == -9999
+        assert swe.encoding.get("dtype") == "int16"
+        assert str(swe.dtype) == "int16"
+
+        # Latitude/longitude coords (CF section 4.1/4.2: standard_name +
+        # units + axis are all required for proper CF detection).
+        for coord, expected_units, expected_axis, expected_std in (
+            ("lat", "degrees_north", "Y", "latitude"),
+            ("lon", "degrees_east", "X", "longitude"),
+        ):
+            assert ds[coord].attrs.get("units") == expected_units
+            assert ds[coord].attrs.get("axis") == expected_axis
+            assert ds[coord].attrs.get("standard_name") == expected_std
+
+        # Time coord (CF section 4.4: units required as "<interval> since <ref>";
+        # calendar required for proleptic-Gregorian assumption).
+        # `decode_cf=False` keeps the raw encoding attrs visible.
+        time_attrs_or_encoding = {
+            **ds["time"].attrs,
+            **{
+                k: v
+                for k, v in ds["time"].encoding.items()
+                if k in ("units", "calendar")
+            },
+        }
+        assert "since" in time_attrs_or_encoding["units"]
+        assert time_attrs_or_encoding.get("calendar") in (
+            "standard",
+            "proleptic_gregorian",
+            "gregorian",
+        )
+        assert ds["time"].attrs.get("standard_name") == "time"
+        assert ds["time"].attrs.get("axis") == "T"
 
 
 def test_consolidate_year_idempotent_when_nc_newer(tmp_path):

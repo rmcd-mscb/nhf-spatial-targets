@@ -329,65 +329,115 @@ def _parse_snodas_header(text: str) -> dict[str, str]:
     return out
 
 
-def _decode_snodas_swe_tar(
-    tar_path: Path,
-) -> tuple[pd.Timestamp, np.ndarray, dict[str, str]]:
-    """Decode the SWE product (NSIDC code 1034) out of one daily ``.tar``.
-
-    Returns ``(date, swe_int16_2d, header_dict)``. Fill values are
-    preserved as ``-9999`` in the returned array; masking to NaN is
-    deferred to the xarray layer via ``_FillValue`` encoding (so the
-    on-disk per-year NC keeps the native int16 footprint).
-
-    Raises
-    ------
-    ValueError
-        Member missing, binary size mismatch, or unparseable date.
-    """
-    with tarfile.open(tar_path, "r") as tf:
-        members = tf.getnames()
-        dat = next((m for m in members if _SWE_PRODUCT_REGEX.search(m)), None)
-        hdr = next((m for m in members if _SWE_HEADER_REGEX.search(m)), None)
-        if dat is None or hdr is None:
-            raise ValueError(
-                f"{tar_path.name}: no SWE product (code 1034) member. "
-                f"Tar members: {members}"
-            )
-        hdr_member = tf.extractfile(hdr)
-        if hdr_member is None:
-            raise ValueError(f"{tar_path.name}: cannot extract {hdr}")
-        header_text = gzip.decompress(hdr_member.read()).decode("latin-1")
-        dat_member = tf.extractfile(dat)
-        if dat_member is None:
-            raise ValueError(f"{tar_path.name}: cannot extract {dat}")
-        raw = gzip.decompress(dat_member.read())
-
-    header = _parse_snodas_header(header_text)
-    try:
-        rows = int(header["Number of rows"])
-        cols = int(header["Number of columns"])
-    except KeyError as exc:
-        raise ValueError(
-            f"{tar_path.name}: SWE header missing required key {exc}"
-        ) from exc
-    expected = rows * cols * 2
-    if len(raw) != expected:
-        raise ValueError(
-            f"{tar_path.name}: SWE binary has {len(raw)} bytes, expected "
-            f"{expected} for ({rows}, {cols}) big-endian int16."
-        )
-    # `.astype(np.int16)` already returns a new owned array (with native
-    # byte order on little-endian hosts), so the gzip buffer is released
-    # as soon as this function returns.
-    arr = np.frombuffer(raw, dtype=">i2").reshape(rows, cols).astype(np.int16)
-
+def _date_from_tar_filename(tar_path: Path) -> pd.Timestamp:
+    """Extract ``YYYYMMDD`` from ``SNODAS_YYYYMMDD.tar``."""
     m = re.search(r"SNODAS_(\d{8})\.tar$", tar_path.name)
     if not m:
         raise ValueError(
             f"{tar_path.name}: cannot parse YYYYMMDD from filename "
             f"(expected SNODAS_YYYYMMDD.tar)."
         )
-    date = pd.Timestamp(m.group(1))
+    return pd.Timestamp(m.group(1))
+
+
+def _read_snodas_swe_header(tar_path: Path) -> dict[str, str]:
+    """Open ``tar_path`` in-memory and return the SWE product's parsed header.
+
+    Cheap by comparison to the binary decode: only the ``us_ssmv11034*.txt.gz``
+    member (typically <1 KB compressed) is read. Used by the streaming
+    consolidator to validate grid stability across an entire year before
+    decoding any binary.
+
+    Raises
+    ------
+    ValueError
+        No SWE header member, or header missing the rows/cols keys.
+    """
+    with tarfile.open(tar_path, "r") as tf:
+        members = tf.getnames()
+        hdr = next((m for m in members if _SWE_HEADER_REGEX.search(m)), None)
+        if hdr is None:
+            raise ValueError(
+                f"{tar_path.name}: no SWE header (code 1034) member. "
+                f"Tar members: {members}"
+            )
+        hdr_member = tf.extractfile(hdr)
+        if hdr_member is None:
+            raise ValueError(f"{tar_path.name}: cannot extract {hdr}")
+        header_text = gzip.decompress(hdr_member.read()).decode("latin-1")
+    header = _parse_snodas_header(header_text)
+    for required in ("Number of rows", "Number of columns"):
+        if required not in header:
+            raise ValueError(
+                f"{tar_path.name}: SWE header missing required key {required!r}"
+            )
+    return header
+
+
+def _read_snodas_swe_array(
+    tar_path: Path, expected_rows: int, expected_cols: int
+) -> np.ndarray:
+    """Decode just the SWE binary from ``tar_path`` to an ``int16`` array.
+
+    Called once per day during the dask-streaming consolidation write.
+    Memory footprint per call: ~one day's worth (≈ 46 MB at native CONUS
+    resolution); released as soon as the chunk is compressed and written.
+
+    Raises
+    ------
+    ValueError
+        Member missing, binary size disagrees with ``(expected_rows, expected_cols)``.
+    """
+    with tarfile.open(tar_path, "r") as tf:
+        members = tf.getnames()
+        dat = next((m for m in members if _SWE_PRODUCT_REGEX.search(m)), None)
+        if dat is None:
+            raise ValueError(
+                f"{tar_path.name}: no SWE product (code 1034) member. "
+                f"Tar members: {members}"
+            )
+        dat_member = tf.extractfile(dat)
+        if dat_member is None:
+            raise ValueError(f"{tar_path.name}: cannot extract {dat}")
+        raw = gzip.decompress(dat_member.read())
+
+    expected_bytes = expected_rows * expected_cols * 2
+    if len(raw) != expected_bytes:
+        raise ValueError(
+            f"{tar_path.name}: SWE binary has {len(raw)} bytes, expected "
+            f"{expected_bytes} for ({expected_rows}, {expected_cols}) big-endian int16."
+        )
+    # `.astype(np.int16)` already returns a new owned array (with native
+    # byte order on little-endian hosts), so the gzip buffer is released
+    # as soon as this function returns.
+    return (
+        np.frombuffer(raw, dtype=">i2")
+        .reshape(expected_rows, expected_cols)
+        .astype(np.int16)
+    )
+
+
+def _decode_snodas_swe_tar(
+    tar_path: Path,
+) -> tuple[pd.Timestamp, np.ndarray, dict[str, str]]:
+    """Decode the SWE product (NSIDC code 1034) out of one daily ``.tar``.
+
+    Returns ``(date, swe_int16_2d, header_dict)``. Convenience wrapper
+    around :func:`_read_snodas_swe_header` + :func:`_read_snodas_swe_array`
+    for callers that want both halves in one round trip. The streaming
+    consolidator uses the two helpers separately so the (large) binary
+    decode is lazy.
+
+    Raises
+    ------
+    ValueError
+        Member missing, binary size mismatch, or unparseable date.
+    """
+    date = _date_from_tar_filename(tar_path)
+    header = _read_snodas_swe_header(tar_path)
+    rows = int(header["Number of rows"])
+    cols = int(header["Number of columns"])
+    arr = _read_snodas_swe_array(tar_path, rows, cols)
     return date, arr, header
 
 
@@ -515,22 +565,26 @@ def consolidate_year_snodas(year: int, raw_dir: Path, daily_dir: Path) -> Path:
         out_path,
     )
 
-    first_date, first_arr, first_header = _decode_snodas_swe_tar(tar_paths[0])
-    lat, lon = _coords_from_snodas_header(first_header)
+    # Phase 1 — eager, cheap: read every day's header to validate the
+    # within-year grid invariant before touching any binary. A SNODAS
+    # header is ~1 KB compressed; reading 366 of them is sub-second.
+    # `tar_paths` is already chronologically sorted (zero-padded
+    # YYYYMMDD filenames lex-sort = chronologically-sort), so we don't
+    # need a separate np.argsort after decode.
+    first_header = _read_snodas_swe_header(tar_paths[0])
     rows = int(first_header["Number of rows"])
     cols = int(first_header["Number of columns"])
+    lat, lon = _coords_from_snodas_header(first_header)
+    times = np.array(
+        [_date_from_tar_filename(p).to_datetime64() for p in tar_paths],
+        dtype="datetime64[ns]",
+    )
 
-    n_days = len(tar_paths)
-    swe_arr = np.full((n_days, rows, cols), _SNODAS_FILL, dtype=np.int16)
-    times = np.empty(n_days, dtype="datetime64[ns]")
-    swe_arr[0] = first_arr
-    times[0] = first_date.to_datetime64()
-
-    for i, tar in enumerate(tar_paths[1:], start=1):
-        date, arr, header = _decode_snodas_swe_tar(tar)
+    for p in tar_paths[1:]:
+        header = _read_snodas_swe_header(p)
         if not _grids_match(first_header, header):
             raise ValueError(
-                f"snodas: within-year grid mismatch in {year}: {tar.name} "
+                f"snodas: within-year grid mismatch in {year}: {p.name} "
                 f"differs from {tar_paths[0].name} (first day). "
                 f"first: rows={first_header.get('Number of rows')}, "
                 f"cols={first_header.get('Number of columns')}, "
@@ -545,17 +599,33 @@ def consolidate_year_snodas(year: int, raw_dir: Path, daily_dir: Path) -> Path:
                 f"within-year mismatches indicate a corrupt or mid-year-changed "
                 f"download that should not be silently absorbed."
             )
-        swe_arr[i] = arr
-        times[i] = date.to_datetime64()
 
-    # Sort by date in case glob order diverges from chronological (it
-    # shouldn't with zero-padded YYYYMMDD names, but be defensive).
-    order = np.argsort(times)
-    swe_arr = swe_arr[order]
-    times = times[order]
+    # Phase 2 — lazy: build a dask-delayed stack of binary decodes. Each
+    # day's array (~46 MB int16 at native CONUS resolution) is materialized
+    # only when xarray asks for that chunk during `to_netcdf`, then released
+    # as soon as the zlib-compressed chunk is written to disk. Peak resident
+    # memory is bounded by a handful of in-flight chunks (~hundreds of MB),
+    # not by the full (n_days × rows × cols) int16 array (which would be
+    # ~17 GB for a full CONUS year and caused OOM kills under --mem=32G in
+    # SLURM job 17553331). The chunked storage layout `(1, rows, cols)`
+    # matches exactly one day per dask block, so each block survives a
+    # single read → compress → write cycle.
+    import dask
+    import dask.array as da
+
+    delayed_decodes = [
+        dask.delayed(_read_snodas_swe_array)(p, rows, cols) for p in tar_paths
+    ]
+    swe_stack = da.stack(
+        [
+            da.from_delayed(d, shape=(rows, cols), dtype=np.int16)
+            for d in delayed_decodes
+        ],
+        axis=0,
+    )
 
     ds = xr.Dataset(
-        {"swe": (("time", "lat", "lon"), swe_arr)},
+        {"swe": (("time", "lat", "lon"), swe_stack)},
         coords={"time": times, "lat": lat, "lon": lon},
     )
     ds = apply_cf_metadata(ds, _SOURCE_KEY, "daily")
@@ -600,7 +670,21 @@ def consolidate_year_snodas(year: int, raw_dir: Path, daily_dir: Path) -> Path:
 
     tmp = out_path.with_suffix(out_path.suffix + ".tmp")
     try:
-        ds.to_netcdf(tmp, format="NETCDF4", encoding=encoding)
+        # Force the synchronous dask scheduler during write so chunks are
+        # decoded ONE AT A TIME instead of in parallel. xarray's default
+        # `to_netcdf` uses dask's threaded scheduler, which dispatches
+        # multiple chunk-decode tasks concurrently and balloons RAM with
+        # in-flight decoded chunks. For SNODAS each chunk is ~46 MB int16
+        # at native CONUS resolution; parallel decode of even 4 chunks
+        # would put ~200 MB in flight per chunk × ~3-4× working overhead
+        # ≈ multi-GB peak per year. Synchronous keeps peak bounded to
+        # ~1-2 chunks (~hundreds of MB total) regardless of n_days.
+        # The serialization cost is small for SNODAS (~1 s decode per
+        # day, ~6 min serial vs ~2 min parallel for a full year) and the
+        # memory savings turn 32 GB SLURM grants from "OOM at year 2003"
+        # into "comfortably fits in 4-8 GB".
+        with dask.config.set(scheduler="synchronous"):
+            ds.to_netcdf(tmp, format="NETCDF4", encoding=encoding)
         tmp.replace(out_path)
     except BaseException:
         tmp.unlink(missing_ok=True)
