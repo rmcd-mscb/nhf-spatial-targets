@@ -86,6 +86,14 @@ _SNODAS_FILL = -9999
 # sub-µdeg text-representation noise observed between headers within a
 # year, while still flagging real mid-year format changes loudly.
 _SNODAS_GRID_TOL_DEG = 1e-6
+# Sub-pixel drift tolerance for within-year header comparison. SNODAS
+# masked CONUS is on a 30-arcsec grid (1/120 °); ~half a pixel
+# (0.5/120 ≈ 0.00417 °) absorbs the observed CY 2013 mid-year origin
+# drift (~4×10⁻⁴ ° = ~5% of a pixel) without silently accepting a
+# real format/resolution change. Drifts in this band are recorded as
+# provenance global attrs but do not abort consolidation. Used only
+# when row/column counts are unchanged — see ``consolidate_year_snodas``.
+_SNODAS_GRID_DRIFT_TOL_DEG = 0.5 / 120
 _SNODAS_DAILY_FILENAME_TEMPLATE = "snodas_daily_{year}.nc"
 
 # Locale-independent month abbreviations for URL construction. The NSIDC
@@ -481,7 +489,41 @@ def _grids_match(
     return True
 
 
-def consolidate_year_snodas(year: int, raw_dir: Path, daily_dir: Path) -> Path:
+def _max_grid_drift_deg(h1: dict[str, str], h2: dict[str, str]) -> float | None:
+    """Return the max absolute origin/resolution drift between two headers.
+
+    Returns ``None`` if ``(rows, cols)`` differ (a structural mismatch
+    that cannot be a sub-pixel drift), or if a required key is missing.
+    Otherwise returns the max ``|h1[k] - h2[k]|`` over the four
+    grid-defining numeric fields (``Minimum x-axis coordinate``,
+    ``Maximum y-axis coordinate``, ``X-axis resolution``,
+    ``Y-axis resolution``).
+    """
+    if h1.get("Number of rows") != h2.get("Number of rows"):
+        return None
+    if h1.get("Number of columns") != h2.get("Number of columns"):
+        return None
+    drifts: list[float] = []
+    for k in (
+        "Minimum x-axis coordinate",
+        "Maximum y-axis coordinate",
+        "X-axis resolution",
+        "Y-axis resolution",
+    ):
+        try:
+            drifts.append(abs(float(h1[k]) - float(h2[k])))
+        except KeyError:
+            return None
+    return max(drifts)
+
+
+def consolidate_year_snodas(
+    year: int,
+    raw_dir: Path,
+    daily_dir: Path,
+    *,
+    grid_drift_tol_deg: float = _SNODAS_GRID_DRIFT_TOL_DEG,
+) -> Path:
     """Decode every ``SNODAS_YYYYMMDD.tar`` in ``raw_dir`` into one year NC.
 
     Mirrors :func:`nhf_spatial_targets.fetch.era5_land.consolidate_year`:
@@ -504,7 +546,20 @@ def consolidate_year_snodas(year: int, raw_dir: Path, daily_dir: Path) -> Path:
     re-georeferenced the masked product at least twice (between
     2003/2004 and 2013/2014), with sub-pixel shifts (< 1e-3 deg). The
     consolidator verifies every day within the year shares the same
-    grid; cross-year shifts are expected and live at the file boundary.
+    ``(rows, cols)`` and the same grid origin to within
+    ``grid_drift_tol_deg`` of the first day:
+
+    - Exact match (within the strict 1e-6 ° tolerance) — pass silently.
+    - Drift within ``grid_drift_tol_deg`` (default ~half a SNODAS pixel)
+      AND identical ``(rows, cols)`` — accept the day, log a warning,
+      and record ``snodas_grid_drift_days_count`` /
+      ``snodas_grid_drift_max_deg`` global attrs on the consolidated NC.
+      The day's pixel array is inserted as-is and labelled with the
+      first-day's lat/lon (zero-shift nearest-neighbour, since the
+      drift is sub-pixel and shape is unchanged).
+    - Beyond ``grid_drift_tol_deg`` or any ``(rows, cols)`` change —
+      raise ``ValueError``; cross-year shifts are expected and live at
+      the file boundary.
 
     Parameters
     ----------
@@ -515,6 +570,9 @@ def consolidate_year_snodas(year: int, raw_dir: Path, daily_dir: Path) -> Path:
     daily_dir : Path
         Output directory (typically ``<datastore>/snodas/daily/``). Created
         if missing.
+    grid_drift_tol_deg : float, optional
+        Maximum within-year header drift accepted as sub-pixel noise.
+        Defaults to half a SNODAS pixel (0.5/120 ° ≈ 0.00417 °).
 
     Returns
     -------
@@ -527,7 +585,7 @@ def consolidate_year_snodas(year: int, raw_dir: Path, daily_dir: Path) -> Path:
         No ``SNODAS_*.tar`` files in ``raw_dir``.
     ValueError
         Any day fails to decode, or a within-year header mismatch is
-        detected.
+        detected beyond ``grid_drift_tol_deg``.
     """
     raw_dir = Path(raw_dir)
     daily_dir = Path(daily_dir)
@@ -580,25 +638,54 @@ def consolidate_year_snodas(year: int, raw_dir: Path, daily_dir: Path) -> Path:
         dtype="datetime64[ns]",
     )
 
+    # Track sub-pixel drift days: SNODAS has been re-georeferenced
+    # mid-year on at least one occasion (CY 2013, ~4×10⁻⁴ ° origin
+    # shift between Jan 1 and Oct 1), and the array shape stays the
+    # same across the shift. Accept these as zero-shift NN snapped to
+    # the first-day grid; surface a real format change as ValueError.
+    drift_days: list[tuple[str, float]] = []  # (tar name, max drift deg)
     for p in tar_paths[1:]:
         header = _read_snodas_swe_header(p)
-        if not _grids_match(first_header, header):
-            raise ValueError(
-                f"snodas: within-year grid mismatch in {year}: {p.name} "
-                f"differs from {tar_paths[0].name} (first day). "
-                f"first: rows={first_header.get('Number of rows')}, "
-                f"cols={first_header.get('Number of columns')}, "
-                f"min_x={first_header.get('Minimum x-axis coordinate')}, "
-                f"max_y={first_header.get('Maximum y-axis coordinate')}. "
-                f"mismatching: rows={header.get('Number of rows')}, "
-                f"cols={header.get('Number of columns')}, "
-                f"min_x={header.get('Minimum x-axis coordinate')}, "
-                f"max_y={header.get('Maximum y-axis coordinate')}. "
-                f"Re-consolidate after removing the mismatching .tar; "
-                f"cross-year shifts are expected at year boundaries, but "
-                f"within-year mismatches indicate a corrupt or mid-year-changed "
-                f"download that should not be silently absorbed."
-            )
+        if _grids_match(first_header, header):
+            continue
+        drift = _max_grid_drift_deg(first_header, header)
+        if drift is not None and drift <= grid_drift_tol_deg:
+            drift_days.append((p.name, drift))
+            continue
+        raise ValueError(
+            f"snodas: within-year grid mismatch in {year}: {p.name} "
+            f"differs from {tar_paths[0].name} (first day). "
+            f"first: rows={first_header.get('Number of rows')}, "
+            f"cols={first_header.get('Number of columns')}, "
+            f"min_x={first_header.get('Minimum x-axis coordinate')}, "
+            f"max_y={first_header.get('Maximum y-axis coordinate')}. "
+            f"mismatching: rows={header.get('Number of rows')}, "
+            f"cols={header.get('Number of columns')}, "
+            f"min_x={header.get('Minimum x-axis coordinate')}, "
+            f"max_y={header.get('Maximum y-axis coordinate')}. "
+            f"Drift beyond grid_drift_tol_deg={grid_drift_tol_deg:g} "
+            f"(or shape change). Re-consolidate after removing the "
+            f"mismatching .tar; cross-year shifts are expected at year "
+            f"boundaries, but within-year mismatches beyond sub-pixel "
+            f"drift indicate a corrupt or mid-year-changed download "
+            f"that should not be silently absorbed."
+        )
+
+    if drift_days:
+        max_drift = max(d for _, d in drift_days)
+        first_drift_name, _ = drift_days[0]
+        logger.warning(
+            "snodas: %d day(s) in %d show within-year sub-pixel grid drift "
+            "≤ %g deg (max %g deg); accepting as zero-shift NN snap to "
+            "first-day grid. First drift day: %s. Recorded in NC global "
+            "attrs `snodas_grid_drift_days_count` and "
+            "`snodas_grid_drift_max_deg`.",
+            len(drift_days),
+            year,
+            grid_drift_tol_deg,
+            max_drift,
+            first_drift_name,
+        )
 
     # Phase 2 — lazy: build a dask-delayed stack of binary decodes. Each
     # day's array (~46 MB int16 at native CONUS resolution) is materialized
@@ -657,6 +744,10 @@ def consolidate_year_snodas(year: int, raw_dir: Path, daily_dir: Path) -> Path:
             "snodas_first_day_header": json.dumps(first_header_subset),
         }
     )
+    if drift_days:
+        ds.attrs["snodas_grid_drift_days_count"] = len(drift_days)
+        ds.attrs["snodas_grid_drift_max_deg"] = max(d for _, d in drift_days)
+        ds.attrs["snodas_grid_drift_tol_deg"] = grid_drift_tol_deg
 
     encoding = {
         "swe": {

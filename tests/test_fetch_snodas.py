@@ -30,6 +30,7 @@ from typing import Callable
 
 import numpy as np
 import pytest
+import xarray as xr
 import yaml
 
 from nhf_spatial_targets.fetch.snodas import fetch_snodas
@@ -993,8 +994,14 @@ def test_consolidate_year_rebuilds_when_tar_newer(tmp_path):
         assert ds["swe"].sizes["time"] == 2
 
 
-def test_consolidate_year_rejects_within_year_grid_mismatch(tmp_path):
-    """A mid-year header shape change raises rather than silently produce a bad NC."""
+def test_consolidate_year_accepts_subpixel_grid_drift(tmp_path):
+    """A sub-pixel mid-year origin drift is absorbed with provenance attrs.
+
+    SNODAS has been re-georeferenced mid-year at least once (CY 2013
+    shows ~4×10⁻⁴ ° origin drift between Jan and Oct). The
+    consolidator accepts such drift up to half a pixel (~0.00417 °)
+    and records the count + max magnitude as global attrs.
+    """
     from nhf_spatial_targets.fetch.snodas import consolidate_year_snodas
 
     raw_dir = tmp_path / "raw" / "2020"
@@ -1003,14 +1010,62 @@ def test_consolidate_year_rejects_within_year_grid_mismatch(tmp_path):
     (raw_dir / "SNODAS_20200101.tar").write_bytes(
         _build_synthetic_snodas_tar("20200101", rows=4, cols=4)
     )
-    # Day 2 declares a different lat_max (~5e-4 deg, well above tolerance).
+    # Day 2 declares a lat_max ~1e-3 deg from day 1 — comparable to
+    # the production CY 2013 drift (~4e-4 deg) and well within the
+    # half-pixel drift tolerance (~4.17e-3 deg).
     (raw_dir / "SNODAS_20200102.tar").write_bytes(
         _build_synthetic_snodas_tar(
             "20200102",
             rows=4,
             cols=4,
-            header_overrides={"Maximum y-axis coordinate": "52.900000000000000"},
+            header_overrides={"Maximum y-axis coordinate": "52.875583333333000"},
         )
+    )
+    out = consolidate_year_snodas(2020, raw_dir, daily_dir)
+    assert out.exists()
+    ds = xr.open_dataset(out)
+    assert ds.attrs["snodas_grid_drift_days_count"] == 1
+    assert ds.attrs["snodas_grid_drift_max_deg"] > 0
+    assert ds.attrs["snodas_grid_drift_max_deg"] <= 0.5 / 120
+    assert "snodas_grid_drift_tol_deg" in ds.attrs
+
+
+def test_consolidate_year_rejects_beyond_drift_tolerance(tmp_path):
+    """Drift > half-pixel still raises rather than silently absorbing."""
+    from nhf_spatial_targets.fetch.snodas import consolidate_year_snodas
+
+    raw_dir = tmp_path / "raw" / "2020"
+    raw_dir.mkdir(parents=True)
+    daily_dir = tmp_path / "daily"
+    (raw_dir / "SNODAS_20200101.tar").write_bytes(
+        _build_synthetic_snodas_tar("20200101", rows=4, cols=4)
+    )
+    # Day 2 declares a lat_max ~0.1 deg from day 1 — well beyond the
+    # half-pixel drift tolerance.
+    (raw_dir / "SNODAS_20200102.tar").write_bytes(
+        _build_synthetic_snodas_tar(
+            "20200102",
+            rows=4,
+            cols=4,
+            header_overrides={"Maximum y-axis coordinate": "53.000000000000000"},
+        )
+    )
+    with pytest.raises(ValueError, match="within-year grid mismatch"):
+        consolidate_year_snodas(2020, raw_dir, daily_dir)
+
+
+def test_consolidate_year_rejects_row_count_change(tmp_path):
+    """A row/col count change is a structural mismatch, never accepted as drift."""
+    from nhf_spatial_targets.fetch.snodas import consolidate_year_snodas
+
+    raw_dir = tmp_path / "raw" / "2020"
+    raw_dir.mkdir(parents=True)
+    daily_dir = tmp_path / "daily"
+    (raw_dir / "SNODAS_20200101.tar").write_bytes(
+        _build_synthetic_snodas_tar("20200101", rows=4, cols=4)
+    )
+    (raw_dir / "SNODAS_20200102.tar").write_bytes(
+        _build_synthetic_snodas_tar("20200102", rows=5, cols=4)
     )
     with pytest.raises(ValueError, match="within-year grid mismatch"):
         consolidate_year_snodas(2020, raw_dir, daily_dir)
