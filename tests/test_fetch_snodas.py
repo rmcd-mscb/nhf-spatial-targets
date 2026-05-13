@@ -369,6 +369,109 @@ def test_no_content_length_large_body_accepted(tmp_path, monkeypatch):
     assert rec["n_errors"] == 0
 
 
+# ---------------------------------------------------------------------------
+# Locale-safe URL construction (N1)
+# ---------------------------------------------------------------------------
+
+
+def test_month_names_are_locale_independent():
+    """URL month names come from a hardcoded table, not strftime('%b').
+
+    Regression guard: on a non-English LC_TIME (e.g. de_DE.UTF-8),
+    `strftime('%b')` would emit 'Jän' / 'Mär' and every URL would 404.
+    The hardcoded table makes the fetch portable across locales.
+    """
+    from nhf_spatial_targets.fetch.snodas import _MONTH_NAMES, _daily_urls
+
+    assert _MONTH_NAMES[1] == "Jan"
+    assert _MONTH_NAMES[12] == "Dec"
+
+    urls = _daily_urls("https://example.test/archive", 2020)
+    jan1 = next(u for _, u in urls if u.endswith("SNODAS_20200101.tar"))
+    jul15 = next(u for _, u in urls if u.endswith("SNODAS_20200715.tar"))
+    dec31 = next(u for _, u in urls if u.endswith("SNODAS_20201231.tar"))
+    assert "/2020/01_Jan/" in jan1
+    assert "/2020/07_Jul/" in jul15
+    assert "/2020/12_Dec/" in dec31
+
+
+# ---------------------------------------------------------------------------
+# Retry adapter (C2)
+# ---------------------------------------------------------------------------
+
+
+def test_session_carries_retry_adapter_on_https(monkeypatch):
+    """`_earthaccess_session` mounts a urllib3.Retry adapter on https://.
+
+    Stubs earthaccess.login so we exercise the real adapter wiring
+    without hitting the network. Doesn't try to exercise actual retry
+    behaviour (that's urllib3's responsibility) — just confirms the
+    adapter is attached with the expected config.
+    """
+    import earthaccess
+    import requests
+    from urllib3.util.retry import Retry
+
+    from nhf_spatial_targets.fetch.snodas import _earthaccess_session
+
+    class _StubAuth:
+        authenticated = True
+
+        def get_session(self):
+            return requests.Session()
+
+    monkeypatch.setattr(earthaccess, "login", lambda strategy=None: _StubAuth())
+
+    session = _earthaccess_session()
+    adapter = session.get_adapter("https://example.com")
+    assert isinstance(adapter.max_retries, Retry)
+    assert adapter.max_retries.total == 3
+    assert 500 in adapter.max_retries.status_forcelist
+    assert 503 in adapter.max_retries.status_forcelist
+
+
+# ---------------------------------------------------------------------------
+# Per-day error visibility (C6)
+# ---------------------------------------------------------------------------
+
+
+def test_errors_recorded_with_first_last_url_and_sidecar(tmp_path, monkeypatch):
+    """When `n_errors > 0`, manifest carries first/last_error_url AND a sidecar.
+
+    Sidecar `.failed_urls.txt` lives in the year dir and lists every
+    failing URL line-separated. Lets operators triage with `curl -I`
+    against the boundary URLs.
+    """
+    workdir = _make_project(tmp_path)
+    # Every day returns 503 → 366 errors for 2020.
+    _stub_session(monkeypatch, responder=lambda url: _FakeResponse(503))
+    fetch_snodas(workdir=workdir, period="2020/2020")
+    manifest = json.loads((workdir / "manifest.json").read_text())
+    rec = manifest["sources"]["snodas"]["years"][0]
+    assert rec["n_errors"] == 366
+    assert rec["first_error_url"].endswith("SNODAS_20200101.tar")
+    assert rec["last_error_url"].endswith("SNODAS_20201231.tar")
+
+    sidecar = tmp_path / "datastore" / "snodas" / "raw" / "2020" / ".failed_urls.txt"
+    lines = sidecar.read_text().strip().splitlines()
+    assert len(lines) == 366
+    assert lines[0].endswith("SNODAS_20200101.tar")
+    assert lines[-1].endswith("SNODAS_20201231.tar")
+
+
+def test_no_sidecar_when_no_errors(tmp_path, monkeypatch):
+    """A clean year (no errors) does not write the diagnostic sidecar."""
+    workdir = _make_project(tmp_path)
+    _stub_session(monkeypatch)
+    fetch_snodas(workdir=workdir, period="2020/2020")
+    sidecar = tmp_path / "datastore" / "snodas" / "raw" / "2020" / ".failed_urls.txt"
+    assert not sidecar.exists()
+    manifest = json.loads((workdir / "manifest.json").read_text())
+    rec = manifest["sources"]["snodas"]["years"][0]
+    assert "first_error_url" not in rec
+    assert "last_error_url" not in rec
+
+
 def test_other_status_recorded_as_error(tmp_path, monkeypatch):
     """5xx / unexpected status surfaces as an `error`, not a crash."""
     workdir = _make_project(tmp_path)

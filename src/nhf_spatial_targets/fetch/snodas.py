@@ -60,6 +60,26 @@ _DOWNLOAD_CHUNK_BYTES = 8 * 1024 * 1024
 # minimum is a fallback for cases where the server omits Content-Length.
 _MIN_VALID_TAR_BYTES = 1 * 1024 * 1024  # 1 MiB
 
+# Locale-independent month abbreviations for URL construction. The NSIDC
+# archive uses fixed English short names (e.g. ``01_Jan``); using
+# ``date.strftime('%b')`` would emit ``01_Jän`` on a German LC_TIME and
+# every URL would 404. Index 0 unused so month integer maps directly.
+_MONTH_NAMES: tuple[str, ...] = (
+    "",
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+)
+
 
 def _assign_worker_years(
     all_years: list[int],
@@ -90,11 +110,14 @@ def _daily_urls(archive_url: str, year: int) -> list[tuple[pd.Timestamp, str]]:
     a file — partial-year boundaries (2003 starts late September) and
     occasional gaps are normal; 404s are handled upstream.
     """
+    # Intentionally probe-by-GET rather than HEAD-then-GET: 404s are
+    # cheap (single round trip, no body), and HTML directory parsing
+    # would add complexity and locale assumptions about the index page.
     base = archive_url.rstrip("/")
     days = pd.date_range(f"{year}-01-01", f"{year}-12-31", freq="1D")
     out: list[tuple[pd.Timestamp, str]] = []
     for d in days:
-        month_dir = f"{d.month:02d}_{d.strftime('%b')}"
+        month_dir = f"{d.month:02d}_{_MONTH_NAMES[d.month]}"
         fname = f"SNODAS_{d.strftime('%Y%m%d')}.tar"
         out.append((d, f"{base}/{year}/{month_dir}/{fname}"))
     return out
@@ -219,10 +242,21 @@ def _download_tar(
 def _earthaccess_session():
     """Return an authenticated HTTPS session for noaadata.apps.nsidc.org.
 
-    Wrapped for monkeypatch in tests. Production calls
-    ``earthaccess.login(strategy='netrc').get_session()``.
+    Wraps ``earthaccess.login(strategy='netrc').get_session()`` and
+    mounts a ``urllib3.Retry`` adapter so transient flakes (502/503/504
+    and connection resets) don't immediately turn into permanent
+    ``"error"`` records on the per-day status counter. With ~8k daily
+    files per full run, even a 99.9% per-request success rate produces
+    a handful of stragglers; the retry budget of 3 attempts with
+    exponential backoff turns most of those into successful downloads
+    rather than operator-driven re-runs.
+
+    Wrapped (rather than inlined into ``fetch_snodas``) for
+    monkeypatching in tests.
     """
     import earthaccess
+    from requests.adapters import HTTPAdapter
+    from urllib3.util.retry import Retry
 
     auth = earthaccess.login(strategy="netrc")
     if not auth.authenticated:
@@ -232,7 +266,22 @@ def _earthaccess_session():
             "`nhf-targets materialize-credentials --project-dir <project>` "
             "to refresh from .credentials.yml."
         )
-    return auth.get_session()
+    session = auth.get_session()
+    retry = Retry(
+        total=3,
+        connect=3,
+        read=3,
+        status=3,
+        backoff_factor=1.0,
+        status_forcelist=(500, 502, 503, 504),
+        # Idempotent GETs only — safe to retry.
+        allowed_methods=frozenset({"GET", "HEAD"}),
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
 
 def fetch_snodas(
@@ -354,12 +403,17 @@ def _fetch_year(session, archive_url: str, year: int, year_dir: Path) -> dict:
     """Download every available daily .tar for ``year`` into ``year_dir``.
 
     Returns a per-year record dict. Per-day 404s are common at year
-    boundaries and not treated as errors.
+    boundaries and not treated as errors. When ``n_errors > 0`` the
+    manifest record also carries ``first_error_url`` / ``last_error_url``
+    and a ``.failed_urls.txt`` sidecar lists every failed URL — both
+    purely for operator diagnostics, no functional behaviour depends on
+    them.
     """
     n_downloaded = 0
     n_already = 0
     n_404 = 0
     n_err = 0
+    failed_urls: list[str] = []
     for date, url in _daily_urls(archive_url, year):
         fname = f"SNODAS_{date.strftime('%Y%m%d')}.tar"
         out_path = year_dir / fname
@@ -372,8 +426,9 @@ def _fetch_year(session, archive_url: str, year: int, year_dir: Path) -> dict:
             n_404 += 1
         else:
             n_err += 1
+            failed_urls.append(url)
     n_granules = n_downloaded + n_already
-    return {
+    rec: dict = {
         "year": year,
         "raw_dir": str(year_dir),
         "n_granules": n_granules,
@@ -382,6 +437,16 @@ def _fetch_year(session, archive_url: str, year: int, year_dir: Path) -> dict:
         "n_missing_404": n_404,
         "n_errors": n_err,
     }
+    if failed_urls:
+        rec["first_error_url"] = failed_urls[0]
+        rec["last_error_url"] = failed_urls[-1]
+        # Sidecar makes the full list available for `curl -I`-style
+        # triage without bloating the manifest. Overwritten each run so
+        # the file reflects only the most recent run's failures (which
+        # is what operators expect when investigating).
+        sidecar = year_dir / ".failed_urls.txt"
+        sidecar.write_text("\n".join(failed_urls) + "\n")
+    return rec
 
 
 def _build_summary(

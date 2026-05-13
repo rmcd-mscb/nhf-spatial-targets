@@ -213,7 +213,11 @@ def test_snodas_source_present():
     assert s["access"]["archive_url"].startswith(
         "https://noaadata.apps.nsidc.org/NOAA/G02158/"
     )
-    assert s["access"]["cmr_short_name"] == "G02158"
+    # CMR record exists as a metadata-only stub (zero granules) and is
+    # preserved for provenance; the fetch module deliberately does NOT
+    # call earthaccess.search_data on it (see #107).
+    assert s["access"]["cmr"]["short_name"] == "G02158"
+    assert s["access"]["cmr"]["concept_id"] == "C1386246263-NSIDCV0"
     var_names = {v["name"] for v in s["variables"]}
     assert "swe" in var_names
     swe = next(v for v in s["variables"] if v["name"] == "swe")
@@ -227,7 +231,9 @@ def test_snodas_source_present():
 def test_margulis_wus_sr_source_present():
     s = source("margulis_wus_sr")
     assert s["status"] == "current"
-    assert s["access"]["type"] == "nasa_nsidc"
+    # `nsidc` = CMR-mediated path; distinct from SNODAS's `nsidc_https`
+    # which uses the granule-less CMR record only as metadata.
+    assert s["access"]["type"] == "nsidc"
     assert s["access"]["short_name"] == "WUS_UCLA_SR"
     assert s["access"]["url"].startswith("https://")
     assert s["doi"] == "10.5067/PP7T2GBI52I2"

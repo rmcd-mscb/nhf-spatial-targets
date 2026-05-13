@@ -748,11 +748,12 @@ sources:
       url: https://nsidc.org/data/g02158
       archive_url: https://noaadata.apps.nsidc.org/NOAA/G02158/masked/
       # CMR collection record (granule-less metadata stub) — kept for
-      # provenance; do NOT use earthaccess.search_data on this short_name,
-      # it returns 0 hits.
-      cmr_short_name: G02158
-      cmr_version: "1"
-      cmr_concept_id: C1386246263-NSIDCV0
+      # provenance and to flag the trap for the next reader; do NOT use
+      # earthaccess.search_data on this short_name, it returns 0 hits.
+      cmr:
+        short_name: G02158
+        version: "1"
+        concept_id: C1386246263-NSIDCV0
       notes: >
         SNODAS is distributed by NSIDC via an Earthdata-Login-gated
         HTTPS archive at https://noaadata.apps.nsidc.org/NOAA/G02158/.
@@ -798,7 +799,11 @@ sources:
       - "Fang, Y., Liu, Y., and Margulis, S.A., 2022, doi:10.5067/PP7T2GBI52I2"
     doi: "10.5067/PP7T2GBI52I2"
     access:
-      type: nasa_nsidc
+      # `nsidc` = CMR-mediated earthaccess.search_data path (same as
+      # MOD10C1). Distinct from `nsidc_https` (SNODAS), where the CMR
+      # record is granule-less and the fetch goes direct to the HTTPS
+      # archive instead.
+      type: nsidc
       short_name: WUS_UCLA_SR
       version: "1"
       url: https://nsidc.org/data/nsidc-0719

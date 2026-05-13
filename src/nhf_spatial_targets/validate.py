@@ -332,7 +332,9 @@ def _check_credentials(workdir: Path) -> None:
     # catalog. Keep in sync with the fetch modules — any new EDL-using
     # type needs to be added here so `nhf-targets validate` still
     # catches missing creds before the operator hits a runtime auth
-    # failure inside earthaccess.
+    # failure inside earthaccess. `nasa_nsidc` is retained as a defensive
+    # fallback for historical entries even though current entries use
+    # the cleaner `nsidc` / `nsidc_https` tags.
     _EDL_TYPES = (
         "nasa_gesdisc",
         "nasa_earthdata",
