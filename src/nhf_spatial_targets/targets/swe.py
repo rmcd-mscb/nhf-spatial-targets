@@ -1,4 +1,4 @@
-"""Build snow water equivalent calibration targets from Daymet, SNODAS, ERA5-Land, and Margulis WUS-SR."""
+"""Build snow water equivalent (SWE) calibration targets."""
 
 from __future__ import annotations
 

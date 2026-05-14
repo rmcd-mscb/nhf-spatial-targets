@@ -405,6 +405,8 @@ On HPC, [`run_all.slurm`](run_all.slurm) submits a 6-element array (runoff, aet,
 - [`inspect_consolidated.slurm`](inspect_consolidated.slurm) — 5-element array, `notebooks/consolidated/inspect_consolidated_<target>.ipynb` (192 GB by default; CONUS-wide gridded comparisons)
 - [`inspect_aggregated.slurm`](inspect_aggregated.slurm) — 5-element array, `notebooks/aggregated/inspect_aggregated_<target>.ipynb`
 
+These inspection arrays stay 5-element — there is no SWE inspection notebook yet (the SWE target builder is unimplemented; see #101).
+
 Set `SAVE_FIGURES=1` to also write rendered panels under `docs/figures/{consolidated,aggregated}/<project>/`. `notebooks/targets/inspect_target_runoff.ipynb` inspects the final per-HRU runoff bounds.
 
 ## Aggregation Transformation Policy
