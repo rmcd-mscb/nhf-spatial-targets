@@ -53,6 +53,11 @@
 
 set -euo pipefail
 
+# Flush Python stdout per-line so slurm logs (--output=...) update in
+# real time instead of dumping batches when the 8 KB block buffer fills.
+# Slow workloads can otherwise look frozen for tens of minutes.
+export PYTHONUNBUFFERED=1
+
 # Must match the --array upper bound + 1 (i.e. --array=0-3 → N_WORKERS=4).
 N_WORKERS=4
 
