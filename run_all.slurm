@@ -38,6 +38,11 @@
 
 set -euo pipefail
 
+# Flush Python stdout per-line so slurm logs (--output=...) update in
+# real time instead of dumping batches when the 8 KB block buffer fills.
+# Slow workloads can otherwise look frozen for tens of minutes.
+export PYTHONUNBUFFERED=1
+
 # Repo and project directories — override via environment, or edit these
 # defaults for your site. The repo default mirrors the USGS Hovenweep path;
 # $PROJECT_DIR must be a project directory created by `nhf-targets init`.

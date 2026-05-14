@@ -47,6 +47,11 @@
 
 set -euo pipefail
 
+# Flush Python stdout per-line so slurm logs (--output=...) update in
+# real time instead of dumping batches when the 8 KB block buffer fills.
+# Slow workloads can otherwise look frozen for tens of minutes.
+export PYTHONUNBUFFERED=1
+
 REPO_DIR="${REPO_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/nhf-spatial-targets}"
 PROJECT_DIR="${PROJECT_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2-spatial-targets}"
 SAVE_FIGURES="${SAVE_FIGURES:-0}"
