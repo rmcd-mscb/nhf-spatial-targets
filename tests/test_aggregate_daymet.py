@@ -14,7 +14,11 @@ import xarray as xr
 import yaml
 from shapely.geometry import box
 
-from nhf_spatial_targets.aggregate.daymet import aggregate_daymet
+from nhf_spatial_targets.aggregate.daymet import (
+    _crs_from_grid_mapping,
+    _validate_period_in_zarr_range,
+    aggregate_daymet,
+)
 
 
 # --- function-signature contracts -----------------------------------
@@ -59,6 +63,56 @@ def test_pr_region_raises_not_implemented(tmp_path):
             workdir=tmp_path,
             region="pr",
         )
+
+
+# --- helper-function unit tests -------------------------------------
+
+
+def test_crs_from_grid_mapping_missing_variable_raises():
+    """A zarr without the ``lambert_conformal_conic`` variable should
+    surface a clear ValueError pointing at the missing variable
+    rather than silently defaulting to WGS84."""
+    ds = xr.Dataset(
+        {"swe": (("time", "y", "x"), np.zeros((1, 2, 2), dtype=np.float32))},
+        coords={
+            "time": pd.date_range("2010-01-01", periods=1, freq="D"),
+            "x": [0.0, 1000.0],
+            "y": [0.0, 1000.0],
+        },
+    )
+    with pytest.raises(ValueError, match="grid mapping"):
+        _crs_from_grid_mapping(ds)
+
+
+def _ds_with_time(years: tuple[int, int]) -> xr.Dataset:
+    """Minimal Dataset with a daily time coord spanning [years[0]..years[1]]."""
+    times = pd.date_range(f"{years[0]}-01-01", f"{years[1]}-12-31", freq="D")
+    return xr.Dataset(coords={"time": times})
+
+
+def test_validate_period_in_zarr_range_accepts_in_range():
+    ds = _ds_with_time((1980, 2024))
+    _validate_period_in_zarr_range(ds, 2010, 2011)  # no raise
+
+
+def test_validate_period_in_zarr_range_rejects_before_zarr_start():
+    ds = _ds_with_time((1980, 2024))
+    with pytest.raises(ValueError, match=r"extends past .*1980/2024"):
+        _validate_period_in_zarr_range(ds, 1900, 1979)
+
+
+def test_validate_period_in_zarr_range_rejects_after_zarr_end():
+    ds = _ds_with_time((1980, 2024))
+    with pytest.raises(ValueError, match=r"extends past .*1980/2024"):
+        _validate_period_in_zarr_range(ds, 2025, 2030)
+
+
+def test_validate_period_in_zarr_range_rejects_partial_overlap():
+    """Partial overlap is rejected so the operator can't silently get
+    fewer years than they asked for."""
+    ds = _ds_with_time((1980, 2024))
+    with pytest.raises(ValueError, match=r"extends past .*1980/2024"):
+        _validate_period_in_zarr_range(ds, 1975, 1985)
 
 
 # --- shared fixtures ------------------------------------------------
@@ -214,6 +268,27 @@ def test_unknown_region_in_manifest_raises(workdir, tiny_fabric):
             )
     finally:
         daymet_mod._SUPPORTED_REGIONS = original
+
+
+# --- period validation end-to-end ----------------------------------
+
+
+@patch("nhf_spatial_targets.aggregate.daymet.xr.open_zarr")
+def test_aggregate_rejects_period_outside_zarr_range(
+    mock_open_zarr, workdir, tiny_fabric
+):
+    """Wiring test: ``aggregate_daymet`` must call
+    ``_validate_period_in_zarr_range`` and surface its ValueError,
+    not iterate years and fail opaquely inside gdptools."""
+    mock_open_zarr.return_value = _make_lcc_zarr_dataset(years=(2010, 2011))
+    with pytest.raises(ValueError, match=r"extends past .*2010/2011"):
+        aggregate_daymet(
+            fabric_path=tiny_fabric,
+            id_col="hru_id",
+            period="2008/2009",  # before the synthetic zarr starts
+            workdir=workdir,
+            region="na",
+        )
 
 
 # --- end-to-end smoke ----------------------------------------------

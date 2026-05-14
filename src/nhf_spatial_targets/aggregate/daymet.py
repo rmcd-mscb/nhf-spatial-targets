@@ -23,6 +23,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pandas as pd
 import xarray as xr
 from pyproj import CRS
 
@@ -189,6 +190,36 @@ def _resolve_zarr_path(project: Project, region: str) -> Path:
     return zarr_path
 
 
+def _validate_period_in_zarr_range(
+    ds: xr.Dataset, start_year: int, end_year: int
+) -> None:
+    """Reject ``--period`` ranges that extend past the zarr's time coord.
+
+    Without this check, a user passing ``--period 1900/1979`` (before
+    Daymet starts) would iterate years, slice empty time ranges, and
+    surface an opaque gdptools error from the first batch. Doing the
+    check here — with the already-open zarr's actual time coord
+    (authoritative; the catalog's ``period`` may lag staging) —
+    surfaces the misuse with a clear remediation.
+
+    Hard-fails on any out-of-range year rather than silently clipping
+    the requested window: silently skipping years would produce
+    aggregator outputs that look complete but cover less than the
+    operator asked for.
+    """
+    times = ds["time"].values
+    if len(times) == 0:
+        raise ValueError("daymet: zarr time coord is empty; cannot aggregate.")
+    zarr_min_year = pd.Timestamp(times[0]).year
+    zarr_max_year = pd.Timestamp(times[-1]).year
+    if start_year < zarr_min_year or end_year > zarr_max_year:
+        raise ValueError(
+            f"daymet: --period {start_year}/{end_year} extends past the "
+            f"zarr's time coverage ({zarr_min_year}/{zarr_max_year}). "
+            f"Restrict --period to within the zarr's available years."
+        )
+
+
 def _crs_from_grid_mapping(ds: xr.Dataset) -> str:
     """Decode the ``lambert_conformal_conic`` grid mapping to a WKT CRS string.
 
@@ -281,6 +312,7 @@ def aggregate_daymet(
                 f"{_SOURCE_VAR!r} (have {list(src_ds.data_vars)})."
             )
         source_crs = _crs_from_grid_mapping(src_ds)
+        _validate_period_in_zarr_range(src_ds, start_year, end_year)
         # Keep only the swe variable (plus its coords and the grid
         # mapping reference) so gdptools doesn't chunk-walk prcp/
         # tmax/tmin/srad/vp.
