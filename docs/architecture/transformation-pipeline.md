@@ -352,6 +352,54 @@ sort keys (VPU grouping) may live as additional columns/coords but
 are never the row order; existing aggregated NCs are not migrated
 (the read-time defensive sort handles them).
 
+## Operational cost: source CRS vs aggregator cost
+
+Two sources at the same nominal ~1 km grid resolution can run at very
+different aggregator speeds depending on **the source's native CRS**.
+gdptools reprojects every batch to `EPSG:5070` (NAD83 / CONUS Albers
+Equal Area, our `WEIGHT_GEN_CRS`) before computing weights. The cost
+of that reprojection — and the polygon-generation / validation steps
+that surround it — is dominated by whether the source CRS is
+projected (metric) or geographic (lat/lon).
+
+Measured side-by-side on `gfv2-spatial-targets`, batch 0 of weight
+gen for a typical CONUS batch (5648 HRUs):
+
+| Phase | SNODAS (WGS84) | Daymet NA (LCC) | Ratio |
+|---|---|---|---|
+| Generating grid-cell polygons | 8.01 s | 0.08 s | 100× |
+| Data preparation | 11.45 s | 0.08 s | 140× |
+| Validate polygons | 9.14 s | 0.38 s | 23× |
+| Reprojecting to EPSG:5070 | 36.74 s | 0.99 s | 37× |
+| Intersections | 57.84 s | 7.31 s | 8× |
+| **Total weight gen** | **~61 s** | **~7-11 s** | **~8×** |
+
+Daymet's native Lambert Conformal Conic grid is a projected metric
+CRS, so reprojecting LCC → EPSG:5070 is a per-vertex affine transform
+and the cell polygons are uniform 1 km squares. SNODAS is on a
+30 arcsec WGS84 grid; the cells are non-uniform (~0.71 × 0.93 km at
+40°N) and reprojection is a full trigonometric transform per vertex,
+plus polygon validation has to handle geographic edge cases even
+when the data doesn't actually touch them.
+
+Roughly 1.5× of the slowdown is the higher cell density (SNODAS has
+~2× the cells per HRU footprint); the remaining ~5× is the CRS
+arithmetic itself. For a CONUS fabric (~360 K HRUs at batch_size
+10 K = ~64 batches), this is the difference between ~3 hours and
+~25 minutes of weight gen for a first-time aggregation run.
+
+**Aggregator-side impact is bounded.** Weight caches are per-batch
+and reused across years, so the cost is a one-time tax on the first
+year for any given fabric. After that, the daily-aggregation step
+runs at similar speed for both sources.
+
+**Implication for new sources.** When a source is available in both
+a projected and a geographic format (or the consolidator could
+reproject at fetch time), prefer the projected format for the
+aggregator's sake. For sources we're stuck with in geographic
+coords, a pre-projection step in the consolidator is the cleanest
+fix — tracked for SNODAS in issue #121.
+
 ## Cross-references
 
 - `CLAUDE.md` — concise policy summary for AI assistants.
