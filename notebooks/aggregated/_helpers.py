@@ -85,17 +85,30 @@ def select_month(da: xr.DataArray, year: int, month: int) -> xr.DataArray:
     return sliced.isel(time=0)
 
 
-def discover_aggregated(project_dir: Path, source_key: str) -> list[Path] | None:
+def discover_aggregated(
+    project_dir: Path, source_key: str, region: str | None = None
+) -> list[Path] | None:
     """Return sorted per-year aggregated NC paths, or ``None`` if absent.
 
-    Globs ``<project>/data/aggregated/<source_key>/<source_key>_*_agg.nc``.
+    Globs ``<project>/data/aggregated/<source_key>/<source_key>_*_agg.nc``
+    by default. When ``region`` is provided, narrows the glob to
+    ``<source_key>_<region>_*_agg.nc`` — Daymet is the first source to
+    encode region in the filename (see ``aggregate/daymet.py``), so
+    callers inspecting region-partitioned outputs pass ``region="na"``
+    to filter cleanly without pulling in other regions or hypothetical
+    region-less artifacts.
+
     Returns ``None`` when the directory is missing or empty so callers
     can print a single "skip with reason" line and continue.
     """
     agg_dir = Path(project_dir) / "data" / "aggregated" / source_key
     if not agg_dir.is_dir():
         return None
-    paths = sorted(agg_dir.glob(f"{source_key}_*_agg.nc"))
+    if region is None:
+        pattern = f"{source_key}_*_agg.nc"
+    else:
+        pattern = f"{source_key}_{region}_*_agg.nc"
+    paths = sorted(agg_dir.glob(pattern))
     return paths if paths else None
 
 
@@ -190,37 +203,45 @@ def lookup_hrus_by_points(
     return dict(zip(joined["label"], joined[id_col].tolist()))
 
 
-def open_year(project_dir: Path, source_key: str, year: int) -> xr.Dataset:
+def open_year(
+    project_dir: Path, source_key: str, year: int, region: str | None = None
+) -> xr.Dataset:
     """Open a single per-year aggregated NC and detach from the file.
 
     The Dataset is loaded into memory and the underlying file handle is
     closed before return — the SOM/MERRA-2 family of xarray bugs around
     file handles staying open is covered by ``feedback_rioxarray_close.md``.
+
+    Pass ``region`` for sources whose output paths encode it (Daymet:
+    ``daymet_na_<year>_agg.nc``).
     """
-    paths = discover_aggregated(project_dir, source_key)
+    paths = discover_aggregated(project_dir, source_key, region=region)
     if paths is None:
         raise FileNotFoundError(
             f"No aggregated NCs for {source_key} in {project_dir}"
         )
     target = next((p for p in paths if f"_{year}_agg.nc" in p.name), None)
     if target is None:
-        raise FileNotFoundError(
-            f"No {source_key}_{year}_agg.nc in {paths[0].parent}"
-        )
+        scope = f"{source_key}_{region}" if region is not None else source_key
+        raise FileNotFoundError(f"No {scope}_{year}_agg.nc in {paths[0].parent}")
     with xr.open_dataset(target) as ds:
         loaded = ds.load()
     return loaded
 
 
 def open_year_range(
-    project_dir: Path, source_key: str, years: range
+    project_dir: Path,
+    source_key: str,
+    years: range,
+    region: str | None = None,
 ) -> xr.Dataset:
     """Open a contiguous range of per-year aggregated NCs (lazy).
 
     Caller is responsible for ``.sel(hru=[...])`` and ``.load()`` to bound
-    memory, then ``.close()`` afterwards.
+    memory, then ``.close()`` afterwards. Pass ``region`` for sources
+    whose output paths encode it (Daymet).
     """
-    paths = discover_aggregated(project_dir, source_key)
+    paths = discover_aggregated(project_dir, source_key, region=region)
     if paths is None:
         raise FileNotFoundError(
             f"No aggregated NCs for {source_key} in {project_dir}"

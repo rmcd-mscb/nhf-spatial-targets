@@ -33,6 +33,7 @@ pixi run nhf-targets agg watergap22d  --project-dir /data/nhf-runs/my-run
 pixi run nhf-targets agg reitz2017    --project-dir /data/nhf-runs/my-run
 pixi run nhf-targets agg mod16a2      --project-dir /data/nhf-runs/my-run
 pixi run nhf-targets agg mod10c1      --project-dir /data/nhf-runs/my-run
+pixi run nhf-targets agg daymet       --project-dir /data/nhf-runs/my-run --period 1980/2024
 pixi run nhf-targets agg snodas       --project-dir /data/nhf-runs/my-run
 pixi run nhf-targets agg all          --project-dir /data/nhf-runs/my-run
 

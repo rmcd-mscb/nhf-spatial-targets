@@ -17,6 +17,7 @@ import yaml
 from cyclopts import App, Parameter
 
 from nhf_spatial_targets._logging import setup_logging
+from nhf_spatial_targets.aggregate.daymet import aggregate_daymet
 from nhf_spatial_targets.aggregate.era5_land import aggregate_era5_land
 from nhf_spatial_targets.aggregate.gldas import aggregate_gldas
 from nhf_spatial_targets.aggregate.merra2 import aggregate_merra2
@@ -1322,6 +1323,94 @@ def agg_ssebop_cmd(
     )
 
 
+@agg_app.command(name="daymet")
+def agg_daymet_cmd(
+    workdir: Annotated[
+        Path,
+        Parameter(
+            name=["--project-dir"],
+            help="Project created by 'nhf-targets init'.",
+        ),
+    ],
+    period: Annotated[
+        str,
+        Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
+    ],
+    batch_size: Annotated[
+        int,
+        Parameter(name="--batch-size", help="Target HRUs per spatial batch."),
+    ] = 500,
+    region: Annotated[
+        str,
+        Parameter(
+            name=["--region", "-r"],
+            help=(
+                "Daymet region: 'na', 'hi', or 'pr'. Only 'na' is wired "
+                "up in this build; 'hi' and 'pr' raise NotImplementedError "
+                "until the corresponding fabrics land (issue #101)."
+            ),
+        ),
+    ] = "na",
+):
+    """Aggregate Daymet V4 R1 daily SWE to HRU fabric polygons.
+
+    Reads the per-region zarr path from manifest.json (written by
+    'nhf-targets fetch daymet'), opens the zarr directly, computes
+    area-weighted means per HRU, and writes per-year NetCDFs.
+    """
+    from rich.console import Console
+
+    if not workdir.exists():
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
+        sys.exit(2)
+    if not (workdir / "fabric.json").exists():
+        print(
+            f"Error: fabric.json not found in {workdir}. "
+            "Run 'nhf-targets validate' first.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    try:
+        cfg = yaml.safe_load((workdir / "config.yml").read_text())
+    except yaml.YAMLError as exc:
+        print(f"Error: Cannot parse config.yml: {exc}", file=sys.stderr)
+        sys.exit(1)
+    fabric_path = cfg["fabric"]["path"]
+    id_col = cfg["fabric"].get("id_col", "nhm_id")
+
+    console = Console()
+    console.print(
+        f"[bold]Aggregating Daymet SWE (region={region}, period={period}, "
+        f"batch_size={batch_size})...[/bold]"
+    )
+
+    try:
+        aggregate_daymet(
+            fabric_path=fabric_path,
+            id_col=id_col,
+            period=period,
+            workdir=workdir,
+            batch_size=batch_size,
+            region=region,
+        )
+    except (ValueError, FileNotFoundError, RuntimeError, NotImplementedError) as exc:
+        print(f"Error ({type(exc).__name__}): {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        _logger.exception("Unexpected error during Daymet aggregation")
+        print(
+            f"Unexpected error ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    console.print(
+        f"[green]Daymet aggregation complete; per-year NCs and manifest "
+        f"updated under {workdir / 'data' / 'aggregated' / 'daymet'}[/green]"
+    )
+
+
 @catalog_app.command(name="sources")
 def catalog_sources():
     """List all registered data sources."""
@@ -1560,7 +1649,11 @@ def agg_all_cmd(
     """Aggregate every registered source for this project.
 
     Runs tier-1/tier-2 aggregators in sequence; stops on first failure.
-    SSEBop is not included here — run ``agg ssebop --period`` separately.
+    Sources that require an explicit ``--period`` argument are not
+    included here — run them separately:
+
+    - ``agg ssebop --period YYYY/YYYY``
+    - ``agg daymet --period YYYY/YYYY [--region na]``
     """
     from rich.console import Console
 
