@@ -170,18 +170,48 @@ carries:
   `snodas_first_day_header` JSON string capturing the original ENVI
   grid metadata for cross-year drift forensics.
 
-## For the SNODAS aggregator (sub-task 2b of #101)
+## SNODAS aggregator (PR #117)
 
-When wiring the aggregate adapter, use `stat_method="masked_mean"` on
-the `SourceAdapter` so the gdptools area-weighted mean **skips** the
-NaN pixels at the CONUS analysis mask edge rather than letting them
-poison every HRU that touches the mask. SNODAS deliberately ships
-`-9999` for off-CONUS pixels (oceans, the Mexico/Canada portions of
-the bbox, the Great Lakes); after consolidation those arrive at the
-aggregator as NaN. Without `masked_mean` an HRU whose footprint
-intersects even one masked pixel collapses to NaN. Same pattern as
+`aggregate/snodas.py` is a thin `SourceAdapter` delegating to the
+shared `aggregate_source` driver. Run it via:
+
+```bash
+pixi run nhf-targets agg snodas --project-dir <project>
+# optional period clip (default = every year on disk):
+pixi run nhf-targets agg snodas --project-dir <project> --period 2003/2024
+```
+
+Output: `<project>/data/aggregated/snodas/snodas_<year>_agg.nc`, one
+per year, `id_col` ascending (issue #93), CF-1.6 globals.
+
+**`stat_method="mean"` (default), not `masked_mean`.** SNODAS's
+`-9999` fill is decoded by xarray (`mask_and_scale=True`) to NaN at
+open time — *before* the aggregator sees pixels. There is no
+`pre_aggregate_hook` constructing an explicit per-pixel mask, so the
+NaN-poisoning concern that motivates `masked_mean` in
 [`aggregate/mod10c1.py`](../../src/nhf_spatial_targets/aggregate/mod10c1.py)
-and [`aggregate/mod16a2.py`](../../src/nhf_spatial_targets/aggregate/mod16a2.py).
+/ [`aggregate/mod16a2.py`](../../src/nhf_spatial_targets/aggregate/mod16a2.py)
+doesn't apply. Per CLAUDE.md's Aggregation Transformation Policy,
+this is the "geometric partial coverage / true upstream gaps" case
+— `mean` is correct, and HRUs that straddle the CONUS edge become
+honest NaN. NN-fill (if any) is a target-stage concern, not an
+aggregator concern.
+
+**Performance note: ~5-8× slower per batch than Daymet at similar
+resolution.** SNODAS is WGS84-native; gdptools spends most of weight
+gen reprojecting geographic polygons to EPSG:5070 and validating
+their geographic edges. Daymet's native LCC grid lets all of these
+phases run in straight metric math. See
+[CRS-cost note in the transformation-pipeline doc](../architecture/transformation-pipeline.md#operational-cost-source-crs-vs-aggregator-cost)
+for the breakdown. Issue #121 tracks a pre-projection optimization.
+
+## SLURM wiring (`agg_all.slurm` array index 10)
+
+The slurm array script runs SNODAS in parallel with the other
+tier-1/tier-2 sources. Default `--batch-size=10000` (tuned for 128 GB
+node); for the first run on a new fabric, expect ~3 hours of weight
+gen (one-time, cached on disk per batch) before the 21-year
+aggregation loop starts. Subsequent years reuse the cached weights.
 
 ## Archive gaps — missing days inside otherwise-complete years
 
