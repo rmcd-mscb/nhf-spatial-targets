@@ -74,6 +74,7 @@ run-aet    = { cmd = "nhf-targets run --target aet" }
 run-rch    = { cmd = "nhf-targets run --target recharge" }
 run-som    = { cmd = "nhf-targets run --target soil_moisture" }
 run-sca    = { cmd = "nhf-targets run --target snow_covered_area" }
+run-swe    = { cmd = "nhf-targets run --target snow_water_equivalent" }
 
 # Fetch source data
 fetch-era5-land = { cmd = "nhf-targets fetch era5-land", description = "Download ERA5-Land data into a project datastore" }

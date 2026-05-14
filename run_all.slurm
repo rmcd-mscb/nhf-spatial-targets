@@ -2,7 +2,7 @@
 #SBATCH --job-name=nhf-run
 #SBATCH --account=impd
 #SBATCH --partition=cpu
-#SBATCH --array=0-4
+#SBATCH --array=0-5
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=32G
@@ -11,11 +11,11 @@
 #SBATCH --error=logs/run_%a_%A.err
 
 # NHF Spatial Targets — parallel target-build array.
-# Submits one SLURM job per calibration target (5 total). Each target depends
+# Submits one SLURM job per calibration target (6 total). Each target depends
 # on its source aggregations being complete (run agg_all.slurm first); targets
 # are otherwise independent and can run concurrently on separate compute nodes.
 #
-# Stub targets (AET, RCH, SOM, SCA) raise NotImplementedError under the hood;
+# Stub targets (AET, RCH, SOM, SCA, SWE) raise NotImplementedError under the hood;
 # the CLI catches that and logs "skipping", so the array won't fail noisily on
 # bulk submits. As each target's builder lands, the skip becomes a real build
 # with no slurm-script change.
@@ -58,6 +58,7 @@ RUN_TASKS=(
     "run-rch"      # 2 — Recharge (stub)
     "run-som"      # 3 — Soil moisture (stub)
     "run-sca"      # 4 — SCA (stub)
+    "run-swe"      # 5 — SWE (stub)
 )
 
 if (( SLURM_ARRAY_TASK_ID < 0 || SLURM_ARRAY_TASK_ID >= ${#RUN_TASKS[@]} )); then

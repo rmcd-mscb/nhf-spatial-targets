@@ -396,7 +396,7 @@ pixi run run-runoff -- --project-dir /data/gfv11-targets
 pixi run run-aet    -- --project-dir /data/gfv11-targets   # stub: skipped with warning
 ```
 
-On HPC, [`run_all.slurm`](run_all.slurm) submits a 5-element array (runoff, aet, rch, som, sca). Targets whose builders are still stubs raise `NotImplementedError`, which the CLI catches and logs as a `WARNING ... skipping` so the array doesn't fail noisily.
+On HPC, [`run_all.slurm`](run_all.slurm) submits a 6-element array (runoff, aet, rch, som, sca, swe). Targets whose builders are still stubs raise `NotImplementedError`, which the CLI catches and logs as a `WARNING ... skipping` so the array doesn't fail noisily.
 
 ### Inspection Notebooks
 

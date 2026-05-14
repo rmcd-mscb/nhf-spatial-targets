@@ -102,6 +102,17 @@ DEFAULTS: dict = {
             "nn_fill": True,
             "nn_max_candidates": 10,
         },
+        "snow_water_equivalent": {
+            "enabled": True,
+            "sources": ["daymet", "snodas", "era5_land", "margulis_wus_sr"],
+            "time_step": "daily",
+            "period": None,
+            "prms_variable": "pkwater_equiv",
+            "range_method": "multi_source_minmax",
+            "output_file": "swe_targets.nc",
+            "nn_fill": True,
+            "nn_max_candidates": 10,
+        },
     },
 }
 

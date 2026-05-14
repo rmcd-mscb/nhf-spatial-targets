@@ -75,7 +75,8 @@ def test_run_dispatches_enabled_targets(tmp_path):
         "  aet:\n    enabled: false\n"
         "  recharge:\n    enabled: false\n"
         "  soil_moisture:\n    enabled: false\n"
-        "  snow_covered_area:\n    enabled: false\n",
+        "  snow_covered_area:\n    enabled: false\n"
+        "  snow_water_equivalent:\n    enabled: false\n",
     )
 
     with patch("nhf_spatial_targets.cli._dispatch") as mock_dispatch:

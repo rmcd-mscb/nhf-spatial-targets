@@ -12,7 +12,7 @@ from nhf_spatial_targets.defaults import (
 )
 
 
-def test_defaults_has_all_five_targets():
+def test_defaults_has_all_six_targets():
     """Every calibration target has a defaults block."""
     assert set(DEFAULTS["targets"].keys()) == {
         "runoff",
@@ -20,6 +20,7 @@ def test_defaults_has_all_five_targets():
         "recharge",
         "soil_moisture",
         "snow_covered_area",
+        "snow_water_equivalent",
     }
 
 
