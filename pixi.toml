@@ -104,6 +104,7 @@ agg-watergap22d  = { cmd = "nhf-targets agg watergap22d",  description = "Aggreg
 agg-reitz2017    = { cmd = "nhf-targets agg reitz2017",    description = "Aggregate Reitz 2017 annual recharge to HRU fabric" }
 agg-mod16a2      = { cmd = "nhf-targets agg mod16a2",      description = "Aggregate MOD16A2 v061 AET to HRU fabric" }
 agg-mod10c1      = { cmd = "nhf-targets agg mod10c1",      description = "Aggregate MOD10C1 v061 SCA to HRU fabric" }
+agg-daymet       = { cmd = "nhf-targets agg daymet",       description = "Aggregate Daymet V4 daily SWE (per region) to HRU fabric" }
 agg-snodas       = { cmd = "nhf-targets agg snodas",       description = "Aggregate SNODAS daily SWE to HRU fabric" }
 agg-mwbm-climgrid = { cmd = "nhf-targets agg mwbm-climgrid", description = "Aggregate USGS MWBM (ClimGrid-forced) monthly outputs to HRU fabric" }
 agg-all          = { cmd = "nhf-targets agg all",          description = "Aggregate all tier-1/2 sources to HRU fabric sequentially" }
