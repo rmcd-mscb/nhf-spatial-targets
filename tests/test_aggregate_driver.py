@@ -75,6 +75,63 @@ def test_update_manifest_preserves_existing_sources(project):
     assert set(manifest["sources"].keys()) == {"foo", "bar"}
 
 
+def test_update_manifest_preserves_pre_existing_entry_keys(project):
+    """Entry-level read-merge-write: keys written by the fetch module
+    survive the aggregator's ``update_manifest`` call (issue #119).
+
+    Without this, fetch-side nested provenance like daymet's ``regions``
+    dict or snodas's ``years`` list is silently wiped on every
+    aggregator run. The aggregator must merge into the existing entry,
+    not overwrite it.
+    """
+    manifest_path = project.workdir / "manifest.json"
+    # Simulate a fetch module having written nested + flat provenance
+    # under ``sources.foo`` before the aggregator runs.
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "sources": {
+                    "foo": {
+                        "source_key": "foo",
+                        "doi": "10.1234/foo",
+                        "license": "public domain",
+                        "regions": {
+                            "na": {"path": "/data/foo_na.zarr", "sha256": "deadbeef"}
+                        },
+                        "years": [{"year": 2003, "n_files": 365}],
+                    }
+                },
+                "steps": [],
+            }
+        )
+    )
+    update_manifest(
+        project=project,
+        source_key="foo",
+        access={"type": "local"},
+        period="2003-01-01/2003-12-31",
+        output_files=["data/aggregated/foo/foo_2003_agg.nc"],
+        weight_files=["weights/foo_batch0.csv"],
+    )
+    manifest = json.loads(manifest_path.read_text())
+    entry = manifest["sources"]["foo"]
+    # Fetch-side keys preserved:
+    assert entry["doi"] == "10.1234/foo"
+    assert entry["license"] == "public domain"
+    assert entry["regions"] == {
+        "na": {"path": "/data/foo_na.zarr", "sha256": "deadbeef"}
+    }
+    assert entry["years"] == [{"year": 2003, "n_files": 365}]
+    # Aggregator-side keys added on top:
+    assert entry["output_files"] == ["data/aggregated/foo/foo_2003_agg.nc"]
+    assert entry["weight_files"] == ["weights/foo_batch0.csv"]
+    assert entry["period"] == "2003-01-01/2003-12-31"
+    assert entry["access_type"] == "local"
+    assert "timestamp" in entry
+    # source_key unchanged:
+    assert entry["source_key"] == "foo"
+
+
 def test_source_adapter_defaults():
     from nhf_spatial_targets.aggregate._adapter import SourceAdapter
 

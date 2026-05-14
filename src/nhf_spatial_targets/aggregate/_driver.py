@@ -37,11 +37,18 @@ def update_manifest(
     """Merge an aggregation provenance entry into ``manifest.json`` atomically.
 
     The manifest is keyed as ``sources[source_key]``; existing entries for
-    other sources are preserved. ``period`` is stored as-is for provenance;
-    ``fabric_sha256`` is read from ``fabric.json``. ``output_files`` lists
-    aggregated output NC paths relative to ``project.workdir`` (one per year
-    for per-year pipelines, a single-element list for sources like ssebop
-    that emit one consolidated file).
+    other sources are preserved. **Within** ``sources[source_key]``, the
+    aggregator-owned fields below are merged into any pre-existing entry
+    rather than overwriting it — fetch modules write per-source provenance
+    (e.g. daymet's ``regions`` dict, snodas's ``years`` list) and the
+    aggregator must not erase those keys when it adds ``output_files`` /
+    ``weight_files`` / ``timestamp`` (issue #119).
+
+    ``period`` is stored as-is for provenance; ``fabric_sha256`` is read
+    from ``fabric.json``. ``output_files`` lists aggregated output NC
+    paths relative to ``project.workdir`` (one per year for per-year
+    pipelines, a single-element list for sources like ssebop that emit
+    one consolidated file).
     """
     manifest_path = project.manifest_path
     if manifest_path.exists():
@@ -77,7 +84,13 @@ def update_manifest(
         if extra_key in access:
             entry[extra_key] = access[extra_key]
 
-    manifest["sources"][source_key] = entry
+    # Entry-level read-merge-write: preserve fetch-side keys (issue #119).
+    # For sources whose fetch doesn't write nested state, the existing
+    # entry only contains keys the new entry also writes, so this is a
+    # no-op behavior change.
+    existing = manifest["sources"].get(source_key, {})
+    existing.update(entry)
+    manifest["sources"][source_key] = existing
 
     tmp_fd, tmp_path = tempfile.mkstemp(dir=manifest_path.parent, suffix=".json.tmp")
     try:

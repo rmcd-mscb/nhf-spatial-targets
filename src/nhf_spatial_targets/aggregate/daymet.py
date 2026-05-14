@@ -18,9 +18,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -36,6 +33,7 @@ from nhf_spatial_targets.aggregate._driver import (
     aggregate_variables_for_batch,
     compute_or_load_weights,
     load_and_batch_fabric,
+    update_manifest,
 )
 from nhf_spatial_targets.fetch._period import parse_period
 from nhf_spatial_targets.workspace import Project
@@ -47,73 +45,6 @@ _SOURCE_KEY = "daymet"
 _SOURCE_VAR = "swe"
 _GRID_MAPPING_VAR = "lambert_conformal_conic"
 _SUPPORTED_REGIONS = frozenset({"na"})
-
-
-def _merge_manifest_entry(
-    project: Project,
-    access: dict,
-    period: str,
-    output_files: list[str],
-    weight_files: list[str],
-) -> None:
-    """Write the aggregator's provenance into ``manifest.json`` while
-    preserving fetch-side keys on ``sources.daymet``.
-
-    Daymet's fetch module records per-region zarr provenance under
-    ``sources.daymet.regions``. The shared ``_driver.update_manifest``
-    helper builds a fresh entry dict and replaces ``sources[<key>]``
-    wholesale, which would erase the fetch entry. Every fetch module
-    in this repo already does read-merge-write at the entry level
-    (``entry.update({...})``) — this helper applies the same
-    convention to the aggregator side until the shared driver helper
-    is fixed.
-    """
-    manifest_path = project.manifest_path
-    if manifest_path.exists():
-        try:
-            manifest = json.loads(manifest_path.read_text())
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"manifest.json in {project.workdir} is corrupt: {exc}"
-            ) from exc
-    else:
-        manifest = {"sources": {}, "steps": []}
-    manifest.setdefault("sources", {})
-
-    fabric_json = project.workdir / "fabric.json"
-    fabric_sha = ""
-    if fabric_json.exists():
-        fabric_meta = json.loads(fabric_json.read_text())
-        fabric_sha = fabric_meta.get("sha256", "")
-
-    entry = manifest["sources"].get(_SOURCE_KEY, {})
-    agg_fields: dict = {
-        "source_key": _SOURCE_KEY,
-        "access_type": access.get("type", ""),
-        "period": period,
-        "fabric_sha256": fabric_sha,
-        "output_files": list(output_files),
-        "weight_files": list(weight_files),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-    for extra_key in ("collection_id", "short_name", "version", "doi"):
-        if extra_key in access:
-            agg_fields[extra_key] = access[extra_key]
-    entry.update(agg_fields)
-    manifest["sources"][_SOURCE_KEY] = entry
-
-    tmp_fd, tmp_path = tempfile.mkstemp(dir=manifest_path.parent, suffix=".json.tmp")
-    try:
-        with os.fdopen(tmp_fd, "w") as f:
-            json.dump(manifest, f, indent=2)
-        Path(tmp_path).replace(manifest_path)
-    except Exception:
-        Path(tmp_path).unlink(missing_ok=True)
-        raise
-    logger.info(
-        "daymet: merged aggregator provenance into %s (regions preserved)",
-        manifest_path,
-    )
 
 
 def _region_source_key(region: str) -> str:
@@ -423,8 +354,9 @@ def aggregate_daymet(
     access_with_doi = {**access}
     if meta.get("doi"):
         access_with_doi["doi"] = meta["doi"]
-    _merge_manifest_entry(
+    update_manifest(
         project=project,
+        source_key=_SOURCE_KEY,
         access=access_with_doi,
         period=f"{start_year}-01-01/{end_year}-12-31",
         output_files=rel_outputs,
