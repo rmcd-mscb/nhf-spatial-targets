@@ -6,11 +6,16 @@ import pytest
 
 
 def test_swe_build_is_stub():
-    """The SWE target builder is a stub until implemented."""
+    """The SWE target builder is a stub until implemented.
+
+    Builder signature is unified across all targets on ``build(project)``;
+    a sentinel ``object()`` is enough to reach the ``NotImplementedError``
+    without needing a real Project.
+    """
     from nhf_spatial_targets.targets.swe import build
 
     with pytest.raises(NotImplementedError):
-        build({}, "/fake/fabric.gpkg", "/fake/out")
+        build(object())
 
 
 def test_swe_variable_lists_four_sources():
