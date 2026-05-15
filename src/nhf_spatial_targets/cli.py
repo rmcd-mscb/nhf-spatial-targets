@@ -106,7 +106,7 @@ def run(
             sys.exit(1)
         print(f"Building target: {name}")
         try:
-            _dispatch(name, targets_cfg[name], project)
+            _dispatch(name, project)
         except NotImplementedError as exc:
             print(
                 f"WARNING: target '{name}' not yet implemented; skipping ({exc})",
@@ -121,17 +121,18 @@ def run(
 
 def _dispatch(
     name: str,
-    target_cfg: dict,
     project: "Project",
 ) -> None:
-    """Dispatch to the appropriate target builder module."""
+    """Dispatch to the appropriate target builder module.
+
+    All builders share the ``build(project: Project) -> None`` signature
+    of :func:`targets.run.build`; per-target config is read from
+    ``project.target(name)``.
+    """
     from nhf_spatial_targets.targets import aet, rch, run, sca, som, swe
 
-    if name == "runoff":
-        run.build(project)
-        return
-
     builders = {
+        "runoff": run.build,
         "aet": aet.build,
         "recharge": rch.build,
         "soil_moisture": som.build,
@@ -141,10 +142,7 @@ def _dispatch(
     if name not in builders:
         print(f"Error: No builder registered for target: {name}", file=sys.stderr)
         sys.exit(1)
-
-    fabric_path = project.config["fabric"]["path"]
-    output_path = str(project.targets_dir())
-    builders[name](target_cfg, fabric_path, output_path)
+    builders[name](project)
 
 
 @app.command
