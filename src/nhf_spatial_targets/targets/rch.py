@@ -12,7 +12,12 @@ normalized sources.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 
-def build(config: dict, fabric_path: str, output_path: str) -> None:
+if TYPE_CHECKING:
+    from nhf_spatial_targets.workspace import Project
+
+
+def build(project: "Project") -> None:
     """Build recharge target dataset."""
     raise NotImplementedError

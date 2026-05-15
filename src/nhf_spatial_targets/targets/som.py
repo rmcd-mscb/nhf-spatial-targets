@@ -5,7 +5,14 @@
 # Variable: soil_rechr
 # Timestep: monthly and annual
 
+from __future__ import annotations
 
-def build(config: dict, fabric_path: str, output_path: str) -> None:
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from nhf_spatial_targets.workspace import Project
+
+
+def build(project: "Project") -> None:
     """Build soil moisture target dataset."""
     raise NotImplementedError

@@ -85,10 +85,10 @@ def test_run_dispatches_enabled_targets(tmp_path):
     mock_dispatch.assert_called_once()
     args = mock_dispatch.call_args[0]
     assert args[0] == "runoff"
-    # Third positional is now a Project, not a dict
+    # Second positional is the Project (signature: _dispatch(name, project))
     from nhf_spatial_targets.workspace import Project
 
-    assert isinstance(args[2], Project)
+    assert isinstance(args[1], Project)
 
 
 def test_run_single_target(tmp_path):
@@ -105,10 +105,10 @@ def test_run_single_target(tmp_path):
     mock_dispatch.assert_called_once()
     args = mock_dispatch.call_args[0]
     assert args[0] == "aet"
-    # Third positional is now a Project, not a dict
+    # Second positional is the Project (signature: _dispatch(name, project))
     from nhf_spatial_targets.workspace import Project
 
-    assert isinstance(args[2], Project)
+    assert isinstance(args[1], Project)
 
 
 def test_run_unknown_target(tmp_path):
@@ -720,5 +720,5 @@ def test_run_runoff_smoke(tmp_path):
 
     workdir = _make_runoff_project(tmp_path)
     project = load(workdir)
-    _dispatch("runoff", {}, project)
+    _dispatch("runoff", project)
     assert (workdir / "targets" / "runoff_targets.nc").exists()
