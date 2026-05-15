@@ -1,7 +1,7 @@
 # nhf-spatial-targets — Claude Development Guide
 
 ## Project Purpose
-Build curated calibration target datasets for the USGS National Hydrologic Model (NHM) by spatially aggregating gridded source datasets to an HRU fabric using gdptools. Targets documented in USGS TM 6-B10 (Hay et al., 2022): runoff, AET, recharge, soil moisture, snow-covered area.
+Build curated calibration target datasets for the USGS National Hydrologic Model (NHM) by spatially aggregating gridded source datasets to an HRU fabric using gdptools. Targets documented in USGS TM 6-B10 (Hay et al., 2022): runoff, AET, recharge, soil moisture, snow-covered area. A sixth target, snow water equivalent (SWE), extends the pipeline beyond the TM 6-B10 set.
 
 ## Environment & Commands
 
@@ -79,7 +79,7 @@ src/nhf_spatial_targets/
   fetch/           # per-source download modules (one file per source, ~10 modules)
   aggregate/       # gdptools area-weighted aggregation (one file per source, ~15 modules)
   normalize/       # normalization and range-bound methods
-  targets/         # per-variable target builders (run/aet/rch/som/sca)
+  targets/         # per-variable target builders (run/aet/rch/som/sca/swe)
 tests/
 ```
 

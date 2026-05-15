@@ -75,7 +75,8 @@ def test_run_dispatches_enabled_targets(tmp_path):
         "  aet:\n    enabled: false\n"
         "  recharge:\n    enabled: false\n"
         "  soil_moisture:\n    enabled: false\n"
-        "  snow_covered_area:\n    enabled: false\n",
+        "  snow_covered_area:\n    enabled: false\n"
+        "  snow_water_equivalent:\n    enabled: false\n",
     )
 
     with patch("nhf_spatial_targets.cli._dispatch") as mock_dispatch:
@@ -142,6 +143,26 @@ def test_run_skips_not_implemented_targets(tmp_path, capsys):
     assert "runoff" in called_names
     err = capsys.readouterr().err
     assert "WARNING" in err and "aet" in err and "skipping" in err
+
+
+def test_run_swe_target_routes_to_stub_and_skips(tmp_path, capsys):
+    """SWE routes through the real _dispatch to the swe stub and is skipped.
+
+    Exercises the builders-dict entry without mocking _dispatch, so a
+    mis-keyed registration would surface as an exit-1 crash here.
+    """
+    workdir = _make_minimal_project(
+        tmp_path,
+        "targets:\n"
+        "  snow_water_equivalent:\n"
+        "    enabled: true\n"
+        "    period: 2003-01-01/2010-12-31\n",
+    )
+
+    _run("run", "--project-dir", str(workdir), "--target", "snow_water_equivalent")
+
+    err = capsys.readouterr().err
+    assert "WARNING" in err and "snow_water_equivalent" in err and "skipping" in err
 
 
 # ---- init command ----------------------------------------------------------

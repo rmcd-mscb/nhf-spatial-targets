@@ -125,7 +125,7 @@ def _dispatch(
     project: "Project",
 ) -> None:
     """Dispatch to the appropriate target builder module."""
-    from nhf_spatial_targets.targets import aet, rch, run, sca, som
+    from nhf_spatial_targets.targets import aet, rch, run, sca, som, swe
 
     if name == "runoff":
         run.build(project)
@@ -136,6 +136,7 @@ def _dispatch(
         "recharge": rch.build,
         "soil_moisture": som.build,
         "snow_covered_area": sca.build,
+        "snow_water_equivalent": swe.build,
     }
     if name not in builders:
         print(f"Error: No builder registered for target: {name}", file=sys.stderr)

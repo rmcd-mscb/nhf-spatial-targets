@@ -58,6 +58,7 @@ def _write_config(
             "recharge": {"period": "2000-01-01/2010-12-31"},
             "soil_moisture": {"period": "2000-01-01/2010-12-31"},
             "snow_covered_area": {"period": "2000-01-01/2010-12-31"},
+            "snow_water_equivalent": {"period": "2000-01-01/2010-12-31"},
         },
     }
     if overrides:
