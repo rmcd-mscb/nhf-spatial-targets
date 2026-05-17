@@ -409,6 +409,167 @@ def test_build_emits_id_col_sorted_target_ncs(tmp_path: Path):
             )
 
 
+# ---------------------------------------------------------------------------
+# Year-chunked build (PR #139)
+# ---------------------------------------------------------------------------
+
+
+def test_build_writes_per_year_intermediates(tmp_path: Path):
+    """Year-chunked build leaves per-year NCs under .swe_intermediates/
+    for forensic inspection after the stitch.
+    """
+    from nhf_spatial_targets.targets.swe import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_swe_project(
+        tmp_path,
+        period="2003-12-01/2004-01-31",  # spans two calendar years
+        fabric_token="or",
+        nn_fill=False,
+    )
+    project = load(workdir)
+    build(project)
+    inter = project.targets_dir() / ".swe_intermediates"
+    assert inter.is_dir()
+    year_files = sorted(inter.glob("swe_targets_*.nc"))
+    assert [p.name for p in year_files] == [
+        "swe_targets_2003.nc",
+        "swe_targets_2004.nc",
+    ]
+
+
+def test_build_stitched_time_index_is_contiguous_across_year_boundary(
+    tmp_path: Path,
+):
+    """Stitched output has every day from period_start to period_end
+    with no gap at the year boundary.
+    """
+    from nhf_spatial_targets.targets.swe import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_swe_project(
+        tmp_path,
+        period="2003-12-30/2004-01-02",
+        fabric_token="or",
+        nn_fill=False,
+    )
+    project = load(workdir)
+    build(project)
+    with xr.open_dataset(project.targets_dir() / "swe_targets.nc") as ds:
+        times = pd.DatetimeIndex(ds["time"].values)
+        expected = pd.date_range("2003-12-30", "2004-01-02", freq="D")
+        assert list(times) == list(expected)
+        # All 4 sources present in both years; n_sources stays at 4.
+        assert (ds["n_sources"].values == 4).all()
+
+
+def test_build_per_year_n_sources_varies_with_source_coverage(tmp_path: Path):
+    """When SNODAS only covers 2004 (not 2003), the per-year build
+    drops it for 2003 (n_sources=3) and includes it for 2004 (n_sources=4).
+    Verifies the per-year period-union semantics work as advertised.
+    """
+    from nhf_spatial_targets.targets.swe import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_swe_project(
+        tmp_path,
+        period="2003-12-30/2004-01-02",
+        fabric_token="or",
+        nn_fill=False,
+    )
+    # Remove the SNODAS 2003 NC so 2003 has only 3 sources.
+    snodas_2003 = workdir / "data" / "aggregated" / "snodas" / "snodas_2003_agg.nc"
+    snodas_2003.unlink()
+
+    project = load(workdir)
+    build(project)
+    with xr.open_dataset(project.targets_dir() / "swe_targets.nc") as ds:
+        ns_2003 = ds["n_sources"].sel(time="2003-12-31").values
+        ns_2004 = ds["n_sources"].sel(time="2004-01-01").values
+        assert (ns_2003 == 3).all(), (
+            f"2003-12-31 should have 3 sources (snodas missing), got {ns_2003}"
+        )
+        assert (ns_2004 == 4).all(), f"2004-01-01 should have 4 sources, got {ns_2004}"
+
+
+def test_build_year_chunked_idempotent_skips_existing_intermediates(
+    tmp_path: Path,
+):
+    """A re-run after partial completion (or mid-OOM) skips per-year
+    NCs that already exist. Useful for recovering from OOM mid-build
+    without re-doing every year.
+    """
+    from nhf_spatial_targets.targets.swe import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_swe_project(
+        tmp_path,
+        period="2003-12-30/2004-01-02",
+        fabric_token="or",
+        nn_fill=False,
+    )
+    project = load(workdir)
+    build(project)
+    inter = project.targets_dir() / ".swe_intermediates"
+    # Capture mtimes; re-running build must NOT re-touch them.
+    pre_mtimes = {p.name: p.stat().st_mtime_ns for p in inter.glob("swe_targets_*.nc")}
+    build(project)
+    post_mtimes = {p.name: p.stat().st_mtime_ns for p in inter.glob("swe_targets_*.nc")}
+    assert pre_mtimes == post_mtimes, (
+        "Per-year intermediates were re-touched on idempotent re-build"
+    )
+
+
+def test_iter_period_years_clips_to_period_bounds():
+    """First and last year ranges are clipped to mid-year period bounds."""
+    from nhf_spatial_targets.targets._common import iter_period_years
+
+    out = iter_period_years("1980-06-15", "1982-03-20")
+    assert out == [
+        (1980, "1980-06-15", "1980-12-31"),
+        (1981, "1981-01-01", "1981-12-31"),
+        (1982, "1982-01-01", "1982-03-20"),
+    ]
+
+
+def test_iter_period_years_single_year():
+    from nhf_spatial_targets.targets._common import iter_period_years
+
+    assert iter_period_years("2020-03-01", "2020-04-30") == [
+        (2020, "2020-03-01", "2020-04-30"),
+    ]
+
+
+def test_iter_period_years_rejects_reversed_period():
+    from nhf_spatial_targets.targets._common import iter_period_years
+
+    with pytest.raises(ValueError, match="precedes start"):
+        iter_period_years("2025-01-01", "2024-12-31")
+
+
+def test_stitched_output_global_attrs_carry_target_metadata(tmp_path: Path):
+    """The stitch step overlays the target's `extra_global_attrs` on
+    top of the per-year files' attrs, so the canonical output keeps the
+    PR-#135 metadata (source, period, fabric_token, etc).
+    """
+    from nhf_spatial_targets.targets.swe import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_swe_project(
+        tmp_path,
+        period="2003-12-30/2004-01-02",
+        fabric_token="or",
+        nn_fill=False,
+    )
+    project = load(workdir)
+    build(project)
+    with xr.open_dataset(project.targets_dir() / "swe_targets.nc") as ds:
+        assert ds.attrs["period"] == "2003-12-30/2004-01-02"
+        assert ds.attrs["fabric_token"] == "or"
+        assert "Margulis" in ds.attrs["source"]
+        assert "stitched from" in ds.attrs["history"]
+
+
 def test_build_nn_fill_actually_fills_nan_cells(tmp_path: Path):
     """End-to-end NN-fill: aggregated NC with NaN at one HRU/day produces
     a *_nn_filled.nc with that cell filled and nn_filled=1.
