@@ -283,6 +283,68 @@ def test_compute_hru_area_and_centroids_lat_lon_in_range(tmp_path: Path):
     assert df["centroid_lon"].between(-106, -104).all()
 
 
+def test_compute_hru_centroids_returns_centroids_only(tmp_path: Path):
+    """centroids-only helper omits area_m2."""
+    from nhf_spatial_targets.targets._common import compute_hru_centroids
+
+    workdir = _make_project_with_fabric(tmp_path)
+    project = load(workdir)
+    df = compute_hru_centroids(project)
+    assert df.index.name == "nhm_id"
+    assert set(df.columns) == {
+        "centroid_x",
+        "centroid_y",
+        "centroid_lat",
+        "centroid_lon",
+    }
+    assert "area_m2" not in df.columns
+    assert len(df) == 3
+
+
+def test_compute_hru_centroids_matches_combined_helper(tmp_path: Path):
+    """Centroid columns from the lighter helper match the combined helper."""
+    from nhf_spatial_targets.targets._common import (
+        compute_hru_area_and_centroids,
+        compute_hru_centroids,
+    )
+
+    workdir = _make_project_with_fabric(tmp_path)
+    project = load(workdir)
+    light = compute_hru_centroids(project)
+    full = compute_hru_area_and_centroids(project)
+    for col in ("centroid_x", "centroid_y", "centroid_lat", "centroid_lon"):
+        np.testing.assert_array_equal(light[col].values, full[col].values)
+    np.testing.assert_array_equal(light.index.values, full.index.values)
+
+
+def test_compute_hru_areas_returns_area_only(tmp_path: Path):
+    """area-only helper omits centroid columns."""
+    from nhf_spatial_targets.targets._common import compute_hru_areas
+
+    workdir = _make_project_with_fabric(tmp_path)
+    project = load(workdir)
+    df = compute_hru_areas(project)
+    assert df.index.name == "nhm_id"
+    assert set(df.columns) == {"area_m2"}
+    assert len(df) == 3
+    assert (df["area_m2"] > 0).all()
+
+
+def test_compute_hru_areas_matches_combined_helper(tmp_path: Path):
+    """area_m2 from the lighter helper matches the combined helper exactly."""
+    from nhf_spatial_targets.targets._common import (
+        compute_hru_area_and_centroids,
+        compute_hru_areas,
+    )
+
+    workdir = _make_project_with_fabric(tmp_path)
+    project = load(workdir)
+    light = compute_hru_areas(project)
+    full = compute_hru_area_and_centroids(project)
+    np.testing.assert_array_equal(light["area_m2"].values, full["area_m2"].values)
+    np.testing.assert_array_equal(light.index.values, full.index.values)
+
+
 def _toy_target_dataset(
     id_col: str = "nhm_id",
 ) -> xr.Dataset:
