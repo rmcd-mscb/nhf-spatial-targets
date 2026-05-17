@@ -18,6 +18,12 @@ notebooks (PR #68) and the catalog corrections that fell out of them.
 Several target builders are still stubs raising `NotImplementedError`;
 the recipes below are guidance for filling them in.
 
+For **which time window each target can be built over**, see
+[`target-period-coverage.md`](target-period-coverage.md) — per-source
+on-disk coverage and the resulting max-overlap intersection per target,
+plus the `normalize_period` vs `period` distinction for the
+normalized_minmax targets (recharge, soil_moisture).
+
 ---
 
 ## Per-target recipes
