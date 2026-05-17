@@ -82,6 +82,8 @@ targets:
     normalize: true
     normalize_period: "2000-01-01/2009-12-31"   # verify vs Appendix 1
     output_file: recharge_targets.nc
+    nn_fill: true
+    nn_max_candidates: 10
 
   soil_moisture:
     enabled: true
@@ -94,11 +96,19 @@ targets:
       - monthly
       - annual
     period: "1982-01-01/2010-12-31"
+    # Independent normalization window; leave null (or omit) to use `period`.
+    # Values in `period` outside this window may produce normalized values
+    # < 0 or > 1 by design (visibly out-of-range, not silently re-scaled).
+    normalize_period: null
     prms_variable: soil_rechr
     range_method: normalized_minmax
     normalize: true
     normalize_by: calendar_month   # monthly normalization per calendar month
+    # Two NCs are written derived from this base name:
+    #   <base>_monthly.nc and <base>_annual.nc (plus *_nn_filled.nc).
     output_file: soil_moisture_targets.nc
+    nn_fill: true
+    nn_max_candidates: 10
 
   snow_covered_area:
     enabled: true

@@ -694,3 +694,133 @@ def test_aet_target_module_exposes_well_formed_shims():
     for key in ("ssebop", "mwbm_climgrid"):
         out = by_key[key].to_common_units(da)
         assert out.attrs.get("units") == "mm"
+
+
+# ---------------------------------------------------------------------------
+# parse_period
+# ---------------------------------------------------------------------------
+
+
+def test_parse_period_splits_endpoints():
+    from nhf_spatial_targets.targets._common import parse_period
+
+    assert parse_period("2000-01-01/2009-12-31") == ("2000-01-01", "2009-12-31")
+    assert parse_period("2000/2009") == ("2000", "2009")
+
+
+def test_parse_period_strips_whitespace():
+    from nhf_spatial_targets.targets._common import parse_period
+
+    assert parse_period("  2000-01-01 / 2009-12-31  ") == (
+        "2000-01-01",
+        "2009-12-31",
+    )
+
+
+def test_parse_period_raises_on_missing_slash():
+    from nhf_spatial_targets.targets._common import parse_period
+
+    with pytest.raises(ValueError, match="Expected 'YYYY-MM-DD"):
+        parse_period("2000-01-01")
+
+
+# ---------------------------------------------------------------------------
+# check_hru_coords  (consider-2 follow-up; nit-5 test coverage)
+# ---------------------------------------------------------------------------
+
+
+def test_check_hru_coords_returns_none_when_coords_match():
+    """Exact-match returns None (no raise)."""
+    from nhf_spatial_targets.targets._common import check_hru_coords
+
+    fabric_ids = np.array([1, 2, 3], dtype=np.int32)
+    da = xr.DataArray(
+        np.zeros(3, dtype=np.float32),
+        dims=("nhm_id",),
+        coords={"nhm_id": fabric_ids},
+    )
+    # Returning None is the contract; no exception means success.
+    assert check_hru_coords(da, fabric_ids, "nhm_id", "test_source") is None
+
+
+def test_check_hru_coords_raises_on_same_set_different_order():
+    """Permuted-but-same-set raises a 'canonical-sort regression' message."""
+    from nhf_spatial_targets.targets._common import check_hru_coords
+
+    fabric_ids = np.array([1, 2, 3], dtype=np.int32)
+    da = xr.DataArray(
+        np.zeros(3, dtype=np.float32),
+        dims=("nhm_id",),
+        coords={"nhm_id": np.array([3, 1, 2], dtype=np.int32)},  # permuted
+    )
+    with pytest.raises(ValueError, match="canonical-sort invariant"):
+        check_hru_coords(da, fabric_ids, "nhm_id", "test_source")
+
+
+def test_check_hru_coords_raises_on_different_sets():
+    """Different sets raise a 'Re-aggregate' message."""
+    from nhf_spatial_targets.targets._common import check_hru_coords
+
+    fabric_ids = np.array([1, 2, 3], dtype=np.int32)
+    da = xr.DataArray(
+        np.zeros(3, dtype=np.float32),
+        dims=("nhm_id",),
+        coords={"nhm_id": np.array([1, 2, 99], dtype=np.int32)},
+    )
+    with pytest.raises(ValueError, match="Re-aggregate 'test_source'"):
+        check_hru_coords(da, fabric_ids, "nhm_id", "test_source")
+
+
+def test_check_hru_coords_raises_on_different_length():
+    """Different-length coords go through the 'different sets' branch."""
+    from nhf_spatial_targets.targets._common import check_hru_coords
+
+    fabric_ids = np.array([1, 2, 3], dtype=np.int32)
+    da = xr.DataArray(
+        np.zeros(2, dtype=np.float32),
+        dims=("nhm_id",),
+        coords={"nhm_id": np.array([1, 2], dtype=np.int32)},
+    )
+    with pytest.raises(ValueError, match="differ between fabric and source"):
+        check_hru_coords(da, fabric_ids, "nhm_id", "test_source")
+
+
+# ---------------------------------------------------------------------------
+# build_n_sources_attrs  (consider-2 follow-up; nit-1 docstring/count check)
+# ---------------------------------------------------------------------------
+
+
+def test_build_n_sources_attrs_three_sources():
+    """3-source target → flag_values=[0,1,2,3] and meanings 'none one two three'."""
+    from nhf_spatial_targets.targets._common import build_n_sources_attrs
+
+    attrs = build_n_sources_attrs(3)
+    assert attrs["units"] == "1"
+    assert attrs["long_name"] == "number of finite source contributions"
+    assert attrs["flag_values"] == [0, 1, 2, 3]
+    assert attrs["flag_meanings"] == "none one two three"
+    assert attrs["coordinates"] == "centroid_lat centroid_lon"
+
+
+def test_build_n_sources_attrs_one_source():
+    """Single-source target → flag_values=[0,1], meanings 'none one'."""
+    from nhf_spatial_targets.targets._common import build_n_sources_attrs
+
+    attrs = build_n_sources_attrs(1)
+    assert attrs["flag_values"] == [0, 1]
+    assert attrs["flag_meanings"] == "none one"
+
+
+def test_build_n_sources_attrs_custom_coords():
+    from nhf_spatial_targets.targets._common import build_n_sources_attrs
+
+    attrs = build_n_sources_attrs(2, ancillary_coords="lat lon")
+    assert attrs["coordinates"] == "lat lon"
+
+
+def test_build_n_sources_attrs_raises_when_count_exceeds_label_vocab():
+    """6+ sources outpace the 'none..five' vocabulary and must raise."""
+    from nhf_spatial_targets.targets._common import build_n_sources_attrs
+
+    with pytest.raises(ValueError, match="5-source label vocabulary"):
+        build_n_sources_attrs(6)

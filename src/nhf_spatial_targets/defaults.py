@@ -82,6 +82,11 @@ DEFAULTS: dict = {
             "sources": ["merra2", "ncep_ncar", "nldas_mosaic", "nldas_noah"],
             "time_step": ["monthly", "annual"],
             "period": None,
+            # If null, defaults to `period` (whole-period normalization).
+            # Set independently to extend the output time axis past the
+            # calibration-period climatology — values outside the window
+            # may then produce normalized values < 0 or > 1, by design.
+            "normalize_period": None,
             "prms_variable": "soil_rechr",
             "range_method": "normalized_minmax",
             "normalize": True,
