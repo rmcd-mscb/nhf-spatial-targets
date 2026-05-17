@@ -22,7 +22,6 @@ finite HRU's value at the same time step (cKDTree donor walk in
 from __future__ import annotations
 
 import logging
-from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -30,10 +29,12 @@ import xarray as xr
 
 from nhf_spatial_targets.normalize.methods import nn_fill_bounds
 from nhf_spatial_targets.targets._common import (
+    SourceShim,
     compute_hru_area_and_centroids,
     multi_source_nanminmax,
     read_aggregated_source,
     reindex_to_month_start,
+    shims_by_key,
     write_target_nc,
 )
 from nhf_spatial_targets.workspace import Project
@@ -43,20 +44,6 @@ logger = logging.getLogger(__name__)
 
 # 1 m³/day = (1/86400) m³/s = (35.3147/86400) ft³/s
 _M3_PER_DAY_TO_CFS = 35.3146667 / 86400.0
-
-# Per-source variable name in the aggregated NC.
-_SOURCE_VAR: dict[str, str] = {
-    "era5_land": "ro",
-    "gldas_noah_v21_monthly": "runoff_total",
-    "mwbm_climgrid": "runoff",
-}
-
-# Per-source human-readable description for the output NC's global ``source`` attr.
-_SOURCE_DESCRIPTION: dict[str, str] = {
-    "era5_land": "ERA5-Land ro",
-    "gldas_noah_v21_monthly": "GLDAS-2.1 NOAH runoff_total (Qs_acc + Qsb_acc, summed at consolidation)",
-    "mwbm_climgrid": "MWBM ClimGrid runoff",
-}
 
 
 # ---------------------------------------------------------------------------
@@ -99,11 +86,30 @@ def mwbm_to_mm_per_month(da: xr.DataArray) -> xr.DataArray:
     return out
 
 
-_TO_MM: dict[str, Callable[[xr.DataArray], xr.DataArray]] = {
-    "era5_land": era5_to_mm_per_month,
-    "gldas_noah_v21_monthly": gldas_to_mm_per_month,
-    "mwbm_climgrid": mwbm_to_mm_per_month,
-}
+# Per-source registry: (source_key, aggregated_var, description, to_mm shim).
+# `shims_by_key(SHIMS)` is used at build time for O(1) lookup.
+SHIMS: tuple[SourceShim, ...] = (
+    SourceShim(
+        source_key="era5_land",
+        aggregated_var="ro",
+        description="ERA5-Land ro",
+        to_common_units=era5_to_mm_per_month,
+    ),
+    SourceShim(
+        source_key="gldas_noah_v21_monthly",
+        aggregated_var="runoff_total",
+        description=(
+            "GLDAS-2.1 NOAH runoff_total (Qs_acc + Qsb_acc, summed at consolidation)"
+        ),
+        to_common_units=gldas_to_mm_per_month,
+    ),
+    SourceShim(
+        source_key="mwbm_climgrid",
+        aggregated_var="runoff",
+        description="MWBM ClimGrid runoff",
+        to_common_units=mwbm_to_mm_per_month,
+    ),
+)
 
 
 def mm_per_month_to_cfs(da: xr.DataArray, hru_area_m2: xr.DataArray) -> xr.DataArray:
@@ -177,16 +183,21 @@ def build(project: Project) -> None:
     # Fabric HRU IDs as a numpy array for coord-agreement checks.
     fabric_hru_ids = hru_meta.index.values
 
+    shims = shims_by_key(SHIMS)
     sources_cfs: dict[str, xr.DataArray] = {}
     for src in sources:
-        if src not in _SOURCE_VAR:
+        if src not in shims:
             raise ValueError(
                 f"runoff.sources includes unknown source '{src}'. "
-                f"Known: {sorted(_SOURCE_VAR.keys())}"
+                f"Known: {sorted(shims)}"
             )
-        var = _SOURCE_VAR[src]
+        shim = shims[src]
         da_native = read_aggregated_source(
-            project, src, var, period, chunks={"time": chunk_months, id_col: -1}
+            project,
+            shim.source_key,
+            shim.aggregated_var,
+            period,
+            chunks={"time": chunk_months, id_col: -1},
         )
         # Validate that the source's HRU IDs match the fabric before any
         # arithmetic that would silently broadcast/intersect mismatched coords.
@@ -217,7 +228,7 @@ def build(project: Project) -> None:
                 f"(first={src_hru_ids[0]}, last={src_hru_ids[-1]}). "
                 f"Re-aggregate '{src}' against the current fabric."
             )
-        da_mm = _TO_MM[src](da_native)
+        da_mm = shim.to_common_units(da_native)
         da_cfs = mm_per_month_to_cfs(da_mm, hru_area_da)
         sources_cfs[src] = reindex_to_month_start(da_cfs, master_idx)
 
@@ -309,7 +320,7 @@ def build(project: Project) -> None:
     ds[id_col].attrs["cf_role"] = "timeseries_id"
 
     extra_attrs = {
-        "source": "; ".join(_SOURCE_DESCRIPTION[s] for s in sources),
+        "source": "; ".join(shims[s].description for s in sources),
         "references": "Hay et al. 2022, doi:10.3133/tm6B10",
         "fabric": project.config["fabric"]["path"],
         "fabric_sha256": project.fabric.get("sha256", ""),
