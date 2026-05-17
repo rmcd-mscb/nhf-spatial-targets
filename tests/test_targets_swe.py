@@ -550,7 +550,8 @@ def test_iter_period_years_rejects_reversed_period():
 def test_stitched_output_global_attrs_carry_target_metadata(tmp_path: Path):
     """The stitch step overlays the target's `extra_global_attrs` on
     top of the per-year files' attrs, so the canonical output keeps the
-    PR-#135 metadata (source, period, fabric_token, etc).
+    PR-#135 metadata (source, period, fabric_token, etc) and strips
+    per-year-only attrs that would mislead about the file's scope.
     """
     from nhf_spatial_targets.targets.swe import build
     from nhf_spatial_targets.workspace import load
@@ -568,6 +569,23 @@ def test_stitched_output_global_attrs_carry_target_metadata(tmp_path: Path):
         assert ds.attrs["fabric_token"] == "or"
         assert "Margulis" in ds.attrs["source"]
         assert "stitched from" in ds.attrs["history"]
+        # PR #139 review must-fix: year_chunk is set on every per-year
+        # intermediate by _build_year; xr.open_mfdataset's default
+        # combine_attrs='override' would leak the first year's value
+        # into the stitched canonical file. The stitch helper must
+        # pop it so the canonical file doesn't mislead about its scope.
+        assert "year_chunk" not in ds.attrs, (
+            "year_chunk is a per-year-intermediate attr; must not leak "
+            "to the canonical stitched file"
+        )
+
+    # And: the per-year intermediates DO carry year_chunk (regression
+    # guard — losing this would hide forensic info on the per-year files).
+    inter = project.targets_dir() / ".swe_intermediates"
+    with xr.open_dataset(inter / "swe_targets_2003.nc") as ds_2003:
+        assert ds_2003.attrs.get("year_chunk") == 2003
+    with xr.open_dataset(inter / "swe_targets_2004.nc") as ds_2004:
+        assert ds_2004.attrs.get("year_chunk") == 2004
 
 
 def test_build_nn_fill_actually_fills_nan_cells(tmp_path: Path):

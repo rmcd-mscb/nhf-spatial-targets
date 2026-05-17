@@ -984,12 +984,23 @@ def stitch_year_chunks_to_target(
     ds = xr.open_mfdataset(
         [str(p) for p in intermediate_files],
         combine="by_coords",
-        join="outer",
+        # `join="exact"` mirrors the project's defensive-failure pattern
+        # in `check_hru_coords`: a coord-set mismatch across per-year
+        # files indicates per-year-build corruption (fabric drift,
+        # weight-cache poisoning) and should fail loud, not silently
+        # broadcast NaN on the union as `join="outer"` would.
+        join="exact",
         chunks={"time": time_chunk_days, sort_dim: -1},
         engine="netcdf4",
     )
     try:
         ds = ds.sortby(sort_dim)
+        # `combine_attrs="override"` (the open_mfdataset default) keeps
+        # the first file's attrs, which include per-year-only attrs
+        # like ``year_chunk`` that don't apply to the stitched
+        # multi-year output. Strip them before the canonical attrs are
+        # applied so the final NC reports its actual scope honestly.
+        ds.attrs.pop("year_chunk", None)
         ds.attrs.setdefault("Conventions", "CF-1.6")
         ds.attrs["title"] = title
         ds.attrs["history"] = (

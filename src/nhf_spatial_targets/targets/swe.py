@@ -44,7 +44,9 @@ nearest finite HRU's value at the same day (cKDTree donor walk in
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import xarray as xr
 
@@ -361,11 +363,11 @@ def _build_year(
     sources: list[str],
     shims: dict[str, SourceShim],
     hru_meta: pd.DataFrame,
-    fabric_hru_ids,
+    fabric_hru_ids: np.ndarray,
     id_col: str,
     n_sources_count: int,
     extra_attrs: dict,
-    intermediates_dir,
+    intermediates_dir: Path,
     nn_fill: bool,
     nn_max_candidates: int,
 ) -> None:

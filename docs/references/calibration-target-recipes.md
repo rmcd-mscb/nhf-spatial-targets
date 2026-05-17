@@ -556,6 +556,23 @@ verify `n_sources` matches expectations across the period, then
 extend to the full window. The smoke-test cost is small and
 surfaces unit / fabric_scope / coverage bugs cheaply.
 
+**NN-fill is per-year.** Each year's intermediate runs its own
+cKDTree donor walk, so an HRU that's all-NaN throughout year *Y*
+cannot inherit a donor from year *Y±1*. This matches the
+single-shot pattern's behaviour (NN-fill there also operates per
+time-step), so there's no regression — but it's worth knowing if
+you see a sparsely-covered HRU left unfilled in a year where every
+contributing source happened to be NaN. Such HRUs are rare in
+practice; SWE coverage on CONUS is essentially complete across
+daymet + era5_land_sd from 1980 onward.
+
+**Concurrent builds — don't.** The year-chunked builder doesn't
+file-lock `.swe_intermediates/`. Two SLURM jobs targeting the same
+project would race on per-year writes and may corrupt intermediates
+or stitch. Operators should not submit overlapping SWE builds for
+the same project; if a build is in flight and needs adjusting,
+either let it finish (idempotent on resubmit) or `scancel` first.
+
 ---
 
 ## Aggregation, masked_mean, and target-time NN-fill
