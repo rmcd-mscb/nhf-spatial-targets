@@ -1,21 +1,11 @@
-"""Tests for the snow water equivalent calibration target."""
+"""Tests for the snow water equivalent calibration target (catalog-level).
+
+End-to-end builder behaviour lives in ``test_targets_swe.py``; this file
+keeps only the catalog-level invariants that should hold regardless of
+builder implementation status.
+"""
 
 from __future__ import annotations
-
-import pytest
-
-
-def test_swe_build_is_stub():
-    """The SWE target builder is a stub until implemented.
-
-    Builder signature is unified across all targets on ``build(project)``;
-    a sentinel ``object()`` is enough to reach the ``NotImplementedError``
-    without needing a real Project.
-    """
-    from nhf_spatial_targets.targets.swe import build
-
-    with pytest.raises(NotImplementedError):
-        build(object())
 
 
 def test_swe_variable_lists_four_sources():

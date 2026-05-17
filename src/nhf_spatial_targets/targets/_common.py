@@ -230,6 +230,37 @@ def reindex_to_month_start(
     return canon.reindex(time=master_index)
 
 
+def reindex_to_day_start(
+    da: xr.DataArray, master_index: pd.DatetimeIndex
+) -> xr.DataArray:
+    """Reindex a daily DataArray onto a master ``freq="D"`` index.
+
+    Source timestamps may be midnight (SNODAS, ERA5-Land daily, Margulis)
+    or noon (Daymet — calendar-day mean). Both convey "which calendar
+    day" unambiguously; this helper normalises by stripping the time of
+    day (``.dt.floor("D")``) before reindexing.
+
+    Days in ``master_index`` that the source does not cover come back as
+    NaN — this is what gives the SWE target its period-union semantics:
+    a source whose record ends in 2020 but is asked through 2024 simply
+    contributes nothing for the post-2020 cells.
+    """
+    if not isinstance(master_index, pd.DatetimeIndex):
+        raise TypeError(
+            f"master_index must be a pandas.DatetimeIndex, got "
+            f"{type(master_index).__name__}"
+        )
+    if master_index.freqstr != "D":
+        raise ValueError(
+            f"master_index must have freq='D' (daily); got "
+            f"freq={master_index.freqstr!r}. Build it with "
+            f"pd.date_range(start, end, freq='D')."
+        )
+    day_times = pd.DatetimeIndex(da.time.values).floor("D")
+    canon = da.assign_coords(time=day_times)
+    return canon.reindex(time=master_index)
+
+
 def multi_source_nanminmax(
     sources: dict[str, xr.DataArray],
 ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray]:

@@ -108,6 +108,8 @@ agg-mod10c1      = { cmd = "nhf-targets agg mod10c1",      description = "Aggreg
 agg-daymet       = { cmd = "nhf-targets agg daymet",       description = "Aggregate Daymet V4 daily SWE (per region) to HRU fabric" }
 agg-snodas       = { cmd = "nhf-targets agg snodas",       description = "Aggregate SNODAS daily SWE to HRU fabric" }
 agg-mwbm-climgrid = { cmd = "nhf-targets agg mwbm-climgrid", description = "Aggregate USGS MWBM (ClimGrid-forced) monthly outputs to HRU fabric" }
+agg-era5-land-sd = { cmd = "nhf-targets agg era5-land-sd", description = "Aggregate ERA5-Land daily snow depth water equivalent to HRU fabric" }
+agg-margulis-wus-sr = { cmd = "nhf-targets agg margulis-wus-sr", description = "Aggregate Margulis WUS-SR daily SWE to HRU fabric (OR fabric only)" }
 agg-all          = { cmd = "nhf-targets agg all",          description = "Aggregate all tier-1/2 sources to HRU fabric sequentially" }
 
 # Catalog inspection

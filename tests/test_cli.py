@@ -145,24 +145,26 @@ def test_run_skips_not_implemented_targets(tmp_path, capsys):
     assert "WARNING" in err and "aet" in err and "skipping" in err
 
 
-def test_run_swe_target_routes_to_stub_and_skips(tmp_path, capsys):
-    """SWE routes through the real _dispatch to the swe stub and is skipped.
+def test_run_sca_target_routes_to_stub_and_skips(tmp_path, capsys):
+    """SCA routes through the real _dispatch to the sca stub and is skipped.
 
     Exercises the builders-dict entry without mocking _dispatch, so a
-    mis-keyed registration would surface as an exit-1 crash here.
+    mis-keyed registration would surface as an exit-1 crash here. SCA
+    is the last remaining target stub (PRMSobjfun.f CI-bounds formula
+    unconfirmed — see CLAUDE.md "Known Gaps").
     """
     workdir = _make_minimal_project(
         tmp_path,
         "targets:\n"
-        "  snow_water_equivalent:\n"
+        "  snow_covered_area:\n"
         "    enabled: true\n"
-        "    period: 2003-01-01/2010-12-31\n",
+        "    period: 2000-01-01/2010-12-31\n",
     )
 
-    _run("run", "--project-dir", str(workdir), "--target", "snow_water_equivalent")
+    _run("run", "--project-dir", str(workdir), "--target", "snow_covered_area")
 
     err = capsys.readouterr().err
-    assert "WARNING" in err and "snow_water_equivalent" in err and "skipping" in err
+    assert "WARNING" in err and "snow_covered_area" in err and "skipping" in err
 
 
 # ---- init command ----------------------------------------------------------

@@ -727,16 +727,20 @@ def aggregate_source(
     """
     workdir = Path(workdir)
     project = load_project(workdir)
-    meta = catalog_source(adapter.source_key)
+    # Adapter that shares another source's catalog entry and raw dir
+    # (e.g. era5_land_sd reusing era5_land's metadata and daily/ NCs)
+    # uses catalog_key / raw_dir_key here; for the 1:1 case both default
+    # to source_key in SourceAdapter.__post_init__.
+    meta = catalog_source(adapter.catalog_key)
 
     _migrate_legacy_layout(project, adapter.source_key)
 
-    raw_dir = project.raw_dir(adapter.source_key)
+    raw_dir = project.raw_dir(adapter.raw_dir_key)
     files = sorted(raw_dir.glob(adapter.files_glob))
     if not files:
         raise FileNotFoundError(
             f"No NC matching '{adapter.files_glob}' found in {raw_dir}. "
-            f"Run 'nhf-targets fetch {adapter.source_key}' first."
+            f"Run 'nhf-targets fetch {adapter.raw_dir_key}' first."
         )
 
     # Fail fast on missing declared variables and on source-grid drift across

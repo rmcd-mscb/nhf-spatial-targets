@@ -403,6 +403,107 @@ Per-HRU per-day:
 
 ---
 
+### 6. Snow water equivalent (SWE)
+
+- **PRMS variable:** `pkwater_equiv`
+- **Sources:** Daymet V4 R1 `swe`; SNODAS `swe`; ERA5-Land `sd`;
+  Margulis WUS-SR `SWE` (Oregon fabric only).
+- **Builder:** `src/nhf_spatial_targets/targets/swe.py`
+
+**Native-unit handling**
+
+Each source is harmonised to mm in its `targets/swe.py` shim, then
+converted to inches in a single linear step at the tail end:
+
+- `daymet swe`: kg m⁻² (≡ mm water-eq), daily — passthrough.
+- `snodas swe`: kg m⁻² (≡ mm water-eq), daily — passthrough.
+- `era5_land sd`: m water-eq, daily snapshot — × 1000 → mm. NB: the
+  catalog `sd` is the **instantaneous** snow depth water equivalent
+  (`cell_methods: "time: point"`), not an accumulation — the daily
+  consolidator already uses `.mean()` of the hourly snapshots, not
+  `.sum()` (see `fetch/era5_land.py` `_VARIABLE_KIND`).
+- `margulis_wus_sr SWE`: m water-eq, daily — × 1000 → mm.
+
+The final mm → inches step matches PRMS `pkwater_equiv` PUNIT (per
+TM 6-B7 Markstrom et al. 2015).
+
+**Time conventions**
+
+Daily, day-start (00:00:00). `targets/_common.py:reindex_to_day_start`
+floors source timestamps to midnight before aligning onto the master
+daily index; the resulting `time_bnds` covers `[t, t+1day)` per CF.
+`cell_methods="time: point"` matches the instantaneous-snapshot
+semantics of every contributing source.
+
+**Spatial extent**
+
+- Daymet: NA (CONUS + parts of Canada/Mexico). HI/PR deferred.
+- SNODAS: CONUS only.
+- ERA5-Land: global; this pipeline fetches CONUS+contributing-watersheds.
+- Margulis WUS-SR: Western US ranges; **Oregon fabric only** in this
+  pipeline (`catalog/sources.yml[margulis_wus_sr].fabric_scope.fabrics: ["or"]`).
+
+**Aggregator outputs**
+
+- Daymet writes per-region per-year NCs as `daymet_<region>_<year>_agg.nc`
+  in `<project>/data/aggregated/daymet/` (NA only as of #118).
+- SNODAS writes `snodas_<year>_agg.nc` in `<project>/data/aggregated/snodas/`.
+- ERA5-Land sd uses a separate aggregated subdir to keep the daily
+  outputs from colliding with the monthly runoff aggregations:
+  `era5_land_sd_<year>_agg.nc` in
+  `<project>/data/aggregated/era5_land_sd/`. The daily aggregator
+  declares `SourceAdapter.source_key="era5_land_sd"` for storage while
+  using `catalog_key="era5_land"` and `raw_dir_key="era5_land"` so it
+  inherits the real catalog entry's CF metadata and reads from
+  `<datastore>/era5_land/daily/`.
+- Margulis writes `margulis_wus_sr_<year>_agg.nc` in
+  `<project>/data/aggregated/margulis_wus_sr/`.
+
+**Combination rule**
+
+Per-HRU per-day:
+
+1. Apply each shim's unit conversion (× 1000 for the two metres
+   sources; passthrough for the two mm sources).
+2. Convert mm → inches (÷ 25.4).
+3. Reindex each source onto the master `freq="D"` index over
+   `snow_water_equivalent.period`. Days a source doesn't cover come
+   back as NaN, contributing nothing to the multi-source min/max.
+4. Stack on a `source` dim; reduce with `skipna=True` for both
+   bounds. `lower_bound = nanmin`, `upper_bound = nanmax`; a bound is
+   defined whenever ≥1 source is finite at that cell. The companion
+   `n_sources` diagnostic carries the count.
+
+**Fabric scope enforcement**
+
+The target builder reads `project.config["fabric"].get("token")`.
+Each requested source's `catalog.source(src).get("fabric_scope")` is
+honoured — sources whose `fabrics` list does not contain the project
+token are silently dropped (with a clear log line). A missing project
+token causes every fabric-scoped source to be dropped, which is the
+safe default for non-Oregon projects that accidentally inherit the
+four-source SWE default from `defaults.py`. Typos like
+`fabric.token: oregon` (instead of `or`) raise rather than silently
+filtering, validated against `catalog.FABRIC_SCOPE_TOKENS`.
+
+**NN-fill (when applied)**
+
+If `snow_water_equivalent.nn_fill` is True (default), the per-day
+per-HRU bounds NaNs are filled by the nearest finite HRU's value at
+the same day (cKDTree donor walk in `project.area_crs`). Companion
+file: `swe_targets_nn_filled.nc` carries `nn_filled` int8 flag for
+provenance.
+
+**Time window choice**
+
+The catalog default `period: "2003/present"` is SNODAS-limited (the
+SNODAS archive begins 2003-09-30). Non-Oregon fabrics use a 3-source
+bound — daymet (1980+) ∩ era5_land sd (1979+) ∩ snodas (2003+) =
+2003-10 onward. Oregon adds margulis (1985-2020) so the 4-source
+intersection caps at 2020.
+
+---
+
 ## Aggregation, masked_mean, and target-time NN-fill
 
 The aggregation pipeline uses `gdptools` with `stat_method` set per

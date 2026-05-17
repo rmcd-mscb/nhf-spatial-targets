@@ -18,8 +18,12 @@ from cyclopts import App, Parameter
 
 from nhf_spatial_targets._logging import setup_logging
 from nhf_spatial_targets.aggregate.daymet import aggregate_daymet
-from nhf_spatial_targets.aggregate.era5_land import aggregate_era5_land
+from nhf_spatial_targets.aggregate.era5_land import (
+    aggregate_era5_land,
+    aggregate_era5_land_sd,
+)
 from nhf_spatial_targets.aggregate.gldas import aggregate_gldas
+from nhf_spatial_targets.aggregate.margulis_wus_sr import aggregate_margulis_wus_sr
 from nhf_spatial_targets.aggregate.merra2 import aggregate_merra2
 from nhf_spatial_targets.aggregate.mod10c1 import aggregate_mod10c1
 from nhf_spatial_targets.aggregate.mod16a2 import aggregate_mod16a2
@@ -1604,6 +1608,48 @@ def agg_snodas_cmd(
     _run_tier_agg(aggregate_snodas, "SNODAS", workdir, batch_size, period=period)
 
 
+@agg_app.command(name="era5-land-sd")
+def agg_era5_land_sd_cmd(
+    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    batch_size: Annotated[int, Parameter(name="--batch-size")] = 500,
+):
+    """Aggregate ERA5-Land daily snow depth water equivalent to HRU polygons.
+
+    Reads from ``<datastore>/era5_land/daily/era5_land_daily_*.nc`` and
+    writes to ``<project>/data/aggregated/era5_land_sd/`` so the daily
+    SWE outputs stay separate from the monthly runoff aggregations under
+    ``era5_land/`` (which the runoff and recharge targets consume).
+    """
+    _run_tier_agg(aggregate_era5_land_sd, "ERA5-Land sd", workdir, batch_size)
+
+
+@agg_app.command(name="margulis-wus-sr")
+def agg_margulis_wus_sr_cmd(
+    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    batch_size: Annotated[int, Parameter(name="--batch-size")] = 500,
+    period: Annotated[
+        str | None,
+        Parameter(
+            name=["--period", "-p"],
+            help=(
+                "Optional 'YYYY/YYYY' clip applied at agg time. Margulis "
+                "consolidated NCs span 1985-2020 in the datastore; pass "
+                "e.g. '2003/2020' to restrict aggregation to the SWE "
+                "target window. Omit to aggregate every year present."
+            ),
+        ),
+    ] = None,
+):
+    """Aggregate Margulis WUS-SR daily SWE to HRU polygons (Oregon-scoped)."""
+    _run_tier_agg(
+        aggregate_margulis_wus_sr,
+        "Margulis WUS-SR",
+        workdir,
+        batch_size,
+        period=period,
+    )
+
+
 @agg_app.command(name="mwbm-climgrid")
 def agg_mwbm_climgrid_cmd(
     workdir: Annotated[Path, Parameter(name=["--project-dir"])],
@@ -1674,6 +1720,8 @@ def agg_all_cmd(
         ("mod10c1", aggregate_mod10c1),
         ("snodas", aggregate_snodas),
         ("mwbm-climgrid", aggregate_mwbm_climgrid),
+        ("era5-land-sd", aggregate_era5_land_sd),
+        ("margulis-wus-sr", aggregate_margulis_wus_sr),
     ]
     for label, fn in sources:
         console.print(f"\n[bold]{'─' * 60}[/bold]")
