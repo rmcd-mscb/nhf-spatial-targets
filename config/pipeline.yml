@@ -82,6 +82,8 @@ targets:
     normalize: true
     normalize_period: "2000-01-01/2009-12-31"   # verify vs Appendix 1
     output_file: recharge_targets.nc
+    nn_fill: true
+    nn_max_candidates: 10
 
   soil_moisture:
     enabled: true
@@ -98,7 +100,11 @@ targets:
     range_method: normalized_minmax
     normalize: true
     normalize_by: calendar_month   # monthly normalization per calendar month
+    # Two NCs are written derived from this base name:
+    #   <base>_monthly.nc and <base>_annual.nc (plus *_nn_filled.nc).
     output_file: soil_moisture_targets.nc
+    nn_fill: true
+    nn_max_candidates: 10
 
   snow_covered_area:
     enabled: true
