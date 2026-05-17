@@ -600,3 +600,97 @@ def test_compute_hru_area_and_centroids_raises_on_duplicate_id_col(tmp_path: Pat
     project = load(workdir)
     with pytest.raises(ValueError, match="duplicate"):
         compute_hru_area_and_centroids(project)
+
+
+# ---------------------------------------------------------------------------
+# SourceShim / shims_by_key
+# ---------------------------------------------------------------------------
+
+
+def _identity_shim(da: xr.DataArray) -> xr.DataArray:
+    return da
+
+
+def test_source_shim_is_frozen_dataclass():
+    """SourceShim instances are immutable so SHIMS tuples can be module-level."""
+    from dataclasses import FrozenInstanceError
+
+    from nhf_spatial_targets.targets._common import SourceShim
+
+    shim = SourceShim(
+        source_key="foo",
+        aggregated_var="x",
+        description="foo",
+        to_common_units=_identity_shim,
+    )
+    with pytest.raises(FrozenInstanceError):
+        shim.source_key = "bar"  # type: ignore[misc]
+
+
+def test_shims_by_key_returns_keyed_lookup():
+    """shims_by_key indexes a SHIMS tuple by source_key."""
+    from nhf_spatial_targets.targets._common import SourceShim, shims_by_key
+
+    a = SourceShim("a", "va", "A", _identity_shim)
+    b = SourceShim("b", "vb", "B", _identity_shim)
+    out = shims_by_key((a, b))
+    assert out == {"a": a, "b": b}
+
+
+def test_shims_by_key_raises_on_duplicate_source_key():
+    """Two shims with the same key would silently shadow; must raise."""
+    from nhf_spatial_targets.targets._common import SourceShim, shims_by_key
+
+    a = SourceShim("dup", "va", "A", _identity_shim)
+    b = SourceShim("dup", "vb", "B", _identity_shim)
+    with pytest.raises(ValueError, match="Duplicate SourceShim.source_key='dup'"):
+        shims_by_key((a, b))
+
+
+def test_shims_by_key_empty_tuple_returns_empty_dict():
+    """Empty SHIMS tuple is a degenerate but valid input."""
+    from nhf_spatial_targets.targets._common import shims_by_key
+
+    assert shims_by_key(()) == {}
+
+
+def test_run_target_module_exposes_well_formed_shims():
+    """targets/run.py SHIMS registry has the expected source keys and aggregated vars."""
+    from nhf_spatial_targets.targets.run import SHIMS
+
+    by_key = {s.source_key: s for s in SHIMS}
+    assert set(by_key) == {"era5_land", "gldas_noah_v21_monthly", "mwbm_climgrid"}
+    assert by_key["era5_land"].aggregated_var == "ro"
+    assert by_key["gldas_noah_v21_monthly"].aggregated_var == "runoff_total"
+    assert by_key["mwbm_climgrid"].aggregated_var == "runoff"
+    # Each shim's to_common_units must be callable on a synthetic DataArray.
+    da = xr.DataArray(
+        np.array([[1.0]], dtype=np.float32),
+        dims=("time", "nhm_id"),
+        coords={"time": pd.DatetimeIndex(["2000-01-01"]), "nhm_id": [1]},
+        attrs={"units": "anything"},
+    )
+    for shim in SHIMS:
+        out = shim.to_common_units(da)
+        assert out.attrs.get("units") == "mm"
+
+
+def test_aet_target_module_exposes_well_formed_shims():
+    """targets/aet.py SHIMS registry has the expected source keys and aggregated vars."""
+    from nhf_spatial_targets.targets.aet import SHIMS
+
+    by_key = {s.source_key: s for s in SHIMS}
+    assert set(by_key) == {"mod16a2_v061", "ssebop", "mwbm_climgrid"}
+    assert by_key["mod16a2_v061"].aggregated_var == "ET_500m"
+    assert by_key["ssebop"].aggregated_var == "et"
+    assert by_key["mwbm_climgrid"].aggregated_var == "aet"
+    # SSEBop and MWBM are pass-throughs; verify they accept a synthetic DataArray.
+    da = xr.DataArray(
+        np.array([[1.0]], dtype=np.float32),
+        dims=("time", "nhm_id"),
+        coords={"time": pd.DatetimeIndex(["2000-01-01"]), "nhm_id": [1]},
+        attrs={"units": "anything"},
+    )
+    for key in ("ssebop", "mwbm_climgrid"):
+        out = by_key[key].to_common_units(da)
+        assert out.attrs.get("units") == "mm"

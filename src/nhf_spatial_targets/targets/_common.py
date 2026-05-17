@@ -17,6 +17,8 @@ keeps ``mm_per_month_to_cfs``); this module is unit-agnostic.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -26,6 +28,63 @@ import xarray as xr
 from nhf_spatial_targets.workspace import Project
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SourceShim:
+    """Per-source contract for a multi-source target builder.
+
+    Co-locates the three facts each target needs about a contributing
+    source: the catalog key it loads from, the variable name in the
+    aggregated NC, the human-readable label for the output NC's global
+    ``source`` attr, and the per-source unit-shim function that brings the
+    native variable into the target's common intermediate units (e.g.
+    mm/month for runoff and AET).
+
+    Target modules declare a tuple of :class:`SourceShim` instances as
+    their ``SHIMS`` constant and call :func:`shims_by_key` to look one up
+    by catalog key inside their build loop. Adding a future source is a
+    single edit — there is no parallel-dict drift surface.
+
+    Attributes
+    ----------
+    source_key
+        Catalog key (e.g. ``"ssebop"``). Must match ``catalog.source(...)``
+        and the directory name under ``<project>/data/aggregated/``.
+    aggregated_var
+        Variable name to extract from the aggregated NC (e.g. ``"et"``).
+    description
+        Human-readable label for the output NC's global ``source`` attr.
+    to_common_units
+        Callable that converts the source's native variable to the
+        target's common intermediate units. For multi_source_minmax
+        targets the common intermediate is usually mm/month; the per-
+        target unit chain then applies a final linear conversion (e.g.
+        mm/month → cfs for runoff, mm/month → inches/day for AET).
+    """
+
+    source_key: str
+    aggregated_var: str
+    description: str
+    to_common_units: Callable[[xr.DataArray], xr.DataArray]
+
+
+def shims_by_key(shims: "tuple[SourceShim, ...]") -> "dict[str, SourceShim]":
+    """Index a ``SHIMS`` tuple by ``source_key`` for lookup at build time.
+
+    Raises ``ValueError`` if two shims share the same ``source_key`` —
+    that would silently shadow one entry, which is exactly the kind of
+    drift this refactor prevents.
+    """
+    out: dict[str, SourceShim] = {}
+    for shim in shims:
+        if shim.source_key in out:
+            raise ValueError(
+                f"Duplicate SourceShim.source_key={shim.source_key!r} in "
+                f"target SHIMS registry. Each source may appear at most once."
+            )
+        out[shim.source_key] = shim
+    return out
 
 
 def read_aggregated_source(

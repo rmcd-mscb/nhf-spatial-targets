@@ -32,7 +32,6 @@ code edit.
 from __future__ import annotations
 
 import logging
-from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -40,10 +39,12 @@ import xarray as xr
 
 from nhf_spatial_targets.normalize.methods import nn_fill_bounds
 from nhf_spatial_targets.targets._common import (
+    SourceShim,
     compute_hru_centroids,
     multi_source_nanminmax,
     read_aggregated_source,
     reindex_to_month_start,
+    shims_by_key,
     write_target_nc,
 )
 from nhf_spatial_targets.workspace import Project
@@ -53,22 +54,6 @@ logger = logging.getLogger(__name__)
 
 # 1 inch = 25.4 mm.
 _MM_PER_INCH = 25.4
-
-# Per-source variable name in the aggregated NC.
-_SOURCE_VAR: dict[str, str] = {
-    "mod16a2_v061": "ET_500m",
-    "ssebop": "et",
-    "mwbm_climgrid": "aet",
-}
-
-# Per-source human-readable description for the output NC's global ``source`` attr.
-_SOURCE_DESCRIPTION: dict[str, str] = {
-    "mod16a2_v061": (
-        "MOD16A2 v061 ET_500m (8-day kg m-2; overlap-weighted to mm/month)"
-    ),
-    "ssebop": "SSEBop et (mm/month, native)",
-    "mwbm_climgrid": "MWBM ClimGrid aet (mm/month, native)",
-}
 
 
 # ---------------------------------------------------------------------------
@@ -169,11 +154,30 @@ def mod16a2_to_mm_per_month(
     return monthly
 
 
-_TO_MM: dict[str, Callable[[xr.DataArray], xr.DataArray]] = {
-    "mod16a2_v061": mod16a2_to_mm_per_month,
-    "ssebop": ssebop_to_mm_per_month,
-    "mwbm_climgrid": mwbm_to_mm_per_month,
-}
+# Per-source registry: (source_key, aggregated_var, description, to_mm shim).
+# `shims_by_key(SHIMS)` is used at build time for O(1) lookup.
+SHIMS: tuple[SourceShim, ...] = (
+    SourceShim(
+        source_key="mod16a2_v061",
+        aggregated_var="ET_500m",
+        description=(
+            "MOD16A2 v061 ET_500m (8-day kg m-2; overlap-weighted to mm/month)"
+        ),
+        to_common_units=mod16a2_to_mm_per_month,
+    ),
+    SourceShim(
+        source_key="ssebop",
+        aggregated_var="et",
+        description="SSEBop et (mm/month, native)",
+        to_common_units=ssebop_to_mm_per_month,
+    ),
+    SourceShim(
+        source_key="mwbm_climgrid",
+        aggregated_var="aet",
+        description="MWBM ClimGrid aet (mm/month, native)",
+        to_common_units=mwbm_to_mm_per_month,
+    ),
+)
 
 
 def mm_per_month_to_inches_per_day(da: xr.DataArray) -> xr.DataArray:
@@ -238,19 +242,23 @@ def build(project: Project) -> None:
 
     # 3. Read, convert, reindex each source.
     fabric_hru_ids = hru_meta.index.values
+    shims = shims_by_key(SHIMS)
     sources_in_day: dict[str, xr.DataArray] = {}
     for src in sources:
-        if src not in _SOURCE_VAR:
+        if src not in shims:
             raise ValueError(
-                f"aet.sources includes unknown source '{src}'. "
-                f"Known: {sorted(_SOURCE_VAR.keys())}"
+                f"aet.sources includes unknown source '{src}'. Known: {sorted(shims)}"
             )
-        var = _SOURCE_VAR[src]
+        shim = shims[src]
         # For MOD16A2 the time dim is 8-day; slicing by the requested
         # monthly period is still correct because xr.sel(time=slice(...))
         # is a half-open inclusive-of-both-endpoints date range.
         da_native = read_aggregated_source(
-            project, src, var, period, chunks={"time": chunk_months, id_col: -1}
+            project,
+            shim.source_key,
+            shim.aggregated_var,
+            period,
+            chunks={"time": chunk_months, id_col: -1},
         )
         # HRU coord check (same canonical-sort invariant as runoff target).
         src_hru_ids = da_native[id_col].values
@@ -274,7 +282,7 @@ def build(project: Project) -> None:
                 f"(first={src_hru_ids[0]}, last={src_hru_ids[-1]}). "
                 f"Re-aggregate '{src}' against the current fabric."
             )
-        da_mm = _TO_MM[src](da_native)
+        da_mm = shim.to_common_units(da_native)
         da_in_day = mm_per_month_to_inches_per_day(da_mm)
         sources_in_day[src] = reindex_to_month_start(da_in_day, master_idx)
 
@@ -362,7 +370,7 @@ def build(project: Project) -> None:
     ds[id_col].attrs["cf_role"] = "timeseries_id"
 
     extra_attrs = {
-        "source": "; ".join(_SOURCE_DESCRIPTION[s] for s in sources),
+        "source": "; ".join(shims[s].description for s in sources),
         "references": "Hay et al. 2022, doi:10.3133/tm6B10",
         "fabric": project.config["fabric"]["path"],
         "fabric_sha256": project.fabric.get("sha256", ""),
