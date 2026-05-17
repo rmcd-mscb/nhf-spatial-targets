@@ -44,7 +44,9 @@ nearest finite HRU's value at the same day (cKDTree donor walk in
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import xarray as xr
 
@@ -53,11 +55,13 @@ from nhf_spatial_targets.targets._common import (
     SourceShim,
     check_hru_coords,
     compute_hru_centroids,
+    iter_period_years,
     multi_source_nanminmax,
     parse_period,
     read_aggregated_source,
     reindex_to_day_start,
     shims_by_config_label,
+    stitch_year_chunks_to_target,
     write_bounds_target,
 )
 from nhf_spatial_targets.workspace import Project
@@ -256,41 +260,15 @@ def build(project: Project) -> None:
     )
 
     # 1. Per-HRU centroids (only centroids needed for NN-fill — SWE has
-    # no per-HRU-area unit conversion).
+    # no per-HRU-area unit conversion). Computed once and reused across
+    # every per-year build to amortise the fabric load (~361k polygons
+    # on gfv2).
     hru_meta = compute_hru_centroids(project)
     id_col = project.id_col
-
-    # 2. Master day-start index over the requested period.
-    master_idx = pd.date_range(period[0], period[1], freq="D")
-    if len(master_idx) == 0:
-        raise ValueError(
-            f"snow_water_equivalent.period {swe_cfg['period']} produces no "
-            f"days at freq='D'. Check the date range."
-        )
-
-    # 3. Read, convert, reindex each source.
     fabric_hru_ids = hru_meta.index.values
-    sources_in_inches: dict[str, xr.DataArray] = {}
-    for src_label in sources:
-        shim = shims[src_label]
-        da_native = read_aggregated_source(
-            project,
-            shim.source_key,
-            shim.aggregated_var,
-            period,
-            # Daily cadence; one year per chunk keeps the working set
-            # bounded without exploding the chunk count.
-            chunks={"time": 365, id_col: -1},
-        )
-        check_hru_coords(da_native, fabric_hru_ids, id_col, src_label)
-        da_mm = shim.to_common_units(da_native)
-        da_in = mm_to_inches(da_mm)
-        sources_in_inches[src_label] = reindex_to_day_start(da_in, master_idx)
 
-    # 4. NaN-aware combination across sources.
-    lower, upper, n_sources = multi_source_nanminmax(sources_in_inches)
-
-    # 5. Assemble + write (with optional NN-fill companion).
+    # 2. Common global attrs (same on per-year intermediates and the
+    # stitched final NC).
     extra_attrs = {
         "source": "; ".join(shims[s].description for s in sources),
         "references": (
@@ -302,24 +280,174 @@ def build(project: Project) -> None:
         "period": swe_cfg["period"],
         "area_crs": project.area_crs,
     }
+
+    # 3. Year-chunked build. SWE is the only daily-cadence multi-source
+    # target in the pipeline; materialising the full assembled Dataset
+    # in one shot blows past the large-mem partition (~575 GB peak for
+    # 46 yrs × gfv2 × 3 sources). The year-chunked path keeps peak
+    # bounded by one year's worth of data regardless of period length.
+    year_specs = iter_period_years(period[0], period[1])
+    if not year_specs:
+        raise ValueError(
+            f"snow_water_equivalent.period {swe_cfg['period']} produces "
+            f"no years to build."
+        )
+
+    intermediates_dir = project.targets_dir() / ".swe_intermediates"
+    intermediates_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "Year-chunked build: %d years, intermediates -> %s "
+        "(retained after stitch for forensic value; rm to reclaim disk)",
+        len(year_specs),
+        intermediates_dir,
+    )
+
+    nn_fill = bool(swe_cfg["nn_fill"])
+    nn_max_candidates = int(swe_cfg["nn_max_candidates"])
+
+    for year, year_start, year_end in year_specs:
+        _build_year(
+            project=project,
+            year=year,
+            year_period=(year_start, year_end),
+            sources=sources,
+            shims=shims,
+            hru_meta=hru_meta,
+            fabric_hru_ids=fabric_hru_ids,
+            id_col=id_col,
+            n_sources_count=len(sources),
+            extra_attrs=extra_attrs,
+            intermediates_dir=intermediates_dir,
+            nn_fill=nn_fill,
+            nn_max_candidates=nn_max_candidates,
+        )
+
+    # 4. Stitch per-year intermediates into the canonical single-file
+    # outputs. Dask-streamed so peak memory stays bounded.
     output_path = project.targets_dir() / swe_cfg["output_file"]
+    unfilled_files = sorted(
+        intermediates_dir.glob("swe_targets_[0-9][0-9][0-9][0-9].nc")
+    )
+    stitch_year_chunks_to_target(
+        unfilled_files,
+        output_path,
+        title="NHM SWE calibration target (lower/upper bounds in inches)",
+        extra_global_attrs=extra_attrs,
+        sort_dim=id_col,
+    )
+
+    if nn_fill:
+        nn_files = sorted(
+            intermediates_dir.glob("swe_targets_[0-9][0-9][0-9][0-9]_nn_filled.nc")
+        )
+        nn_path = output_path.with_name(
+            output_path.stem + "_nn_filled" + output_path.suffix
+        )
+        nn_attrs = dict(extra_attrs)
+        nn_attrs["nn_fill_max_candidates"] = nn_max_candidates
+        nn_attrs["nn_fill_distance_crs"] = project.area_crs
+        stitch_year_chunks_to_target(
+            nn_files,
+            nn_path,
+            title="NHM SWE calibration target (NN-filled, inches)",
+            extra_global_attrs=nn_attrs,
+            sort_dim=id_col,
+        )
+
+
+def _build_year(
+    *,
+    project: Project,
+    year: int,
+    year_period: tuple[str, str],
+    sources: list[str],
+    shims: dict[str, SourceShim],
+    hru_meta: pd.DataFrame,
+    fabric_hru_ids: np.ndarray,
+    id_col: str,
+    n_sources_count: int,
+    extra_attrs: dict,
+    intermediates_dir: Path,
+    nn_fill: bool,
+    nn_max_candidates: int,
+) -> None:
+    """Build SWE bounds for one calendar year and write per-year NCs.
+
+    Per-year contributions follow the period-union semantics — sources
+    whose coverage doesn't include this year are silently skipped (with
+    a log line) and contribute NaN to that year's bound. The ``n_sources``
+    diagnostic carries the per-cell count so downstream consumers can
+    filter, e.g., ``ds.where(ds.n_sources >= 2)`` to require 2-source
+    agreement, or ``>= 3`` to require SNODAS-era completeness.
+
+    Idempotent: if both expected per-year NCs already exist
+    (``swe_targets_<year>.nc`` and, when ``nn_fill``,
+    ``swe_targets_<year>_nn_filled.nc``), the build is skipped — useful
+    when re-running after a partial OOM mid-period.
+    """
+    year_unfilled = intermediates_dir / f"swe_targets_{year}.nc"
+    year_nn = intermediates_dir / f"swe_targets_{year}_nn_filled.nc"
+    if year_unfilled.exists() and ((not nn_fill) or year_nn.exists()):
+        logger.info("Year %d intermediates exist; skipping", year)
+        return
+
+    year_master_idx = pd.date_range(year_period[0], year_period[1], freq="D")
+    if len(year_master_idx) == 0:
+        raise ValueError(
+            f"Year {year}: empty master index from period {year_period!r}."
+        )
+
+    year_sources: dict[str, xr.DataArray] = {}
+    for src_label in sources:
+        shim = shims[src_label]
+        try:
+            da_native = read_aggregated_source(
+                project,
+                shim.source_key,
+                shim.aggregated_var,
+                year_period,
+                chunks={"time": 365, id_col: -1},
+            )
+        except ValueError as exc:
+            if "entirely outside source coverage" in str(exc):
+                logger.info(
+                    "swe year %d: source '%s' has no data; contributes NaN",
+                    year,
+                    src_label,
+                )
+                continue
+            raise
+        check_hru_coords(da_native, fabric_hru_ids, id_col, src_label)
+        da_mm = shim.to_common_units(da_native)
+        da_in = mm_to_inches(da_mm)
+        year_sources[src_label] = reindex_to_day_start(da_in, year_master_idx)
+
+    if not year_sources:
+        raise ValueError(
+            f"swe year {year}: no source contributed any data for the year. "
+            f"Either the period is set outside every source's coverage or "
+            f"every aggregated NC is missing for this year."
+        )
+
+    lower, upper, n_sources = multi_source_nanminmax(year_sources)
+
     write_bounds_target(
         project=project,
         lower=lower,
         upper=upper,
         n_sources=n_sources,
-        n_sources_count=len(sources),
-        time_index=master_idx,
+        n_sources_count=n_sources_count,
+        time_index=year_master_idx,
         time_offset_unit=pd.offsets.Day(1),
         bounds_units="inches",
         bounds_long_name_kind="daily SWE",
         cell_methods="time: point",
-        output_path=output_path,
-        title="NHM SWE calibration target (lower/upper bounds in inches)",
-        nn_title="NHM SWE calibration target (NN-filled, inches)",
-        extra_global_attrs=extra_attrs,
+        output_path=year_unfilled,
+        title=f"NHM SWE calibration target year {year} (intermediate)",
+        nn_title=f"NHM SWE calibration target year {year} (NN-filled intermediate)",
+        extra_global_attrs={**extra_attrs, "year_chunk": year},
         hru_meta=hru_meta,
-        nn_fill=swe_cfg["nn_fill"],
-        nn_max_candidates=int(swe_cfg["nn_max_candidates"]),
+        nn_fill=nn_fill,
+        nn_max_candidates=nn_max_candidates,
         id_col=id_col,
     )

@@ -510,30 +510,68 @@ intersection caps at 2020.
 
 **Memory considerations on multi-year full-fabric builds**
 
-SWE is the most memory-intensive target in the pipeline because of the
-daily cadence × multi-source NaN-aware stack. `write_bounds_target`
-materialises the full assembled Dataset before writing (`ds.compute()`),
-so peak RSS scales roughly as:
+SWE is the only daily-cadence multi-source target in the pipeline, so
+it uses a **year-chunked build + stitch** pattern (PR #139) rather
+than the single-shot `ds.compute()` pattern that the monthly /
+annual targets use. The build loops one calendar year at a time:
 
+1. **Per-year**: read each source sliced to `(year-01-01,
+   year-12-31) ∩ period`, harmonise to inches, NaN-aware-combine,
+   and write `<project>/targets/.swe_intermediates/swe_targets_<year>.nc`
+   (plus `_nn_filled` companion when `nn_fill: true`).
+2. **Stitch**: `xr.open_mfdataset` the per-year intermediates with
+   `chunks={"time": 365, id_col: -1}` and stream to the canonical
+   `<project>/targets/swe_targets.nc` via dask-backed `to_netcdf` so
+   only one year's chunk is materialised in memory at a time.
+
+Peak memory therefore stays bounded by one year's worth of data
+regardless of period length. For gfv2 (~361 k HRUs):
+
+- Per-year build × 3 sources: ~15 GB peak → fits in `--mem=32G`.
+- Stitch (lazy open_mfdataset + streamed to_netcdf, one year at a
+  time): ~10 GB peak → also fits in `--mem=32G`.
+- **A 46-year × 3-source full-fabric SWE build fits comfortably in
+  `--mem=32G`**, where the single-shot pattern would have needed
+  ~575 GB.
+
+**Idempotent recovery from OOM mid-period.** `_build_year` skips any
+year whose intermediates already exist on disk. If a build dies
+mid-period (OOM, walltime, etc.) just re-submit — only the years
+that haven't completed are re-computed. The stitch step then sees
+the full year set as if the build had run linearly.
+
+**`.swe_intermediates/` lifecycle.** Per-year NCs are retained after
+the stitch for forensic value (operator can spot-check a specific
+year's bound without re-building). For gfv2 over 46 years this costs
+~460 GB of disk. Once the stitched output is trusted, reclaim with:
+
+```bash
+rm -r <project>/targets/.swe_intermediates/
 ```
-peak_bytes ≈ n_days × n_HRUs × 4 bytes × (n_sources + 2) × overhead
-```
 
-where `n_sources + 2` accounts for the stacked source dim plus
-`lower_bound` + `upper_bound`, and `overhead` ≈ 2 to cover the
-intermediate `multi_source_nanminmax` reductions and the NN-fill
-companion's parallel Dataset. For gfv2 (~361 k HRUs):
+**Smoke-test workflow.** Start a smoke-test on a 2–3 year window
+(e.g. `period: "2004-01-01/2006-12-31"`) at `--mem=32G`, sanity-
+check magnitudes (typical CONUS Mar-1 peak upper bound ~2–4 in),
+verify `n_sources` matches expectations across the period, then
+extend to the full window. The smoke-test cost is small and
+surfaces unit / fabric_scope / coverage bugs cheaply.
 
-- 1 year × 4 sources ≈ 12 GB peak → fits in `--mem=32G`.
-- 5 years × 4 sources ≈ 60 GB peak → bump to `--mem=96G`.
-- 20 years × 4 sources ≈ 240 GB peak → either `--mem=256G` (Hovenweep
-  large-mem partition) or switch to a per-year emission loop in a
-  follow-up PR.
+**NN-fill is per-year.** Each year's intermediate runs its own
+cKDTree donor walk, so an HRU that's all-NaN throughout year *Y*
+cannot inherit a donor from year *Y±1*. This matches the
+single-shot pattern's behaviour (NN-fill there also operates per
+time-step), so there's no regression — but it's worth knowing if
+you see a sparsely-covered HRU left unfilled in a year where every
+contributing source happened to be NaN. Such HRUs are rare in
+practice; SWE coverage on CONUS is essentially complete across
+daymet + era5_land_sd from 1980 onward.
 
-Operator workflow: start a smoke-test on 3–6 months at `--mem=32G`,
-sanity-check magnitudes, then scale `--mem` proportionally with the
-period length. The smoke-test cost is small and surfaces unit /
-fabric_scope / coverage bugs cheaply before committing to a long run.
+**Concurrent builds — don't.** The year-chunked builder doesn't
+file-lock `.swe_intermediates/`. Two SLURM jobs targeting the same
+project would race on per-year writes and may corrupt intermediates
+or stitch. Operators should not submit overlapping SWE builds for
+the same project; if a build is in flight and needs adjusting,
+either let it finish (idempotent on resubmit) or `scancel` first.
 
 ---
 

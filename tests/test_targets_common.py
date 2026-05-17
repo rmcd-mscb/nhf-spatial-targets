@@ -894,3 +894,203 @@ def test_build_n_sources_attrs_raises_when_count_exceeds_label_vocab():
 
     with pytest.raises(ValueError, match="5-source label vocabulary"):
         build_n_sources_attrs(6)
+
+
+# ---------------------------------------------------------------------------
+# stitch_year_chunks_to_target unit tests (year-chunked SWE pattern, PR #139)
+# ---------------------------------------------------------------------------
+
+
+def _write_year_chunk_nc(
+    path: Path,
+    year: int,
+    *,
+    hrus: list[int] | None = None,
+    bound_value: float = 1.0,
+    n_sources: int = 3,
+    extra_attrs: dict | None = None,
+) -> None:
+    """Write a synthetic per-year SWE-style intermediate NC.
+
+    Mirrors what `targets/swe.py:_build_year` emits via
+    `write_bounds_target`: ``lower_bound``, ``upper_bound``, ``n_sources``
+    data vars over ``(time, nhm_id)`` with a daily time index for that
+    calendar year, plus the ``year_chunk`` global attr that the stitch
+    helper must strip.
+    """
+    if hrus is None:
+        hrus = [1, 2, 3]
+    times = pd.date_range(f"{year}-01-01", f"{year}-12-31", freq="D")
+    shape = (len(times), len(hrus))
+    ds = xr.Dataset(
+        {
+            "lower_bound": (
+                ("time", "nhm_id"),
+                np.full(shape, bound_value, dtype=np.float32),
+            ),
+            "upper_bound": (
+                ("time", "nhm_id"),
+                np.full(shape, bound_value + 1.0, dtype=np.float32),
+            ),
+            "n_sources": (
+                ("time", "nhm_id"),
+                np.full(shape, n_sources, dtype=np.int8),
+            ),
+        },
+        coords={"time": times, "nhm_id": hrus},
+        attrs={
+            "Conventions": "CF-1.6",
+            "title": f"per-year SWE chunk {year}",
+            "year_chunk": year,
+            **(extra_attrs or {}),
+        },
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ds.to_netcdf(path)
+
+
+def test_stitch_year_chunks_combines_contiguous_time(tmp_path: Path):
+    """Two adjacent year-chunks stitch into a single contiguous time axis."""
+    from nhf_spatial_targets.targets._common import stitch_year_chunks_to_target
+
+    inter = tmp_path / "intermediates"
+    _write_year_chunk_nc(inter / "swe_targets_2003.nc", 2003)
+    _write_year_chunk_nc(inter / "swe_targets_2004.nc", 2004)
+
+    out = tmp_path / "swe_targets.nc"
+    stitch_year_chunks_to_target(
+        sorted(inter.glob("swe_targets_*.nc")),
+        out,
+        title="test stitched",
+        extra_global_attrs={"period": "2003-01-01/2004-12-31"},
+        sort_dim="nhm_id",
+    )
+
+    with xr.open_dataset(out) as ds:
+        times = pd.DatetimeIndex(ds["time"].values)
+        # 365 (2003) + 366 (2004 leap) = 731 days
+        assert len(times) == 731
+        assert times[0] == pd.Timestamp("2003-01-01")
+        assert times[-1] == pd.Timestamp("2004-12-31")
+
+
+def test_stitch_strips_year_chunk_attr(tmp_path: Path):
+    """The per-year `year_chunk` attr must not leak into the stitched
+    canonical file (PR #139 review must-fix). open_mfdataset's default
+    combine_attrs='override' would otherwise carry over the first
+    year's value and silently mislead about the file's actual scope.
+    """
+    from nhf_spatial_targets.targets._common import stitch_year_chunks_to_target
+
+    inter = tmp_path / "intermediates"
+    _write_year_chunk_nc(inter / "swe_targets_2003.nc", 2003)
+    _write_year_chunk_nc(inter / "swe_targets_2004.nc", 2004)
+
+    out = tmp_path / "swe_targets.nc"
+    stitch_year_chunks_to_target(
+        sorted(inter.glob("swe_targets_*.nc")),
+        out,
+        title="t",
+        extra_global_attrs={"period": "2003/2004"},
+        sort_dim="nhm_id",
+    )
+    with xr.open_dataset(out) as ds:
+        assert "year_chunk" not in ds.attrs
+
+    # Regression guard: the per-year files themselves must STILL carry
+    # year_chunk for forensic value when inspected independently.
+    with xr.open_dataset(inter / "swe_targets_2003.nc") as ds_y:
+        assert ds_y.attrs["year_chunk"] == 2003
+
+
+def test_stitch_applies_canonical_attrs_and_history(tmp_path: Path):
+    """The stitched file gets CF-1.6, title, history, institution,
+    and extra_global_attrs overlay."""
+    from nhf_spatial_targets.targets._common import stitch_year_chunks_to_target
+
+    inter = tmp_path / "intermediates"
+    _write_year_chunk_nc(inter / "swe_targets_2003.nc", 2003)
+
+    out = tmp_path / "swe_targets.nc"
+    stitch_year_chunks_to_target(
+        [inter / "swe_targets_2003.nc"],
+        out,
+        title="canonical SWE target",
+        extra_global_attrs={"period": "2003/2003", "source": "x; y"},
+        sort_dim="nhm_id",
+    )
+    with xr.open_dataset(out) as ds:
+        assert ds.attrs["title"] == "canonical SWE target"
+        assert ds.attrs["period"] == "2003/2003"
+        assert ds.attrs["source"] == "x; y"
+        assert ds.attrs["Conventions"] == "CF-1.6"
+        assert ds.attrs["institution"] == "USGS"
+        assert "stitched from 1 per-year NCs" in ds.attrs["history"]
+
+
+def test_stitch_fails_loud_on_hru_coord_mismatch(tmp_path: Path):
+    """join='exact' must raise when per-year files don't share HRU
+    coords — this catches per-year-build corruption (fabric drift,
+    weight-cache poisoning) rather than silently broadcasting NaN.
+    """
+    from nhf_spatial_targets.targets._common import stitch_year_chunks_to_target
+
+    inter = tmp_path / "intermediates"
+    _write_year_chunk_nc(inter / "swe_targets_2003.nc", 2003, hrus=[1, 2, 3])
+    _write_year_chunk_nc(
+        inter / "swe_targets_2004.nc", 2004, hrus=[1, 2, 99]
+    )  # HRU 99 instead of 3
+
+    out = tmp_path / "swe_targets.nc"
+    with pytest.raises((ValueError, Exception)):
+        stitch_year_chunks_to_target(
+            sorted(inter.glob("swe_targets_*.nc")),
+            out,
+            title="t",
+            extra_global_attrs=None,
+            sort_dim="nhm_id",
+        )
+
+
+def test_stitch_raises_on_empty_input(tmp_path: Path):
+    from nhf_spatial_targets.targets._common import stitch_year_chunks_to_target
+
+    out = tmp_path / "swe_targets.nc"
+    with pytest.raises(ValueError, match="intermediate_files is empty"):
+        stitch_year_chunks_to_target(
+            [], out, title="t", extra_global_attrs=None, sort_dim="nhm_id"
+        )
+
+
+def test_stitch_atomic_write_no_partial_on_failure(tmp_path: Path, monkeypatch):
+    """If to_netcdf raises mid-write, the tempfile is cleaned up and
+    the final path doesn't exist — same atomic-write contract as
+    write_target_nc.
+    """
+    from nhf_spatial_targets.targets import _common as _c
+
+    inter = tmp_path / "intermediates"
+    _write_year_chunk_nc(inter / "swe_targets_2003.nc", 2003)
+
+    out = tmp_path / "swe_targets.nc"
+
+    real_to_netcdf = xr.Dataset.to_netcdf
+
+    def _boom(self, *args, **kwargs):
+        # Simulate a mid-write IO error (disk full, killed worker, etc.)
+        raise OSError("simulated to_netcdf failure")
+
+    monkeypatch.setattr(xr.Dataset, "to_netcdf", _boom)
+    with pytest.raises(OSError, match="simulated to_netcdf failure"):
+        _c.stitch_year_chunks_to_target(
+            [inter / "swe_targets_2003.nc"],
+            out,
+            title="t",
+            extra_global_attrs=None,
+            sort_dim="nhm_id",
+        )
+    assert not out.exists(), "final output should not exist after failure"
+    leftover = list(tmp_path.glob("*.tmp"))
+    assert not leftover, f"tempfile leak: {leftover}"
+    # restore (paranoia — monkeypatch undoes it but be explicit)
+    monkeypatch.setattr(xr.Dataset, "to_netcdf", real_to_netcdf)

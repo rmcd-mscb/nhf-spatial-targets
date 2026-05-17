@@ -883,3 +883,181 @@ def write_bounds_target(
         extra_global_attrs=filled_attrs,
         sort_dim=id_col,
     )
+
+
+# ---------------------------------------------------------------------------
+# Year-chunked target build (memory-bounded for multi-year daily targets)
+# ---------------------------------------------------------------------------
+
+
+def iter_period_years(
+    period_start: str, period_end: str
+) -> "list[tuple[int, str, str]]":
+    """Iterate ``(year, year_start_iso, year_end_iso)`` over the period.
+
+    The first and last yields are clipped to ``period_start`` / ``period_end``
+    when those fall mid-year. Used by year-chunked target builders to drive
+    the per-year build loop.
+
+    Examples
+    --------
+    >>> iter_period_years("1980-06-15", "1982-03-20")
+    [(1980, '1980-06-15', '1980-12-31'),
+     (1981, '1981-01-01', '1981-12-31'),
+     (1982, '1982-01-01', '1982-03-20')]
+    """
+    start = pd.Timestamp(period_start)
+    end = pd.Timestamp(period_end)
+    if end < start:
+        raise ValueError(f"period end {period_end!r} precedes start {period_start!r}")
+    out: list[tuple[int, str, str]] = []
+    for year in range(start.year, end.year + 1):
+        ys = max(start, pd.Timestamp(f"{year}-01-01"))
+        ye = min(end, pd.Timestamp(f"{year}-12-31"))
+        out.append((year, ys.strftime("%Y-%m-%d"), ye.strftime("%Y-%m-%d")))
+    return out
+
+
+def stitch_year_chunks_to_target(
+    intermediate_files: "list[Path]",
+    output_path: Path,
+    *,
+    title: str,
+    extra_global_attrs: dict | None,
+    sort_dim: str,
+    time_chunk_days: int = 365,
+) -> None:
+    """Lazily open per-year target NCs and stream them into one canonical NC.
+
+    Uses ``xr.open_mfdataset`` with explicit ``chunks=`` to keep the
+    dataset dask-backed, then writes via ``to_netcdf`` so the per-year
+    chunks flow through to disk one at a time instead of being
+    materialised in memory. Peak memory therefore stays bounded by one
+    year's worth of data regardless of how many years the period spans
+    — the whole point of the year-chunked build pattern.
+
+    Per-variable encoding mirrors :func:`write_target_nc` (float32+zlib
+    for ``lower_bound`` / ``upper_bound``, int8+zlib for ``n_sources`` /
+    ``nn_filled``, ``days since 1970-01-01`` for the time axis); the
+    global attrs are taken from the first per-year file and then
+    overridden by ``extra_global_attrs`` plus a fresh ``history`` line.
+
+    The stitched output is sorted ascending on ``sort_dim`` (typically
+    ``project.id_col``) before write to preserve the canonical row order
+    invariant from issue #93. Atomic via tempfile + rename, same as
+    ``write_target_nc``.
+
+    Parameters
+    ----------
+    intermediate_files
+        Per-year NC paths to stitch (already sorted by year via
+        filename glob).
+    output_path
+        Final canonical NC path (e.g. ``<project>/targets/swe_targets.nc``).
+    title
+        Global ``title`` attr for the stitched file.
+    extra_global_attrs
+        Per-target metadata to overlay on top of the per-year files'
+        global attrs (e.g. ``period``, ``source``, ``fabric``).
+    sort_dim
+        Dimension to sort ascending on before write (typically
+        ``project.id_col``).
+    time_chunk_days
+        Dask chunk size along the time axis when opening intermediates.
+        Defaults to 365 — one year per chunk, which is also the natural
+        per-file boundary, so to_netcdf streams one file's worth at a
+        time.
+    """
+    from datetime import datetime, timezone
+
+    from nhf_spatial_targets import __version__
+
+    if not intermediate_files:
+        raise ValueError(
+            "stitch_year_chunks_to_target: intermediate_files is empty; "
+            "the year loop produced no per-year NCs."
+        )
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    ds = xr.open_mfdataset(
+        [str(p) for p in intermediate_files],
+        combine="by_coords",
+        # `join="exact"` mirrors the project's defensive-failure pattern
+        # in `check_hru_coords`: a coord-set mismatch across per-year
+        # files indicates per-year-build corruption (fabric drift,
+        # weight-cache poisoning) and should fail loud, not silently
+        # broadcast NaN on the union as `join="outer"` would.
+        join="exact",
+        chunks={"time": time_chunk_days, sort_dim: -1},
+        engine="netcdf4",
+    )
+    try:
+        ds = ds.sortby(sort_dim)
+        # `combine_attrs="override"` (the open_mfdataset default) keeps
+        # the first file's attrs, which include per-year-only attrs
+        # like ``year_chunk`` that don't apply to the stitched
+        # multi-year output. Strip them before the canonical attrs are
+        # applied so the final NC reports its actual scope honestly.
+        ds.attrs.pop("year_chunk", None)
+        ds.attrs.setdefault("Conventions", "CF-1.6")
+        ds.attrs["title"] = title
+        ds.attrs["history"] = (
+            f"{datetime.now(timezone.utc).isoformat()} stitched from "
+            f"{len(intermediate_files)} per-year NCs by "
+            f"nhf_spatial_targets v{__version__}"
+        )
+        ds.attrs.setdefault("institution", "USGS")
+        ds.attrs.setdefault("software_version", __version__)
+        if extra_global_attrs:
+            ds.attrs.update(extra_global_attrs)
+
+        encoding: dict = {}
+        for v in ("lower_bound", "upper_bound"):
+            if v in ds.data_vars:
+                encoding[v] = {
+                    "dtype": "float32",
+                    "zlib": True,
+                    "complevel": 4,
+                    "_FillValue": np.float32("nan"),
+                }
+        for v in ("n_sources", "nn_filled"):
+            if v in ds.data_vars:
+                encoding[v] = {
+                    "dtype": "int8",
+                    "zlib": True,
+                    "complevel": 4,
+                    "_FillValue": None,
+                }
+        if "time" in ds.coords or "time" in ds.dims or "time" in ds.variables:
+            encoding["time"] = {
+                "dtype": "float64",
+                "units": "days since 1970-01-01 00:00:00",
+                "calendar": "proleptic_gregorian",
+            }
+        if "time_bnds" in ds.variables:
+            encoding["time_bnds"] = {
+                "dtype": "float64",
+                "units": "days since 1970-01-01 00:00:00",
+                "calendar": "proleptic_gregorian",
+            }
+
+        tmp = output_path.with_suffix(output_path.suffix + ".tmp")
+        try:
+            # Streaming write — dask schedules one chunk at a time, so
+            # peak memory stays bounded by ~one year's worth of data.
+            ds.to_netcdf(tmp, format="NETCDF4", encoding=encoding)
+            tmp.rename(output_path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+    finally:
+        ds.close()
+
+    logger.info(
+        "Stitched %d per-year NCs -> %s (%.1f MB)",
+        len(intermediate_files),
+        output_path,
+        output_path.stat().st_size / 1e6,
+    )
