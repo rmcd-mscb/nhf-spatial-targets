@@ -221,23 +221,21 @@ def multi_source_nanminmax(
     return lower, upper, n_sources
 
 
-def compute_hru_area_and_centroids(project: Project) -> "pd.DataFrame":
-    """Compute per-HRU area (m²) and centroid coords from the fabric.
+def _load_and_reproject_fabric(project: Project) -> "tuple[object, str]":
+    """Load the fabric, validate the id_col, reproject to ``area_crs``.
 
-    Always recomputes from geometry (no fabric-column fallback) so the area
-    cannot drift from the geometry actually being processed. Reprojects to
-    ``project.area_crs`` (e.g. EPSG:5070 for CONUS) to compute area and
-    equal-area centroids; reprojects centroids to EPSG:4326 for ancillary
-    lat/lon coords.
-
-    The returned DataFrame is indexed by ``project.id_col`` so callers can
-    align to xarray's HRU dim trivially.
+    Shared expensive setup for :func:`compute_hru_areas`,
+    :func:`compute_hru_centroids`, and the combined
+    :func:`compute_hru_area_and_centroids`. The fabric IO and the CRS
+    reprojection are the two non-trivial costs at fabric scale (~361k
+    polygons on gfv2); per-column derivations (area, centroids) are
+    near-free relative to those.
 
     Returns
     -------
-    pandas.DataFrame
-        Columns: ``area_m2``, ``centroid_x``, ``centroid_y`` (in
-        ``area_crs``), ``centroid_lat``, ``centroid_lon`` (EPSG:4326).
+    (gdf_eq, id_col)
+        Reprojected GeoDataFrame in ``project.area_crs`` and the validated
+        HRU id column name.
     """
     import geopandas as gpd
 
@@ -260,6 +258,78 @@ def compute_hru_area_and_centroids(project: Project) -> "pd.DataFrame":
         )
 
     gdf_eq = gdf.to_crs(project.area_crs)
+    return gdf_eq, id_col
+
+
+def compute_hru_centroids(project: Project) -> "pd.DataFrame":
+    """Compute per-HRU centroid coords from the fabric.
+
+    Reprojects to ``project.area_crs`` (e.g. EPSG:5070 for CONUS) for
+    equal-area centroids, then reprojects centroids to EPSG:4326 for
+    ancillary lat/lon. Use this in target builders that do **not** need
+    per-HRU area (AET, recharge, soil moisture, SCA, SWE) — it skips the
+    `gdf.geometry.area` call that :func:`compute_hru_area_and_centroids`
+    performs.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Indexed by ``project.id_col``. Columns: ``centroid_x``,
+        ``centroid_y`` (in ``area_crs``), ``centroid_lat``,
+        ``centroid_lon`` (EPSG:4326).
+    """
+    gdf_eq, id_col = _load_and_reproject_fabric(project)
+    centroids_eq = gdf_eq.geometry.centroid
+    centroids_ll = centroids_eq.to_crs("EPSG:4326")
+
+    df = gdf_eq[[id_col]].copy()
+    df["centroid_x"] = centroids_eq.x.astype(float)
+    df["centroid_y"] = centroids_eq.y.astype(float)
+    df["centroid_lon"] = centroids_ll.x.astype(float)
+    df["centroid_lat"] = centroids_ll.y.astype(float)
+    df = df.set_index(id_col).sort_index()
+    return df
+
+
+def compute_hru_areas(project: Project) -> "pd.DataFrame":
+    """Compute per-HRU area (m²) from the fabric.
+
+    Reprojects to ``project.area_crs`` (e.g. EPSG:5070 for CONUS) so the
+    area is computed in an equal-area projection. Always recomputes from
+    geometry (no fabric-column fallback) so the area cannot drift from
+    the geometry actually being processed.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Indexed by ``project.id_col``. Single column ``area_m2``.
+    """
+    gdf_eq, id_col = _load_and_reproject_fabric(project)
+    df = gdf_eq[[id_col]].copy()
+    df["area_m2"] = gdf_eq.geometry.area.astype(float)
+    df = df.set_index(id_col).sort_index()
+    return df
+
+
+def compute_hru_area_and_centroids(project: Project) -> "pd.DataFrame":
+    """Compute per-HRU area (m²) and centroid coords in a single fabric pass.
+
+    Combined helper for builders that need both (runoff). Lighter
+    alternatives are :func:`compute_hru_centroids` (centroids only) and
+    :func:`compute_hru_areas` (area only) — prefer them when you don't
+    need the other column.
+
+    Always recomputes from geometry (no fabric-column fallback) so the
+    area cannot drift from the geometry actually being processed.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Indexed by ``project.id_col``. Columns: ``area_m2``,
+        ``centroid_x``, ``centroid_y`` (in ``area_crs``),
+        ``centroid_lat``, ``centroid_lon`` (EPSG:4326).
+    """
+    gdf_eq, id_col = _load_and_reproject_fabric(project)
     centroids_eq = gdf_eq.geometry.centroid
     centroids_ll = centroids_eq.to_crs("EPSG:4326")
 

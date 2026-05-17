@@ -40,7 +40,7 @@ import xarray as xr
 
 from nhf_spatial_targets.normalize.methods import nn_fill_bounds
 from nhf_spatial_targets.targets._common import (
-    compute_hru_area_and_centroids,
+    compute_hru_centroids,
     multi_source_nanminmax,
     read_aggregated_source,
     reindex_to_month_start,
@@ -225,7 +225,7 @@ def build(project: Project) -> None:
 
     # 1. Per-HRU centroids (computed once from fabric; only centroids are
     # needed for NN-fill — AET has no per-HRU-area unit conversion).
-    hru_meta = compute_hru_area_and_centroids(project)
+    hru_meta = compute_hru_centroids(project)
     id_col = project.id_col
 
     # 2. Master month-start index over the requested period.
