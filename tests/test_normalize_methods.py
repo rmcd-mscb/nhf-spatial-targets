@@ -201,3 +201,182 @@ def test_normalize_0_1_by_calendar_month_raises_on_missing_time_dim():
     )
     with pytest.raises(ValueError, match="expected 'time' dim"):
         normalize_0_1_by_calendar_month(da)
+
+
+# ---------------------------------------------------------------------------
+# normalize_0_1_over_window
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_0_1_over_window_uses_window_minmax():
+    """Window's min/max drive the normalization; values outside may exceed [0, 1]."""
+    from nhf_spatial_targets.normalize.methods import normalize_0_1_over_window
+
+    # da spans 5 years; window is years 2000-2002 (min=10, max=30).
+    # Year 2003 = 50 should normalize to (50-10)/(30-10) = 2.0 (visibly out of range).
+    times = pd.date_range("2000-01-01", "2004-01-01", freq="YS")
+    da = xr.DataArray(
+        np.array([[10.0], [20.0], [30.0], [50.0], [80.0]], dtype=np.float32),
+        dims=("time", "nhm_id"),
+        coords={"time": times, "nhm_id": [1]},
+        attrs={"units": "mm"},
+    )
+    window = da.sel(time=slice("2000-01-01", "2002-12-31"))
+    out = normalize_0_1_over_window(da, window)
+    np.testing.assert_allclose(
+        out.values, [[0.0], [0.5], [1.0], [2.0], [3.5]], rtol=1e-6
+    )
+    assert out.attrs["units"] == "1"
+
+
+def test_normalize_0_1_over_window_equals_normalize_0_1_when_window_is_da():
+    """When window == da, the window variant matches the no-window primitive."""
+    from nhf_spatial_targets.normalize.methods import (
+        normalize_0_1,
+        normalize_0_1_over_window,
+    )
+
+    times = pd.date_range("2000-01-01", "2004-01-01", freq="YS")
+    da = xr.DataArray(
+        np.array([[0.0, 5.0], [10.0, 15.0], [20.0, 25.0], [30.0, 35.0], [40.0, 45.0]]),
+        dims=("time", "nhm_id"),
+        coords={"time": times, "nhm_id": [1, 2]},
+        attrs={"units": "mm"},
+    )
+    np.testing.assert_allclose(
+        normalize_0_1_over_window(da, da).values,
+        normalize_0_1(da, dim="time").values,
+        rtol=1e-6,
+    )
+
+
+def test_normalize_0_1_over_window_zero_range_yields_nan():
+    """Constant series over window → NaN (zero range)."""
+    from nhf_spatial_targets.normalize.methods import normalize_0_1_over_window
+
+    times = pd.date_range("2000-01-01", "2003-01-01", freq="YS")
+    da = xr.DataArray(
+        np.array([[5.0], [5.0], [5.0], [10.0]], dtype=np.float32),
+        dims=("time", "nhm_id"),
+        coords={"time": times, "nhm_id": [1]},
+    )
+    window = da.sel(time=slice("2000-01-01", "2002-12-31"))
+    out = normalize_0_1_over_window(da, window)
+    assert np.isnan(out.values).all()
+
+
+def test_normalize_0_1_over_window_raises_on_unknown_dim():
+    from nhf_spatial_targets.normalize.methods import normalize_0_1_over_window
+
+    da = xr.DataArray(
+        np.array([1.0, 2.0]),
+        dims=("nhm_id",),
+        coords={"nhm_id": [1, 2]},
+    )
+    with pytest.raises(ValueError, match="not in DataArray dims"):
+        normalize_0_1_over_window(da, da, dim="time")
+
+
+# ---------------------------------------------------------------------------
+# normalize_0_1_by_calendar_month_over_window
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_0_1_by_calendar_month_over_window_uses_window_per_month():
+    """Each calendar month is normalized using only that month's window min/max."""
+    from nhf_spatial_targets.normalize.methods import (
+        normalize_0_1_by_calendar_month_over_window,
+    )
+
+    # 4 years × 2 calendar months. Window = years 2000-2001 only.
+    #   Jan window: 0, 10 → min=0, max=10
+    #   Jul window: 100, 200 → min=100, max=200
+    # da's 2002-2003 values are normalized using the window's min/max.
+    times = pd.to_datetime(
+        [
+            "2000-01-01",
+            "2000-07-01",
+            "2001-01-01",
+            "2001-07-01",
+            "2002-01-01",
+            "2002-07-01",
+            "2003-01-01",
+            "2003-07-01",
+        ]
+    )
+    values = np.array(
+        [[0.0], [100.0], [10.0], [200.0], [20.0], [300.0], [5.0], [150.0]],
+        dtype=np.float32,
+    )
+    da = xr.DataArray(
+        values,
+        dims=("time", "nhm_id"),
+        coords={"time": times, "nhm_id": [1]},
+        attrs={"units": "mm"},
+    )
+    window = da.sel(time=slice("2000-01-01", "2001-12-31"))
+    out = normalize_0_1_by_calendar_month_over_window(da, window)
+    # Jan: window min=0, max=10
+    #   2000-01: (0-0)/(10-0) = 0
+    #   2001-01: (10-0)/(10-0) = 1
+    #   2002-01: (20-0)/(10-0) = 2.0 (above window max — by design)
+    #   2003-01: (5-0)/(10-0) = 0.5
+    # Jul: window min=100, max=200
+    #   2000-07: (100-100)/(200-100) = 0
+    #   2001-07: (200-100)/(200-100) = 1
+    #   2002-07: (300-100)/(200-100) = 2.0
+    #   2003-07: (150-100)/(200-100) = 0.5
+    np.testing.assert_allclose(
+        out.values,
+        [[0.0], [0.0], [1.0], [1.0], [2.0], [2.0], [0.5], [0.5]],
+        rtol=1e-6,
+    )
+    assert out.attrs["units"] == "1"
+
+
+def test_normalize_0_1_by_calendar_month_over_window_equals_no_window():
+    """When window == da, the variant matches the no-window primitive."""
+    from nhf_spatial_targets.normalize.methods import (
+        normalize_0_1_by_calendar_month,
+        normalize_0_1_by_calendar_month_over_window,
+    )
+
+    times = pd.to_datetime(["2000-01-01", "2000-07-01", "2001-01-01", "2001-07-01"])
+    da = xr.DataArray(
+        np.array([[0.0], [100.0], [10.0], [200.0]], dtype=np.float32),
+        dims=("time", "nhm_id"),
+        coords={"time": times, "nhm_id": [1]},
+    )
+    out_with = normalize_0_1_by_calendar_month_over_window(da, da)
+    out_no = normalize_0_1_by_calendar_month(da)
+    np.testing.assert_allclose(out_with.values, out_no.values, rtol=1e-6)
+
+
+def test_normalize_0_1_by_calendar_month_over_window_raises_on_missing_time():
+    from nhf_spatial_targets.normalize.methods import (
+        normalize_0_1_by_calendar_month_over_window,
+    )
+
+    da = xr.DataArray(
+        np.array([1.0, 2.0]),
+        dims=("nhm_id",),
+        coords={"nhm_id": [1, 2]},
+    )
+    with pytest.raises(ValueError, match="expected 'time' dim"):
+        normalize_0_1_by_calendar_month_over_window(da, da)
+
+
+def test_normalize_0_1_by_calendar_month_over_window_raises_when_window_lacks_time():
+    from nhf_spatial_targets.normalize.methods import (
+        normalize_0_1_by_calendar_month_over_window,
+    )
+
+    times = pd.to_datetime(["2000-01-01", "2000-07-01"])
+    da = xr.DataArray(
+        np.array([[1.0], [2.0]], dtype=np.float32),
+        dims=("time", "nhm_id"),
+        coords={"time": times, "nhm_id": [1]},
+    )
+    bad_window = xr.DataArray(np.array([1.0]), dims=("nhm_id",), coords={"nhm_id": [1]})
+    with pytest.raises(ValueError, match="window must also have 'time' dim"):
+        normalize_0_1_by_calendar_month_over_window(da, bad_window)

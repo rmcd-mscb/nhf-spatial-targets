@@ -37,15 +37,16 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from nhf_spatial_targets.normalize.methods import nn_fill_bounds
 from nhf_spatial_targets.targets._common import (
     SourceShim,
+    check_hru_coords,
     compute_hru_centroids,
     multi_source_nanminmax,
+    parse_period,
     read_aggregated_source,
     reindex_to_month_start,
     shims_by_key,
-    write_target_nc,
+    write_bounds_target,
 )
 from nhf_spatial_targets.workspace import Project
 
@@ -194,16 +195,6 @@ def mm_per_month_to_inches_per_day(da: xr.DataArray) -> xr.DataArray:
 # ---------------------------------------------------------------------------
 
 
-def _parse_period(period_str: str) -> tuple[str, str]:
-    """Parse 'YYYY-MM-DD/YYYY-MM-DD' (or 'YYYY/YYYY') into (start, end)."""
-    if "/" not in period_str:
-        raise ValueError(
-            f"Invalid period {period_str!r}. Expected 'YYYY-MM-DD/YYYY-MM-DD'."
-        )
-    start, end = period_str.split("/", 1)
-    return start.strip(), end.strip()
-
-
 def build(project: Project) -> None:
     """Build the AET calibration target.
 
@@ -214,7 +205,7 @@ def build(project: Project) -> None:
     ``aet_targets_nn_filled.nc``.
     """
     aet_cfg = project.target("aet")
-    period = _parse_period(aet_cfg["period"])
+    period = parse_period(aet_cfg["period"])
     sources = list(aet_cfg["sources"])
     chunk_months = int(aet_cfg["chunk_months"])
 
@@ -260,115 +251,15 @@ def build(project: Project) -> None:
             period,
             chunks={"time": chunk_months, id_col: -1},
         )
-        # HRU coord check (same canonical-sort invariant as runoff target).
-        src_hru_ids = da_native[id_col].values
-        if not np.array_equal(src_hru_ids, fabric_hru_ids):
-            same_set = len(src_hru_ids) == len(fabric_hru_ids) and np.array_equal(
-                np.sort(src_hru_ids), np.sort(fabric_hru_ids)
-            )
-            if same_set:
-                raise ValueError(
-                    f"HRU coords for source '{src}' have the same set as the "
-                    f"fabric ({len(fabric_hru_ids)} HRUs) but a different "
-                    f"order. Both sides are expected to be sorted ascending by "
-                    f"id_col='{id_col}' — this indicates a regression in the "
-                    f"canonical-sort invariant in targets/_common.py."
-                )
-            raise ValueError(
-                f"HRU coords differ between fabric and source '{src}' as "
-                f"sets. Fabric has {len(fabric_hru_ids)} HRUs "
-                f"(first={fabric_hru_ids[0]}, last={fabric_hru_ids[-1]}); "
-                f"source has {len(src_hru_ids)} "
-                f"(first={src_hru_ids[0]}, last={src_hru_ids[-1]}). "
-                f"Re-aggregate '{src}' against the current fabric."
-            )
+        check_hru_coords(da_native, fabric_hru_ids, id_col, src)
         da_mm = shim.to_common_units(da_native)
         da_in_day = mm_per_month_to_inches_per_day(da_mm)
         sources_in_day[src] = reindex_to_month_start(da_in_day, master_idx)
 
-    # 4. NaN-aware combination.
+    # 4. NaN-aware combination across sources.
     lower, upper, n_sources = multi_source_nanminmax(sources_in_day)
-    lower.name = "lower_bound"
-    upper.name = "upper_bound"
-    n_sources.name = "n_sources"
 
-    # 5. Assemble Dataset with CF metadata + ancillary coords.
-    time_bnds = xr.DataArray(
-        list(zip(master_idx.values, (master_idx + pd.offsets.MonthBegin(1)).values)),
-        dims=("time", "nv"),
-        coords={"time": master_idx.values},
-        name="time_bnds",
-    )
-    centroid_lat = xr.DataArray(
-        hru_meta["centroid_lat"].values,
-        dims=(id_col,),
-        coords={id_col: hru_meta.index.values},
-        attrs={
-            "units": "degrees_north",
-            "standard_name": "latitude",
-            "long_name": "HRU centroid latitude",
-        },
-    )
-    centroid_lon = xr.DataArray(
-        hru_meta["centroid_lon"].values,
-        dims=(id_col,),
-        coords={id_col: hru_meta.index.values},
-        attrs={
-            "units": "degrees_east",
-            "standard_name": "longitude",
-            "long_name": "HRU centroid longitude",
-        },
-    )
-
-    lower.attrs.update(
-        {
-            "units": "inches/day",
-            "long_name": ("lower bound of monthly AET (NaN-aware min across sources)"),
-            "cell_methods": "time: mean",
-            "coordinates": "centroid_lat centroid_lon",
-        }
-    )
-    upper.attrs.update(
-        {
-            "units": "inches/day",
-            "long_name": ("upper bound of monthly AET (NaN-aware max across sources)"),
-            "cell_methods": "time: mean",
-            "coordinates": "centroid_lat centroid_lon",
-        }
-    )
-    n_sources.attrs.update(
-        {
-            "units": "1",
-            "long_name": "number of finite source contributions",
-            "flag_values": list(range(0, len(sources) + 1)),
-            "flag_meanings": " ".join(
-                ["none", "one", "two", "three", "four", "five"][: len(sources) + 1]
-            ),
-            "coordinates": "centroid_lat centroid_lon",
-        }
-    )
-
-    ds = xr.Dataset(
-        {
-            "lower_bound": lower,
-            "upper_bound": upper,
-            "n_sources": n_sources,
-        },
-        coords={
-            "time": master_idx,
-            id_col: lower[id_col],
-            "time_bnds": time_bnds,
-            "centroid_lat": centroid_lat,
-            "centroid_lon": centroid_lon,
-        },
-    )
-    ds["time"].attrs["bounds"] = "time_bnds"
-    ds["time"].attrs["axis"] = "T"
-    ds["time"].attrs["standard_name"] = "time"
-    ds["time"].attrs["long_name"] = "time at month start"
-    ds[id_col].attrs["long_name"] = "HRU identifier"
-    ds[id_col].attrs["cf_role"] = "timeseries_id"
-
+    # 5. Assemble + write (with optional NN-fill companion).
     extra_attrs = {
         "source": "; ".join(shims[s].description for s in sources),
         "references": "Hay et al. 2022, doi:10.3133/tm6B10",
@@ -377,57 +268,24 @@ def build(project: Project) -> None:
         "period": aet_cfg["period"],
         "area_crs": project.area_crs,
     }
-
-    ds_loaded = ds.compute()
-
     output_path = project.targets_dir() / aet_cfg["output_file"]
-    write_target_nc(
-        ds_loaded,
-        output_path,
+    write_bounds_target(
+        project=project,
+        lower=lower,
+        upper=upper,
+        n_sources=n_sources,
+        n_sources_count=len(sources),
+        time_index=master_idx,
+        time_offset_unit=pd.offsets.MonthBegin(1),
+        bounds_units="inches/day",
+        bounds_long_name_kind="monthly AET",
+        cell_methods="time: mean",
+        output_path=output_path,
         title="NHM AET calibration target (lower/upper bounds in inches/day)",
+        nn_title="NHM AET calibration target (NN-filled, inches/day)",
         extra_global_attrs=extra_attrs,
-        sort_dim=id_col,
+        hru_meta=hru_meta,
+        nn_fill=aet_cfg["nn_fill"],
+        nn_max_candidates=int(aet_cfg["nn_max_candidates"]),
+        id_col=id_col,
     )
-
-    n = ds_loaded["n_sources"].values
-    total = n.size
-    none = int((n == 0).sum())
-    logger.info(
-        "Coverage: %d/%d cells have >=1 finite source (%.2f%% all-NaN)",
-        total - none,
-        total,
-        100.0 * none / total if total else 0.0,
-    )
-
-    # 6. NN-fill (optional).
-    if aet_cfg["nn_fill"]:
-        centroids_xy = hru_meta[["centroid_x", "centroid_y"]].values
-        filled_ds, nn_diag = nn_fill_bounds(
-            ds_loaded,
-            centroids_xy,
-            max_candidates=int(aet_cfg["nn_max_candidates"]),
-        )
-        nn_diag.attrs.update(
-            {
-                "units": "1",
-                "long_name": "nearest-neighbor fill flag",
-                "flag_values": [0, 1],
-                "flag_meanings": "not_filled filled",
-                "coordinates": "centroid_lat centroid_lon",
-            }
-        )
-        filled_ds["nn_filled"] = nn_diag
-        filled_attrs = dict(extra_attrs)
-        filled_attrs["nn_fill_max_candidates"] = int(aet_cfg["nn_max_candidates"])
-        filled_attrs["nn_fill_distance_crs"] = project.area_crs
-
-        nn_path = output_path.with_name(
-            output_path.stem + "_nn_filled" + output_path.suffix
-        )
-        write_target_nc(
-            filled_ds,
-            nn_path,
-            title="NHM AET calibration target (NN-filled, inches/day)",
-            extra_global_attrs=filled_attrs,
-            sort_dim=id_col,
-        )

@@ -96,6 +96,10 @@ targets:
       - monthly
       - annual
     period: "1982-01-01/2010-12-31"
+    # Independent normalization window; leave null (or omit) to use `period`.
+    # Values in `period` outside this window may produce normalized values
+    # < 0 or > 1 by design (visibly out-of-range, not silently re-scaled).
+    normalize_period: null
     prms_variable: soil_rechr
     range_method: normalized_minmax
     normalize: true

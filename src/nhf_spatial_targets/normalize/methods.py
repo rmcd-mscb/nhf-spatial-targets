@@ -81,6 +81,92 @@ def normalize_0_1_by_calendar_month(da: xr.DataArray) -> xr.DataArray:
     return norm
 
 
+def normalize_0_1_over_window(
+    da: xr.DataArray, window: xr.DataArray, dim: str = "time"
+) -> xr.DataArray:
+    """Normalize ``da`` to [0, 1] using ``window``'s min/max along ``dim``.
+
+    Like :func:`normalize_0_1` but the min/max are computed over a subset
+    of ``da`` (the calibration / normalization period). Values in ``da``
+    that fall outside ``window``'s climatology may produce values < 0 or
+    > 1 — by design: TM 6-B10 §3 and §4 say the bound reflects the
+    calibration-period climatology, and a future year outside that
+    climatology should be visibly out-of-range, not silently re-normalized
+    against extended data.
+
+    Cells where the window's range is zero (constant series or all-NaN
+    over the window) yield NaN; see :func:`normalize_0_1` for the
+    reasoning.
+
+    Parameters
+    ----------
+    da
+        DataArray to normalize. Must have ``dim`` as one of its dimensions.
+    window
+        Subset of ``da`` along ``dim`` (typically a time-slice) used to
+        compute the min/max. The remaining (non-``dim``) dims must match
+        ``da``.
+    dim
+        Dimension to compute min/max over. Defaults to ``"time"``.
+    """
+    if dim not in da.dims:
+        raise ValueError(
+            f"normalize_0_1_over_window: dim {dim!r} not in DataArray dims "
+            f"{tuple(da.dims)!r}"
+        )
+    mn = window.min(dim=dim, skipna=True)
+    mx = window.max(dim=dim, skipna=True)
+    rng = mx - mn
+    safe_rng = rng.where(rng > 0)
+    norm = (da - mn) / safe_rng
+    norm.attrs = dict(da.attrs)
+    norm.attrs["units"] = "1"
+    return norm
+
+
+def normalize_0_1_by_calendar_month_over_window(
+    da: xr.DataArray, window: xr.DataArray
+) -> xr.DataArray:
+    """Per-calendar-month [0, 1] normalize using ``window``'s monthly min/max.
+
+    Like :func:`normalize_0_1_by_calendar_month` but the per-calendar-month
+    min/max are computed over a subset (the normalization period). All
+    Januaries within ``window`` pool to give the January min/max, which
+    is then applied to every January in ``da`` — including Januaries
+    outside ``window``, which may produce values < 0 or > 1 by the same
+    "visibly out-of-range" design as :func:`normalize_0_1_over_window`.
+
+    Per TM 6-B10 §4 Appendix 1, this is the monthly soil moisture
+    target's normalization when ``period`` and ``normalize_period``
+    differ; when they are equal, the behavior collapses to
+    :func:`normalize_0_1_by_calendar_month` applied to the full period.
+    """
+    if "time" not in da.dims:
+        raise ValueError(
+            f"normalize_0_1_by_calendar_month_over_window: expected 'time' "
+            f"dim, got {tuple(da.dims)!r}"
+        )
+    if "time" not in window.dims:
+        raise ValueError(
+            f"normalize_0_1_by_calendar_month_over_window: window must also "
+            f"have 'time' dim; got {tuple(window.dims)!r}"
+        )
+    # Per-calendar-month min/max over the window. Result is dim ``month``.
+    window_grouped = window.groupby("time.month")
+    mn_by_month = window_grouped.min("time", skipna=True)
+    mx_by_month = window_grouped.max("time", skipna=True)
+    # For each timestep in da, look up its calendar month's window min/max.
+    months_da = da["time"].dt.month
+    mn = mn_by_month.sel(month=months_da)
+    mx = mx_by_month.sel(month=months_da)
+    rng = mx - mn
+    safe_rng = rng.where(rng > 0)
+    norm = (da - mn) / safe_rng
+    norm.attrs = dict(da.attrs)
+    norm.attrs["units"] = "1"
+    return norm
+
+
 def multi_source_minmax(datasets: list) -> tuple:
     """Compute lower/upper bounds as min/max across a list of DataArrays."""
     raise NotImplementedError

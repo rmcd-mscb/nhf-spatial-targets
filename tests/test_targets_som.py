@@ -67,6 +67,7 @@ def _make_som_project(
     period: str = "2000-01-01/2002-12-31",
     sources: list[str] | None = None,
     nn_fill: bool = True,
+    normalize_period: str | None = None,
 ) -> Path:
     """Build a project skeleton with synthetic fabric + per-year aggregated NCs.
 
@@ -88,6 +89,7 @@ def _make_som_project(
         "targets": {
             "soil_moisture": {
                 "period": period,
+                "normalize_period": normalize_period,
                 "sources": sources,
                 "nn_fill": nn_fill,
             },
@@ -388,3 +390,136 @@ def test_build_hru_mismatch_raises(tmp_path: Path):
     project = load(workdir)
     with pytest.raises(ValueError, match="HRU coords differ.*as sets"):
         build(project)
+
+
+# ---------------------------------------------------------------------------
+# normalize_period config knob
+# ---------------------------------------------------------------------------
+
+
+def test_build_normalize_period_defaults_to_period(tmp_path: Path):
+    """When normalize_period is None, behavior matches the no-window primitive."""
+    from nhf_spatial_targets.targets.som import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_som_project(
+        tmp_path,
+        period="2000-01-01/2002-12-31",
+        normalize_period=None,
+        nn_fill=False,
+    )
+    project = load(workdir)
+    build(project)
+    with xr.open_dataset(
+        project.targets_dir() / "soil_moisture_targets_annual.nc"
+    ) as ds:
+        # Default behavior unchanged from PR base: ramp 2000→2002 normalizes to 0,0.5,1.
+        np.testing.assert_allclose(
+            ds["lower_bound"].values[:, 0], [0.0, 0.5, 1.0], atol=1e-6
+        )
+        assert ds.attrs["normalize_period"] == "2000-01-01/2002-12-31"
+
+
+def test_build_normalize_period_narrower_than_period_extrapolates_above_1(
+    tmp_path: Path,
+):
+    """normalize_period < period: years past the window normalize above 1.
+
+    Use a 5-year period with normalize_period covering only the first 3 years.
+    The ramp (1.0, 1.125, 1.25, 1.375, 1.5x) means the first 3 years' annual
+    means normalize to [0, 0.5, 1.0]; the 4th year (1.375x) is above the
+    window max so normalizes to 1.5 (visibly out-of-range, by design).
+    """
+    from nhf_spatial_targets.targets.som import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_som_project(
+        tmp_path,
+        period="2000-01-01/2004-12-31",
+        normalize_period="2000-01-01/2002-12-31",
+        nn_fill=False,
+    )
+    project = load(workdir)
+    build(project)
+    with xr.open_dataset(
+        project.targets_dir() / "soil_moisture_targets_annual.nc"
+    ) as ds:
+        lo = ds["lower_bound"].values[:, 0]
+        # Window years 2000, 2001, 2002 → 0, 0.5, 1.0
+        np.testing.assert_allclose(lo[:3], [0.0, 0.5, 1.0], atol=1e-6)
+        # Years 2003 and 2004 extrapolate above 1 (by design)
+        assert lo[3] > 1.0
+        assert lo[4] > lo[3]
+        assert ds.attrs["normalize_period"] == "2000-01-01/2002-12-31"
+
+
+def test_build_normalize_period_monthly_variant_records_attr(tmp_path: Path):
+    """Monthly variant records the normalize_period in its global attrs."""
+    from nhf_spatial_targets.targets.som import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_som_project(
+        tmp_path,
+        period="2000-01-01/2002-12-31",
+        normalize_period="2000-01-01/2001-12-31",
+        nn_fill=False,
+    )
+    project = load(workdir)
+    build(project)
+    with xr.open_dataset(
+        project.targets_dir() / "soil_moisture_targets_monthly.nc"
+    ) as ds:
+        assert ds.attrs["normalize_period"] == "2000-01-01/2001-12-31"
+
+
+# ---------------------------------------------------------------------------
+# NN-fill effect
+# ---------------------------------------------------------------------------
+
+
+def test_build_nn_fill_actually_fills_nan_cells(tmp_path: Path):
+    """End-to-end NN-fill for the SOM monthly variant: a NaN HRU is filled in
+    the *_nn_filled.nc companion and the nn_filled flag is set."""
+    from nhf_spatial_targets.targets.som import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_som_project(
+        tmp_path,
+        period="2000-01-01/2002-12-31",
+        sources=["merra2"],  # single source so any NaN propagates to bound NaN
+        nn_fill=True,
+    )
+    # Rewrite each merra2 NC so HRU 2 is NaN throughout.
+    for year in (2000, 2001, 2002):
+        path = workdir / "data" / "aggregated" / "merra2" / f"merra2_{year}_agg.nc"
+        path.unlink()
+        times = pd.DatetimeIndex([f"{year}-{m:02d}-15" for m in range(1, 13)])
+        # Per-month base value × year-over-year ramp so the normalization
+        # produces non-degenerate bounds for HRUs 1 and 3.
+        scale = 1.0 + 0.5 * ((year - 2000) / 2)
+        arr = np.full((12, 3), 0.5 * scale, dtype=np.float32)
+        arr[:, 1] = np.nan
+        ds = xr.Dataset(
+            {"GWETTOP": (("time", "nhm_id"), arr)},
+            coords={"time": times, "nhm_id": [1, 2, 3]},
+        )
+        ds.to_netcdf(path)
+
+    project = load(workdir)
+    build(project)
+
+    monthly = project.targets_dir() / "soil_moisture_targets_monthly.nc"
+    monthly_nn = project.targets_dir() / "soil_moisture_targets_monthly_nn_filled.nc"
+
+    # Honest-NaN file: HRU 2 NaN throughout, n_sources=0 there.
+    with xr.open_dataset(monthly) as raw:
+        assert np.isnan(raw["lower_bound"].values[:, 1]).all()
+        assert (raw["n_sources"].values[:, 1] == 0).all()
+
+    # NN-filled file: HRU 2 now finite, nn_filled=1 there.
+    assert monthly_nn.exists()
+    with xr.open_dataset(monthly_nn) as filled:
+        assert "nn_filled" in filled.data_vars
+        assert np.isfinite(filled["lower_bound"].values[:, 1]).all()
+        assert (filled["nn_filled"].values[:, 1] == 1).all()
+        assert (filled["nn_filled"].values[:, 0] == 0).all()

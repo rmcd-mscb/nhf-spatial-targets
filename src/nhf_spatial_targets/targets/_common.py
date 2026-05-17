@@ -486,3 +486,313 @@ def write_target_nc(
         tmp.unlink(missing_ok=True)
         raise
     logger.info("Wrote %s (%.1f MB)", output_path, output_path.stat().st_size / 1e6)
+
+
+# ---------------------------------------------------------------------------
+# Shared target-builder helpers
+# ---------------------------------------------------------------------------
+
+
+def parse_period(period_str: str) -> tuple[str, str]:
+    """Parse 'YYYY-MM-DD/YYYY-MM-DD' (or 'YYYY/YYYY') into ``(start, end)``.
+
+    Used by every target builder to split the project config's
+    ``<target>.period`` (and ``<target>.normalize_period`` where present)
+    into the two endpoints needed to slice ``read_aggregated_source``'s
+    output.
+    """
+    if "/" not in period_str:
+        raise ValueError(
+            f"Invalid period {period_str!r}. Expected 'YYYY-MM-DD/YYYY-MM-DD'."
+        )
+    start, end = period_str.split("/", 1)
+    return start.strip(), end.strip()
+
+
+def check_hru_coords(
+    da: xr.DataArray,
+    fabric_hru_ids: np.ndarray,
+    id_col: str,
+    source_key: str,
+) -> None:
+    """Raise if the source DataArray's HRU dim disagrees with the fabric.
+
+    Both sides are expected to be sorted ascending by ``id_col`` upstream
+    (``compute_hru_*`` helpers and ``read_aggregated_source`` enforce
+    this). Three outcomes:
+
+    - Coords match exactly: returns ``None``.
+    - Coords have the SAME SET but a different order: raises with a
+      "canonical-sort invariant regression" message — the upstream
+      sort-on-emission contract (#93) has been broken somewhere.
+    - Coords have different SETS: raises a "re-aggregate this source
+      against the current fabric" message.
+
+    Called by target builders right after ``read_aggregated_source``
+    so any HRU misalignment is caught before silent broadcast/intersect
+    arithmetic poisons downstream values.
+    """
+    src_hru_ids = da[id_col].values
+    if np.array_equal(src_hru_ids, fabric_hru_ids):
+        return
+    same_set = len(src_hru_ids) == len(fabric_hru_ids) and np.array_equal(
+        np.sort(src_hru_ids), np.sort(fabric_hru_ids)
+    )
+    if same_set:
+        raise ValueError(
+            f"HRU coords for source '{source_key}' have the same set as the "
+            f"fabric ({len(fabric_hru_ids)} HRUs) but a different order. "
+            f"Both sides are expected to be sorted ascending by id_col="
+            f"'{id_col}' — this indicates a regression in the canonical-"
+            f"sort invariant in targets/_common.py."
+        )
+    raise ValueError(
+        f"HRU coords differ between fabric and source '{source_key}' as "
+        f"sets. Fabric has {len(fabric_hru_ids)} HRUs "
+        f"(first={fabric_hru_ids[0]}, last={fabric_hru_ids[-1]}); "
+        f"source has {len(src_hru_ids)} "
+        f"(first={src_hru_ids[0]}, last={src_hru_ids[-1]}). "
+        f"Re-aggregate '{source_key}' against the current fabric."
+    )
+
+
+def build_n_sources_attrs(
+    n_sources_count: int,
+    ancillary_coords: str = "centroid_lat centroid_lon",
+) -> dict:
+    """Build the per-variable attrs dict for an ``n_sources`` diagnostic var.
+
+    Parameters
+    ----------
+    n_sources_count
+        Number of source contributors (an integer ≥ 0 and ≤ 5). Determines
+        the length of the ``flag_values`` list and the matching
+        ``flag_meanings`` labels (``none one two three four five``,
+        truncated to ``n_sources_count + 1`` entries).
+    ancillary_coords
+        Space-separated list of ancillary coordinate variable names to
+        record under CF's ``coordinates`` attr. Defaults to the centroid
+        pair used by every target builder.
+    """
+    flag_labels = ["none", "one", "two", "three", "four", "five"]
+    if n_sources_count + 1 > len(flag_labels):
+        raise ValueError(
+            f"build_n_sources_attrs: n_sources_count={n_sources_count} exceeds "
+            f"the {len(flag_labels) - 1}-source label vocabulary."
+        )
+    return {
+        "units": "1",
+        "long_name": "number of finite source contributions",
+        "flag_values": list(range(0, n_sources_count + 1)),
+        "flag_meanings": " ".join(flag_labels[: n_sources_count + 1]),
+        "coordinates": ancillary_coords,
+    }
+
+
+def write_bounds_target(
+    *,
+    project: Project,
+    lower: xr.DataArray,
+    upper: xr.DataArray,
+    n_sources: xr.DataArray,
+    n_sources_count: int,
+    time_index: pd.DatetimeIndex,
+    time_offset_unit: object,
+    bounds_units: str,
+    bounds_long_name_kind: str,
+    cell_methods: str,
+    output_path: Path,
+    title: str,
+    nn_title: str,
+    extra_global_attrs: dict,
+    hru_meta: "pd.DataFrame",
+    nn_fill: bool,
+    nn_max_candidates: int,
+    id_col: str,
+) -> None:
+    """Assemble + write a bounds-target Dataset, with optional NN-fill companion.
+
+    Consolidates the assemble-and-write pipeline shared by every target
+    builder (runoff, AET, recharge, soil moisture): centroid coords,
+    ``time_bnds``, per-variable attrs (units / long_name / cell_methods /
+    coordinates), global attrs, atomic write via ``write_target_nc``, a
+    coverage-summary log line, and the optional ``nn_fill_bounds``
+    companion file.
+
+    Parameters
+    ----------
+    project
+        Loaded :class:`~nhf_spatial_targets.workspace.Project`.
+    lower, upper, n_sources
+        The three combined-source DataArrays from
+        :func:`multi_source_nanminmax`.
+    n_sources_count
+        Total number of source contributors (an int); drives the
+        ``n_sources`` diagnostic's ``flag_values`` length.
+    time_index
+        Master ``DatetimeIndex`` that ``lower`` / ``upper`` are aligned to.
+    time_offset_unit
+        Offset added to each ``time_index`` entry to form ``time_bnds``'s
+        upper edge (e.g. ``pd.offsets.MonthBegin(1)`` for monthly,
+        ``pd.offsets.YearBegin(1)`` for annual).
+    bounds_units
+        Units string for the lower/upper variable attrs (e.g. ``"cfs"``,
+        ``"inches/day"``, ``"1"``).
+    bounds_long_name_kind
+        Substituted into the ``long_name`` template: ``"lower bound of
+        {kind} (NaN-aware min across sources)"``. Examples: ``"monthly
+        runoff"``, ``"annual recharge"``.
+    cell_methods
+        CF ``cell_methods`` attr value for both bounds (e.g.
+        ``"time: sum"``, ``"time: mean"``).
+    output_path
+        Final NetCDF path for the unfilled target.
+    title
+        ``title`` global attr for the unfilled target.
+    nn_title
+        ``title`` global attr for the NN-filled companion (only used when
+        ``nn_fill`` is True).
+    extra_global_attrs
+        Per-target metadata (``source``, ``period``, ``fabric_sha256``,
+        etc.) — passed through to ``write_target_nc``.
+    hru_meta
+        DataFrame returned by ``compute_hru_centroids`` (or the combined
+        helper). Must contain ``centroid_lat``, ``centroid_lon``,
+        ``centroid_x``, ``centroid_y`` columns.
+    nn_fill
+        If True, additionally write ``<output>_nn_filled.nc`` via
+        :func:`nn_fill_bounds`.
+    nn_max_candidates
+        Forwarded to :func:`nn_fill_bounds`.
+    id_col
+        HRU id column name (e.g. ``"nhm_id"``); the dataset is sorted
+        ascending on this dim at emission per the #93 canonical-row-order
+        invariant.
+    """
+    # Avoid a circular-import by deferring this helper-internal import.
+    from nhf_spatial_targets.normalize.methods import nn_fill_bounds
+
+    lower.name = "lower_bound"
+    upper.name = "upper_bound"
+    n_sources.name = "n_sources"
+
+    time_bnds = xr.DataArray(
+        list(zip(time_index.values, (time_index + time_offset_unit).values)),
+        dims=("time", "nv"),
+        coords={"time": time_index.values},
+        name="time_bnds",
+    )
+    centroid_lat = xr.DataArray(
+        hru_meta["centroid_lat"].values,
+        dims=(id_col,),
+        coords={id_col: hru_meta.index.values},
+        attrs={
+            "units": "degrees_north",
+            "standard_name": "latitude",
+            "long_name": "HRU centroid latitude",
+        },
+    )
+    centroid_lon = xr.DataArray(
+        hru_meta["centroid_lon"].values,
+        dims=(id_col,),
+        coords={id_col: hru_meta.index.values},
+        attrs={
+            "units": "degrees_east",
+            "standard_name": "longitude",
+            "long_name": "HRU centroid longitude",
+        },
+    )
+
+    lower.attrs.update(
+        {
+            "units": bounds_units,
+            "long_name": (
+                f"lower bound of {bounds_long_name_kind} (NaN-aware min across sources)"
+            ),
+            "cell_methods": cell_methods,
+            "coordinates": "centroid_lat centroid_lon",
+        }
+    )
+    upper.attrs.update(
+        {
+            "units": bounds_units,
+            "long_name": (
+                f"upper bound of {bounds_long_name_kind} (NaN-aware max across sources)"
+            ),
+            "cell_methods": cell_methods,
+            "coordinates": "centroid_lat centroid_lon",
+        }
+    )
+    n_sources.attrs.update(build_n_sources_attrs(n_sources_count))
+
+    ds = xr.Dataset(
+        {
+            "lower_bound": lower,
+            "upper_bound": upper,
+            "n_sources": n_sources,
+        },
+        coords={
+            "time": time_index,
+            id_col: lower[id_col],
+            "time_bnds": time_bnds,
+            "centroid_lat": centroid_lat,
+            "centroid_lon": centroid_lon,
+        },
+    )
+    ds["time"].attrs["bounds"] = "time_bnds"
+    ds["time"].attrs["axis"] = "T"
+    ds["time"].attrs["standard_name"] = "time"
+    ds[id_col].attrs["long_name"] = "HRU identifier"
+    ds[id_col].attrs["cf_role"] = "timeseries_id"
+
+    ds_loaded = ds.compute()
+
+    write_target_nc(
+        ds_loaded,
+        output_path,
+        title=title,
+        extra_global_attrs=extra_global_attrs,
+        sort_dim=id_col,
+    )
+
+    n = ds_loaded["n_sources"].values
+    total = n.size
+    none = int((n == 0).sum())
+    logger.info(
+        "%s coverage: %d/%d cells have >=1 finite source (%.2f%% all-NaN)",
+        bounds_long_name_kind,
+        total - none,
+        total,
+        100.0 * none / total if total else 0.0,
+    )
+
+    if not nn_fill:
+        return
+
+    centroids_xy = hru_meta[["centroid_x", "centroid_y"]].values
+    filled_ds, nn_diag = nn_fill_bounds(
+        ds_loaded, centroids_xy, max_candidates=nn_max_candidates
+    )
+    nn_diag.attrs.update(
+        {
+            "units": "1",
+            "long_name": "nearest-neighbor fill flag",
+            "flag_values": [0, 1],
+            "flag_meanings": "not_filled filled",
+            "coordinates": "centroid_lat centroid_lon",
+        }
+    )
+    filled_ds["nn_filled"] = nn_diag
+    filled_attrs = dict(extra_global_attrs)
+    filled_attrs["nn_fill_max_candidates"] = nn_max_candidates
+    filled_attrs["nn_fill_distance_crs"] = project.area_crs
+    nn_path = output_path.with_name(
+        output_path.stem + "_nn_filled" + output_path.suffix
+    )
+    write_target_nc(
+        filled_ds,
+        nn_path,
+        title=nn_title,
+        extra_global_attrs=filled_attrs,
+        sort_dim=id_col,
+    )
