@@ -319,6 +319,9 @@ def compute_hru_area_and_centroids(project: Project) -> "pd.DataFrame":
     :func:`compute_hru_areas` (area only) — prefer them when you don't
     need the other column.
 
+    Always recomputes from geometry (no fabric-column fallback) so the
+    area cannot drift from the geometry actually being processed.
+
     Returns
     -------
     pandas.DataFrame
