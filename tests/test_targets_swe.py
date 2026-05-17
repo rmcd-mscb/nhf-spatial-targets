@@ -12,14 +12,20 @@ import xarray as xr
 import yaml
 
 
-# Map config-label → on-disk per-source dir + aggregated variable name.
-# Mirrors targets/swe.py:_CONFIG_LABEL_TO_SHIM_KEY + SHIMS.aggregated_var.
-_SOURCE_DIRS_AND_VARS = {
-    "daymet": ("daymet", "swe"),
-    "snodas": ("snodas", "swe"),
-    "era5_land": ("era5_land_sd", "sd"),
-    "margulis_wus_sr": ("margulis_wus_sr", "SWE"),
-}
+# Map config-label → (on-disk per-source dir, aggregated variable name).
+# Derived from targets/swe.py:SHIMS so there is no parallel dict to drift
+# from the real registry (PR #135 review consider 4).
+def _source_dirs_and_vars() -> dict[str, tuple[str, str]]:
+    from nhf_spatial_targets.targets._common import shims_by_config_label
+    from nhf_spatial_targets.targets.swe import SHIMS
+
+    return {
+        label: (shim.source_key, shim.aggregated_var)
+        for label, shim in shims_by_config_label(SHIMS).items()
+    }
+
+
+_SOURCE_DIRS_AND_VARS = _source_dirs_and_vars()
 
 
 def _write_synthetic_fabric(path: Path, id_col: str = "nhm_id"):
@@ -326,10 +332,16 @@ def test_build_oregon_includes_margulis_in_source_attr(tmp_path: Path):
         assert ds.attrs["fabric_token"] == "or"
 
 
-def test_build_no_token_drops_margulis(tmp_path: Path):
+def test_build_no_token_drops_margulis(tmp_path: Path, caplog):
     """Fabric token unset (e.g. gfv2-style CONUS project) → Margulis is
     silently dropped via fabric_scope filter; bound reduces to 3 sources.
+
+    Also asserts the filter logs the skip with the source name + token,
+    so an operator can see why a source vanished from the bound without
+    having to instrument anything (PR #135 review nit).
     """
+    import logging
+
     from nhf_spatial_targets.targets.swe import build
     from nhf_spatial_targets.workspace import load
 
@@ -340,10 +352,13 @@ def test_build_no_token_drops_margulis(tmp_path: Path):
         write_margulis=False,  # operator wouldn't fetch margulis here
     )
     project = load(workdir)
-    build(project)
+    with caplog.at_level(logging.INFO, logger="nhf_spatial_targets.targets.swe"):
+        build(project)
     with xr.open_dataset(project.targets_dir() / "swe_targets.nc") as ds:
         assert (ds["n_sources"].values == 3).all()
         assert "Margulis" not in ds.attrs["source"]
+    assert "margulis_wus_sr" in caplog.text
+    assert "fabric_scope" in caplog.text
 
 
 def test_build_invalid_fabric_token_raises(tmp_path: Path):

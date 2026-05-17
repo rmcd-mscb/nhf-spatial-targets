@@ -472,6 +472,76 @@ def test_reindex_to_month_start_rejects_non_ms_freq():
         reindex_to_month_start(da, bad)
 
 
+def test_reindex_to_day_start_floors_noon_timestamps():
+    """Daymet-style noon timestamps land on the same day as midnight on master."""
+    from nhf_spatial_targets.targets._common import reindex_to_day_start
+
+    noon = _da_with_time(["2003-12-15 12:00:00", "2003-12-16 12:00:00"])
+    master = pd.date_range("2003-12-15", "2003-12-16", freq="D")
+    reindexed = reindex_to_day_start(noon, master)
+    assert list(reindexed.time.values) == list(master.values)
+    np.testing.assert_array_equal(reindexed.values, noon.values)
+
+
+def test_reindex_to_day_start_already_midnight_is_idempotent():
+    from nhf_spatial_targets.targets._common import reindex_to_day_start
+
+    midnight = _da_with_time(["2003-12-15", "2003-12-16", "2003-12-17"])
+    master = pd.date_range("2003-12-15", "2003-12-17", freq="D")
+    reindexed = reindex_to_day_start(midnight, master)
+    np.testing.assert_array_equal(reindexed.values, midnight.values)
+
+
+def test_reindex_to_day_start_pads_missing_days_with_nan():
+    """Days in master_index but absent from the source come out as NaN.
+
+    This is the SWE target's period-union semantics — a SNODAS source
+    that starts in 2003-10 contributes nothing for earlier days in a
+    larger master index, but the bound is still defined wherever
+    another source is finite.
+    """
+    from nhf_spatial_targets.targets._common import reindex_to_day_start
+
+    partial = _da_with_time(["2003-12-15", "2003-12-16"])
+    master = pd.date_range("2003-12-15", "2003-12-18", freq="D")
+    reindexed = reindex_to_day_start(partial, master)
+    assert len(reindexed.time) == 4
+    assert np.isnan(reindexed.values[2:]).all()
+    np.testing.assert_array_equal(reindexed.values[:2], partial.values)
+
+
+def test_reindex_to_day_start_rejects_non_d_freq():
+    """A freq='MS' master_index must raise, not silently produce all-NaN."""
+    from nhf_spatial_targets.targets._common import reindex_to_day_start
+
+    da = _da_with_time(["2003-12-15", "2003-12-16"])
+    bad = pd.date_range("2003-12-01", "2003-12-31", freq="MS")
+    with pytest.raises(ValueError, match="freq='D'"):
+        reindex_to_day_start(da, bad)
+
+
+def test_reindex_to_day_start_rejects_cftime_decoded_time():
+    """Non-datetime64 time coords (e.g. cftime from non-standard calendars)
+    raise rather than silently losing calendar info via DatetimeIndex coercion.
+    """
+    import cftime
+
+    from nhf_spatial_targets.targets._common import reindex_to_day_start
+
+    times = np.array(
+        [cftime.DatetimeNoLeap(2003, 12, 15), cftime.DatetimeNoLeap(2003, 12, 16)],
+        dtype=object,
+    )
+    da = xr.DataArray(
+        np.array([[1.0], [2.0]], dtype=np.float32),
+        dims=("time", "nhm_id"),
+        coords={"time": times, "nhm_id": [1]},
+    )
+    master = pd.date_range("2003-12-15", "2003-12-16", freq="D")
+    with pytest.raises(TypeError, match="datetime64-decoded time"):
+        reindex_to_day_start(da, master)
+
+
 def _write_year_nc_unsorted(
     path: Path,
     year: int,

@@ -48,13 +48,34 @@ def test_sd_adapter_default_mean():
     assert ADAPTER_SD.stat_method == "mean"
 
 
-def test_monthly_and_sd_have_distinct_source_keys():
-    """The two ERA5-Land adapters must keep separate aggregated dirs so
-    read_aggregated_source's `<source_key>_*_agg.nc` glob can't cross
-    them. Bug class: PR #133 review consider — runoff target picking up
-    daily sd files would broadcast NaN on ro/sro/ssro for any non-monthly
-    time."""
-    assert ADAPTER.source_key != ADAPTER_SD.source_key
+def test_monthly_and_sd_land_in_distinct_aggregated_dirs(tmp_path):
+    """The two ERA5-Land adapters must produce per-year NCs in
+    different ``<project>/data/aggregated/<source_key>/`` subdirs so
+    ``read_aggregated_source``'s ``<source_key>_*_agg.nc`` glob cannot
+    cross them. Bug class: PR #135 review consider — the runoff target
+    picking up daily sd files would broadcast NaN on ro/sro/ssro for
+    any non-monthly time.
+
+    Asserts the actual invariant we care about (distinct per-year output
+    paths) rather than just the source_key inequality, which is only a
+    necessary condition.
+    """
+    from nhf_spatial_targets.aggregate._driver import per_year_output_path
+
+    # The driver's per_year_output_path helper only reads ``workdir``
+    # from its Project argument, so a stub keeps this test path-level
+    # (which is the layer that actually matters) without needing to
+    # spin up a real project.
+    class _ProjectStub:
+        workdir = tmp_path
+
+    monthly_2003 = per_year_output_path(_ProjectStub(), ADAPTER.source_key, 2003)
+    sd_2003 = per_year_output_path(_ProjectStub(), ADAPTER_SD.source_key, 2003)
+    assert monthly_2003.parent != sd_2003.parent, (
+        f"monthly + sd outputs share a directory ({monthly_2003.parent}); "
+        f"read_aggregated_source's loose glob would mix cadences"
+    )
+    assert monthly_2003 != sd_2003
 
 
 def test_adapter_relies_on_cf_coord_detection():

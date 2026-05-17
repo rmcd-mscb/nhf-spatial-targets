@@ -502,6 +502,33 @@ bound — daymet (1980+) ∩ era5_land sd (1979+) ∩ snodas (2003+) =
 2003-10 onward. Oregon adds margulis (1985-2020) so the 4-source
 intersection caps at 2020.
 
+**Memory considerations on multi-year full-fabric builds**
+
+SWE is the most memory-intensive target in the pipeline because of the
+daily cadence × multi-source NaN-aware stack. `write_bounds_target`
+materialises the full assembled Dataset before writing (`ds.compute()`),
+so peak RSS scales roughly as:
+
+```
+peak_bytes ≈ n_days × n_HRUs × 4 bytes × (n_sources + 2) × overhead
+```
+
+where `n_sources + 2` accounts for the stacked source dim plus
+`lower_bound` + `upper_bound`, and `overhead` ≈ 2 to cover the
+intermediate `multi_source_nanminmax` reductions and the NN-fill
+companion's parallel Dataset. For gfv2 (~361 k HRUs):
+
+- 1 year × 4 sources ≈ 12 GB peak → fits in `--mem=32G`.
+- 5 years × 4 sources ≈ 60 GB peak → bump to `--mem=96G`.
+- 20 years × 4 sources ≈ 240 GB peak → either `--mem=256G` (Hovenweep
+  large-mem partition) or switch to a per-year emission loop in a
+  follow-up PR.
+
+Operator workflow: start a smoke-test on 3–6 months at `--mem=32G`,
+sanity-check magnitudes, then scale `--mem` proportionally with the
+period length. The smoke-test cost is small and surfaces unit /
+fabric_scope / coverage bugs cheaply before committing to a long run.
+
 ---
 
 ## Aggregation, masked_mean, and target-time NN-fill

@@ -120,8 +120,11 @@ class SourceAdapter:
         # enforce the cross-year grid invariant.
         if self.raw_grid_variable is None:
             object.__setattr__(self, "raw_grid_variable", self.grid_variable)
-        # Default catalog_key / raw_dir_key to source_key (the 1:1 case).
-        if self.catalog_key is None:
+        # Default catalog_key / raw_dir_key to source_key (the 1:1 case);
+        # remember whether the caller set them explicitly so the catalog-
+        # typo error below can blame the right field.
+        catalog_key_explicit = self.catalog_key is not None
+        if not catalog_key_explicit:
             object.__setattr__(self, "catalog_key", self.source_key)
         if self.raw_dir_key is None:
             object.__setattr__(self, "raw_dir_key", self.source_key)
@@ -135,10 +138,22 @@ class SourceAdapter:
 
             _catalog_source(self.catalog_key)
         except KeyError as exc:
-            raise ValueError(
-                f"SourceAdapter.catalog_key {self.catalog_key!r} not found in "
-                f"catalog/sources.yml"
-            ) from exc
+            # Blame source_key when catalog_key was auto-defaulted from it
+            # (the common case — a typo in source_key surfaces here);
+            # blame catalog_key when it was explicitly set (the synthetic-
+            # key case, e.g. era5_land_sd → era5_land).
+            if catalog_key_explicit:
+                msg = (
+                    f"SourceAdapter.catalog_key {self.catalog_key!r} not found "
+                    f"in catalog/sources.yml"
+                )
+            else:
+                msg = (
+                    f"SourceAdapter.source_key {self.source_key!r} not found "
+                    f"in catalog/sources.yml (catalog_key defaulted from "
+                    f"source_key)"
+                )
+            raise ValueError(msg) from exc
         except Exception:
             # Catalog file missing/unreadable/YAML broken — let the aggregator
             # surface this at run time with richer context.

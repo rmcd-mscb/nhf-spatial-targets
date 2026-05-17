@@ -57,7 +57,7 @@ from nhf_spatial_targets.targets._common import (
     parse_period,
     read_aggregated_source,
     reindex_to_day_start,
-    shims_by_key,
+    shims_by_config_label,
     write_bounds_target,
 )
 from nhf_spatial_targets.workspace import Project
@@ -106,12 +106,14 @@ def margulis_to_mm(da: xr.DataArray) -> xr.DataArray:
     return out
 
 
-# Per-source registry. Source keys here match the keys consumed by the
-# config — ``era5_land`` refers to the daily-sd aggregated subdir under
-# ``era5_land_sd/`` via the synthetic-key trick (see aggregate/era5_land.py:
-# ADAPTER_SD reads from <datastore>/era5_land/daily/ and writes to
-# <project>/data/aggregated/era5_land_sd/), keeping a single "era5_land"
-# label in user-facing config + targets while disambiguating storage.
+# Per-source registry. The ERA5-Land sd shim has ``source_key="era5_land_sd"``
+# (the on-disk storage key, matching aggregate/era5_land.py:ADAPTER_SD's
+# output dir under <project>/data/aggregated/era5_land_sd/) but
+# ``config_label="era5_land"`` so the project config can keep a single
+# logical "era5_land" entry in ``snow_water_equivalent.sources``. The
+# label→shim map is derived from this tuple at module load via
+# :func:`shims_by_config_label` — there is no parallel dict to keep in
+# sync.
 SHIMS: tuple[SourceShim, ...] = (
     SourceShim(
         source_key="daymet",
@@ -130,6 +132,7 @@ SHIMS: tuple[SourceShim, ...] = (
         aggregated_var="sd",
         description="ERA5-Land sd (m → mm, daily snapshot)",
         to_common_units=era5_sd_to_mm,
+        config_label="era5_land",
     ),
     SourceShim(
         source_key="margulis_wus_sr",
@@ -138,20 +141,6 @@ SHIMS: tuple[SourceShim, ...] = (
         to_common_units=margulis_to_mm,
     ),
 )
-
-
-# Mapping from the user-facing source label in `snow_water_equivalent.sources`
-# (which mirrors the catalog source key, e.g. "era5_land") to the actual
-# `source_key` used inside the aggregated-data tree (e.g. "era5_land_sd"
-# for ERA5-Land's daily snow depth). Lets the project config keep one
-# logical "era5_land" entry while the daily SWE outputs live in their
-# own per-source subdirectory (see aggregate/era5_land.py).
-_CONFIG_LABEL_TO_SHIM_KEY: dict[str, str] = {
-    "daymet": "daymet",
-    "snodas": "snodas",
-    "era5_land": "era5_land_sd",
-    "margulis_wus_sr": "margulis_wus_sr",
-}
 
 
 def mm_to_inches(da: xr.DataArray) -> xr.DataArray:
@@ -221,17 +210,18 @@ def build(project: Project) -> None:
     requested_sources = list(swe_cfg["sources"])
     fabric_cfg = project.config.get("fabric") or {}
     fabric_token = fabric_cfg.get("token")
+    shims = shims_by_config_label(SHIMS)
 
-    # Validate every requested source against the known SHIMS registry
-    # BEFORE any catalog or fabric_scope lookups, so an unknown source
-    # name surfaces a "Known: ..." message rather than a confusing
-    # KeyError from the catalog or a "zero sources after filtering"
-    # message after silent drops.
+    # Validate every requested source against the SHIMS registry BEFORE
+    # any catalog or fabric_scope lookups, so an unknown source name
+    # surfaces a "Known: ..." message rather than a confusing KeyError
+    # from the catalog or a "zero sources after filtering" message
+    # after silent drops.
     for src in requested_sources:
-        if src not in _CONFIG_LABEL_TO_SHIM_KEY:
+        if src not in shims:
             raise ValueError(
                 f"snow_water_equivalent.sources includes unknown source "
-                f"'{src}'. Known: {sorted(_CONFIG_LABEL_TO_SHIM_KEY)}"
+                f"'{src}'. Known: {sorted(shims)}"
             )
 
     # Validate the project's fabric token if set, to catch typos like
@@ -280,16 +270,9 @@ def build(project: Project) -> None:
 
     # 3. Read, convert, reindex each source.
     fabric_hru_ids = hru_meta.index.values
-    shims = shims_by_key(SHIMS)
     sources_in_inches: dict[str, xr.DataArray] = {}
     for src_label in sources:
-        shim_key = _CONFIG_LABEL_TO_SHIM_KEY.get(src_label, src_label)
-        if shim_key not in shims:
-            raise ValueError(
-                f"snow_water_equivalent.sources includes unknown source "
-                f"'{src_label}'. Known: {sorted(_CONFIG_LABEL_TO_SHIM_KEY)}"
-            )
-        shim = shims[shim_key]
+        shim = shims[src_label]
         da_native = read_aggregated_source(
             project,
             shim.source_key,
@@ -309,9 +292,7 @@ def build(project: Project) -> None:
 
     # 5. Assemble + write (with optional NN-fill companion).
     extra_attrs = {
-        "source": "; ".join(
-            shims[_CONFIG_LABEL_TO_SHIM_KEY.get(s, s)].description for s in sources
-        ),
+        "source": "; ".join(shims[s].description for s in sources),
         "references": (
             "Hay et al. 2022, doi:10.3133/tm6B10; Markstrom et al. 2015, TM 6-B7"
         ),

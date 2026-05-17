@@ -14,7 +14,8 @@
 # Submits one SLURM job per aggregation source (14 total). SSEBop is the
 # remote-STAC aggregator and has its own separate script (agg_ssebop.slurm).
 # Daymet has its own script too (agg_daymet.slurm) because it requires
-# the operator-staged zarr root and a --region / --period argument.
+# a --region argument (no useful default — projects pick na/hi/pr based
+# on their fabric) plus an operator-staged zarr root.
 # Each job aggregates independently; they can run concurrently on separate
 # compute nodes.
 #
