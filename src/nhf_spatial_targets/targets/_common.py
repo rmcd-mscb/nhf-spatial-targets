@@ -49,8 +49,13 @@ class SourceShim:
     Attributes
     ----------
     source_key
-        Catalog key (e.g. ``"ssebop"``). Must match ``catalog.source(...)``
-        and the directory name under ``<project>/data/aggregated/``.
+        On-disk storage key. Used as the subdirectory name under
+        ``<project>/data/aggregated/`` and as the prefix of the per-year
+        NC filename. Matches the catalog source key in the common case,
+        but may be a synthetic key (e.g. ``"era5_land_sd"``) when one
+        upstream source produces multiple aggregated cadences in
+        separate subdirs — see ``aggregate/era5_land.py``'s
+        ``ADAPTER_SD``.
     aggregated_var
         Variable name to extract from the aggregated NC (e.g. ``"et"``).
     description
@@ -61,12 +66,21 @@ class SourceShim:
         targets the common intermediate is usually mm/month; the per-
         target unit chain then applies a final linear conversion (e.g.
         mm/month → cfs for runoff, mm/month → inches/day for AET).
+    config_label
+        Optional user-facing alias used in the project config's
+        ``<target>.sources`` list. Defaults to ``source_key``. Set this
+        when the storage key is a synthetic disambiguation (e.g.
+        ``"era5_land_sd"``) but the config should keep the canonical
+        catalog name (``"era5_land"``) — this keeps target builders
+        free of any parallel label→storage dict that could drift from
+        the SHIMS registry.
     """
 
     source_key: str
     aggregated_var: str
     description: str
     to_common_units: Callable[[xr.DataArray], xr.DataArray]
+    config_label: str | None = None
 
 
 def shims_by_key(shims: "tuple[SourceShim, ...]") -> "dict[str, SourceShim]":
@@ -84,6 +98,30 @@ def shims_by_key(shims: "tuple[SourceShim, ...]") -> "dict[str, SourceShim]":
                 f"target SHIMS registry. Each source may appear at most once."
             )
         out[shim.source_key] = shim
+    return out
+
+
+def shims_by_config_label(
+    shims: "tuple[SourceShim, ...]",
+) -> "dict[str, SourceShim]":
+    """Index a ``SHIMS`` tuple by ``config_label`` (defaulted to ``source_key``).
+
+    Used by target builders to resolve a user-facing source name from
+    the project config (e.g. ``"era5_land"``) to the SourceShim that
+    encodes its storage key, aggregated variable, and unit shim. Raises
+    ``ValueError`` on duplicate labels — two shims wanting the same
+    config label is the same drift class :func:`shims_by_key` guards.
+    """
+    out: dict[str, SourceShim] = {}
+    for shim in shims:
+        label = shim.config_label or shim.source_key
+        if label in out:
+            raise ValueError(
+                f"Duplicate SourceShim config_label={label!r} in target "
+                f"SHIMS registry. Each label may appear at most once "
+                f"(set distinct config_label values to disambiguate)."
+            )
+        out[label] = shim
     return out
 
 
@@ -227,6 +265,55 @@ def reindex_to_month_start(
         )
     ms_times = pd.DatetimeIndex(da.time.values).to_period("M").to_timestamp()
     canon = da.assign_coords(time=ms_times)
+    return canon.reindex(time=master_index)
+
+
+def reindex_to_day_start(
+    da: xr.DataArray, master_index: pd.DatetimeIndex
+) -> xr.DataArray:
+    """Reindex a daily DataArray onto a master ``freq="D"`` index.
+
+    Source timestamps may be midnight (SNODAS, ERA5-Land daily, Margulis)
+    or noon (Daymet — calendar-day mean). Both convey "which calendar
+    day" unambiguously; this helper normalises by stripping the time of
+    day (``.dt.floor("D")``) before reindexing.
+
+    Days in ``master_index`` that the source does not cover come back as
+    NaN — this is what gives the SWE target its period-union semantics:
+    a source whose record ends in 2020 but is asked through 2024 simply
+    contributes nothing for the post-2020 cells.
+
+    Requires ``da.time`` to be decoded as ``datetime64[ns]`` (the xarray
+    default for ``proleptic_gregorian`` calendars, which is what every
+    NC the pipeline writes uses — see ``fetch/consolidate.py``). Sources
+    decoded as ``cftime`` objects (non-standard calendars like
+    ``noleap`` / ``360_day``) raise ``TypeError`` rather than silently
+    falling back to a ``DatetimeIndex`` conversion that loses the
+    calendar.
+    """
+    if not isinstance(master_index, pd.DatetimeIndex):
+        raise TypeError(
+            f"master_index must be a pandas.DatetimeIndex, got "
+            f"{type(master_index).__name__}"
+        )
+    if master_index.freqstr != "D":
+        raise ValueError(
+            f"master_index must have freq='D' (daily); got "
+            f"freq={master_index.freqstr!r}. Build it with "
+            f"pd.date_range(start, end, freq='D')."
+        )
+    if not np.issubdtype(da.time.dtype, np.datetime64):
+        raise TypeError(
+            f"reindex_to_day_start expects datetime64-decoded time, got "
+            f"dtype={da.time.dtype!r}. The pipeline writes every NC with "
+            f"calendar='proleptic_gregorian' so xarray should decode to "
+            f"datetime64[ns]; a cftime-decoded source indicates either a "
+            f"non-standard upstream calendar or decode_cf=False during "
+            f"open. Re-open with the default decoder or report as a "
+            f"consolidator bug."
+        )
+    day_times = pd.DatetimeIndex(da.time.values).floor("D")
+    canon = da.assign_coords(time=day_times)
     return canon.reindex(time=master_index)
 
 

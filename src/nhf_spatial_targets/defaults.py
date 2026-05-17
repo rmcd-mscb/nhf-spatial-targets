@@ -30,6 +30,11 @@ DEFAULTS: dict = {
         # Equal-area CRS used for HRU area + NN-fill distances. Override for
         # AK / HI / PR (e.g. EPSG:3338 for Alaska Albers).
         "area_crs": "EPSG:5070",
+        # Fabric identifier consumed by per-target fabric_scope filters
+        # (currently SWE for Margulis WUS-SR). Must be a member of
+        # catalog.FABRIC_SCOPE_TOKENS when set; unset leaves all
+        # fabric-scoped sources excluded by default.
+        "token": None,
     },
     "datastore": None,  # required
     "dir_mode": "2775",

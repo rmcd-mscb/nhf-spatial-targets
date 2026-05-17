@@ -2,7 +2,7 @@
 #SBATCH --job-name=nhf-agg
 #SBATCH --account=impd
 #SBATCH --partition=cpu
-#SBATCH --array=0-11
+#SBATCH --array=0-13
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=128G
@@ -11,8 +11,11 @@
 #SBATCH --error=logs/agg_%a_%A.err
 
 # NHF Spatial Targets — parallel aggregation array (tier-1 + tier-2)
-# Submits one SLURM job per aggregation source (12 total). SSEBop is the
+# Submits one SLURM job per aggregation source (14 total). SSEBop is the
 # remote-STAC aggregator and has its own separate script (agg_ssebop.slurm).
+# Daymet has its own script too (agg_daymet.slurm) because it requires
+# a --region argument (no useful default — projects pick na/hi/pr based
+# on their fabric) plus an operator-staged zarr root.
 # Each job aggregates independently; they can run concurrently on separate
 # compute nodes.
 #
@@ -65,6 +68,8 @@ AGG_TASKS=(
     "agg-mod10c1"       # 9 — MOD10C1 v061   (0.05° daily SCA) — memory-heavy
     "agg-snodas"        # 10 — SNODAS         (~1 km daily SWE, CONUS)
     "agg-mwbm-climgrid" # 11 — USGS MWBM (ClimGrid) (2.5 arcmin monthly, 4 vars)
+    "agg-era5-land-sd"  # 12 — ERA5-Land sd   (0.1° daily snow depth, SWE source)
+    "agg-margulis-wus-sr" # 13 — Margulis WUS-SR (90 m daily SWE, OR-only SWE source)
 )
 
 # Optional --period override per task. Empty string means "no clip"; the
@@ -85,6 +90,8 @@ AGG_PERIODS=(
     ""              # 9  mod10c1
     ""              # 10 snodas
     "1979/2020"     # 11 mwbm-climgrid (publisher: 1895-2020; clip to NHM window, drop spinup)
+    ""              # 12 era5-land-sd
+    ""              # 13 margulis-wus-sr (1985-2020 on disk; clip via --period if desired)
 )
 
 if (( SLURM_ARRAY_TASK_ID < 0 || SLURM_ARRAY_TASK_ID >= ${#AGG_TASKS[@]} )); then

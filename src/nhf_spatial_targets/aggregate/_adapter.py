@@ -38,6 +38,17 @@ class SourceAdapter:
     Currently used by ``aggregate/mod16a2.py`` (PR #88 fill mask) and
     ``aggregate/mod10c1.py`` (CI > 70 quality gate). See
     ``docs/architecture/transformation-pipeline.md`` for the full rule.
+
+    ``catalog_key`` and ``raw_dir_key`` decouple the synthetic
+    ``source_key`` used for output storage / weight cache / manifest
+    keying from the real catalog and datastore-raw lookups. Both default
+    to ``source_key`` for the common 1:1 case. The current consumer is
+    ERA5-Land snow depth (``aggregate/era5_land.py``'s ``ADAPTER_SD``),
+    which uses ``source_key="era5_land_sd"`` to keep daily SWE outputs
+    in their own ``<project>/data/aggregated/era5_land_sd/`` subdir
+    (separate from the monthly runoff outputs under ``era5_land/``)
+    while still reading from ``<datastore>/era5_land/daily/`` and
+    inheriting CF metadata from the real ``era5_land`` catalog entry.
     """
 
     source_key: str
@@ -53,6 +64,8 @@ class SourceAdapter:
     pre_aggregate_hook: Callable[[xr.Dataset], xr.Dataset] | None = field(default=None)
     post_aggregate_hook: Callable[[xr.Dataset], xr.Dataset] | None = field(default=None)
     stat_method: str = "mean"
+    catalog_key: str | None = None
+    raw_dir_key: str | None = None
 
     def __post_init__(self) -> None:
         # Coerce list → tuple so callers can pass list literals.
@@ -107,19 +120,40 @@ class SourceAdapter:
         # enforce the cross-year grid invariant.
         if self.raw_grid_variable is None:
             object.__setattr__(self, "raw_grid_variable", self.grid_variable)
-        # Catalog-typo check. If the catalog is unavailable at construction
+        # Default catalog_key / raw_dir_key to source_key (the 1:1 case);
+        # remember whether the caller set them explicitly so the catalog-
+        # typo error below can blame the right field.
+        catalog_key_explicit = self.catalog_key is not None
+        if not catalog_key_explicit:
+            object.__setattr__(self, "catalog_key", self.source_key)
+        if self.raw_dir_key is None:
+            object.__setattr__(self, "raw_dir_key", self.source_key)
+        # Catalog-typo check (against catalog_key, which is what the driver
+        # actually looks up). If the catalog is unavailable at construction
         # time (e.g. test harness, repackaged install), defer the check until
         # the driver runs. Do NOT swallow KeyError — that's the typo case we
         # specifically want to surface.
         try:
             from nhf_spatial_targets.catalog import source as _catalog_source
 
-            _catalog_source(self.source_key)
+            _catalog_source(self.catalog_key)
         except KeyError as exc:
-            raise ValueError(
-                f"SourceAdapter.source_key {self.source_key!r} not found in "
-                f"catalog/sources.yml"
-            ) from exc
+            # Blame source_key when catalog_key was auto-defaulted from it
+            # (the common case — a typo in source_key surfaces here);
+            # blame catalog_key when it was explicitly set (the synthetic-
+            # key case, e.g. era5_land_sd → era5_land).
+            if catalog_key_explicit:
+                msg = (
+                    f"SourceAdapter.catalog_key {self.catalog_key!r} not found "
+                    f"in catalog/sources.yml"
+                )
+            else:
+                msg = (
+                    f"SourceAdapter.source_key {self.source_key!r} not found "
+                    f"in catalog/sources.yml (catalog_key defaulted from "
+                    f"source_key)"
+                )
+            raise ValueError(msg) from exc
         except Exception:
             # Catalog file missing/unreadable/YAML broken — let the aggregator
             # surface this at run time with richer context.
