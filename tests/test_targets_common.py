@@ -854,6 +854,75 @@ def test_validate_source_units_uses_config_label_for_catalog_lookup():
     validate_source_units(SWE_SHIMS, ["era5_land"])
 
 
+def test_source_shim_catalog_source_key_defaults_to_none():
+    """`catalog_source_key` defaults to None; existing shims keep the
+    config_label-or-source_key fallback (issue #142)."""
+    from nhf_spatial_targets.targets._common import SourceShim
+
+    shim = SourceShim(
+        source_key="x",
+        aggregated_var="y",
+        description="d",
+        to_common_units=_identity_shim,
+    )
+    assert shim.catalog_source_key is None
+
+
+def test_validate_source_units_routes_through_catalog_source_key(monkeypatch):
+    """All three of source_key / config_label / catalog_source_key may
+    differ; the validator must route the catalog lookup through
+    catalog_source_key, not the user-facing alias (issue #142)."""
+    from nhf_spatial_targets import catalog as cat
+    from nhf_spatial_targets.targets._common import SourceShim, validate_source_units
+
+    # Track what catalog key the validator passes to source_var_cf_units.
+    seen: list[tuple[str, str]] = []
+    original = cat.source_var_cf_units
+
+    def spy(source_key: str, var_name: str) -> str:
+        seen.append((source_key, var_name))
+        return original(source_key, var_name)
+
+    monkeypatch.setattr(cat, "source_var_cf_units", spy)
+
+    shims = (
+        SourceShim(
+            source_key="storage_only_key",  # on-disk dir only
+            aggregated_var="ro",
+            description="d",
+            to_common_units=_identity_shim,
+            config_label="user_facing_alias",  # what the config writes
+            catalog_source_key="era5_land",  # real catalog source
+            expected_cf_units="m",  # matches catalog era5_land/ro
+        ),
+    )
+    validate_source_units(shims, ["user_facing_alias"])
+    assert seen == [("era5_land", "ro")], (
+        f"Expected catalog lookup against catalog_source_key='era5_land', got {seen!r}"
+    )
+
+
+def test_validate_source_units_catalog_key_falls_back_to_config_label():
+    """When `catalog_source_key` is None, the lookup precedence still
+    falls back to `config_label`, then `source_key` — preserving
+    behaviour for every existing shim (issue #142)."""
+    from nhf_spatial_targets.targets._common import SourceShim, validate_source_units
+
+    # No catalog_source_key set; config_label="era5_land" carries the
+    # catalog key for a synthetic on-disk storage layout.
+    shims = (
+        SourceShim(
+            source_key="era5_land_sd",
+            aggregated_var="sd",
+            description="d",
+            to_common_units=_identity_shim,
+            config_label="era5_land",
+            expected_cf_units="m",
+        ),
+    )
+    validate_source_units(shims, ["era5_land"])
+
+
 def test_validate_source_units_raises_when_catalog_lacks_cf_units():
     """A shim pointing at a flat-string catalog entry raises with guidance."""
     from nhf_spatial_targets.targets._common import SourceShim, validate_source_units
