@@ -355,3 +355,32 @@ def test_ssebop_et_resolves_to_mm():
     from nhf_spatial_targets.catalog import source_var_cf_units
 
     assert source_var_cf_units("ssebop", "et") == "mm"
+
+
+def test_source_var_cell_methods_returns_string():
+    """Per-variable cell_methods is exposed for catalog-driven dispatch (#101)."""
+    from nhf_spatial_targets.catalog import source_var_cell_methods
+
+    assert source_var_cell_methods("era5_land", "ro") == "time: sum"
+    assert source_var_cell_methods("era5_land", "sd") == "time: point"
+
+
+def test_source_var_cell_methods_returns_none_when_absent():
+    """Variables with no cell_methods declared return None, not raise.
+
+    Reitz 2017 annual recharge entries carry cf_units but no
+    cell_methods; callers decide whether None is acceptable for
+    their dispatch.
+    """
+    from nhf_spatial_targets.catalog import source_var_cell_methods
+
+    assert source_var_cell_methods("reitz2017", "total_recharge") is None
+    # Also via file_variable (the on-disk name).
+    assert source_var_cell_methods("reitz2017", "TotalRecharge") is None
+
+
+def test_source_var_cell_methods_raises_on_unknown_variable():
+    from nhf_spatial_targets.catalog import source_var_cell_methods
+
+    with pytest.raises(KeyError, match="not found"):
+        source_var_cell_methods("era5_land", "no_such_var")

@@ -100,6 +100,53 @@ def source_var_cf_units(source_key: str, var_name: str) -> str:
     )
 
 
+def source_var_cell_methods(source_key: str, var_name: str) -> str | None:
+    """Return the ``cell_methods`` string for ``var_name`` under ``source_key``.
+
+    Mirrors :func:`source_var_cf_units` but returns the CF ``cell_methods``
+    string (e.g. ``"time: sum"`` for accumulated fields,
+    ``"time: point"`` for instantaneous snapshots). Returns ``None`` when
+    the variable entry exists but does not declare ``cell_methods`` —
+    callers decide whether to raise on missing metadata, since some
+    superseded sources omit it.
+
+    Used by fetchers and aggregators that need to dispatch on whether
+    a variable is accumulated vs instantaneous (e.g. ERA5-Land's
+    hourly→daily and daily→monthly reducers) without duplicating the
+    accumulated/instantaneous mapping in Python.
+
+    Parameters
+    ----------
+    source_key
+        Catalog source key (e.g. ``"era5_land"``).
+    var_name
+        Variable name to look up; matched against each entry's ``name``,
+        then ``file_variable``.
+
+    Returns
+    -------
+    str or None
+        The ``cell_methods`` string, or ``None`` when the entry exists
+        but has no ``cell_methods`` field.
+
+    Raises
+    ------
+    KeyError
+        Source has no variable matching ``var_name``, or the matching
+        entry is in flat-string form (no per-variable metadata).
+    """
+    src = source(source_key)
+    for entry in src.get("variables", []):
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("name") == var_name or entry.get("file_variable") == var_name:
+            return entry.get("cell_methods")
+    raise KeyError(
+        f"Variable {var_name!r} not found (as 'name' or 'file_variable') "
+        f"in catalog source {source_key!r}."
+    )
+
+
 # Allowed `fabric_scope.fabrics` tokens. Keep this set in sync with the
 # fabrics this pipeline targets — adding a new fabric should be
 # accompanied by extending this allow-list and the matching

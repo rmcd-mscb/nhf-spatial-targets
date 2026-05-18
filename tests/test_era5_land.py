@@ -1574,3 +1574,52 @@ def test_consolidate_year_dispatches_by_variable_kind(tmp_path):
             0.30,
             rtol=1e-9,
         )
+
+
+# ---- _VARIABLE_KIND derived from catalog cell_methods (#101) ----------------
+
+
+def test_variable_kind_derived_from_catalog():
+    """Module-level _VARIABLE_KIND comes from catalog cell_methods, not a
+    hardcoded dict. Pins the expected accumulated/instantaneous mapping
+    for all four VARIABLES (ro/sro/ssro/sd) so a future catalog edit that
+    flips one would surface here before reaching the reducer dispatch."""
+    from nhf_spatial_targets.fetch.era5_land import _VARIABLE_KIND, VARIABLES
+
+    assert set(_VARIABLE_KIND) == set(VARIABLES)
+    assert _VARIABLE_KIND["ro"] == "accumulated"
+    assert _VARIABLE_KIND["sro"] == "accumulated"
+    assert _VARIABLE_KIND["ssro"] == "accumulated"
+    assert _VARIABLE_KIND["sd"] == "instantaneous"
+
+
+def test_derive_variable_kind_raises_on_unknown_cell_methods(monkeypatch):
+    """If the catalog grows a variable with cell_methods outside the
+    known set, _derive_variable_kind() raises rather than silently
+    miscategorizing — a new aggregation flavour must be a deliberate
+    extension of _CELL_METHODS_TO_KIND."""
+    from nhf_spatial_targets.fetch import era5_land
+
+    def fake_cell_methods(source_key: str, var_name: str):
+        return "time: maximum"  # not in _CELL_METHODS_TO_KIND
+
+    monkeypatch.setattr(
+        era5_land._catalog, "source_var_cell_methods", fake_cell_methods
+    )
+    with pytest.raises(ValueError, match="cell_methods='time: maximum'"):
+        era5_land._derive_variable_kind()
+
+
+def test_derive_variable_kind_raises_on_missing_cell_methods(monkeypatch):
+    """A None return from the catalog (variable entry exists but lacks
+    cell_methods) must raise — every ERA5-Land variable needs an
+    explicit accumulated-vs-instantaneous declaration."""
+    from nhf_spatial_targets.fetch import era5_land
+
+    monkeypatch.setattr(
+        era5_land._catalog,
+        "source_var_cell_methods",
+        lambda source_key, var_name: None,
+    )
+    with pytest.raises(ValueError, match="cell_methods=None"):
+        era5_land._derive_variable_kind()
