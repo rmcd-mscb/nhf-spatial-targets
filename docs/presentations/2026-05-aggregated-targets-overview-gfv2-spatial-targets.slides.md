@@ -509,26 +509,28 @@ it's a quick "look, this is what we're excluding and why" moment.
 
 ## 3.4 Soil moisture — final target
 
-![w:520](../figures/targets/gfv2-spatial-targets/soil_moisture_target_monthly_coverage_timeseries.png)
+![w:520](../figures/targets/gfv2-spatial-targets/soil_moisture_target_monthly_bounds_map.png) ![w:520](../figures/targets/gfv2-spatial-targets/soil_moisture_target_monthly_climatology.png)
 
-<span class="caption">Monthly coverage timeseries — fraction of HRUs with a finite bound per month.</span>
+<span class="caption">Left: monthly lower / upper bound maps, normalised 0–1. Right: per-calendar-month climatology, CONUS mean.</span>
+
+- `soil_moisture_target_monthly_coverage_timeseries.png` — bound coverage across the 1982–2010 window.
+- Annual companions on disk: `..._annual_representative_series.png`, `..._annual_conus_series.png`, `..._annual_nan_map.png`, `..._annual_nn_fill_series.png`.
+- NCs on disk: `soil_moisture_targets_monthly.nc`, `..._annual.nc`, plus `_nn_filled` variants.
 
 <div class="callout">
-<strong>Action item before delivery.</strong> Re-run
-<code>notebooks/targets/inspect_target_soil_moisture.ipynb</code> end-to-end to
-render bounds_map / n_sources_map / representative_series companions so this
-slide reaches parity with runoff / AET / recharge.
+<strong>Discussion hook.</strong> Monthly normalisation (per calendar month — Jans
+together, Febs together, …) vs annual normalisation (single 1982–2010 window)
+gives meaningfully different bound widths, especially in spring shoulder
+seasons. Is the modelling team using monthly, annual, or both?
 </div>
 
-- NCs on disk: `soil_moisture_targets_monthly.nc`, `…_annual.nc`, plus `_nn_filled` variants.
-- Discussion hook: monthly vs annual normalisation gives different bound widths — is the modelling team using monthly, annual, or both?
-
 <!--
-The slide is intentionally light right now — running the notebook before talk
-day is on the verification checklist. If discussion expands here naturally, lean
-into "what does the modelling team actually consume — monthly, annual, both?"
-because we emit both NCs and the choice between them isn't something the
-calibration side has explicitly told us.
+The bounds_map shows the per-HRU envelope at a snapshot month; the climatology
+panel shows the seasonal cycle of the CONUS-mean bound after per-calendar-month
+normalisation. The annual figures aren't shown inline to keep the slide tight,
+but the file list above signals to the room that they exist if anyone wants to
+dig into the annual cadence. The choice of monthly-vs-annual is genuinely a
+modeller-side decision — we emit both NCs.
 -->
 
 ---
@@ -761,8 +763,7 @@ that have been quietly accumulating; airing them is the point of this slide.
 
 1. **SCA target builder** — pick a bound formula (Part 3.5), implement against existing aggregated NC, ship `sca_targets.nc`.
 2. **SWE end-to-end run on gfv2** — once SNODAS aggregation finishes, run `nhf-targets run-swe`, render `notebooks/targets/inspect_target_swe.ipynb`, swap the SWE placeholder slide for real figures.
-3. **Soil moisture target figures** — re-run `notebooks/targets/inspect_target_soil_moisture.ipynb` to render the bounds_map / n_sources_map / representative_series companions, swap Slide 3.4-C.
-4. **Per-fabric exclusion mechanism** — if other fabrics need WaterGAP / NCEP-NCAR re-included, lift the hard-coded `gfv2` exclusion into a config-driven per-fabric override.
+3. **Per-fabric exclusion mechanism** — if other fabrics need WaterGAP / NCEP-NCAR re-included, lift the hard-coded `gfv2` exclusion into a config-driven per-fabric override.
 
 <span class="footnote">
 Questions / discussion → open floor.
