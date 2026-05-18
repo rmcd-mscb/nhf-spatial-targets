@@ -49,6 +49,57 @@ def variable(name: str) -> dict:
     return all_vars[name]
 
 
+def source_var_cf_units(source_key: str, var_name: str) -> str:
+    """Return the ``cf_units`` string for ``var_name`` under source ``source_key``.
+
+    Resolves the variable entry by ``name`` first and falls back to
+    ``file_variable`` (the on-disk name carried by sources like Reitz 2017
+    whose distribution variables differ from the catalog name). Only the
+    dict-form variables shape is supported — flat-string variable lists
+    have no per-variable units field and are kept only on superseded
+    sources; target builders that pin units must consume sources that
+    declare ``cf_units`` explicitly.
+
+    Used by target builders at startup to assert that catalog-declared
+    per-pixel units still match the per-source unit-shim's expectation
+    (issue #130). Catching drift here turns a silent magnitude bug into
+    a loud startup failure with the source-and-units context the
+    operator needs to fix it.
+
+    Parameters
+    ----------
+    source_key
+        Catalog source key (e.g. ``"era5_land"``).
+    var_name
+        Variable name to look up; matched against each entry's ``name``,
+        then ``file_variable``.
+
+    Raises
+    ------
+    KeyError
+        Source has no variable matching ``var_name``, or the matching
+        entry is in flat-string form (no ``cf_units`` available).
+    """
+    src = source(source_key)
+    for entry in src.get("variables", []):
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("name") == var_name or entry.get("file_variable") == var_name:
+            cf_units = entry.get("cf_units")
+            if cf_units is None:
+                raise KeyError(
+                    f"Catalog source {source_key!r} variable {var_name!r} "
+                    f"has no 'cf_units' field. Add cf_units to "
+                    f"catalog/sources.yml so target builders can validate "
+                    f"unit drift at startup."
+                )
+            return cf_units
+    raise KeyError(
+        f"Variable {var_name!r} not found (as 'name' or 'file_variable') "
+        f"in catalog source {source_key!r}."
+    )
+
+
 # Allowed `fabric_scope.fabrics` tokens. Keep this set in sync with the
 # fabrics this pipeline targets — adding a new fabric should be
 # accompanied by extending this allow-list and the matching

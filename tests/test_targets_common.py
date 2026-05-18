@@ -724,6 +724,156 @@ def test_shims_by_key_empty_tuple_returns_empty_dict():
     assert shims_by_key(()) == {}
 
 
+# ---------------------------------------------------------------------------
+# validate_source_units (issue #130 — catalog-vs-shim unit drift guard)
+# ---------------------------------------------------------------------------
+
+
+def test_source_shim_accepts_expected_cf_units_field():
+    """SourceShim grew an optional `expected_cf_units` field (issue #130)."""
+    from nhf_spatial_targets.targets._common import SourceShim
+
+    shim = SourceShim(
+        source_key="era5_land",
+        aggregated_var="ro",
+        description="test",
+        to_common_units=_identity_shim,
+        expected_cf_units="m",
+    )
+    assert shim.expected_cf_units == "m"
+
+
+def test_source_shim_expected_cf_units_defaults_to_none():
+    """Defaulting to None preserves opt-out semantics for legacy shims."""
+    from nhf_spatial_targets.targets._common import SourceShim
+
+    shim = SourceShim(
+        source_key="x",
+        aggregated_var="y",
+        description="t",
+        to_common_units=_identity_shim,
+    )
+    assert shim.expected_cf_units is None
+
+
+def test_validate_source_units_passes_when_catalog_matches_shim():
+    """Happy path: real SHIMS registries pass against the real catalog."""
+    from nhf_spatial_targets.targets._common import validate_source_units
+    from nhf_spatial_targets.targets.run import SHIMS as RUN_SHIMS
+
+    # Should not raise.
+    validate_source_units(
+        RUN_SHIMS, ["era5_land", "gldas_noah_v21_monthly", "mwbm_climgrid"]
+    )
+
+
+def test_validate_source_units_raises_on_catalog_drift():
+    """A shim declaring different expected_cf_units from catalog raises."""
+    from nhf_spatial_targets.targets._common import SourceShim, validate_source_units
+
+    drifted = (
+        SourceShim(
+            source_key="era5_land",
+            aggregated_var="ro",
+            description="d",
+            to_common_units=_identity_shim,
+            expected_cf_units="DRIFTED",
+        ),
+    )
+    with pytest.raises(ValueError, match="Catalog cf_units drift"):
+        validate_source_units(drifted, ["era5_land"])
+
+
+def test_validate_source_units_message_includes_both_units():
+    """The error message must surface both strings so the operator can decide."""
+    from nhf_spatial_targets.targets._common import SourceShim, validate_source_units
+
+    drifted = (
+        SourceShim(
+            source_key="era5_land",
+            aggregated_var="ro",
+            description="d",
+            to_common_units=_identity_shim,
+            expected_cf_units="kg m-2",
+        ),
+    )
+    with pytest.raises(ValueError) as exc_info:
+        validate_source_units(drifted, ["era5_land"])
+    msg = str(exc_info.value)
+    assert "'m'" in msg  # catalog says "m"
+    assert "'kg m-2'" in msg  # shim claims "kg m-2"
+
+
+def test_validate_source_units_skips_when_expected_is_none():
+    """expected_cf_units=None opts out of the check entirely."""
+    from nhf_spatial_targets.targets._common import SourceShim, validate_source_units
+
+    # If validation ran, this would raise (catalog says "m", not "wrong").
+    # expected_cf_units=None means the check is skipped.
+    opted_out = (
+        SourceShim(
+            source_key="era5_land",
+            aggregated_var="ro",
+            description="d",
+            to_common_units=_identity_shim,
+            expected_cf_units=None,
+        ),
+    )
+    validate_source_units(opted_out, ["era5_land"])
+
+
+def test_validate_source_units_raises_on_unknown_source_label():
+    """An unknown config label (typo) surfaces as a startup error."""
+    from nhf_spatial_targets.targets._common import SourceShim, validate_source_units
+
+    shims = (
+        SourceShim(
+            source_key="x",
+            aggregated_var="v",
+            description="d",
+            to_common_units=_identity_shim,
+            expected_cf_units="m",
+        ),
+    )
+    with pytest.raises(ValueError, match="no matching SourceShim"):
+        validate_source_units(shims, ["not_in_registry"])
+
+
+def test_validate_source_units_uses_config_label_for_catalog_lookup():
+    """When config_label is set, catalog lookup goes through that key.
+
+    SWE's era5_land_sd shim stores under a synthetic source_key but the
+    catalog key is the canonical "era5_land"; validate_source_units must
+    look up against the catalog under config_label, not source_key.
+    """
+    from nhf_spatial_targets.targets._common import validate_source_units
+    from nhf_spatial_targets.targets.swe import SHIMS as SWE_SHIMS
+
+    # The label "era5_land" resolves to the era5_land_sd shim; catalog
+    # cf_units for era5_land/sd is "m", which matches expected_cf_units="m".
+    validate_source_units(SWE_SHIMS, ["era5_land"])
+
+
+def test_validate_source_units_raises_when_catalog_lacks_cf_units():
+    """A shim pointing at a flat-string catalog entry raises with guidance."""
+    from nhf_spatial_targets.targets._common import SourceShim, validate_source_units
+
+    # merra_land is superseded and uses flat-list `variables: [SFMC]` (no
+    # cf_units). A target that pointed at it must either gain catalog
+    # cf_units or opt out via expected_cf_units=None.
+    shims = (
+        SourceShim(
+            source_key="merra_land",
+            aggregated_var="SFMC",
+            description="d",
+            to_common_units=_identity_shim,
+            expected_cf_units="m3/m3",
+        ),
+    )
+    with pytest.raises(ValueError, match="cannot resolve cf_units"):
+        validate_source_units(shims, ["merra_land"])
+
+
 def test_run_target_module_exposes_well_formed_shims():
     """targets/run.py SHIMS registry has the expected source keys and aggregated vars."""
     from nhf_spatial_targets.targets.run import SHIMS
@@ -745,6 +895,16 @@ def test_run_target_module_exposes_well_formed_shims():
         assert out.attrs.get("units") == "mm"
 
 
+def test_run_target_shims_declare_expected_cf_units():
+    """Issue #130: every runoff shim pins its expected catalog cf_units."""
+    from nhf_spatial_targets.targets.run import SHIMS
+
+    by_key = {s.source_key: s for s in SHIMS}
+    assert by_key["era5_land"].expected_cf_units == "m"
+    assert by_key["gldas_noah_v21_monthly"].expected_cf_units == "kg m-2"
+    assert by_key["mwbm_climgrid"].expected_cf_units == "mm"
+
+
 def test_aet_target_module_exposes_well_formed_shims():
     """targets/aet.py SHIMS registry has the expected source keys and aggregated vars."""
     from nhf_spatial_targets.targets.aet import SHIMS
@@ -764,6 +924,27 @@ def test_aet_target_module_exposes_well_formed_shims():
     for key in ("ssebop", "mwbm_climgrid"):
         out = by_key[key].to_common_units(da)
         assert out.attrs.get("units") == "mm"
+
+
+def test_aet_target_shims_declare_expected_cf_units():
+    """Issue #130: every AET shim pins its expected catalog cf_units."""
+    from nhf_spatial_targets.targets.aet import SHIMS
+
+    by_key = {s.source_key: s for s in SHIMS}
+    assert by_key["mod16a2_v061"].expected_cf_units == "kg m-2"
+    assert by_key["ssebop"].expected_cf_units == "mm"
+    assert by_key["mwbm_climgrid"].expected_cf_units == "mm"
+
+
+def test_swe_target_shims_declare_expected_cf_units():
+    """Issue #130: every SWE shim pins its expected catalog cf_units."""
+    from nhf_spatial_targets.targets.swe import SHIMS
+
+    by_key = {s.source_key: s for s in SHIMS}
+    assert by_key["daymet"].expected_cf_units == "kg m-2"
+    assert by_key["snodas"].expected_cf_units == "kg m-2"
+    assert by_key["era5_land_sd"].expected_cf_units == "m"
+    assert by_key["margulis_wus_sr"].expected_cf_units == "m"
 
 
 # ---------------------------------------------------------------------------

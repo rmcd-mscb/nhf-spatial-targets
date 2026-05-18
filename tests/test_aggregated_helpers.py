@@ -41,9 +41,17 @@ def test_unit_from_catalog_dict_variables(helpers):
 
 
 def test_unit_from_catalog_flat_variables(helpers):
-    # ssebop has a flat variables list and a source-level units field
+    # merra_land (superseded) retains the original flat variables list:
+    # ``variables: [SFMC]`` with the unit at the source level.
+    units = helpers.unit_from_catalog("merra_land", "SFMC")
+    src_units = helpers.cat.source("merra_land")["units"]
+    assert units == src_units
+
+
+def test_unit_from_catalog_ssebop_resolves_via_cf_units(helpers):
+    """SSEBop now uses the dict-form variables shape with cf_units."""
     units = helpers.unit_from_catalog("ssebop", "et")
-    assert units == "mm/month"
+    assert units == "mm"
 
 
 def test_unit_from_catalog_unknown_variable_raises(helpers):

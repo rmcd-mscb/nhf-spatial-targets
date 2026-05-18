@@ -203,7 +203,15 @@ sources:
       endpoint: https://usgs.osn.mghpcc.org/
       zarr_store: s3://mdmf/gdp/ssebopeta_monthly.zarr/
     variables:
-      - et
+      - name: et
+        long_name: actual evapotranspiration
+        cf_units: "mm"
+        cell_methods: "time: sum"
+        notes: >
+          Monthly accumulation of actual ET in mm water-equivalent. The
+          source-level ``units: mm/month`` (kept for backwards readability)
+          is recovered by combining ``cf_units: mm`` with the time-axis
+          aggregation declared in ``cell_methods``.
     time_step: monthly
     period: "2000/2023"
     spatial_extent: CONUS

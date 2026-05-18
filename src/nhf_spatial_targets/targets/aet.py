@@ -46,6 +46,7 @@ from nhf_spatial_targets.targets._common import (
     read_aggregated_source,
     reindex_to_month_start,
     shims_by_key,
+    validate_source_units,
     write_bounds_target,
 )
 from nhf_spatial_targets.workspace import Project
@@ -165,18 +166,21 @@ SHIMS: tuple[SourceShim, ...] = (
             "MOD16A2 v061 ET_500m (8-day kg m-2; overlap-weighted to mm/month)"
         ),
         to_common_units=mod16a2_to_mm_per_month,
+        expected_cf_units="kg m-2",
     ),
     SourceShim(
         source_key="ssebop",
         aggregated_var="et",
         description="SSEBop et (mm/month, native)",
         to_common_units=ssebop_to_mm_per_month,
+        expected_cf_units="mm",
     ),
     SourceShim(
         source_key="mwbm_climgrid",
         aggregated_var="aet",
         description="MWBM ClimGrid aet (mm/month, native)",
         to_common_units=mwbm_to_mm_per_month,
+        expected_cf_units="mm",
     ),
 )
 
@@ -208,6 +212,10 @@ def build(project: Project) -> None:
     period = parse_period(aet_cfg["period"])
     sources = list(aet_cfg["sources"])
     chunk_months = int(aet_cfg["chunk_months"])
+
+    # Fail loud at startup if a catalog cf_units string has drifted from
+    # the per-source shim's hardcoded conversion factor (issue #130).
+    validate_source_units(SHIMS, sources)
 
     logger.info(
         "Building AET target: %d sources (%s), period %s .. %s, fabric=%s",
