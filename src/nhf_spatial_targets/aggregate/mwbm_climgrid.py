@@ -22,6 +22,9 @@ def aggregate_mwbm_climgrid(
     workdir: Path,
     batch_size: int = 500,
     period: str | None = None,
+    *,
+    worker_index: int = 0,
+    n_workers: int = 1,
 ) -> None:
     """Aggregate the MWBM ClimGrid source to HRU polygons.
 
@@ -38,4 +41,6 @@ def aggregate_mwbm_climgrid(
         workdir,
         batch_size,
         period=period,
+        worker_index=worker_index,
+        n_workers=n_workers,
     )

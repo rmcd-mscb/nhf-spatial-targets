@@ -35,10 +35,19 @@ DEFAULTS: dict = {
         # catalog.FABRIC_SCOPE_TOKENS when set; unset leaves all
         # fabric-scoped sources excluded by default.
         "token": None,
+        # KD-tree partition target HRUs/batch (issue #156). Stored under
+        # fabric: because the partition is a property of the fabric, not
+        # the source: the same partition gets reused across every
+        # source's aggregation. Default 500 matches the long-standing
+        # CLI default. CLI --batch-size still overrides per-run.
+        "batch_size": 500,
     },
     "datastore": None,  # required
     "dir_mode": "2775",
-    "aggregation": {"engine": "gdptools", "method": "area_weighted"},
+    "aggregation": {
+        "engine": "gdptools",
+        "method": "area_weighted",
+    },
     "output": {"dir": "outputs", "format": "netcdf", "compress": True},
     "targets": {
         "runoff": {

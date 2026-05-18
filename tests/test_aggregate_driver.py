@@ -987,8 +987,10 @@ def test_compute_or_load_weights_uses_cache_on_hit(tmp_path, tiny_fabric):
     cached = _fake_weights()
     cache_path = tmp_path / "weights" / "toy_batch0.csv"
     cached.to_csv(cache_path, index=False)
+    # Sidecar fingerprint must include source_crs to match what
+    # compute_or_load_weights computes (issue #156).
     cache_path.with_suffix(".csv.meta").write_text(
-        _batch_fingerprint(batch_gdf, "hru_id")
+        _batch_fingerprint(batch_gdf, "hru_id", source_crs="EPSG:4326")
     )
 
     with patch("nhf_spatial_targets.aggregate._driver.WeightGen") as mock_wg:
@@ -1110,12 +1112,15 @@ def test_compute_or_load_weights_invalidates_cache_when_fingerprint_mismatches(
             period=("2000-01-01", "2000-02-01"),
         )
     assert mock_wg.called  # stale fingerprint triggered recompute
-    # Sidecar now reflects the current batch's fingerprint.
+    # Sidecar now reflects the current batch's fingerprint (including
+    # source CRS per issue #156).
     from nhf_spatial_targets.aggregate._driver import _batch_fingerprint
 
     assert cache_path.with_suffix(
         ".csv.meta"
-    ).read_text().strip() == _batch_fingerprint(batch_gdf, "hru_id")
+    ).read_text().strip() == _batch_fingerprint(
+        batch_gdf, "hru_id", source_crs="EPSG:4326"
+    )
 
 
 def test_update_manifest_raises_on_corrupt_json(project):
@@ -1967,3 +1972,266 @@ def test_atomic_write_netcdf_cleans_up_tmp_on_failure(tmp_path):
     assert leftover_tmps == [], (
         f"failed write must leave no .nc.tmp sidecar; found {leftover_tmps}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #156: fingerprint includes source CRS; SLURM-array worker sharding;
+# flock-protected manifest merge; batch_size config promotion.
+# ---------------------------------------------------------------------------
+
+
+def test_batch_fingerprint_changes_with_source_crs(tiny_fabric):
+    """Source CRS arm of the fingerprint detects schema changes that
+    HRU-IDs-alone can't see (e.g. SNODAS pre-projection in PR #155)."""
+    from nhf_spatial_targets.aggregate._driver import _batch_fingerprint
+
+    batch_gdf = gpd.read_file(tiny_fabric)
+    fp_wgs84 = _batch_fingerprint(batch_gdf, "hru_id", source_crs="EPSG:4326")
+    fp_albers = _batch_fingerprint(batch_gdf, "hru_id", source_crs="EPSG:5070")
+    fp_none = _batch_fingerprint(batch_gdf, "hru_id")  # backward-compat None
+    assert fp_wgs84 != fp_albers, "source-CRS change must invalidate fingerprint"
+    assert fp_wgs84 != fp_none, "explicit CRS must differ from no-CRS default"
+    # Same args produce same digest (idempotent).
+    assert fp_wgs84 == _batch_fingerprint(batch_gdf, "hru_id", source_crs="EPSG:4326")
+
+
+def test_compute_or_load_weights_invalidates_cache_when_source_crs_changes(
+    tmp_path, tiny_fabric
+):
+    """Cache written under one source CRS must be recomputed when re-called
+    with a different source CRS.
+
+    Reproduces the PR #155 SNODAS stale-cache bug: pre-#155 weights were
+    computed against EPSG:4326 SNODAS; post-#155 SNODAS is EPSG:5070. The
+    HRU IDs and batch_size were unchanged, so the pre-#156 HRU-IDs-only
+    fingerprint accepted the stale cache and produced bad aggregations.
+    """
+    from nhf_spatial_targets.aggregate._driver import (
+        _batch_fingerprint,
+        compute_or_load_weights,
+    )
+
+    (tmp_path / "weights").mkdir()
+    batch_gdf = gpd.read_file(tiny_fabric)
+    source_ds = xr.Dataset(
+        {"a": (["time", "lat", "lon"], np.ones((1, 2, 2)))},
+        coords={
+            "time": pd.date_range("2000-01-01", periods=1, freq="MS"),
+            "lat": [0.25, 0.75],
+            "lon": [0.5, 1.5],
+        },
+    )
+    # Stage a cache that was written under EPSG:4326.
+    cache_path = tmp_path / "weights" / "toy_batch0.csv"
+    _fake_weights().to_csv(cache_path, index=False)
+    cache_path.with_suffix(".csv.meta").write_text(
+        _batch_fingerprint(batch_gdf, "hru_id", source_crs="EPSG:4326")
+    )
+
+    # Re-call with EPSG:5070 (simulates SNODAS post-#155 pre-projection).
+    fresh = _fake_weights()
+    with (
+        patch("nhf_spatial_targets.aggregate._driver.WeightGen") as mock_wg,
+        patch("nhf_spatial_targets.aggregate._driver.UserCatData"),
+    ):
+        inst = MagicMock()
+        inst.calculate_weights.return_value = fresh
+        mock_wg.return_value = inst
+        compute_or_load_weights(
+            batch_gdf=batch_gdf,
+            source_ds=source_ds,
+            source_var="a",
+            source_crs="EPSG:5070",
+            x_coord="lon",
+            y_coord="lat",
+            time_coord="time",
+            id_col="hru_id",
+            source_key="toy",
+            batch_id=0,
+            workdir=tmp_path,
+            period=("2000-01-01", "2000-02-01"),
+        )
+    assert mock_wg.called, "source-CRS change must invalidate stale cache"
+    # New sidecar fingerprint reflects EPSG:5070.
+    assert cache_path.with_suffix(
+        ".csv.meta"
+    ).read_text().strip() == _batch_fingerprint(
+        batch_gdf, "hru_id", source_crs="EPSG:5070"
+    )
+
+
+def test_assign_worker_years_round_robin_partitions_disjointly():
+    """Round-robin year sharding produces disjoint slices whose union is the input."""
+    from nhf_spatial_targets.aggregate._driver import _assign_worker_years
+
+    pairs = [(y, f"f{y}.nc") for y in range(2000, 2010)]  # 10 years
+    n_workers = 4
+    slices = [_assign_worker_years(pairs, w, n_workers) for w in range(n_workers)]
+    # Disjoint: no year appears in more than one slice.
+    seen = set()
+    for s in slices:
+        years_in_slice = {y for y, _ in s}
+        assert seen.isdisjoint(years_in_slice), (
+            f"workers must hold disjoint year sets; collision: {seen & years_in_slice}"
+        )
+        seen |= years_in_slice
+    # Complete: union equals input.
+    assert seen == {y for y, _ in pairs}
+
+
+def test_assign_worker_years_serial_path_returns_everything():
+    """Default (worker_index=0, n_workers=1) is a pass-through."""
+    from nhf_spatial_targets.aggregate._driver import _assign_worker_years
+
+    pairs = [(y, f"f{y}.nc") for y in range(2000, 2005)]
+    assert _assign_worker_years(pairs, 0, 1) == pairs
+
+
+def test_assign_worker_years_rejects_invalid_inputs():
+    """``n_workers < 1`` and ``worker_index`` out of range raise ValueError."""
+    from nhf_spatial_targets.aggregate._driver import _assign_worker_years
+
+    with pytest.raises(ValueError, match="n_workers must be >= 1"):
+        _assign_worker_years([(2000, "f.nc")], 0, 0)
+    with pytest.raises(ValueError, match="worker_index must be in"):
+        _assign_worker_years([(2000, "f.nc")], 3, 2)
+    with pytest.raises(ValueError, match="worker_index must be in"):
+        _assign_worker_years([(2000, "f.nc")], -1, 2)
+
+
+def test_update_manifest_records_batch_size_and_workers(project):
+    """Manifest entry records batch_size and n_workers used for provenance."""
+    update_manifest(
+        project=project,
+        source_key="foo",
+        access={"type": "local"},
+        period="2000/2001",
+        output_files=["data/aggregated/foo/foo_2000_agg.nc"],
+        weight_files=["weights/foo_batch0.csv"],
+        batch_size=10000,
+        n_workers=4,
+    )
+    entry = json.loads((project.workdir / "manifest.json").read_text())["sources"][
+        "foo"
+    ]
+    assert entry["batch_size"] == 10000
+    assert entry["n_workers"] == 4
+
+
+def test_update_manifest_omits_n_workers_when_serial(project):
+    """Single-worker runs do not pollute the manifest with `n_workers: 1`."""
+    update_manifest(
+        project=project,
+        source_key="foo",
+        access={"type": "local"},
+        period="2000/2001",
+        output_files=["data/aggregated/foo/foo_2000_agg.nc"],
+        weight_files=["weights/foo_batch0.csv"],
+        batch_size=500,
+    )
+    entry = json.loads((project.workdir / "manifest.json").read_text())["sources"][
+        "foo"
+    ]
+    assert entry["batch_size"] == 500
+    assert "n_workers" not in entry
+
+
+def test_update_manifest_parallel_workers_merge_file_lists(project):
+    """Each SLURM-array worker contributes its slice; the manifest entry's
+    file lists are the sorted union across workers.
+
+    Pin for the issue #156 SLURM-array semantics: a single-worker run
+    overwrites file lists (existing behavior); a multi-worker run takes
+    the union so worker 0's outputs aren't wiped when worker 1 writes.
+    """
+    # Worker 0 writes years 2000, 2002.
+    update_manifest(
+        project=project,
+        source_key="foo",
+        access={"type": "local"},
+        period="2000/2003",
+        output_files=[
+            "data/aggregated/foo/foo_2000_agg.nc",
+            "data/aggregated/foo/foo_2002_agg.nc",
+        ],
+        weight_files=["weights/foo_batch0.csv"],
+        batch_size=500,
+        n_workers=2,
+    )
+    # Worker 1 writes years 2001, 2003 concurrently — flock serializes.
+    update_manifest(
+        project=project,
+        source_key="foo",
+        access={"type": "local"},
+        period="2000/2003",
+        output_files=[
+            "data/aggregated/foo/foo_2001_agg.nc",
+            "data/aggregated/foo/foo_2003_agg.nc",
+        ],
+        weight_files=["weights/foo_batch0.csv"],
+        batch_size=500,
+        n_workers=2,
+    )
+    entry = json.loads((project.workdir / "manifest.json").read_text())["sources"][
+        "foo"
+    ]
+    # Union of both workers' outputs, sorted.
+    assert entry["output_files"] == [
+        "data/aggregated/foo/foo_2000_agg.nc",
+        "data/aggregated/foo/foo_2001_agg.nc",
+        "data/aggregated/foo/foo_2002_agg.nc",
+        "data/aggregated/foo/foo_2003_agg.nc",
+    ]
+    # Weight files de-duplicated (both workers list the same batch CSVs).
+    assert entry["weight_files"] == ["weights/foo_batch0.csv"]
+    assert entry["n_workers"] == 2
+
+
+def test_update_manifest_serial_replaces_file_lists(project):
+    """``n_workers=1`` overwrites file lists (no merge); preserves the
+    historical single-worker semantics."""
+    # First run: years 2000, 2001.
+    update_manifest(
+        project=project,
+        source_key="foo",
+        access={"type": "local"},
+        period="2000/2001",
+        output_files=[
+            "data/aggregated/foo/foo_2000_agg.nc",
+            "data/aggregated/foo/foo_2001_agg.nc",
+        ],
+        weight_files=["weights/foo_batch0.csv"],
+    )
+    # Second run: years 2002, 2003 only. Should REPLACE the file list.
+    update_manifest(
+        project=project,
+        source_key="foo",
+        access={"type": "local"},
+        period="2002/2003",
+        output_files=[
+            "data/aggregated/foo/foo_2002_agg.nc",
+            "data/aggregated/foo/foo_2003_agg.nc",
+        ],
+        weight_files=["weights/foo_batch0.csv"],
+    )
+    entry = json.loads((project.workdir / "manifest.json").read_text())["sources"][
+        "foo"
+    ]
+    # No merge — second call replaces first.
+    assert entry["output_files"] == [
+        "data/aggregated/foo/foo_2002_agg.nc",
+        "data/aggregated/foo/foo_2003_agg.nc",
+    ]
+
+
+def test_defaults_fabric_batch_size_is_500():
+    """``fabric.batch_size`` defaults to 500 (matches historical CLI default)."""
+    from nhf_spatial_targets.defaults import DEFAULTS, apply_defaults
+
+    assert DEFAULTS["fabric"]["batch_size"] == 500
+    # apply_defaults preserves user override.
+    merged = apply_defaults({"fabric": {"batch_size": 1234}})
+    assert merged["fabric"]["batch_size"] == 1234
+    # apply_defaults falls back to default when unset.
+    merged = apply_defaults({"fabric": {}})
+    assert merged["fabric"]["batch_size"] == 500
