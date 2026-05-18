@@ -74,6 +74,15 @@ class SourceShim:
         catalog name (``"era5_land"``) — this keeps target builders
         free of any parallel label→storage dict that could drift from
         the SHIMS registry.
+    catalog_source_key
+        Optional ``catalog/sources.yml`` key for the source. Defaults
+        to ``config_label`` if set, else ``source_key``. Used by
+        :func:`validate_source_units` to look up the catalog
+        ``cf_units`` for ``aggregated_var``. Set this only when the
+        catalog key is genuinely independent of both the on-disk
+        storage key and the user-facing config alias — e.g. a shim
+        named ``foo_v2`` with ``config_label="legacy_foo"`` (a config
+        alias) but catalog data still under ``foo_v2``.
     expected_cf_units
         Optional CF-style units string this shim was written against.
         When set, :func:`validate_source_units` (called by every
@@ -91,6 +100,7 @@ class SourceShim:
     description: str
     to_common_units: Callable[[xr.DataArray], xr.DataArray]
     config_label: str | None = None
+    catalog_source_key: str | None = None
     expected_cf_units: str | None = None
 
 
@@ -122,8 +132,8 @@ def validate_source_units(
     ``["era5_land", "gldas_noah_v21_monthly"]`` from the project config)
     to its :class:`SourceShim`, then looks up the catalog ``cf_units``
     for the shim's ``aggregated_var`` under the shim's catalog source
-    key (``config_label`` if set, else ``source_key`` — same convention
-    :func:`shims_by_config_label` uses) and raises if the strings differ.
+    key (``catalog_source_key`` if set, else ``config_label``, else
+    ``source_key``) and raises if the strings differ.
 
     Called at the top of every target builder's ``build()`` so a
     post-hoc catalog correction (PR #68 caught four such corrections)
@@ -169,7 +179,7 @@ def validate_source_units(
         shim = by_label[label]
         if shim.expected_cf_units is None:
             continue
-        catalog_key = shim.config_label or shim.source_key
+        catalog_key = shim.catalog_source_key or shim.config_label or shim.source_key
         try:
             actual = cat.source_var_cf_units(catalog_key, shim.aggregated_var)
         except KeyError as exc:
