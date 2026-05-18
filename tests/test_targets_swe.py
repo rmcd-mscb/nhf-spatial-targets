@@ -389,7 +389,9 @@ def test_build_unknown_source_raises(tmp_path: Path):
         nn_fill=False,
     )
     project = load(workdir)
-    with pytest.raises(ValueError, match="unknown source 'not_a_real_source'"):
+    with pytest.raises(
+        ValueError, match="no matching SourceShim for source 'not_a_real_source'"
+    ):
         build(project)
 
 
