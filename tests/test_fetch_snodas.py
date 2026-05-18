@@ -834,7 +834,12 @@ def test_coords_from_header_matches_expected_shape():
 
 
 def test_consolidate_year_writes_cf_netcdf(tmp_path):
-    """`consolidate_year_snodas` produces a CF NetCDF with the expected variable and metadata."""
+    """`consolidate_year_snodas` produces a CF NetCDF with the expected variable and metadata.
+
+    Post-#121 the on-disk layout is ``(time, y, x)`` on an EPSG:5070
+    grid with 2D auxiliary lat/lon coords; the per-day uniform SWE
+    values are preserved through the nearest-neighbour reprojection.
+    """
     import xarray as xr
 
     from nhf_spatial_targets.fetch.snodas import consolidate_year_snodas
@@ -853,11 +858,18 @@ def test_consolidate_year_writes_cf_netcdf(tmp_path):
     assert out_path.exists()
 
     with xr.open_dataset(out_path) as ds:
-        assert ds["swe"].dims == ("time", "lat", "lon")
-        assert ds["swe"].shape == (3, 4, 4)
-        # Per-day SWE values preserved.
-        day_means = ds["swe"].mean(("lat", "lon")).values
-        np.testing.assert_array_equal(day_means, [10.0, 50.0, 90.0])
+        # Projected EPSG:5070 schema (#121): dims are (time, y, x), not lat/lon.
+        assert ds["swe"].dims == ("time", "y", "x")
+        assert ds["swe"].sizes["time"] == 3
+        assert ds["swe"].sizes["y"] >= 1 and ds["swe"].sizes["x"] >= 1
+        # Per-day SWE: nearest-neighbour reprojection of a uniform field
+        # preserves the source value at every covered destination cell;
+        # any destination cells outside the source bbox are NaN-fill.
+        # Take the finite-only mean per day and check it matches.
+        for day_idx, expected in enumerate((10.0, 50.0, 90.0)):
+            day = ds["swe"].isel(time=day_idx)
+            finite_mean = float(day.where(day.notnull()).mean(skipna=True))
+            assert finite_mean == pytest.approx(expected)
         # CF metadata from the catalog.
         assert ds["swe"].attrs["units"] == "kg m-2"
         assert ds["swe"].attrs["cell_methods"] == "time: point"
@@ -868,6 +880,61 @@ def test_consolidate_year_writes_cf_netcdf(tmp_path):
         # First-day header captured in global attrs for provenance.
         assert "snodas_first_day_header" in ds.attrs
         assert "Number of rows" in json.loads(ds.attrs["snodas_first_day_header"])
+        # Reprojection provenance (#121).
+        assert "snodas_reprojection" in ds.attrs
+        assert "EPSG:5070" in ds.attrs["snodas_reprojection"]
+
+
+def test_consolidate_year_writes_projected_nc(tmp_path):
+    """Output NC is in EPSG:5070 with projected y/x metres + 2D aux lat/lon.
+
+    Pin for issue #121 — guarantees the consolidator emits the projected
+    schema the aggregator depends on (``source_crs="EPSG:5070"`` matches
+    the WEIGHT_GEN_CRS). Without this pin a future refactor could
+    silently drop back to a WGS84 emission and the aggregator's ~5-8×
+    speedup would quietly disappear.
+    """
+    import xarray as xr
+
+    from nhf_spatial_targets.fetch.snodas import consolidate_year_snodas
+
+    raw_dir = tmp_path / "raw" / "2020"
+    raw_dir.mkdir(parents=True)
+    daily_dir = tmp_path / "daily"
+    for day in ("20200101", "20200102"):
+        (raw_dir / f"SNODAS_{day}.tar").write_bytes(_build_synthetic_snodas_tar(day))
+    out_path = consolidate_year_snodas(2020, raw_dir, daily_dir)
+
+    with xr.open_dataset(out_path) as ds:
+        # Projected dims (not lat/lon).
+        assert ("y", "x") == ds["swe"].dims[1:]
+        # y/x are 1D dim coords in projected metres.
+        assert ds["y"].attrs["standard_name"] == "projection_y_coordinate"
+        assert ds["y"].attrs["units"] == "m"
+        assert ds["y"].attrs["axis"] == "Y"
+        assert ds["x"].attrs["standard_name"] == "projection_x_coordinate"
+        assert ds["x"].attrs["units"] == "m"
+        assert ds["x"].attrs["axis"] == "X"
+
+        # lat/lon present as 2D auxiliary coordinates over (y, x).
+        assert "lat" in ds.coords
+        assert "lon" in ds.coords
+        assert ds["lat"].dims == ("y", "x")
+        assert ds["lon"].dims == ("y", "x")
+        assert ds["lat"].attrs["standard_name"] == "latitude"
+        assert ds["lon"].attrs["standard_name"] == "longitude"
+
+        # crs ancillary names the Albers Equal Area grid mapping (not
+        # latitude_longitude).
+        assert ds["crs"].attrs["grid_mapping_name"] == "albers_conical_equal_area"
+        assert ds["swe"].attrs["grid_mapping"] == "crs"
+
+    # xarray strips the explicit `coordinates` attr on read (it promotes
+    # the referenced names to ds.coords instead). Check the raw on-disk
+    # CF attr via decode_cf=False so the test pins what's written to disk.
+    with xr.open_dataset(out_path, decode_cf=False) as raw:
+        coords_attr = raw["swe"].attrs.get("coordinates", "")
+        assert "lat" in coords_attr and "lon" in coords_attr
 
 
 def test_daily_nc_is_cf_1_6_compliant(tmp_path):
@@ -877,6 +944,11 @@ def test_daily_nc_is_cf_1_6_compliant(tmp_path):
     compliant" from CLAUDE.md "Data & Catalog Conventions". This is the
     light-weight in-test attribute audit; an external compliance-checker
     pass is a separate dev-tool concern.
+
+    Post-#121 the on-disk grid is projected EPSG:5070 (y/x in metres);
+    lat/lon survive as 2D auxiliary coordinates (CF section 5.2) without
+    an ``axis`` attribute (the axis attribute lives on the projected y/x
+    dim coords instead).
     """
     import xarray as xr
 
@@ -894,19 +966,22 @@ def test_daily_nc_is_cf_1_6_compliant(tmp_path):
         assert ds.attrs.get("Conventions") == "CF-1.6"
 
         # Required ancillary CRS variable (CF section 5.6) with a
-        # populated grid_mapping_name + crs_wkt.
+        # populated grid_mapping_name + crs_wkt. Post-#121 the projection
+        # is Albers Conical Equal Area, not latitude_longitude.
         assert "crs" in ds.variables
         crs_attrs = ds["crs"].attrs
-        assert crs_attrs.get("grid_mapping_name") == "latitude_longitude"
+        assert crs_attrs.get("grid_mapping_name") == "albers_conical_equal_area"
         assert "crs_wkt" in crs_attrs
 
         # Data variable attrs (CF section 3.1: units; 3.5: cell_methods;
-        # 5.6: grid_mapping; 3.2: long_name).
+        # 5.6: grid_mapping; 3.2: long_name; 5.2: coordinates for 2D aux).
         swe = ds["swe"]
         assert swe.attrs.get("units") == "kg m-2"
         assert swe.attrs.get("long_name") == "snow water equivalent"
         assert swe.attrs.get("cell_methods") == "time: point"
         assert swe.attrs.get("grid_mapping") == "crs"
+        coords_attr = swe.attrs.get("coordinates", "")
+        assert "lat" in coords_attr and "lon" in coords_attr
         # int16 + _FillValue=-9999 (CF section 2.5.1 + 3.4). With
         # decode_cf=False the fill value lives in `attrs` as a CF
         # attribute; the on-disk dtype is reported via `encoding`.
@@ -914,15 +989,26 @@ def test_daily_nc_is_cf_1_6_compliant(tmp_path):
         assert swe.encoding.get("dtype") == "int16"
         assert str(swe.dtype) == "int16"
 
-        # Latitude/longitude coords (CF section 4.1/4.2: standard_name +
-        # units + axis are all required for proper CF detection).
+        # Projected y/x dim coords (CF section 5.6: projection_*_coordinate
+        # standard names; units in metres; axis labels on the projected
+        # dims, not on the aux lat/lon).
         for coord, expected_units, expected_axis, expected_std in (
-            ("lat", "degrees_north", "Y", "latitude"),
-            ("lon", "degrees_east", "X", "longitude"),
+            ("y", "m", "Y", "projection_y_coordinate"),
+            ("x", "m", "X", "projection_x_coordinate"),
         ):
             assert ds[coord].attrs.get("units") == expected_units
             assert ds[coord].attrs.get("axis") == expected_axis
             assert ds[coord].attrs.get("standard_name") == expected_std
+
+        # 2D auxiliary lat/lon (CF section 5.2): standard_name + units,
+        # but NO axis attribute (axis lives on projected y/x).
+        for coord, expected_units, expected_std in (
+            ("lat", "degrees_north", "latitude"),
+            ("lon", "degrees_east", "longitude"),
+        ):
+            assert ds[coord].attrs.get("units") == expected_units
+            assert ds[coord].attrs.get("standard_name") == expected_std
+            assert "axis" not in ds[coord].attrs
 
         # Time coord (CF section 4.4: units required as "<interval> since <ref>";
         # calendar required for proleptic-Gregorian assumption).

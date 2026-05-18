@@ -16,10 +16,16 @@ The fetch module constructs daily URLs from each date and streams the
 (``earthaccess.login(strategy='netrc').get_session()``). Each bundle
 contains flat int16 binary fields plus ENVI-style ``.Hdr`` headers.
 After all of a year's ``.tars`` are on disk, :func:`consolidate_year_snodas`
-decodes product 1034 (SWE) from each day and writes a single per-year
-NetCDF at ``<datastore>/snodas/daily/snodas_daily_<year>.nc``. Raw
-``.tars`` are preserved on disk after consolidation for provenance and
-future re-decode if catalog metadata changes.
+decodes product 1034 (SWE) from each day, **reprojects from native
+WGS84 to EPSG:5070 (NAD83 / CONUS Albers Equal Area) at 1000 m using
+nearest-neighbour resampling**, and writes a single per-year CF NetCDF
+at ``<datastore>/snodas/daily/snodas_daily_<year>.nc``. The
+pre-projection (issue #121) eliminates ~5-8× of gdptools weight-gen
+cost in the aggregator by matching the aggregator's WEIGHT_GEN_CRS;
+nearest-neighbour preserves the integer-like ``-9999`` fill code
+without bleed into neighbouring cells (SWE is instantaneous, not a
+flux). Raw ``.tars`` are preserved on disk after consolidation for
+provenance and future re-decode if catalog metadata changes.
 """
 
 from __future__ import annotations
@@ -95,6 +101,13 @@ _SNODAS_GRID_TOL_DEG = 1e-6
 # when row/column counts are unchanged — see ``consolidate_year_snodas``.
 _SNODAS_GRID_DRIFT_TOL_DEG = 0.5 / 120
 _SNODAS_DAILY_FILENAME_TEMPLATE = "snodas_daily_{year}.nc"
+# Pre-projection target CRS + resolution (issue #121). EPSG:5070 matches
+# the aggregator's WEIGHT_GEN_CRS so gdptools' weight gen does not need
+# to reproject the source grid at all (~5-8× speedup on CONUS fabrics).
+# 1000 m approximately preserves the native 30 arcsec (~1 km) sampling
+# without over-densifying.
+_SNODAS_DST_CRS = "EPSG:5070"
+_SNODAS_DST_RESOLUTION_M = 1000.0
 
 # Locale-independent month abbreviations for URL construction. The NSIDC
 # archive uses fixed English short names (e.g. ``01_Jan``); using
@@ -517,6 +530,99 @@ def _max_grid_drift_deg(h1: dict[str, str], h2: dict[str, str]) -> float | None:
     return max(drifts)
 
 
+def _build_wgs84_dataarray(
+    swe_int16: np.ndarray,
+    wgs84_lat: np.ndarray,
+    wgs84_lon: np.ndarray,
+) -> "xr.DataArray":
+    """Wrap a raw SNODAS day in a rio-tagged WGS84 DataArray for reprojection."""
+    import rioxarray  # noqa: F401  (registers ``.rio`` accessor)
+
+    da = xr.DataArray(
+        swe_int16,
+        coords={"y": wgs84_lat, "x": wgs84_lon},
+        dims=("y", "x"),
+        name="swe",
+    )
+    # write_crs + write_nodata teach rioxarray the source CRS and the
+    # fill code to honour during resampling. The raw SNODAS array
+    # carries -9999 in band as int16 (no scaling applied), so
+    # ``encoded=False`` (default) is correct — the value is in the
+    # array, not hidden behind a mask_and_scale decode.
+    da = da.rio.write_crs("EPSG:4326")
+    da = da.rio.write_nodata(_SNODAS_FILL)
+    return da
+
+
+def _compute_dst_grid(
+    sample_day: np.ndarray,
+    wgs84_lat: np.ndarray,
+    wgs84_lon: np.ndarray,
+) -> tuple[object, tuple[int, int], np.ndarray, np.ndarray]:
+    """One-shot reprojection of the first day, used to lock the year's grid.
+
+    The full year's per-day reprojections all use the same destination
+    transform/shape so the stacked output has a single, stable EPSG:5070
+    grid. Returns ``(transform, (rows, cols), y_metres, x_metres)``.
+    """
+    from rasterio.enums import Resampling
+
+    template = _build_wgs84_dataarray(sample_day, wgs84_lat, wgs84_lon)
+    reprojected = template.rio.reproject(
+        _SNODAS_DST_CRS,
+        resolution=_SNODAS_DST_RESOLUTION_M,
+        resampling=Resampling.nearest,
+        nodata=_SNODAS_FILL,
+    )
+    dst_transform = reprojected.rio.transform()
+    dst_shape = (int(reprojected.sizes["y"]), int(reprojected.sizes["x"]))
+    y_metres = np.asarray(reprojected["y"].values, dtype=np.float64)
+    x_metres = np.asarray(reprojected["x"].values, dtype=np.float64)
+    return dst_transform, dst_shape, y_metres, x_metres
+
+
+def _decode_and_reproject_day(
+    tar_path: Path,
+    rows: int,
+    cols: int,
+    wgs84_lat: np.ndarray,
+    wgs84_lon: np.ndarray,
+    dst_transform: object,
+    dst_shape: tuple[int, int],
+) -> np.ndarray:
+    """Decode one .tar's SWE binary, reproject to the locked EPSG:5070 grid.
+
+    Combines the two operations in one delayed task so the WGS84 source
+    array is released as soon as the projected destination is built;
+    peak per-task memory is ~source + ~destination (≈ 60-70 MB for full
+    CONUS), independent of the year length.
+    """
+    from rasterio.enums import Resampling
+
+    raw = _read_snodas_swe_array(tar_path, rows, cols)
+    src = _build_wgs84_dataarray(raw, wgs84_lat, wgs84_lon)
+    dst = src.rio.reproject(
+        _SNODAS_DST_CRS,
+        shape=dst_shape,
+        transform=dst_transform,
+        resampling=Resampling.nearest,
+        nodata=_SNODAS_FILL,
+    )
+    return np.asarray(dst.values, dtype=np.int16)
+
+
+def _compute_lat_lon_2d(
+    y_metres: np.ndarray, x_metres: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return 2D (lat, lon) auxiliary coords at EPSG:5070 cell centres."""
+    from pyproj import Transformer
+
+    xx, yy = np.meshgrid(x_metres, y_metres)
+    transformer = Transformer.from_crs(_SNODAS_DST_CRS, "EPSG:4326", always_xy=True)
+    lon2d, lat2d = transformer.transform(xx, yy)
+    return lat2d.astype(np.float32), lon2d.astype(np.float32)
+
+
 def consolidate_year_snodas(
     year: int,
     raw_dir: Path,
@@ -530,12 +636,31 @@ def consolidate_year_snodas(
 
     - **Idempotent**: skips rebuild when the output exists and is newer
       than every input ``.tar`` (mtime check, same pattern as ERA5-Land).
+      *Schema-change caveat (issue #121)*: the on-disk schema flipped
+      from WGS84 lat/lon to EPSG:5070 projected y/x. Operators upgrading
+      from pre-#121 daily NCs must ``rm <datastore>/snodas/daily/*.nc``
+      manually before re-running; otherwise mtime says "up to date" and
+      the schema change never takes effect.
     - **Atomic**: writes to ``.nc.tmp`` then renames; an interrupted run
       never leaves a half-written NC at the canonical path.
+    - **Pre-projection (issue #121)**: every day's SWE binary is decoded
+      as native WGS84, then immediately reprojected to EPSG:5070
+      (NAD83 / CONUS Albers, 1000 m) using ``Resampling.nearest`` so the
+      ``-9999`` fill code does not bleed into neighbouring cells. The
+      whole year's per-day reprojections target a single (transform,
+      shape) computed from the first day, so the stacked output has a
+      stable EPSG:5070 grid. The aggregator's ``WEIGHT_GEN_CRS`` is also
+      EPSG:5070, so gdptools skips reprojection entirely (~5-8× speedup).
     - **CF metadata**: applies :func:`apply_cf_metadata` with
-      ``time_step="daily"``, so the variable carries ``units`` from
-      catalog ``cf_units`` (``kg m-2``), ``cell_methods``, ``grid_mapping``,
-      and a WGS84 ``crs`` ancillary variable.
+      ``time_step="daily"`` and ``coord_type="projected"``, so the
+      variable carries ``units`` from catalog ``cf_units`` (``kg m-2``),
+      ``cell_methods``, ``grid_mapping``, and a CF-correct EPSG:5070
+      ``crs`` ancillary variable. 2D ``lat``/``lon`` auxiliary
+      coordinates (computed from the EPSG:5070 cell centres) are
+      attached as CF auxiliary coordinate variables so downstream tools
+      that need geographic coords still have them — but note these
+      describe the *new* projected cell centres, not the original SNODAS
+      30-arcsec pixel positions.
     - **Storage**: SWE stored as native ``int16`` with
       ``_FillValue=-9999`` plus zlib (level 4). xarray's default
       ``mask_and_scale=True`` on read converts fills to NaN
@@ -632,7 +757,7 @@ def consolidate_year_snodas(
     first_header = _read_snodas_swe_header(tar_paths[0])
     rows = int(first_header["Number of rows"])
     cols = int(first_header["Number of columns"])
-    lat, lon = _coords_from_snodas_header(first_header)
+    wgs84_lat, wgs84_lon = _coords_from_snodas_header(first_header)
     times = np.array(
         [_date_from_tar_filename(p).to_datetime64() for p in tar_paths],
         dtype="datetime64[ns]",
@@ -687,38 +812,59 @@ def consolidate_year_snodas(
             first_drift_name,
         )
 
-    # Phase 2 — lazy: build a dask-delayed stack of binary decodes. Each
-    # day's array (~46 MB int16 at native CONUS resolution) is materialized
-    # only when xarray asks for that chunk during `to_netcdf`, then released
-    # as soon as the zlib-compressed chunk is written to disk. Peak resident
-    # memory is bounded by a handful of in-flight chunks (~hundreds of MB),
-    # not by the full (n_days × rows × cols) int16 array (which would be
-    # ~17 GB for a full CONUS year and caused OOM kills under --mem=32G in
-    # SLURM job 17553331). The chunked storage layout `(1, rows, cols)`
-    # matches exactly one day per dask block, so each block survives a
-    # single read → compress → write cycle.
+    # Phase 2a — eager but cheap: lock the destination EPSG:5070 grid by
+    # reprojecting the first day once. Every subsequent day's reprojection
+    # targets this same (transform, shape) so the stacked output has a
+    # single stable projected grid for the year. Decoding one day's binary
+    # to drive the computation is unavoidable but small (~46 MB int16).
+    sample_day = _read_snodas_swe_array(tar_paths[0], rows, cols)
+    dst_transform, dst_shape, dst_y, dst_x = _compute_dst_grid(
+        sample_day, wgs84_lat, wgs84_lon
+    )
+    del sample_day  # release the WGS84 source array before the dask stage
+    dst_rows, dst_cols = dst_shape
+    lat2d, lon2d = _compute_lat_lon_2d(dst_y, dst_x)
+
+    # Phase 2b — lazy: build a dask-delayed stack of (decode + reproject)
+    # per day. The combined task releases its WGS84 source array as soon
+    # as the EPSG:5070 destination is built, so peak per-task memory is
+    # ~source + ~destination (≈ 60-70 MB for full CONUS), independent of
+    # the year length. xarray materializes one chunk at a time during
+    # `to_netcdf` (synchronous scheduler below) and the zlib-compressed
+    # chunk is written and released before the next is decoded — keeps
+    # the full year off the heap (the old eager stack was ~17 GB int16
+    # for a CONUS year and caused OOM under --mem=32G in SLURM job
+    # 17553331). The chunked storage layout `(1, dst_rows, dst_cols)`
+    # matches exactly one day per dask block.
     import dask
     import dask.array as da
 
-    delayed_decodes = [
-        dask.delayed(_read_snodas_swe_array)(p, rows, cols) for p in tar_paths
+    delayed_days = [
+        dask.delayed(_decode_and_reproject_day)(
+            p, rows, cols, wgs84_lat, wgs84_lon, dst_transform, dst_shape
+        )
+        for p in tar_paths
     ]
     swe_stack = da.stack(
-        [
-            da.from_delayed(d, shape=(rows, cols), dtype=np.int16)
-            for d in delayed_decodes
-        ],
+        [da.from_delayed(d, shape=dst_shape, dtype=np.int16) for d in delayed_days],
         axis=0,
     )
 
     ds = xr.Dataset(
-        {"swe": (("time", "lat", "lon"), swe_stack)},
-        coords={"time": times, "lat": lat, "lon": lon},
+        {"swe": (("time", "y", "x"), swe_stack)},
+        coords={
+            "time": times,
+            "y": dst_y,
+            "x": dst_x,
+            "lat": (("y", "x"), lat2d),
+            "lon": (("y", "x"), lon2d),
+        },
     )
-    ds = apply_cf_metadata(ds, _SOURCE_KEY, "daily")
+    ds = apply_cf_metadata(ds, _SOURCE_KEY, "daily", coord_type="projected")
 
-    # Record the first-day grid metadata as a global attr so future
-    # readers can detect cross-year drift without re-opening a .tar.
+    # Record the first-day (WGS84) grid metadata as a global attr so future
+    # readers can detect cross-year drift without re-opening a .tar. These
+    # are the *source* SNODAS grid parameters; the on-disk NC is in EPSG:5070.
     first_header_subset = {
         k: first_header[k]
         for k in (
@@ -742,6 +888,11 @@ def consolidate_year_snodas(
             "frequency": "day",
             "history": f"Consolidated by nhf-spatial-targets v{__version__}",
             "snodas_first_day_header": json.dumps(first_header_subset),
+            "snodas_reprojection": (
+                f"native WGS84 -> {_SNODAS_DST_CRS} at "
+                f"{_SNODAS_DST_RESOLUTION_M:g} m, Resampling.nearest "
+                f"(pre-projected at consolidate time per issue #121)"
+            ),
         }
     )
     if drift_days:
@@ -754,7 +905,7 @@ def consolidate_year_snodas(
             "zlib": True,
             "complevel": 4,
             "_FillValue": np.int16(_SNODAS_FILL),
-            "chunksizes": (1, rows, cols),
+            "chunksizes": (1, dst_rows, dst_cols),
             "dtype": "int16",
         },
     }

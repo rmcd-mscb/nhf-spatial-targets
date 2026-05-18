@@ -398,7 +398,27 @@ a projected and a geographic format (or the consolidator could
 reproject at fetch time), prefer the projected format for the
 aggregator's sake. For sources we're stuck with in geographic
 coords, a pre-projection step in the consolidator is the cleanest
-fix — tracked for SNODAS in issue #121.
+fix.
+
+**SNODAS pre-projection (issue #121, resolved).** The SNODAS
+consolidator at `fetch/snodas.py:consolidate_year_snodas` now
+reprojects each day from native WGS84 30 arcsec to EPSG:5070 at
+1000 m using `Resampling.nearest` before writing the per-year NC.
+Nearest is mandatory: SWE is an instantaneous quantity (not a flux),
+and the `-9999` fill code must not bleed into neighbouring cells
+during resampling. Matching `WEIGHT_GEN_CRS` at consolidate time
+collapses the geographic-CRS overhead in the table above — the
+"Reprojecting to EPSG:5070" phase becomes a no-op for gdptools and
+the per-batch weight gen drops from ~61 s to Daymet-like ~10 s
+(~5-8× speedup). The aggregator at `aggregate/snodas.py` declares
+`source_crs="EPSG:5070"` to advertise the pre-projected grid; the
+on-disk consolidated NCs carry projected y/x dim coords in metres
+plus 2D auxiliary lat/lon coords for downstream tools that want
+geographic coordinates. Operators upgrading must
+`rm <datastore>/snodas/daily/*.nc` and the per-fabric SNODAS weight
+caches before re-running fetch + agg (the consolidated-NC mtime check
+cannot detect the schema change on its own; the source-grid change
+invalidates the cached weights).
 
 ## Cross-references
 

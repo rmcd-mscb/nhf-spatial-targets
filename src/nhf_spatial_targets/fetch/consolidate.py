@@ -166,6 +166,7 @@ def apply_cf_metadata(
     source_key: str,
     time_step: str = "monthly",
     crs_wkt: str | None = None,
+    coord_type: str = "geographic",
 ) -> xr.Dataset:
     """Apply CF-1.6 compliant metadata to a consolidated dataset.
 
@@ -181,9 +182,18 @@ def apply_cf_metadata(
         ``time_bnds`` generation; all other values (``"daily"``,
         ``"8-day"``, ``"annual"``) leave time bounds unchanged.
     crs_wkt : str | None
-        WKT string for the source CRS. Defaults to WGS84 when ``None``.
-        Only geographic CRS is supported; projected CRS will raise
-        ``NotImplementedError``.
+        WKT string for the source CRS. Defaults to WGS84 (geographic) or
+        ``EPSG:5070`` (projected) when ``None``. Must match
+        ``coord_type``: passing a projected WKT with
+        ``coord_type="geographic"`` raises ``ValueError``.
+    coord_type : {"geographic", "projected"}
+        ``"geographic"`` (default): spatial dims are lat/lon in degrees;
+        renames any ``y/x`` or ``latitude/longitude`` dims to ``lat/lon``;
+        emits ``latitude_longitude`` grid mapping. ``"projected"``: spatial
+        dims are ``y/x`` in metres; the ``y/x`` rename is suppressed and
+        the ``crs`` ancillary carries the projected grid mapping from
+        ``pyproj.CRS.to_cf()``. Used by SNODAS, which is pre-projected to
+        EPSG:5070 at consolidate time per issue #121.
 
     Returns
     -------
@@ -196,18 +206,30 @@ def apply_cf_metadata(
         raise ValueError(
             f"Invalid time_step {time_step!r}; expected one of {sorted(_VALID_TIME_STEPS)}"
         )
+    _VALID_COORD_TYPES = {"geographic", "projected"}
+    if coord_type not in _VALID_COORD_TYPES:
+        raise ValueError(
+            f"Invalid coord_type {coord_type!r}; expected one of "
+            f"{sorted(_VALID_COORD_TYPES)}"
+        )
 
-    # 1. Normalize coordinates to lat/lon and time dimension name.
+    # 1. Normalize coordinates and time dim name.
     # CDS API ≥0.7 renames the time dimension from "time" to "valid_time";
     # normalise here so all downstream code sees a consistent "time" dim.
+    # For coord_type="projected" the y/x→lat/lon rename is suppressed
+    # because the source dims really are projected metres, not degrees.
     rename_map: dict[str, str] = {}
-    for old, new in [
-        ("valid_time", "time"),
-        ("y", "lat"),
-        ("x", "lon"),
-        ("latitude", "lat"),
-        ("longitude", "lon"),
-    ]:
+    name_pairs: list[tuple[str, str]] = [("valid_time", "time")]
+    if coord_type == "geographic":
+        name_pairs.extend(
+            [
+                ("y", "lat"),
+                ("x", "lon"),
+                ("latitude", "lat"),
+                ("longitude", "lon"),
+            ]
+        )
+    for old, new in name_pairs:
         if old in ds.dims and old != new:
             rename_map[old] = new
     if rename_map:
@@ -223,9 +245,13 @@ def apply_cf_metadata(
             f"got dims {list(ds.dims)}."
         )
 
-    # Ensure (time, lat, lon) dimension order; use ellipsis to pass through any
-    # extra dims (e.g. "nv" from time_bnds).
-    dim_order = [d for d in ("time", "lat", "lon") if d in ds.dims]
+    # Ensure canonical dim order: (time, <y-axis>, <x-axis>); use ellipsis
+    # to pass through any extra dims (e.g. "nv" from time_bnds).
+    if coord_type == "geographic":
+        spatial_dims: tuple[str, ...] = ("lat", "lon")
+    else:
+        spatial_dims = ("y", "x")
+    dim_order = [d for d in ("time", *spatial_dims) if d in ds.dims]
     ds = ds.transpose(*dim_order, ...)
 
     # 2. Drop spatial_ref if present (check both data_vars and coords)
@@ -235,43 +261,48 @@ def apply_cf_metadata(
         ds = ds.drop_vars("spatial_ref")
 
     # 3. Add CRS variable
-    if crs_wkt is not None:
-        from pyproj import CRS as _CRS
+    from pyproj import CRS as _CRS
 
+    if crs_wkt is not None:
         src_crs = _CRS.from_wkt(crs_wkt)
-        crs_attrs: dict = {"crs_wkt": crs_wkt}
-        if src_crs.is_geographic:
-            crs_attrs["grid_mapping_name"] = "latitude_longitude"
-            ellipsoid = src_crs.ellipsoid
-            crs_attrs["semi_major_axis"] = ellipsoid.semi_major_metre
-            crs_attrs["inverse_flattening"] = ellipsoid.inverse_flattening
-            crs_attrs["longitude_of_prime_meridian"] = 0.0
-        else:
-            raise NotImplementedError(
-                f"Only geographic CRS is supported, got projected CRS: {src_crs.name}"
+        if coord_type == "geographic" and not src_crs.is_geographic:
+            raise ValueError(
+                f"apply_cf_metadata: coord_type='geographic' but crs_wkt "
+                f"describes a projected CRS ({src_crs.name}). Pass "
+                f"coord_type='projected'."
             )
+        if coord_type == "projected" and src_crs.is_geographic:
+            raise ValueError(
+                f"apply_cf_metadata: coord_type='projected' but crs_wkt "
+                f"describes a geographic CRS ({src_crs.name}). Pass "
+                f"coord_type='geographic'."
+            )
+    elif coord_type == "projected":
+        # Default projected CRS is EPSG:5070 (NAD83 / CONUS Albers Equal
+        # Area), matching the aggregator's WEIGHT_GEN_CRS.
+        src_crs = _CRS.from_epsg(5070)
     else:
-        # Default WGS84
-        crs_attrs = {
-            "grid_mapping_name": "latitude_longitude",
-            "semi_major_axis": 6378137.0,
-            "inverse_flattening": 298.257223563,
-            "longitude_of_prime_meridian": 0.0,
-            "crs_wkt": (
-                'GEOGCS["WGS 84",'
-                'DATUM["WGS_1984",'
-                'SPHEROID["WGS 84",6378137,298.257223563]],'
-                'PRIMEM["Greenwich",0],'
-                'UNIT["degree",0.0174532925199433]]'
-            ),
-        }
+        src_crs = _CRS.from_epsg(4326)
+    # pyproj's CF projection encoding gives us every required grid_mapping
+    # attribute (grid_mapping_name, semi_major_axis, etc.) without having
+    # to hardcode per-projection attribute names.
+    crs_attrs: dict = dict(src_crs.to_cf())
+    crs_attrs.setdefault("crs_wkt", src_crs.to_wkt())
     ds["crs"] = xr.DataArray(np.int32(0), attrs=crs_attrs)
 
-    # 4. Set grid_mapping on data variables
+    # 4. Set grid_mapping on data variables. For projected datasets
+    # with 2D lat/lon auxiliary coords, also point the CF "coordinates"
+    # attr at them per CF section 5.2 so downstream tools can find them.
     skip_vars = {"crs", "time_bnds"}
+    aux_coords: list[str] = []
+    if coord_type == "projected":
+        aux_coords = [c for c in ("lat", "lon") if c in ds.coords]
     for var in ds.data_vars:
-        if var not in skip_vars:
-            ds[var].attrs["grid_mapping"] = "crs"
+        if var in skip_vars:
+            continue
+        ds[var].attrs["grid_mapping"] = "crs"
+        if aux_coords:
+            ds[var].attrs["coordinates"] = " ".join(aux_coords)
 
     # 5. Set variable metadata from catalog
     meta = _catalog.source(source_key)
@@ -302,18 +333,48 @@ def apply_cf_metadata(
                     ds[var].attrs["cell_methods"] = entry["cell_methods"]
 
     # 6. Set coordinate attributes
-    if "lat" in ds.coords:
-        ds.lat.attrs = {
-            "standard_name": "latitude",
-            "units": "degrees_north",
-            "axis": "Y",
-        }
-    if "lon" in ds.coords:
-        ds.lon.attrs = {
-            "standard_name": "longitude",
-            "units": "degrees_east",
-            "axis": "X",
-        }
+    # For projected datasets, axis="X"/"Y" lives on the projected x/y
+    # dims; any lat/lon variables are 2D auxiliary coords (CF section
+    # 5.2) without an axis attribute. For geographic datasets, axis
+    # lives on the 1D lat/lon dim coords.
+    if coord_type == "projected":
+        if "x" in ds.coords:
+            ds["x"].attrs = {
+                "standard_name": "projection_x_coordinate",
+                "long_name": "x coordinate of projection",
+                "units": "m",
+                "axis": "X",
+            }
+        if "y" in ds.coords:
+            ds["y"].attrs = {
+                "standard_name": "projection_y_coordinate",
+                "long_name": "y coordinate of projection",
+                "units": "m",
+                "axis": "Y",
+            }
+        if "lat" in ds.coords:
+            ds["lat"].attrs = {
+                "standard_name": "latitude",
+                "units": "degrees_north",
+            }
+        if "lon" in ds.coords:
+            ds["lon"].attrs = {
+                "standard_name": "longitude",
+                "units": "degrees_east",
+            }
+    else:
+        if "lat" in ds.coords:
+            ds.lat.attrs = {
+                "standard_name": "latitude",
+                "units": "degrees_north",
+                "axis": "Y",
+            }
+        if "lon" in ds.coords:
+            ds.lon.attrs = {
+                "standard_name": "longitude",
+                "units": "degrees_east",
+                "axis": "X",
+            }
     if "time" in ds.coords:
         ds.time.attrs.update(
             {"standard_name": "time", "long_name": "time", "axis": "T"}

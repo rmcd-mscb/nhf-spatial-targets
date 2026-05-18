@@ -777,7 +777,13 @@ sources:
         downloads through the earthaccess HTTPS auth session rather
         than via earthaccess.search_data. The unmasked variant
         (2009-present, ~60 N to 24.95 N including parts of Canada/
-        Mexico) is NOT used.
+        Mexico) is NOT used. Pre-projection (issue #121): the
+        consolidator reprojects from native WGS84 30 arcsec to
+        EPSG:5070 (NAD83 / CONUS Albers) at 1000 m using
+        nearest-neighbour resampling. Matching the aggregator's
+        WEIGHT_GEN_CRS at consolidate time cuts gdptools weight-gen
+        cost ~5-8× per batch; nearest-neighbour preserves the -9999
+        fill code without bleeding into neighbouring cells.
     variables:
       - name: swe
         long_name: snow water equivalent
@@ -790,7 +796,8 @@ sources:
     time_step: daily
     period: "2003/present"
     spatial_extent: CONUS
-    spatial_resolution: 30 arcsec (~1 km)
+    spatial_resolution: 1000 m (EPSG:5070, pre-projected at consolidate
+      time per issue #121; native 30 arcsec WGS84)
     units: kg m-2 (mm water equivalent)
     license: public domain (NSIDC / NOAA)
     status: current
