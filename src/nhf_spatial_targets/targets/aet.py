@@ -244,10 +244,6 @@ def build(project: Project) -> None:
     shims = shims_by_key(SHIMS)
     sources_in_day: dict[str, xr.DataArray] = {}
     for src in sources:
-        if src not in shims:
-            raise ValueError(
-                f"aet.sources includes unknown source '{src}'. Known: {sorted(shims)}"
-            )
         shim = shims[src]
         # For MOD16A2 the time dim is 8-day; slicing by the requested
         # monthly period is still correct because xr.sel(time=slice(...))

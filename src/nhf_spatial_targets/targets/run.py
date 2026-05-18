@@ -184,11 +184,6 @@ def build(project: Project) -> None:
     shims = shims_by_key(SHIMS)
     sources_cfs: dict[str, xr.DataArray] = {}
     for src in sources:
-        if src not in shims:
-            raise ValueError(
-                f"runoff.sources includes unknown source '{src}'. "
-                f"Known: {sorted(shims)}"
-            )
         shim = shims[src]
         da_native = read_aggregated_source(
             project,

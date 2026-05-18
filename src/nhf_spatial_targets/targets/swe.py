@@ -221,17 +221,13 @@ def build(project: Project) -> None:
     fabric_token = fabric_cfg.get("token")
     shims = shims_by_config_label(SHIMS)
 
-    # Validate every requested source against the SHIMS registry BEFORE
-    # any catalog or fabric_scope lookups, so an unknown source name
-    # surfaces a "Known: ..." message rather than a confusing KeyError
-    # from the catalog or a "zero sources after filtering" message
-    # after silent drops.
-    for src in requested_sources:
-        if src not in shims:
-            raise ValueError(
-                f"snow_water_equivalent.sources includes unknown source "
-                f"'{src}'. Known: {sorted(shims)}"
-            )
+    # Fail loud at startup if a requested source has no matching shim or
+    # if a catalog cf_units string has drifted from a shim's hardcoded
+    # conversion factor (issue #130). Run on `requested_sources` (before
+    # fabric-scope filtering) so an unknown source surfaces a clear
+    # "no matching SourceShim" message rather than a KeyError from the
+    # catalog lookup inside `_filter_sources_by_fabric_scope`.
+    validate_source_units(SHIMS, requested_sources)
 
     # Validate the project's fabric token if set, to catch typos like
     # "oregon" instead of "or" before silently filtering every fabric-
@@ -250,12 +246,6 @@ def build(project: Project) -> None:
             f"zero sources after fabric_scope filtering (fabric token="
             f"{fabric_token!r}). Add a non-scoped source or set fabric.token."
         )
-
-    # Fail loud at startup if a catalog cf_units string has drifted from
-    # any per-source shim's hardcoded conversion factor (issue #130).
-    # Run after fabric-scope filtering so we only validate sources that
-    # will actually be read.
-    validate_source_units(SHIMS, sources)
 
     logger.info(
         "Building SWE target: %d sources (%s) [requested %d (%s)], "
