@@ -5,10 +5,15 @@
 #SBATCH --array=0-3          # 4 workers — adjust with N_WORKERS below
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=64G            # Per-worker peak ≈ one batch's weight-gen +
-                             # one batch's aggregation working set. 64G is
-                             # comfortable for the 1 km SNODAS source × any
-                             # CONUS fabric at batch_size up to 10000.
+#SBATCH --mem=128G           # Per-worker peak ≈ one batch's weight-gen +
+                             # one batch's aggregation working set. 128G
+                             # matches the proven --mem in agg_all.slurm
+                             # for the 1 km SNODAS source × CONUS fabric;
+                             # first attempt at 64G OOM-killed on all 4
+                             # array tasks at the smaller batch_size=500
+                             # default (1024 batches × per-batch overhead).
+                             # Per CLAUDE.md memory: prefer SLURM --mem
+                             # bumps over in-code memory refactors.
 #SBATCH --time=12:00:00      # 21 years / 4 workers ≈ 5-6 years per worker;
                              # ~1 hr/year post-#121 (no source-grid reproject)
                              # → ~6 hrs per worker plus weight-gen tax on
