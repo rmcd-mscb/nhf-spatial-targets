@@ -69,7 +69,13 @@ ADAPTER = SourceAdapter(
 
 
 def aggregate_mod16a2(
-    fabric_path: Path, id_col: str, workdir: Path, batch_size: int = 500
+    fabric_path: Path,
+    id_col: str,
+    workdir: Path,
+    batch_size: int = 500,
+    *,
+    worker_index: int = 0,
+    n_workers: int = 1,
 ) -> None:
     """Aggregate MOD16A2 v061 8-day AET to HRU polygons.
 
@@ -82,4 +88,6 @@ def aggregate_mod16a2(
         id_col,
         workdir,
         batch_size,
+        worker_index=worker_index,
+        n_workers=n_workers,
     )

@@ -27,6 +27,14 @@ from nhf_spatial_targets.workspace import Project, load as load_project
 logger = logging.getLogger(__name__)
 
 
+try:
+    import fcntl as _fcntl
+
+    _HAVE_FLOCK = True
+except ImportError:  # Windows fallback (not used on HPC).
+    _HAVE_FLOCK = False
+
+
 def update_manifest(
     project: Project,
     source_key: str,
@@ -34,6 +42,8 @@ def update_manifest(
     period: str,
     output_files: list[str],
     weight_files: list[str],
+    batch_size: int | None = None,
+    n_workers: int = 1,
 ) -> None:
     """Merge an aggregation provenance entry into ``manifest.json`` atomically.
 
@@ -50,19 +60,24 @@ def update_manifest(
     paths relative to ``project.workdir`` (one per year for per-year
     pipelines, a single-element list for sources like ssebop that emit
     one consolidated file).
+
+    File-list semantics under SLURM array runs (issue #156): when called
+    by a single worker the entry replaces existing ``output_files`` and
+    ``weight_files`` as before. When called by one of several parallel
+    workers (``n_workers > 1``), each call **merges** its files into the
+    existing entry's lists rather than overwriting — every worker
+    contributes only the year-NCs it produced, but the final manifest
+    union reflects the full set across workers. The merge is a sorted
+    de-duplicated union, idempotent under re-runs.
+
+    Concurrent-write safety: the read-modify-write is protected by an
+    advisory ``flock(LOCK_EX)`` on a sidecar lock file, so parallel SLURM
+    array workers can call this safely without losing each other's
+    additions. The same pattern as ``fetch/snodas.py:_update_manifest``.
     """
     manifest_path = project.manifest_path
-    if manifest_path.exists():
-        try:
-            manifest = json.loads(manifest_path.read_text())
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"manifest.json in {project.workdir} is corrupt: {exc}"
-            ) from exc
-    else:
-        manifest = {"sources": {}, "steps": []}
-
-    manifest.setdefault("sources", {})
+    lock_path = manifest_path.with_suffix(manifest_path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
 
     fabric_json = project.workdir / "fabric.json"
     fabric_sha = ""
@@ -70,37 +85,79 @@ def update_manifest(
         fabric_meta = json.loads(fabric_json.read_text())
         fabric_sha = fabric_meta.get("sha256", "")
 
-    entry: dict = {
-        "source_key": source_key,
-        "access_type": access.get("type", ""),
-        "period": period,
-        "fabric_sha256": fabric_sha,
-        "output_files": list(output_files),
-        "weight_files": list(weight_files),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-    # Forward optional catalog access keys so downstream provenance consumers
-    # see DOI, collection_id, short_name, and version when catalogued.
-    for extra_key in ("collection_id", "short_name", "version", "doi"):
-        if extra_key in access:
-            entry[extra_key] = access[extra_key]
+    def _do_update() -> None:
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text())
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"manifest.json in {project.workdir} is corrupt: {exc}"
+                ) from exc
+        else:
+            manifest = {"sources": {}, "steps": []}
 
-    # Entry-level read-merge-write: preserve fetch-side keys (issue #119).
-    # For sources whose fetch doesn't write nested state, the existing
-    # entry only contains keys the new entry also writes, so this is a
-    # no-op behavior change.
-    existing = manifest["sources"].get(source_key, {})
-    existing.update(entry)
-    manifest["sources"][source_key] = existing
+        manifest.setdefault("sources", {})
 
-    tmp_fd, tmp_path = tempfile.mkstemp(dir=manifest_path.parent, suffix=".json.tmp")
-    try:
-        with os.fdopen(tmp_fd, "w") as f:
-            json.dump(manifest, f, indent=2)
-        Path(tmp_path).replace(manifest_path)
-    except Exception:
-        Path(tmp_path).unlink(missing_ok=True)
-        raise
+        entry: dict = {
+            "source_key": source_key,
+            "access_type": access.get("type", ""),
+            "period": period,
+            "fabric_sha256": fabric_sha,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        if batch_size is not None:
+            entry["batch_size"] = int(batch_size)
+        if n_workers != 1:
+            entry["n_workers"] = int(n_workers)
+        # Forward optional catalog access keys so downstream provenance consumers
+        # see DOI, collection_id, short_name, and version when catalogued.
+        for extra_key in ("collection_id", "short_name", "version", "doi"):
+            if extra_key in access:
+                entry[extra_key] = access[extra_key]
+
+        # Entry-level read-merge-write: preserve fetch-side keys (issue #119).
+        existing = manifest["sources"].get(source_key, {})
+
+        # File-list merge semantics for parallel workers (issue #156):
+        # take the sorted de-duplicated union of pre-existing and new
+        # files. For single-worker runs the new list typically already
+        # contains the full set so the union is a no-op; for parallel
+        # workers each call contributes its slice and the union grows
+        # across workers. Sort to keep the manifest diff-stable.
+        if n_workers > 1:
+            entry["output_files"] = sorted(
+                set(existing.get("output_files", [])) | set(output_files)
+            )
+            entry["weight_files"] = sorted(
+                set(existing.get("weight_files", [])) | set(weight_files)
+            )
+        else:
+            entry["output_files"] = list(output_files)
+            entry["weight_files"] = list(weight_files)
+
+        existing.update(entry)
+        manifest["sources"][source_key] = existing
+
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=manifest_path.parent, suffix=".json.tmp"
+        )
+        try:
+            with os.fdopen(tmp_fd, "w") as f:
+                json.dump(manifest, f, indent=2)
+            Path(tmp_path).replace(manifest_path)
+        except Exception:
+            Path(tmp_path).unlink(missing_ok=True)
+            raise
+
+    if _HAVE_FLOCK:
+        with open(lock_path, "a") as _lock_f:
+            _fcntl.flock(_lock_f, _fcntl.LOCK_EX)
+            try:
+                _do_update()
+            finally:
+                _fcntl.flock(_lock_f, _fcntl.LOCK_UN)
+    else:
+        _do_update()
 
     logger.info("Updated manifest.json with '%s' aggregation provenance", source_key)
 
@@ -141,16 +198,48 @@ def _weight_cache_fingerprint_path(csv_path: Path) -> Path:
     return csv_path.with_suffix(".csv.meta")
 
 
-def _batch_fingerprint(batch_gdf: gpd.GeoDataFrame, id_col: str) -> str:
-    """SHA-256 over sorted batch HRU IDs; identifies the batch unambiguously.
+def _batch_fingerprint(
+    batch_gdf: gpd.GeoDataFrame,
+    id_col: str,
+    source_crs: str | None = None,
+) -> str:
+    """SHA-256 over sorted batch HRU IDs + source CRS; identifies the cache key.
 
-    The fingerprint changes whenever the set of HRU IDs in the batch changes,
-    e.g. a different batch_size produced a different KD-tree partition or the
-    fabric itself was swapped. Stored alongside cached weights so a stale
-    cache from an earlier batching scheme can be detected and invalidated.
+    The fingerprint changes whenever the set of HRU IDs in the batch
+    changes (different ``batch_size`` produced a different KD-tree
+    partition, or the fabric itself was swapped) OR whenever the
+    source CRS the weights were computed against changes. Stored
+    alongside cached weights so a stale cache from an earlier batching
+    scheme or an earlier source grid can be detected and invalidated.
+
+    The source-CRS arm of the fingerprint matters because a source
+    consolidator may change its on-disk grid (e.g. SNODAS switching
+    from native WGS84 30 arcsec to EPSG:5070 1 km in PR #155): the
+    HRU IDs stay the same but the weights' grid-cell indices now
+    point at the wrong cells. Without including source CRS, the
+    HRU-ID-only check would silently reuse stale weights and produce
+    bad aggregations.
+
+    Parameters
+    ----------
+    batch_gdf : gpd.GeoDataFrame
+    id_col : str
+    source_crs : str, optional
+        Source CRS string (``"EPSG:5070"``, etc.) as declared by the
+        adapter or per-source aggregator. ``None`` preserves the
+        pre-#156 HRU-ID-only fingerprint for backward compatibility
+        with sites that haven't migrated yet (the empty source-CRS
+        component hashes to a stable value). New code should always
+        pass the source CRS.
     """
     ids = np.sort(np.asarray(batch_gdf[id_col].values))
-    return hashlib.sha256(ids.tobytes()).hexdigest()
+    h = hashlib.sha256(ids.tobytes())
+    # Separator byte makes the digest unambiguous: a HRU IDs payload
+    # of "x" + source_crs of "y" is distinguishable from HRU IDs of
+    # "xy" + source_crs of "" (defense against a synthetic collision).
+    h.update(b"|")
+    h.update((source_crs or "").encode("utf-8"))
+    return h.hexdigest()
 
 
 def _find_time_coord_name(ds: xr.Dataset) -> str | None:
@@ -538,7 +627,7 @@ def compute_or_load_weights(
     """
     wp = weight_cache_path(workdir, source_key, batch_id)
     fp_path = _weight_cache_fingerprint_path(wp)
-    expected_fp = _batch_fingerprint(batch_gdf, id_col)
+    expected_fp = _batch_fingerprint(batch_gdf, id_col, source_crs=source_crs)
 
     if wp.exists():
         if fp_path.exists():
@@ -549,8 +638,8 @@ def compute_or_load_weights(
             logger.warning(
                 "Batch %d: cached weights at %s have stale batch fingerprint "
                 "(cached=%s..., expected=%s...). The cache predates a "
-                "batch_size or fabric change since the weights were written. "
-                "Recomputing.",
+                "batch_size, fabric, or source-CRS change since the weights "
+                "were written. Recomputing.",
                 batch_id,
                 wp,
                 cached_fp[:12],
@@ -738,6 +827,28 @@ def _skip_for_fabric_scope(source_key: str, meta: dict, project: Project) -> boo
     return True
 
 
+def _assign_worker_years(
+    all_year_files: list[tuple[int, Path]],
+    worker_index: int,
+    n_workers: int,
+) -> list[tuple[int, Path]]:
+    """Round-robin slice of ``all_year_files`` for ``worker_index`` of ``n_workers``.
+
+    Mirrors ``fetch/snodas.py:_assign_worker_years``. Round-robin (vs.
+    contiguous chunks) keeps the load balanced when per-year cost is
+    uneven — e.g. a leap year is slightly heavier, or early years have
+    sparser data. The serial path is ``(0, 1)``: one worker takes
+    everything.
+    """
+    if n_workers < 1:
+        raise ValueError(f"n_workers must be >= 1, got {n_workers}")
+    if not 0 <= worker_index < n_workers:
+        raise ValueError(
+            f"worker_index must be in [0, {n_workers}); got {worker_index}"
+        )
+    return list(all_year_files[worker_index::n_workers])
+
+
 def aggregate_source(
     adapter: SourceAdapter,
     fabric_path: Path,
@@ -745,6 +856,9 @@ def aggregate_source(
     workdir: Path,
     batch_size: int = 500,
     period: str | None = None,
+    *,
+    worker_index: int = 0,
+    n_workers: int = 1,
 ) -> None:
     """Aggregate a source to fabric HRU polygons; emit per-year NCs.
 
@@ -766,6 +880,13 @@ def aggregate_source(
     source NC cause ValueError before any year is aggregated — unless the
     adapter defines a ``pre_aggregate_hook`` (in which case the declared
     variables are constructed by the hook, not read from the raw NC).
+
+    SLURM-array support (issue #156): ``worker_index`` / ``n_workers``
+    select a round-robin slice of the year files for this worker.
+    Default ``(0, 1)`` is the serial path. With ``n_workers > 1`` the
+    contiguous-year-coverage check is skipped (other workers haven't
+    finished yet); the manifest update is flock-protected by
+    :func:`update_manifest` and merges file lists across workers.
     """
     workdir = Path(workdir)
     project = load_project(workdir)
@@ -861,14 +982,38 @@ def aggregate_source(
             before,
             len(year_files),
         )
+
+    # SLURM-array worker slice (issue #156). For n_workers=1 this is a
+    # no-op pass-through.
+    assigned_year_files = _assign_worker_years(year_files, worker_index, n_workers)
+    if not assigned_year_files:
+        logger.info(
+            "%s: worker %d/%d has no years to process",
+            adapter.source_key,
+            worker_index,
+            n_workers,
+        )
+        return
+
     fabric_batched = load_and_batch_fabric(fabric_path, batch_size=batch_size)
     n_batches = int(fabric_batched["batch_id"].nunique())
-    logger.info(
-        "%s: %d years to aggregate across %d spatial batches",
-        adapter.source_key,
-        len(year_files),
-        n_batches,
-    )
+    if n_workers == 1:
+        logger.info(
+            "%s: %d years to aggregate across %d spatial batches",
+            adapter.source_key,
+            len(assigned_year_files),
+            n_batches,
+        )
+    else:
+        logger.info(
+            "%s: worker %d/%d aggregating %d of %d years across %d spatial batches",
+            adapter.source_key,
+            worker_index,
+            n_workers,
+            len(assigned_year_files),
+            len(year_files),
+            n_batches,
+        )
 
     per_year_paths = [
         aggregate_year(
@@ -880,11 +1025,15 @@ def aggregate_source(
             id_col,
             catalog_meta=meta,
         )
-        for year, path in year_files
+        for year, path in assigned_year_files
     ]
 
     per_source_dir = project.aggregated_dir() / adapter.source_key
-    _verify_year_coverage(per_source_dir, adapter.source_key, period=period)
+    # Skip contiguous-coverage check under SLURM-array: other workers
+    # may still be writing their years. Final coverage is the operator's
+    # responsibility (or a future `nhf-targets agg-verify` command).
+    if n_workers == 1:
+        _verify_year_coverage(per_source_dir, adapter.source_key, period=period)
 
     with xr.open_dataset(per_year_paths[0]) as probe:
         time_coord = _find_time_coord_name(probe)
@@ -894,23 +1043,35 @@ def aggregate_source(
             f"per-year NC {per_year_paths[0].name}. Expected a "
             f"coord with axis='T' or standard_name='time'."
         )
-    period = _derive_period(per_year_paths, time_coord)
+    derived_period = _derive_period(per_year_paths, time_coord)
 
     rel_output_files = [str(p.relative_to(project.workdir)) for p in per_year_paths]
     update_manifest(
         project=project,
         source_key=adapter.source_key,
         access=meta.get("access", {}),
-        period=period,
+        period=derived_period,
         output_files=rel_output_files,
         weight_files=[
             str(Path("weights") / f"{adapter.source_key}_batch{i}.csv")
             for i in range(n_batches)
         ],
+        batch_size=batch_size,
+        n_workers=n_workers,
     )
-    logger.info(
-        "%s: %d per-year NCs written to %s",
-        adapter.source_key,
-        len(per_year_paths),
-        per_source_dir,
-    )
+    if n_workers == 1:
+        logger.info(
+            "%s: %d per-year NCs written to %s",
+            adapter.source_key,
+            len(per_year_paths),
+            per_source_dir,
+        )
+    else:
+        logger.info(
+            "%s: worker %d/%d wrote %d per-year NCs to %s",
+            adapter.source_key,
+            worker_index,
+            n_workers,
+            len(per_year_paths),
+            per_source_dir,
+        )

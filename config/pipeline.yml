@@ -15,6 +15,10 @@ fabric:
   # Equal-area CRS used for HRU area + NN-fill distances. EPSG:5070 is
   # CONUS Albers — override for AK / HI / PR (e.g. EPSG:3338 for Alaska).
   area_crs: "EPSG:5070"
+  # KD-tree partition target HRUs/batch. The same partition is reused
+  # across every source's aggregation. CLI --batch-size overrides
+  # per-run; changing this value invalidates cached weight CSVs.
+  batch_size: 500
   # Optional: subset to specific HRU IDs for testing
   # subset_ids: [1, 2, 3]
 

@@ -59,7 +59,13 @@ ADAPTER_SD = SourceAdapter(
 
 
 def aggregate_era5_land(
-    fabric_path: Path, id_col: str, workdir: Path, batch_size: int = 500
+    fabric_path: Path,
+    id_col: str,
+    workdir: Path,
+    batch_size: int = 500,
+    *,
+    worker_index: int = 0,
+    n_workers: int = 1,
 ) -> None:
     aggregate_source(
         ADAPTER,
@@ -67,11 +73,19 @@ def aggregate_era5_land(
         id_col,
         workdir,
         batch_size,
+        worker_index=worker_index,
+        n_workers=n_workers,
     )
 
 
 def aggregate_era5_land_sd(
-    fabric_path: Path, id_col: str, workdir: Path, batch_size: int = 500
+    fabric_path: Path,
+    id_col: str,
+    workdir: Path,
+    batch_size: int = 500,
+    *,
+    worker_index: int = 0,
+    n_workers: int = 1,
 ) -> None:
     """Aggregate ERA5-Land daily snow depth (`sd`) to HRU polygons."""
     aggregate_source(
@@ -80,4 +94,6 @@ def aggregate_era5_land_sd(
         id_col,
         workdir,
         batch_size,
+        worker_index=worker_index,
+        n_workers=n_workers,
     )

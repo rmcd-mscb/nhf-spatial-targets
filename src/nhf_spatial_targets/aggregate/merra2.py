@@ -16,7 +16,13 @@ ADAPTER = SourceAdapter(
 
 
 def aggregate_merra2(
-    fabric_path: Path, id_col: str, workdir: Path, batch_size: int = 500
+    fabric_path: Path,
+    id_col: str,
+    workdir: Path,
+    batch_size: int = 500,
+    *,
+    worker_index: int = 0,
+    n_workers: int = 1,
 ) -> None:
     aggregate_source(
         ADAPTER,
@@ -24,4 +30,6 @@ def aggregate_merra2(
         id_col,
         workdir,
         batch_size,
+        worker_index=worker_index,
+        n_workers=n_workers,
     )

@@ -262,7 +262,13 @@ def _ssebop_batch_fingerprint(hru_ids):
     The fingerprint is invariant under geometry, so we can build it from a
     bare hru_id list — it must match what _batch_fingerprint produces when
     the actual fabric batch reaches _process_batch.
+
+    Issue #156: the fingerprint now also includes a source-identity arm.
+    For SSEBop (STAC-backed) we pass ``f"stac:{collection_id}"`` so a
+    future migration to a different STAC collection invalidates the
+    cache the same way a source-CRS change does for file-based sources.
     """
+    from nhf_spatial_targets import catalog
     from nhf_spatial_targets.aggregate._driver import _batch_fingerprint
 
     bare = gpd.GeoDataFrame(
@@ -270,7 +276,8 @@ def _ssebop_batch_fingerprint(hru_ids):
         geometry=[box(i, 0, i + 1, 1) for i in range(len(hru_ids))],
         crs="EPSG:4326",
     )
-    return _batch_fingerprint(bare, "hru_id")
+    collection_id = catalog.source("ssebop")["access"]["collection_id"]
+    return _batch_fingerprint(bare, "hru_id", source_crs=f"stac:{collection_id}")
 
 
 @patch("nhf_spatial_targets.aggregate.ssebop.get_stac_collection")

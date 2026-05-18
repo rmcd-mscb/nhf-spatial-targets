@@ -44,6 +44,9 @@ def aggregate_margulis_wus_sr(
     workdir: Path,
     batch_size: int = 500,
     period: str | None = None,
+    *,
+    worker_index: int = 0,
+    n_workers: int = 1,
 ) -> None:
     """Aggregate Margulis WUS-SR daily SWE to HRU polygons; emit per-year NCs."""
     aggregate_source(
@@ -53,4 +56,6 @@ def aggregate_margulis_wus_sr(
         workdir,
         batch_size,
         period=period,
+        worker_index=worker_index,
+        n_workers=n_workers,
     )

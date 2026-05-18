@@ -195,6 +195,9 @@ def aggregate_mod10c1(
     id_col: str,
     workdir: Path,
     batch_size: int = 500,
+    *,
+    worker_index: int = 0,
+    n_workers: int = 1,
 ) -> None:
     """Aggregate MOD10C1 v061 daily SCA to HRU polygons with CI masking.
 
@@ -208,4 +211,12 @@ def aggregate_mod10c1(
     to fractional [0, 1] happens downstream in target builders /
     notebooks.
     """
-    aggregate_source(ADAPTER, fabric_path, id_col, workdir, batch_size)
+    aggregate_source(
+        ADAPTER,
+        fabric_path,
+        id_col,
+        workdir,
+        batch_size,
+        worker_index=worker_index,
+        n_workers=n_workers,
+    )
