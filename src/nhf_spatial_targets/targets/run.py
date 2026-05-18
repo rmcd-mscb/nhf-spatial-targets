@@ -35,6 +35,7 @@ from nhf_spatial_targets.targets._common import (
     read_aggregated_source,
     reindex_to_month_start,
     shims_by_key,
+    validate_source_units,
     write_bounds_target,
 )
 from nhf_spatial_targets.workspace import Project
@@ -94,6 +95,7 @@ SHIMS: tuple[SourceShim, ...] = (
         aggregated_var="ro",
         description="ERA5-Land ro",
         to_common_units=era5_to_mm_per_month,
+        expected_cf_units="m",
     ),
     SourceShim(
         source_key="gldas_noah_v21_monthly",
@@ -102,12 +104,14 @@ SHIMS: tuple[SourceShim, ...] = (
             "GLDAS-2.1 NOAH runoff_total (Qs_acc + Qsb_acc, summed at consolidation)"
         ),
         to_common_units=gldas_to_mm_per_month,
+        expected_cf_units="kg m-2",
     ),
     SourceShim(
         source_key="mwbm_climgrid",
         aggregated_var="runoff",
         description="MWBM ClimGrid runoff",
         to_common_units=mwbm_to_mm_per_month,
+        expected_cf_units="mm",
     ),
 )
 
@@ -141,6 +145,10 @@ def build(project: Project) -> None:
     period = parse_period(runoff_cfg["period"])
     sources = list(runoff_cfg["sources"])
     chunk_months = int(runoff_cfg["chunk_months"])
+
+    # Fail loud at startup if a catalog cf_units string has drifted from
+    # the per-source shim's hardcoded conversion factor (issue #130).
+    validate_source_units(SHIMS, sources)
 
     logger.info(
         "Building runoff target: %d sources (%s), period %s .. %s, fabric=%s",

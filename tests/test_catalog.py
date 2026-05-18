@@ -306,3 +306,52 @@ def test_validate_fabric_scope_none_is_ok():
     from nhf_spatial_targets.catalog import validate_fabric_scope
 
     validate_fabric_scope("test_src", None)
+
+
+# ---------------------------------------------------------------------------
+# source_var_cf_units (issue #130 — target-builder unit-drift guard)
+# ---------------------------------------------------------------------------
+
+
+def test_source_var_cf_units_resolves_dict_form():
+    """Standard dict-form variables resolve via the `name` key."""
+    from nhf_spatial_targets.catalog import source_var_cf_units
+
+    assert source_var_cf_units("era5_land", "ro") == "m"
+    assert source_var_cf_units("gldas_noah_v21_monthly", "runoff_total") == "kg m-2"
+    assert source_var_cf_units("mwbm_climgrid", "runoff") == "mm"
+
+
+def test_source_var_cf_units_resolves_via_file_variable():
+    """Reitz 2017 distributes `TotalRecharge` but stores it under `total_recharge`."""
+    from nhf_spatial_targets.catalog import source_var_cf_units
+
+    assert source_var_cf_units("reitz2017", "TotalRecharge") == "m yr-1"
+    assert source_var_cf_units("reitz2017", "total_recharge") == "m yr-1"
+
+
+def test_source_var_cf_units_raises_on_unknown_variable():
+    from nhf_spatial_targets.catalog import source_var_cf_units
+
+    with pytest.raises(KeyError, match="not found"):
+        source_var_cf_units("era5_land", "no_such_var")
+
+
+def test_source_var_cf_units_raises_on_flat_string_variable():
+    """Flat-string entries (kept only on superseded sources) have no cf_units."""
+    from nhf_spatial_targets.catalog import source_var_cf_units
+
+    # merra_land is superseded and still uses the original `variables: [SFMC]`
+    # flat-list shape. Target builders that point at it would need to add
+    # cf_units to the catalog or opt out via expected_cf_units=None.
+    with pytest.raises(KeyError, match="not found"):
+        source_var_cf_units("merra_land", "SFMC")
+
+
+def test_ssebop_et_resolves_to_mm():
+    """SSEBop migrated from flat-string to dict form with cf_units: mm
+    so the AET target builder can validate units at startup (issue #130).
+    """
+    from nhf_spatial_targets.catalog import source_var_cf_units
+
+    assert source_var_cf_units("ssebop", "et") == "mm"

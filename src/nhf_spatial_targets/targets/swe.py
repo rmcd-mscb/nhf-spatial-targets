@@ -62,6 +62,7 @@ from nhf_spatial_targets.targets._common import (
     reindex_to_day_start,
     shims_by_config_label,
     stitch_year_chunks_to_target,
+    validate_source_units,
     write_bounds_target,
 )
 from nhf_spatial_targets.workspace import Project
@@ -124,12 +125,14 @@ SHIMS: tuple[SourceShim, ...] = (
         aggregated_var="swe",
         description="Daymet V4 R1 swe (kg/m² ≡ mm, daily)",
         to_common_units=daymet_to_mm,
+        expected_cf_units="kg m-2",
     ),
     SourceShim(
         source_key="snodas",
         aggregated_var="swe",
         description="SNODAS swe (kg/m² ≡ mm, daily)",
         to_common_units=snodas_to_mm,
+        expected_cf_units="kg m-2",
     ),
     SourceShim(
         source_key="era5_land_sd",
@@ -137,12 +140,14 @@ SHIMS: tuple[SourceShim, ...] = (
         description="ERA5-Land sd (m → mm, daily snapshot)",
         to_common_units=era5_sd_to_mm,
         config_label="era5_land",
+        expected_cf_units="m",
     ),
     SourceShim(
         source_key="margulis_wus_sr",
         aggregated_var="SWE",
         description="Margulis WUS-SR SWE (m → mm, daily; OR fabric only)",
         to_common_units=margulis_to_mm,
+        expected_cf_units="m",
     ),
 )
 
@@ -245,6 +250,12 @@ def build(project: Project) -> None:
             f"zero sources after fabric_scope filtering (fabric token="
             f"{fabric_token!r}). Add a non-scoped source or set fabric.token."
         )
+
+    # Fail loud at startup if a catalog cf_units string has drifted from
+    # any per-source shim's hardcoded conversion factor (issue #130).
+    # Run after fabric-scope filtering so we only validate sources that
+    # will actually be read.
+    validate_source_units(SHIMS, sources)
 
     logger.info(
         "Building SWE target: %d sources (%s) [requested %d (%s)], "
