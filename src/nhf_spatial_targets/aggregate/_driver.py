@@ -466,21 +466,7 @@ def aggregate_year(
     )
     period = (f"{year}-01-01", f"{year}-12-31")
 
-    # Open dask-chunked along time (one timestep per chunk) so that
-    # gdptools' per-batch `.sel(time=...).values` inside UserCatData
-    # materializes only the chunks intersecting the batch's bbox + time
-    # window, not the full (n_times × full_grid). Without this, a
-    # non-dask lazy Dataset loads the entire spatial extent per batch
-    # — for SNODAS at 365 days × 3404 y × 5818 x × float32 (after
-    # mask_and_scale) that's ~24 GB per batch, and 64-batch runs
-    # cumulatively touched ~1.5 TB of working set on caldera.
-    # One-step time chunks match the consolidator's `chunksizes=(1, …)`
-    # storage layout for daily sources (snodas, era5_land_sd, mod10c1)
-    # and have negligible overhead for monthly/8-day/annual sources
-    # where the time axis is short. Every consolidated NC has a "time"
-    # dim by apply_cf_metadata convention (valid_time gets renamed),
-    # so this is universal across adapter-path aggregators (issue #156).
-    with xr.open_dataset(source_file, chunks={"time": 1}) as raw:
+    with xr.open_dataset(source_file) as raw:
         ds = raw
         if adapter.pre_aggregate_hook is not None:
             ds = adapter.pre_aggregate_hook(ds)
