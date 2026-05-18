@@ -182,6 +182,9 @@ def aggregate_daymet(
     workdir: str | Path,
     batch_size: int = 500,
     region: str = "na",
+    *,
+    worker_index: int = 0,
+    n_workers: int = 1,
 ) -> None:
     """Aggregate Daymet daily SWE (one region) to fabric HRU polygons.
 
@@ -190,6 +193,12 @@ def aggregate_daymet(
     Idempotent: existing per-year NCs are preserved on re-run; weight
     caches are reused across years (Daymet's per-region grid is
     invariant across the archive) and segregated per region.
+
+    SLURM-array support (issue #156): ``worker_index`` / ``n_workers``
+    select a round-robin slice of years for this worker. Default
+    ``(0, 1)`` is serial; with ``n_workers > 1`` the contiguous-year
+    check is skipped (other workers are still producing their slice)
+    and the manifest update merges file lists across workers.
 
     Parameters
     ----------
@@ -208,7 +217,12 @@ def aggregate_daymet(
         Target HRUs per spatial batch.
     region : str
         Daymet region; currently only ``"na"`` is supported.
+    worker_index, n_workers : int
+        SLURM-array round-robin sharding (per :func:`_assign_worker_years`
+        in ``_driver.py``).
     """
+    from nhf_spatial_targets.aggregate._driver import _assign_worker_years
+
     if region not in _SUPPORTED_REGIONS:
         raise NotImplementedError(
             f"daymet: region {region!r} is not yet supported. Only "
@@ -256,16 +270,43 @@ def aggregate_daymet(
         logger.info("daymet: loading fabric %s", fabric_path)
         fabric_batched = load_and_batch_fabric(fabric_path, batch_size=batch_size)
         n_batches = int(fabric_batched["batch_id"].nunique())
-        logger.info(
-            "daymet: region=%s years=%d-%d batches=%d",
-            region,
-            start_year,
-            end_year,
-            n_batches,
+        # SLURM-array year slice. The full year range comes from --period;
+        # each worker gets a round-robin subset (default n_workers=1 -> all).
+        all_years = list(range(start_year, end_year + 1))
+        all_year_files = [(y, zarr_path) for y in all_years]
+        assigned_year_files = _assign_worker_years(
+            all_year_files, worker_index, n_workers
         )
+        if not assigned_year_files:
+            logger.info(
+                "daymet: worker %d/%d has no years to process",
+                worker_index,
+                n_workers,
+            )
+            return
+        assigned_years = [y for y, _ in assigned_year_files]
+        if n_workers == 1:
+            logger.info(
+                "daymet: region=%s years=%d-%d batches=%d",
+                region,
+                start_year,
+                end_year,
+                n_batches,
+            )
+        else:
+            logger.info(
+                "daymet: worker %d/%d region=%s aggregating %d of %d years "
+                "across %d batches",
+                worker_index,
+                n_workers,
+                region,
+                len(assigned_years),
+                len(all_years),
+                n_batches,
+            )
 
         per_year_paths: list[Path] = []
-        for year in range(start_year, end_year + 1):
+        for year in assigned_years:
             out_path = _region_year_path(project, region, year)
             if out_path.exists():
                 if out_path.stat().st_size == 0:
@@ -340,10 +381,12 @@ def aggregate_daymet(
 
     per_source_dir = project.aggregated_dir() / _SOURCE_KEY
     # Scope the contiguity check to the region's filename pattern so
-    # parallel runs of other regions don't trip the check.
-    _verify_year_coverage(
-        per_source_dir, source_key_region, period=f"{start_year}/{end_year}"
-    )
+    # parallel runs of other regions don't trip the check. Skip under
+    # SLURM-array: other workers may still be writing their year slice.
+    if n_workers == 1:
+        _verify_year_coverage(
+            per_source_dir, source_key_region, period=f"{start_year}/{end_year}"
+        )
 
     rel_outputs = [str(p.relative_to(project.workdir)) for p in per_year_paths]
     weight_files = [
@@ -361,10 +404,22 @@ def aggregate_daymet(
         period=f"{start_year}-01-01/{end_year}-12-31",
         output_files=rel_outputs,
         weight_files=weight_files,
+        batch_size=batch_size,
+        n_workers=n_workers,
     )
-    logger.info(
-        "daymet: region=%s wrote %d per-year NCs to %s",
-        region,
-        len(per_year_paths),
-        per_source_dir,
-    )
+    if n_workers == 1:
+        logger.info(
+            "daymet: region=%s wrote %d per-year NCs to %s",
+            region,
+            len(per_year_paths),
+            per_source_dir,
+        )
+    else:
+        logger.info(
+            "daymet: worker %d/%d region=%s wrote %d per-year NCs to %s",
+            worker_index,
+            n_workers,
+            region,
+            len(per_year_paths),
+            per_source_dir,
+        )

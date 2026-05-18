@@ -76,8 +76,16 @@ def aggregate_snodas(
     workdir: Path,
     batch_size: int = 500,
     period: str | None = None,
+    *,
+    worker_index: int = 0,
+    n_workers: int = 1,
 ) -> None:
-    """Aggregate SNODAS daily SWE to HRU polygons; emit per-year NCs."""
+    """Aggregate SNODAS daily SWE to HRU polygons; emit per-year NCs.
+
+    ``worker_index`` / ``n_workers`` enable SLURM-array year-sharding
+    (issue #156); default ``(0, 1)`` is serial. See
+    :func:`aggregate._driver.aggregate_source` for the contract.
+    """
     aggregate_source(
         ADAPTER,
         fabric_path,
@@ -85,4 +93,6 @@ def aggregate_snodas(
         workdir,
         batch_size,
         period=period,
+        worker_index=worker_index,
+        n_workers=n_workers,
     )
