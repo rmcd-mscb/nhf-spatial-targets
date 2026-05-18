@@ -868,6 +868,99 @@ def test_write_netcdf_atomic_failure_no_partial(tmp_path):
     assert not list(tmp_path.glob("*.nc.tmp"))
 
 
+def test_apply_cf_metadata_projected_crs_epsg5070():
+    """coord_type='projected' produces a CF-compliant projected dataset.
+
+    Mirrors what SNODAS emits post-#121 reprojection: ``y/x`` are
+    projected metres (not lat/lon), the ``crs`` ancillary carries the
+    Albers Equal Area grid mapping from ``pyproj.CRS.to_cf()``, and 2D
+    auxiliary lat/lon coords (if present) are tagged with their CF
+    standard names without an ``axis`` attribute.
+    """
+    import numpy as np
+    import pandas as pd
+    import xarray as xr
+
+    from nhf_spatial_targets.fetch.consolidate import apply_cf_metadata
+
+    times = pd.date_range("2020-01-01", periods=2, freq="1D")
+    # Two cells × two cells, 1 km apart in CONUS Albers metres.
+    y = np.array([2_000_000.0, 1_999_000.0])
+    x = np.array([-2_000_000.0, -1_999_000.0])
+    lat2d = np.array([[40.0, 40.0], [39.99, 39.99]])
+    lon2d = np.array([[-100.0, -99.99], [-100.0, -99.99]])
+    ds = xr.Dataset(
+        {"swe": (("time", "y", "x"), np.zeros((2, 2, 2), dtype=np.float32))},
+        coords={
+            "time": times,
+            "y": y,
+            "x": x,
+            "lat": (("y", "x"), lat2d),
+            "lon": (("y", "x"), lon2d),
+        },
+    )
+    result = apply_cf_metadata(ds, "snodas", "daily", coord_type="projected")
+
+    # The y/x rename is suppressed: projected dims survive unchanged.
+    assert result["swe"].dims == ("time", "y", "x")
+    assert "lat" not in result.dims
+    assert "lon" not in result.dims
+
+    # crs ancillary carries the projected grid mapping (not latitude_longitude).
+    crs_attrs = result["crs"].attrs
+    assert crs_attrs["grid_mapping_name"] == "albers_conical_equal_area"
+    assert "crs_wkt" in crs_attrs
+    assert "Albers" in crs_attrs["crs_wkt"] or "ALBERS" in crs_attrs["crs_wkt"].upper()
+
+    # data var points at the crs ancillary AND lists 2D aux coords.
+    assert result["swe"].attrs["grid_mapping"] == "crs"
+    coords_attr = result["swe"].attrs.get("coordinates", "")
+    assert "lat" in coords_attr and "lon" in coords_attr
+
+    # Projected x/y get projection_*_coordinate standard names + metres + axis.
+    assert result["x"].attrs["standard_name"] == "projection_x_coordinate"
+    assert result["x"].attrs["units"] == "m"
+    assert result["x"].attrs["axis"] == "X"
+    assert result["y"].attrs["standard_name"] == "projection_y_coordinate"
+    assert result["y"].attrs["units"] == "m"
+    assert result["y"].attrs["axis"] == "Y"
+
+    # 2D auxiliary lat/lon coords get CF standard names but NO axis
+    # attribute (axis lives on the projected x/y, not the aux lat/lon).
+    assert result["lat"].attrs["standard_name"] == "latitude"
+    assert result["lat"].attrs["units"] == "degrees_north"
+    assert "axis" not in result["lat"].attrs
+    assert result["lon"].attrs["standard_name"] == "longitude"
+    assert result["lon"].attrs["units"] == "degrees_east"
+    assert "axis" not in result["lon"].attrs
+
+    # Catalog metadata (cf_units, long_name, cell_methods) still applied.
+    assert result["swe"].attrs["units"] == "kg m-2"
+    assert result["swe"].attrs["long_name"] == "snow water equivalent"
+
+
+def test_apply_cf_metadata_coord_type_mismatch_raises():
+    """A projected-CRS WKT with coord_type='geographic' fails fast."""
+    import numpy as np
+    import pandas as pd
+    import xarray as xr
+    from pyproj import CRS
+
+    from nhf_spatial_targets.fetch.consolidate import apply_cf_metadata
+
+    proj_wkt = CRS.from_epsg(5070).to_wkt()
+    ds = xr.Dataset(
+        {"foo": (("time", "lat", "lon"), np.zeros((1, 2, 2)))},
+        coords={
+            "time": pd.date_range("2020-01-01", periods=1),
+            "lat": [0.0, 1.0],
+            "lon": [0.0, 1.0],
+        },
+    )
+    with pytest.raises(ValueError, match="coord_type='geographic' but crs_wkt"):
+        apply_cf_metadata(ds, "era5_land", "daily", crs_wkt=proj_wkt)
+
+
 def test_apply_cf_metadata_raises_when_time_missing():
     """apply_cf_metadata for a time-stepped product must have a time dim."""
     import numpy as np
