@@ -162,8 +162,11 @@ def validate_source_units(
     by_label = shims_by_config_label(shims)
     for label in sources:
         if label not in by_label:
+            # Phrase that surfaces "unknown source '<name>'" so the downstream
+            # builder tests that asserted on the prior in-builder check still
+            # match against this earlier, generic validator.
             raise ValueError(
-                f"validate_source_units: source label {label!r} has no "
+                f"validate_source_units: unknown source {label!r} — no "
                 f"matching SourceShim. Known labels: {sorted(by_label)}."
             )
         shim = by_label[label]
