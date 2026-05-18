@@ -49,15 +49,43 @@ VARIABLES = ("ro", "sro", "ssro", "sd")
 #                 daily→monthly sum.
 #   instantaneous : point-in-time field with no midnight reset; aggregate
 #                   via .mean() at both hourly→daily and daily→monthly.
-# The accumulated reducer applied to an instantaneous field would produce
-# physically meaningless values; the dispatch in consolidate_year and
-# daily_to_monthly is keyed on this table.
-_VARIABLE_KIND = {
-    "ro": "accumulated",
-    "sro": "accumulated",
-    "ssro": "accumulated",
-    "sd": "instantaneous",
+# Derived from the catalog's per-variable ``cell_methods`` so the catalog
+# remains the single source of truth: ``time: sum`` → accumulated,
+# ``time: point`` → instantaneous. The accumulated reducer applied to an
+# instantaneous field would produce physically meaningless values; the
+# dispatch in consolidate_year and daily_to_monthly is keyed on this
+# table.
+_CELL_METHODS_TO_KIND = {
+    "time: sum": "accumulated",
+    "time: point": "instantaneous",
 }
+
+
+def _derive_variable_kind() -> dict[str, str]:
+    """Build {var: kind} from the catalog's ``cell_methods`` for each VARIABLES entry.
+
+    Raises ``ValueError`` if a variable's ``cell_methods`` is missing or
+    is not one of the two known forms — adding a new ERA5-Land variable
+    with a different aggregation flavour must be a deliberate edit
+    (update :data:`_CELL_METHODS_TO_KIND`), not a silent
+    miscategorization.
+    """
+    out: dict[str, str] = {}
+    for var in VARIABLES:
+        cm = _catalog.source_var_cell_methods("era5_land", var)
+        if cm not in _CELL_METHODS_TO_KIND:
+            raise ValueError(
+                f"era5_land catalog variable {var!r} has cell_methods="
+                f"{cm!r}; expected one of {sorted(_CELL_METHODS_TO_KIND)} "
+                f"so the hourly→daily / daily→monthly reducer can "
+                f"dispatch. Either correct catalog/sources.yml or extend "
+                f"_CELL_METHODS_TO_KIND in fetch/era5_land.py."
+            )
+        out[var] = _CELL_METHODS_TO_KIND[cm]
+    return out
+
+
+_VARIABLE_KIND = _derive_variable_kind()
 
 
 def hourly_to_daily(da: xr.DataArray) -> xr.DataArray:
