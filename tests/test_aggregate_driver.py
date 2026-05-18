@@ -1814,6 +1814,127 @@ def test_aggregate_source_migrates_legacy_layout_on_startup(tmp_path, tiny_fabri
     assert canonical.exists()
 
 
+def _project_with_token(tmp_path, fabric_token):
+    """Helper: build a minimal Project with the given fabric.token value."""
+    datastore = tmp_path / "datastore"
+    datastore.mkdir()
+    config = {
+        "fabric": {
+            "path": "/fake/fabric.gpkg",
+            "id_col": "hru_id",
+            "token": fabric_token,
+        },
+        "datastore": str(datastore),
+    }
+    (tmp_path / "config.yml").write_text(yaml.dump(config))
+    (tmp_path / "fabric.json").write_text(json.dumps({"sha256": "f00"}))
+    (tmp_path / "manifest.json").write_text(json.dumps({"sources": {}, "steps": []}))
+    return load_project(tmp_path)
+
+
+def test_skip_for_fabric_scope_returns_false_when_scope_is_none(tmp_path):
+    """Sources without a ``fabric_scope`` block aggregate everywhere."""
+    from nhf_spatial_targets.aggregate._driver import _skip_for_fabric_scope
+
+    proj = _project_with_token(tmp_path, fabric_token=None)
+    assert _skip_for_fabric_scope("merra2", {"access": {}}, proj) is False
+
+
+def test_skip_for_fabric_scope_returns_false_when_token_in_scope(tmp_path):
+    """An OR-scoped source on an OR fabric proceeds to aggregation."""
+    from nhf_spatial_targets.aggregate._driver import _skip_for_fabric_scope
+
+    proj = _project_with_token(tmp_path, fabric_token="or")
+    meta = {"access": {}, "fabric_scope": {"fabrics": ["or"]}}
+    assert _skip_for_fabric_scope("margulis_wus_sr", meta, proj) is False
+
+
+def test_skip_for_fabric_scope_returns_true_when_no_token_set(tmp_path, caplog):
+    """The default ``fabric.token=None`` drops every fabric-scoped source.
+
+    This is the path that bit the gfv2 + margulis_wus_sr run: gdptools
+    blew up inside ``WeightGen`` with ``max() iterable argument is empty``
+    because the OR-only source grid had no overlap with the national
+    fabric. The skip turns that crash into a clear INFO log.
+    """
+    import logging
+
+    from nhf_spatial_targets.aggregate._driver import _skip_for_fabric_scope
+
+    proj = _project_with_token(tmp_path, fabric_token=None)
+    meta = {"access": {}, "fabric_scope": {"fabrics": ["or"]}}
+    with caplog.at_level(logging.INFO, logger="nhf_spatial_targets.aggregate._driver"):
+        assert _skip_for_fabric_scope("margulis_wus_sr", meta, proj) is True
+    assert any(
+        "margulis_wus_sr" in rec.message and "skipping aggregation" in rec.message
+        for rec in caplog.records
+    )
+
+
+def test_skip_for_fabric_scope_validates_scope_via_catalog(tmp_path):
+    """The skip helper round-trips ``scope`` through ``validate_fabric_scope``
+    so a typo in the catalog (e.g. ``fabrics: [oregon]``) fails loud at
+    aggregation time instead of silently dropping the source."""
+    from nhf_spatial_targets.aggregate._driver import _skip_for_fabric_scope
+
+    proj = _project_with_token(tmp_path, fabric_token="or")
+    bad_meta = {"access": {}, "fabric_scope": {"fabrics": ["oregon"]}}
+    with pytest.raises(ValueError, match="unknown token"):
+        _skip_for_fabric_scope("margulis_wus_sr", bad_meta, proj)
+
+
+def test_aggregate_source_skips_before_reaching_raw_dir(tmp_path, tiny_fabric):
+    """End-to-end: aggregate_source on an out-of-scope project returns early.
+
+    Critical: the test deliberately does NOT create a raw datastore dir for
+    the source. Without the skip, aggregate_source would raise
+    FileNotFoundError after the empty raw_dir glob. With the skip, the
+    function must return cleanly before that check fires.
+    """
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import aggregate_source
+
+    datastore = tmp_path / "datastore"
+    datastore.mkdir()
+    (tmp_path / "config.yml").write_text(
+        yaml.dump(
+            {
+                "fabric": {
+                    "path": str(tiny_fabric),
+                    "id_col": "hru_id",
+                    "token": None,
+                },
+                "datastore": str(datastore),
+            }
+        )
+    )
+    (tmp_path / "fabric.json").write_text(json.dumps({"sha256": "f00"}))
+    (tmp_path / "manifest.json").write_text(json.dumps({"sources": {}, "steps": []}))
+
+    adapter = SourceAdapter(
+        source_key="margulis_wus_sr",
+        output_name="margulis_wus_sr_agg.nc",
+        variables=["SWE"],
+    )
+    meta = {"access": {"type": "nsidc"}, "fabric_scope": {"fabrics": ["or"]}}
+
+    with patch(
+        "nhf_spatial_targets.aggregate._driver.catalog_source",
+        return_value=meta,
+    ):
+        # Returns None on the skip path; the raw_dir doesn't exist, so any
+        # path that reaches the glob would raise FileNotFoundError.
+        result = aggregate_source(
+            adapter,
+            fabric_path=tiny_fabric,
+            id_col="hru_id",
+            workdir=tmp_path,
+        )
+    assert result is None
+    # No per-source aggregated dir should have been created.
+    assert not (tmp_path / "data" / "aggregated" / "margulis_wus_sr").exists()
+
+
 def test_atomic_write_netcdf_cleans_up_tmp_on_failure(tmp_path):
     """A crash mid-write must leave no canonical file and no .nc.tmp behind.
 
