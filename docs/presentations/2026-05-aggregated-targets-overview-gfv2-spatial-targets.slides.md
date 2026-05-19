@@ -1052,14 +1052,8 @@ That's why SNODAS is the trailing item on the SWE list.
 
 - 4-source bound where Margulis is inside its OR scope; 3-source elsewhere on gfv2.
 - Margulis (500 m) dominates the bound inside its OR scope.
-- `swe_target_nn_fill_{map,series}.png` — companion `_nn_filled` file closes residual all-NaN HRUs (clustered in summer-zero regions).
 
-<div class="callout">
-<strong>Discussion hooks.</strong>
-(1) Source weighting — equal weight, or by native resolution / period coverage?
-(2) NN-fill default — summer all-NaN HRUs are meaningfully zero anyway; ship NN-filled as the consumer default?
-(3) Period-of-record floor — SNODAS-bounded 2003, or accept a Daymet-only era 1980–2002?
-</div>
+
 
 </div>
 </div>
@@ -1101,10 +1095,9 @@ we ship are intentionally wider where products disagree.
 ## Open questions to bring to the room
 
 1. **SCA bound formula** — binary CI > 70 % filter, CI-weighted bound, or wait on `PRMSobjfun.f` recovery? (SCA walkthrough)
-2. **SWE end-to-end run** — order of operations for the remaining SNODAS aggregation; do we cut a gfv2 SWE target as soon as it lands, or wait on additional QA? (SWE walkthrough)
-3. **Period-of-record locks** per category — runoff & AET intersect at 2000–2020 because of MWBM ClimGrid; do we extend with 2-source bounds past 2020?
-4. **NN-fill default** — which targets ship `_nn_filled` as the consumer default vs the honest-NaN file? Currently we emit both for runoff / AET / recharge / soil moisture; choice belongs to the modelling team.
-5. **Fabric-coarse-grid exclusions** for the next fabric — WaterGAP (recharge) and NCEP/NCAR (soil moisture) are gfv2-specific; are we ready to codify a per-fabric exclusion mechanism?
+2. **Period-of-record locks** per category
+3. **NN-fill default** — which targets ship `_nn_filled` as the consumer default vs the honest-NaN file? Currently we emit both for runoff / AET / recharge / soil moisture; choice belongs to the modelling team.
+45. **Fabric-coarse-grid exclusions** for the next fabric — WaterGAP (recharge) and NCEP/NCAR (soil moisture) are gfv2-specific; are we ready to codify a per-fabric exclusion mechanism?
 
 <!--
 These five are the discussion seeds. Order them by where the room has the most
@@ -1139,21 +1132,3 @@ that have been quietly accumulating; airing them is the point of this slide.
 - `docs/presentations/2026-collaborator-overview-gfv2-spatial-targets.slides.md`
 
 **GitHub:** SWE umbrella **#101** · runoff target **#92 / #95** · MOD16A2 fill-mask fix **#88**.
-
----
-
-## Next steps before the next checkpoint
-
-1. **SCA target builder** — pick a bound formula (SCA walkthrough), implement against existing aggregated NC, ship `sca_targets.nc`.
-2. **SWE end-to-end run on gfv2** — once SNODAS aggregation finishes, run `nhf-targets run-swe`, render `notebooks/targets/inspect_target_swe.ipynb`, swap the SWE placeholder slide for real figures.
-3. **Per-fabric exclusion mechanism** — if other fabrics need WaterGAP / NCEP-NCAR re-included, lift the hard-coded `gfv2` exclusion into a config-driven per-fabric override.
-
-<span class="footnote">
-Questions / discussion → open floor.
-</span>
-
-<!--
-Closing slide. Let discussion expand naturally; if it stalls, prompt with
-"of the five open questions, which one would you most like resolved before
-next month?" — the answer to that frames the next sprint.
--->
