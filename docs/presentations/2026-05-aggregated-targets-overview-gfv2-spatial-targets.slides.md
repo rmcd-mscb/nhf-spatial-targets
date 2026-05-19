@@ -18,6 +18,35 @@ style: |
   .status-done   { color: #2a8a2a; font-weight: bold; }
   .status-wip    { color: #b8860b; font-weight: bold; }
   .status-todo   { color: #999;    font-weight: bold; }
+  section.compact { font-size: 19px; padding-bottom: 70px; }
+  section.compact h2 { font-size: 28px; margin: 0 0 0.3em; }
+  section.compact p { margin: 0.35em 0; }
+  section.compact table { font-size: 16px; }
+  section.compact table th, section.compact table td { padding: 4px 8px; }
+  section.two-col h2 { margin: 0 0 0.4em; }
+  section.two-col .grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 24px;
+    align-items: start;
+  }
+  section.two-col .grid .figs p { margin: 4px 0; text-align: center; }
+  section.two-col .grid .figs img {
+    display: block;
+    max-width: 100%;
+    max-height: 170px;
+    width: auto;
+    height: auto;
+    margin: 0 auto;
+  }
+  section.two-col .grid .figs .caption { display: block; text-align: center; margin-top: 6px; }
+  section.two-col .grid > .notes { font-size: 20px; }
+  section.two-col .grid > .notes ul { margin-top: 6px; padding-left: 1.2em; }
+  section.two-col .grid > .notes li { margin: 0.4em 0; }
+  section.two-col .grid > .notes .callout { font-size: 18px; margin-top: 10px; }
+  section.two-col .grid > .notes > .figs { margin-bottom: 8px; }
+  section.two-col .grid .figs.tall-second img:nth-of-type(2) { max-height: 300px; }
+  section.two-col .grid .figs.solo img { max-height: 440px; }
 ---
 
 # nhf-spatial-targets
@@ -47,7 +76,7 @@ in the prior collaborator deck if anyone wants to revisit it.
 
 1. **Repo intro** — purpose, datastore vs project, CLI workflow, multi-source bounds (~5 min)
 2. **Aggregated → target pipeline** in one diagram (~3 min)
-3. **Per-category walkthroughs** — sources → aggregated bounds → final target (~30 min, 6 × ~5 min)
+3. **Calibration target walkthroughs** — sources → aggregated bounds → target output (~30 min, 6 × ~5 min)
    - Runoff · AET · Recharge · Soil moisture · Snow-covered area · SWE
 4. **Open questions & next steps** (~5 min)
 5. **Free discussion** (~2 min buffer + interleaved throughout)
@@ -68,22 +97,20 @@ prompts rather than figure tours.
 
 ---
 
+<!-- _class: compact -->
+
 ## Project purpose
 
-Build the **six calibration targets** for the National Hydrologic Model by
-spatially aggregating gridded source datasets to an HRU fabric via
-[`gdptools`](https://github.com/rmcd-mscb/gdptools). TM 6-B10 (Hay et al. 2022)
-is the methodological reference; where the report's original sources are
-retired we use the modern replacement (`docs/references/known-gaps-resolved.md`).
+Build the **six calibration targets** for the National Hydrologic Model by spatially aggregating gridded source datasets to an HRU fabric via [`gdptools`](https://github.com/rmcd-mscb/gdptools). TM 6-B10 (Hay et al. 2022) is the methodological reference; where the report's original sources are retired we use the modern replacement (`docs/references/known-gaps-resolved.md`).
 
-| Target | PRMS variable | Sources | Method | Step |
-|---|---|---|---|---|
-| Runoff | `basin_cfs` | ERA5-Land · GLDAS-NOAH · MWBM ClimGrid | NaN-aware multi-source min/max | Monthly |
-| AET | `hru_actet` | MOD16A2 v061 · SSEBop · MWBM ClimGrid | Multi-source min/max | Monthly |
-| Recharge | `recharge` | Reitz 2017 · WaterGAP 2.2d · ERA5-Land `ssro` | 0–1 normalised min/max (2000–2009) | Annual |
-| Soil moisture | `soil_rechr` | MERRA-2 · NCEP/NCAR · NLDAS-MOSAIC · NLDAS-NOAH | 0–1 normalised min/max | Monthly + annual |
-| Snow-covered area | `snowcov_area` | MOD10C1 v061 | MODIS CI > 70 % bound | Daily |
-| SWE | `pkwater_equiv` | Daymet · SNODAS · ERA5-Land `sd` · Margulis WUS-SR¹ | NaN-aware multi-source min/max | Daily |
+| Target | Sources | Method | Step |
+|---|---|---|---|
+| Runoff | ERA5-Land · GLDAS-NOAH · MWBM ClimGrid | NaN-aware multi-source min/max | Monthly |
+| AET | MOD16A2 v061 · SSEBop · MWBM ClimGrid | Multi-source min/max | Monthly |
+| Recharge | Reitz 2017 · WaterGAP 2.2d · ERA5-Land `ssro` | 0–1 normalised min/max | Annual |
+| Soil moisture | MERRA-2 · NCEP/NCAR · NLDAS-MOSAIC · NLDAS-NOAH | 0–1 normalised min/max | Monthly + annual |
+| Snow-covered area | MOD10C1 v061 | MODIS CI > 70 % bound | Daily |
+| SWE | Daymet · SNODAS · ERA5-Land `sd` · Margulis WUS-SR¹ | NaN-aware multi-source min/max | Daily |
 
 <span class="footnote">
 ¹ Margulis WUS-SR fabric-scoped to Oregon via `catalog/sources.yml → fabric_scope`. Non-OR fabrics fall back to a 3-source bound.
@@ -144,8 +171,8 @@ in the operator's memory.
 | 3 | `nhf-targets materialize-credentials --project-dir <dir>` | — |
 | 4 | `nhf-targets validate --project-dir <dir>` | — |
 | 5 | `nhf-targets fetch <source> --project-dir <dir>` | — *(covered in prior deck)* |
-| 6 | **`nhf-targets agg <source> --project-dir <dir>`** | **→ `data/aggregated/<source>/` (Part 3 figures B)** |
-| 7 | **`nhf-targets run --project-dir <dir>`** | **→ `targets/*.nc` (Part 3 figures C)** |
+| 6 | **`nhf-targets agg <source> --project-dir <dir>`** | **→ `data/aggregated/<source>/` (panel B in each walkthrough)** |
+| 7 | **`nhf-targets run --project-dir <dir>`** | **→ `targets/*.nc` (panel C in each walkthrough)** |
 
 **On HPC:** the same commands ship as SLURM scripts at the repo root
 (`agg_all.slurm`, `agg_ssebop.slurm`, `agg_daymet.slurm`, `agg_snodas.slurm`,
@@ -162,24 +189,18 @@ SLURM-driven aggregation/target build, not from a workstation run.
 
 ## Multi-source bounds — why a lower/upper, not a point estimate
 
-The pipeline emits **bounds**, not a best estimate. The bound width is real
-inter-product disagreement.
+The pipeline emits **bounds**, not a best estimate. The bound width is real inter-product disagreement.
 
 - Different products use different physics, forcing, and algorithms → different answers.
 - The **envelope** (per-HRU min/max) is the calibration uncertainty range.
 - Targets are *constraints with width*, not absolute observations.
 
-**Why not just pick the "best" product?** No product is best everywhere; picking
-one over-fits the optimiser to that product's systematic bias.
+**Why not just pick the "best" product?** No product is best everywhere; picking one over-fits the optimiser to that product's systematic bias.
 
-**Why not make bounds as wide as possible?** A bound that's too wide flattens
-the penalty surface and calibration won't converge. The goal is an *honest* bound —
-wide where products genuinely disagree, tight where they agree.
+**Why not make bounds as wide as possible?** A bound that's too wide flattens the penalty surface and calibration won't converge. The goal is an *honest* bound — wide where products genuinely disagree, tight where they agree.
 
 <div class="callout">
-This is the conceptual hinge for every Part-3 category. The aggregated-bounds
-slide shows where sources agree and disagree; the target slide shows what
-falls out when we take the envelope.
+This is the conceptual hinge for every calibration target walkthrough that follows. The aggregated-bounds slide shows where sources agree and disagree; the target slide shows what falls out when we take the envelope.
 </div>
 
 <!--
@@ -201,17 +222,17 @@ wrong reason.
 
 ```text
   ┌──────────────────────────────────────────────────────────────────────┐
-  │ Stage 1  (prior deck — out of scope today)                           │
+  │ Stage 1                                                              │
   │   source granules → fetch/<src>.py → datastore consolidated NC       │
   └─────────────────────────────────┬────────────────────────────────────┘
                                     │  native grid, native units
                                     ▼
   ┌──────────────────────────────────────────────────────────────────────┐
   │ Stage 2  AGGREGATE     (nhf-targets agg <src>)                       │
-  │   pre_aggregate_hook  → flag masks, CI gates, sums-of-accums         │
-  │   gdptools weighted mean (stat_method = mean | masked_mean)          │
-  │   post_aggregate_hook → rename diagnostics, attach attrs             │
-  │   ⇒ <project>/data/aggregated/<src>/  (HRU, native units, NaN-honest)│
+  │   1. mask pixels with fill values or failing quality gates           │
+  │   2. area-weighted pixel → HRU mean  (via gdptools)                  │
+  │   3. attach CF metadata; HRUs with no valid pixels stay NaN          │
+  │   ⇒ <project>/data/aggregated/<src>/   (per-HRU, native units)       │
   └─────────────────────────────────┬────────────────────────────────────┘
                                     │  per-source HRU bound material
                                     ▼
@@ -220,45 +241,68 @@ wrong reason.
   │   unit conversion (× 1000, ÷ 100, mm/month → cfs, ...)               │
   │   multi-source NaN-aware min/max  →  lower_bound, upper_bound        │
   │   optional NN-fill on the combined bound  →  parallel _nn_filled.nc  │
-  │   ⇒ <project>/targets/<tgt>.nc   +   <project>/targets/<tgt>_nn_filled.nc │
+  │   ⇒ <project>/targets/<tgt>.nc   +   <tgt>_nn_filled.nc              │
   └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Pixel-defined ops run **pre-aggregation**; HRU-defined ops run **post-aggregation**;
-linear ops commute and live in `targets/` by convention. Deep dive:
-`docs/architecture/transformation-pipeline.md`.
+Pixel-defined ops run **pre-aggregation**; HRU-defined ops run **post-aggregation**; linear ops commute and live in `targets/` by convention. Deep dive: `docs/architecture/transformation-pipeline.md`.
 
 <!--
-The split matters because pixel-level masking and HRU-level combination cannot
-swap places. An HRU with half high-CI snow pixels and half low-CI cloud pixels
-gives different answers if you gate CI pre- vs post-aggregation. mod10c1 and
-mod16a2 are the two sources that exercise this — they use masked_mean because
-their pre_aggregate_hook emits NaNs deliberately.
+Speaker notes:
+
+- One direction, no loops. Stage 2 is per-source; Stage 3 is the only place
+  multiple sources meet.
+- Stage 2 ordering is load-bearing: a per-pixel quality gate AFTER averaging
+  gives a different answer than the same gate BEFORE — once area-weighted
+  mixing happens, you can't recover the high-confidence subset. MOD10C1
+  (cloud-confidence filter) and MOD16A2 (fill-value mask) are the two sources
+  where this would bite if we ran the gate in Stage 3.
+- Three sources currently mask pixels and then weighted-average the
+  survivors (gdptools `stat_method="masked_mean"`): **MOD16A2** (fill-value
+  mask, PR #88), **MOD10C1** (CI > 70 confidence gate), **SNODAS** (CONUS
+  mask, issue #151). Everything else uses the default `mean` where any NaN
+  pixel touching an HRU makes the whole HRU NaN — appropriate when there's
+  no deliberate per-pixel masking upstream.
+- Honest NaNs at Stage 2 are what let Stage 3's NaN-aware min/max
+  distinguish "no source data here" from "source said zero." Don't impute in
+  Stage 2 — that's a Stage 3 (target-builder) choice, see `_nn_filled.nc`.
+- Linear stuff (unit conversion, ×1000, mm/month → cfs) is parked in Stage 3
+  on purpose: it commutes with averaging, and keeping native units in the
+  aggregated NC makes a missed conversion factor easier to spot.
+- Deep dive + worked example: `docs/architecture/transformation-pipeline.md`.
 -->
 
 ---
 
-# Part 3 — Per-category walkthroughs
+# Part 3 — Calibration target walkthroughs
 
-For each variable: **A** sources & method · **B** aggregated bounds · **C** final target.
+For each variable: **A** sources & method · **B** aggregated bounds · **C** target output.
 
 ---
 
+<!-- _class: two-col -->
+
 ## 3.1 Runoff — sources & method
 
-**Sources** (all three contribute to the bound):
+<div class="grid">
+<div class="figs solo">
 
-- **ERA5-Land** `ro` — 0.1°, monthly aggregated from hourly; surface runoff in m water-eq.
-- **GLDAS-2.1 NOAH** `Qs_acc + Qsb_acc` — 0.25°, monthly; surface + sub-surface in kg/m² (≡ mm).
-- **MWBM ClimGrid** `runoff` — 2.5 arcmin, monthly; Wieczorek et al. 2024 ClimGrid-forced MWBM, mm/month.
+![](../figures/consolidated/gfv2-spatial-targets/runoff_normalized_comparison.png)
 
-**Method.** All three aggregated to HRU polygons, harmonised to mm/month, then
-converted to **cfs** in `targets/run.py` using HRU area and days-in-month.
-NaN-aware `nanmin / nanmax` — a bound is defined whenever ≥1 source is finite.
+<span class="caption">Raw-grid scale before HRU aggregation — all three sources on a common mm/month scale, ERA5-Land footprint.</span>
 
-**Period.** Monthly, intersection 2000-01 → 2020-12 (MWBM ClimGrid caps overlap at 2020).
+</div>
+<div class="notes">
 
-**Builder.** `src/nhf_spatial_targets/targets/run.py` (PR #92/#95).
+**Sources** (all contribute to bound):
+- **ERA5-Land** `ro` — 1979–present
+- **GLDAS-2.1 NOAH** `Qs_acc + Qsb_acc` — 2000–present
+- **MWBM ClimGrid** `runoff` — 1900–2020
+
+**Method.** HRU aggregation → mm/month → **cfs** in `targets/run.py`. NaN-aware multi-source min/max. Intersection caps the bound at 2020 (MWBM ceiling).
+
+</div>
+</div>
 
 <!--
 The conversion to cfs is the only linear unit step that lives in the target
@@ -270,15 +314,35 @@ conversion factor easier to spot if it ever creeps in.
 
 ---
 
+<!-- _class: two-col -->
+
 ## 3.1 Runoff — aggregated bounds
 
-![w:520](../figures/aggregated/gfv2-spatial-targets/runoff_native_units_map.png) ![w:520](../figures/aggregated/gfv2-spatial-targets/runoff_normalized_comparison.png)
+<div class="grid">
+<div class="figs tall-second">
 
-<span class="caption">Left: per-source HRU map, native units. Right: cross-source magnitude check after normalisation.</span>
+![](../figures/aggregated/gfv2-spatial-targets/runoff_normalized_comparison.png)
+![](../figures/aggregated/gfv2-spatial-targets/runoff_time_series.png)
+
+<span class="caption">Top: cross-source magnitude check (normalised). Bottom: representative HRU time series, per source.</span>
+
+</div>
+<div class="notes">
+
+<div class="figs">
+
+![](../figures/aggregated/gfv2-spatial-targets/runoff_histogram.png)
+
+<span class="caption">HRU value distribution, per source.</span>
+
+</div>
 
 - All three sources show the expected east-wet / west-dry CONUS gradient at HRU resolution.
 - ERA5-Land and GLDAS agree closely in the humid east; MWBM ClimGrid runs lower in arid HRUs.
 - Coverage map (`runoff_coverage.png`) — full CONUS, no honest-NaN HRUs to worry about for runoff.
+
+</div>
+</div>
 
 <!--
 Bring up runoff_coverage.png in discussion if anyone asks about completeness;
@@ -289,17 +353,36 @@ disagree in a way that suggests a unit bug?" check. They don't.
 
 ---
 
-## 3.1 Runoff — final target
+<!-- _class: two-col -->
 
-![w:520](../figures/targets/gfv2-spatial-targets/runoff_target_bounds_map.png) ![w:520](../figures/targets/gfv2-spatial-targets/runoff_target_n_sources_map.png)
+## 3.1 Runoff — target output
 
-<span class="caption">Left: lower / upper bound maps in cfs. Right: number of sources contributing per HRU (max 3).</span>
+<div class="grid">
+<div class="figs tall-second">
 
-- `runoff_target_representative_series.png` shows a representative HRU time series with bound envelope and PRMS-overlayable shape.
+![](../figures/targets/gfv2-spatial-targets/runoff_target_bounds_map.png)
+![](../figures/targets/gfv2-spatial-targets/runoff_target_representative_series.png)
+
+<span class="caption">Top: lower / upper bound maps (cfs). Bottom: representative HRU time series with bound envelope.</span>
+
+</div>
+<div class="notes">
+
+<div class="figs">
+
+![](../figures/targets/gfv2-spatial-targets/runoff_target_conus_series.png)
+
+<span class="caption">CONUS-mean lower / upper envelope.</span>
+
+</div>
+
 - `runoff_target_nn_fill_{map,series}.png` shows where NN-fill closes the residual all-NaN cells in the `_nn_filled` companion file.
 
 <div class="callout">
 <strong>Discussion hook.</strong> MWBM ClimGrid coverage ends 2020-12 (verified on PR #127's full run; n_sources=3 covers 96.6 % through 2020). Do we extend the runoff target past 2020 with a 2-source bound, or hold the window at 2020 to keep all three sources in play?
+</div>
+
+</div>
 </div>
 
 <!--
@@ -311,26 +394,32 @@ is whether the bound width is honest with one fewer voter.
 
 ---
 
+<!-- _class: two-col -->
+
 ## 3.2 AET — sources & method
 
+<div class="grid">
+<div class="figs solo">
+
+![](../figures/consolidated/gfv2-spatial-targets/aet_normalized_comparison.png)
+
+<span class="caption">Raw-grid scale before HRU aggregation — mm/month on a common scale.</span>
+
+</div>
+<div class="notes">
+
 **Sources:**
+- **MOD16A2 v061** `ET_500m` — 2000–present (`masked_mean`, PR #88)
+- **SSEBop** `et` — 2000–2023
+- **MWBM ClimGrid** `aet` — 1900–2020
 
-- **MOD16A2 v061** — 500 m, 8-day MODIS AET, sinusoidal projection. Fill-value mask in `pre_aggregate_hook`; `masked_mean` aggregation.
-- **SSEBop** — remote STAC via USGS NHGF, per-year NCs; energy-balance AET.
-- **MWBM ClimGrid** `aet` — 2.5 arcmin, monthly; Wieczorek et al. 2024.
-
-**Method.** All three aggregated to HRU polygons, harmonised to **mm/month**,
-converted to **inches/day** in `targets/aet.py`. Multi-source min/max bound.
-
-**Period.** Monthly, intersection ≈ 2000–2020 (MWBM ClimGrid 2020 ceiling again).
-
-**Builder.** `src/nhf_spatial_targets/targets/aet.py`.
+**Method.** HRU aggregation → mm/month → **inches/day** in `targets/aet.py`. Multi-source min/max. Intersection ≈ 2000–2020 (MWBM ceiling).
 
 <div class="callout">
-<strong>Why MOD16A2 v061 needs <code>masked_mean</code>.</strong> Sinusoidal→WGS84 reprojection
-was averaging fill-value codes (e.g. 32766, 32767) into valid neighbours, which
-flattened seasonality and widened the AET bound for an artefactual reason
-(PR #88). The fix masks `ET_500m` fills <strong>before</strong> reprojection.
+<strong>MOD16A2 fill-mask.</strong> Sinusoidal→WGS84 reprojection was averaging fill codes (32766/32767) into valid neighbours, widening the bound artefactually. PR #88 masks `ET_500m` fills <em>before</em> reprojection.
+</div>
+
+</div>
 </div>
 
 <!--
@@ -343,15 +432,35 @@ into "why do we have a pre_aggregate_hook at all".
 
 ---
 
+<!-- _class: two-col -->
+
 ## 3.2 AET — aggregated bounds
 
-![w:520](../figures/aggregated/gfv2-spatial-targets/aet_native_units_map.png) ![w:520](../figures/aggregated/gfv2-spatial-targets/aet_normalized_comparison.png)
+<div class="grid">
+<div class="figs tall-second">
 
-<span class="caption">Left: per-source HRU map in mm/month. Right: normalised cross-source comparison.</span>
+![](../figures/aggregated/gfv2-spatial-targets/aet_normalized_comparison.png)
+![](../figures/aggregated/gfv2-spatial-targets/aet_time_series.png)
+
+<span class="caption">Top: cross-source magnitude check (mm/month basis). Bottom: representative HRU time series, per source.</span>
+
+</div>
+<div class="notes">
+
+<div class="figs">
+
+![](../figures/aggregated/gfv2-spatial-targets/aet_histogram.png)
+
+<span class="caption">HRU value distribution, per source.</span>
+
+</div>
 
 - MOD16A2 v061 (post-#88) recovers the seasonal swing — east-CONUS HRUs show summer maxima ≈ winter minima × 5–8.
 - SSEBop trends slightly higher than MOD16A2 in agricultural HRUs; MWBM ClimGrid sits between them.
 - Coverage map (`aet_coverage.png`) — MOD16A2 has some MODIS-sinusoidal gore-fill HRUs, SSEBop is dense, MWBM is full.
+
+</div>
+</div>
 
 <!--
 The 5–8× summer/winter ratio for east-CONUS HRUs is the test that the PR #88
@@ -362,14 +471,35 @@ smoking gun.
 
 ---
 
-## 3.2 AET — final target
+<!-- _class: two-col -->
 
-![w:520](../figures/targets/gfv2-spatial-targets/aet_target_bounds_map.png) ![w:520](../figures/targets/gfv2-spatial-targets/aet_target_n_sources_map.png)
+## 3.2 AET — target output
 
-<span class="caption">Left: lower / upper bound maps in inches/day. Right: source count per HRU (max 3).</span>
+<div class="grid">
+<div class="figs tall-second">
 
-- `aet_target_representative_series.png` — bound width shrinks markedly in winter (all three sources agree it's near zero) and opens up in summer where MOD16A2 and SSEBop diverge.
-- `aet_target_conus_series.png` — CONUS-mean lower/upper consistent with the PR #127 21-year run.
+![](../figures/targets/gfv2-spatial-targets/aet_target_bounds_map.png)
+![](../figures/targets/gfv2-spatial-targets/aet_target_representative_series.png)
+
+<span class="caption">Top: lower / upper bound maps (inches/day). Bottom: representative HRU time series.</span>
+
+</div>
+<div class="notes">
+
+<div class="figs">
+
+![](../figures/targets/gfv2-spatial-targets/aet_target_conus_series.png)
+
+<span class="caption">CONUS-mean lower / upper envelope (PR #127 21-year run).</span>
+
+</div>
+
+- Bound shrinks in winter — all three sources agree on near-zero AET.
+- Bound opens in summer where MOD16A2 and SSEBop diverge; that's the calibration-relevant disagreement.
+- CONUS-mean envelope confirms the seasonal asymmetry at aggregate scale.
+
+</div>
+</div>
 
 <!--
 For discussion: the summer/winter bound asymmetry is the calibration-relevant
@@ -380,27 +510,32 @@ to a narrow band. That's the kind of "honest bound" we want.
 
 ---
 
+<!-- _class: two-col -->
+
 ## 3.3 Recharge — sources & method
 
-**Sources** (all annual):
+<div class="grid">
+<div class="figs solo">
 
-- **Reitz 2017** — 800 m annual recharge, USGS ScienceBase; inches/year.
-- **WaterGAP 2.2d** — 0.5° monthly diffuse recharge summed to annual; mm/month.
-- **ERA5-Land** `ssro` — 0.1° hourly sub-surface runoff summed to annual; m water-eq (recharge proxy).
+![](../figures/consolidated/gfv2-spatial-targets/recharge_normalized_comparison.png)
 
-**Method.** Each source aggregated to HRU polygons, then **0–1 normalised
-independently over 2000–2009** before the multi-source `nanmin / nanmax`.
-Optimisation target is year-to-year *relative* change, not absolute magnitude.
+<span class="caption">Raw-grid scale before HRU aggregation — annual recharge on a common scale.</span>
 
-**Period.** Annual, normalisation window 2000–2009 (TM 6-B10 body text).
+</div>
+<div class="notes">
 
-**Builder.** `src/nhf_spatial_targets/targets/rch.py`.
+**Sources** (annual):
+- **Reitz 2017** `total_recharge` — 2000–2013
+- **WaterGAP 2.2d** `groundwater_recharge` — 1901–2016
+- **ERA5-Land** `ssro` — 1979–present (sub-surface runoff proxy)
+
+**Method.** 0–1 normalised independently over **2000–2009**, then multi-source min/max in `targets/rch.py`. Target is year-to-year *relative* change, not absolute magnitude.
 
 <div class="callout">
-<strong>gfv2 note.</strong> WaterGAP 2.2d (0.5°) is excluded from recharge for the
-gfv2 fabric — the 0.5° cells average orographic gradients across mountain/valley
-pairs in the intermountain west, so HRUs in the same source cell collapse to a
-constant. Per-fabric decision; revisit for non-mountainous fabrics.
+<strong>gfv2 note.</strong> WaterGAP 2.2d excluded — 0.5° cells average orographic gradients across mountain/valley pairs in the intermountain west, collapsing HRU detail. Per-fabric decision.
+</div>
+
+</div>
 </div>
 
 <!--
@@ -413,15 +548,35 @@ stage for gfv2.
 
 ---
 
+<!-- _class: two-col -->
+
 ## 3.3 Recharge — aggregated bounds
 
-![w:520](../figures/aggregated/gfv2-spatial-targets/recharge_native_units_map.png) ![w:520](../figures/aggregated/gfv2-spatial-targets/recharge_normalized_comparison.png)
+<div class="grid">
+<div class="figs tall-second">
 
-<span class="caption">Left: per-source HRU map, native units. Right: normalised cross-source comparison over 2000–2009.</span>
+![](../figures/aggregated/gfv2-spatial-targets/recharge_normalized_comparison.png)
+![](../figures/aggregated/gfv2-spatial-targets/recharge_time_series.png)
+
+<span class="caption">Top: cross-source magnitude check, normalised over 2000–2009. Bottom: representative HRU annual series, per source.</span>
+
+</div>
+<div class="notes">
+
+<div class="figs">
+
+![](../figures/aggregated/gfv2-spatial-targets/recharge_histogram.png)
+
+<span class="caption">HRU value distribution, per source.</span>
+
+</div>
 
 - Reitz 2017 carries the spatial detail (800 m → HRU); ERA5-Land `ssro` is smoother.
 - WaterGAP 2.2d included in the aggregated NCs (for inspection) but excluded from the gfv2 target bound — see prior slide.
 - Coverage map (`recharge_coverage.png`) — Reitz 2017 ends 2013; ERA5-Land extends through present.
+
+</div>
+</div>
 
 <!--
 The Reitz 2017 2013 end-date is a sub-question to flag if anyone wonders why
@@ -432,13 +587,29 @@ materially changes what the bound captures.
 
 ---
 
-## 3.3 Recharge — final target
+<!-- _class: two-col -->
 
-![w:520](../figures/targets/gfv2-spatial-targets/recharge_target_bounds_map.png) ![w:520](../figures/targets/gfv2-spatial-targets/recharge_target_n_sources_map.png)
+## 3.3 Recharge — target output
 
-<span class="caption">Left: lower / upper bound maps, normalised 0–1. Right: source count per HRU.</span>
+<div class="grid">
+<div class="figs tall-second">
 
-- `recharge_target_representative_series.png` — annual cadence, 0–1 normalised; bound width varies HRU-to-HRU.
+![](../figures/targets/gfv2-spatial-targets/recharge_target_bounds_map.png)
+![](../figures/targets/gfv2-spatial-targets/recharge_target_representative_series.png)
+
+<span class="caption">Top: lower / upper bound maps (0–1 normalised). Bottom: representative HRU annual series.</span>
+
+</div>
+<div class="notes">
+
+<div class="figs">
+
+![](../figures/targets/gfv2-spatial-targets/recharge_target_conus_series.png)
+
+<span class="caption">CONUS-mean lower / upper envelope.</span>
+
+</div>
+
 - `recharge_target_nn_fill_{map,series}.png` — companion `_nn_filled` file closes residual all-NaN HRUs.
 
 <div class="callout">
@@ -446,6 +617,9 @@ materially changes what the bound captures.
 gfv2 actually ships. Is that bound informative enough for calibration in the
 arid west, where Reitz 2017's mean recharge is near zero and ERA5-Land `ssro`
 is the dominant signal?
+</div>
+
+</div>
 </div>
 
 <!--
@@ -458,26 +632,33 @@ fabric-level exclusion.
 
 ---
 
+<!-- _class: two-col -->
+
 ## 3.4 Soil moisture — sources & method
 
-**Sources** (all monthly, upper-zone soil layer):
+<div class="grid">
+<div class="figs solo">
 
-- **MERRA-2** `GWETTOP` — 0.5° monthly, 0–0.05 m, dimensionless wetness (preferred).
-- **NCEP/NCAR** `soilw.0-10cm` — ~1.9° monthly, 0–0.10 m, VWC (m³/m³).
-- **NLDAS-2 MOSAIC** `SoilM_0_10cm` — 0.125° monthly, 0–0.10 m, kg/m².
-- **NLDAS-2 NOAH** `SoilM_0_10cm` — 0.125° monthly, 0–0.10 m, kg/m².
+![](../figures/consolidated/gfv2-spatial-targets/soil_moisture_normalized_comparison.png)
 
-**Method.** Each source aggregated to HRU polygons, then **0–1 normalised
-independently** — *monthly* normalised per calendar month (all Jans together,
-all Febs together, …); *annual* normalised over full 1982–2010 (TM 6-B10 App. 1).
-Multi-source min/max.
+<span class="caption">Raw-grid scale before HRU aggregation — heterogeneous native units normalised to a common scale (note the coarse NCEP/NCAR cells vs the 0.125° NLDAS).</span>
 
-**Builder.** `src/nhf_spatial_targets/targets/som.py` (emits both monthly and annual NCs).
+</div>
+<div class="notes">
+
+**Sources** (monthly, upper-zone soil layer):
+- **MERRA-2** `GWETTOP` — 1980–present
+- **NCEP/NCAR** `soilw_0_10cm` — 1948–present *(gfv2-excluded)*
+- **NLDAS-2 MOSAIC** `SoilM_0_10cm` — 1979–present
+- **NLDAS-2 NOAH** `SoilM_0_10cm` — 1979–present
+
+**Method.** 0–1 normalised independently per source — *monthly* per calendar month; *annual* over 1982–2010. Multi-source min/max in `targets/som.py` (emits monthly + annual NCs).
 
 <div class="callout">
-<strong>gfv2 note.</strong> NCEP/NCAR (T62 ≈ 210 km) excluded for the same intermountain-west
-coarse-grid reason as WaterGAP for recharge. gfv2 ships a 3-source soil-moisture bound
-(MERRA-2, NLDAS-MOSAIC, NLDAS-NOAH).
+<strong>gfv2 note.</strong> NCEP/NCAR (T62 ≈ 210 km) excluded — same intermountain-west coarse-grid reason as WaterGAP for recharge. gfv2 ships a 3-source bound.
+</div>
+
+</div>
 </div>
 
 <!--
@@ -489,15 +670,35 @@ which is comparable across layers. Mention if anyone asks about depth heterogene
 
 ---
 
+<!-- _class: two-col -->
+
 ## 3.4 Soil moisture — aggregated bounds
 
-![w:520](../figures/aggregated/gfv2-spatial-targets/soil_moisture_native_units_map.png) ![w:520](../figures/aggregated/gfv2-spatial-targets/soil_moisture_normalized_comparison.png)
+<div class="grid">
+<div class="figs tall-second">
 
-<span class="caption">Left: per-source HRU map, native units (heterogeneous — see units note). Right: normalised cross-source comparison.</span>
+![](../figures/aggregated/gfv2-spatial-targets/soil_moisture_normalized_comparison.png)
+![](../figures/aggregated/gfv2-spatial-targets/soil_moisture_time_series.png)
+
+<span class="caption">Top: cross-source magnitude check (0–1 normalised — heterogeneous native units harmonised). Bottom: representative HRU time series, per source.</span>
+
+</div>
+<div class="notes">
+
+<div class="figs">
+
+![](../figures/aggregated/gfv2-spatial-targets/soil_moisture_histogram.png)
+
+<span class="caption">HRU value distribution, per source.</span>
+
+</div>
 
 - Wet/dry geography agrees across all four sources at HRU resolution.
 - NCEP/NCAR (T62) visibly washes out terrain detail in the intermountain west — motivation for the gfv2 exclusion.
-- Time series (`soil_moisture_time_series.png`) — annual cycle phase agreement is good; amplitude varies across sources, which the per-calendar-month normalisation absorbs.
+- Annual cycle phase agreement is good across sources; amplitude varies, which the per-calendar-month normalisation absorbs.
+
+</div>
+</div>
 
 <!--
 The visible coarse-grid washout in NCEP/NCAR is the visual smoking gun for the
@@ -507,14 +708,30 @@ it's a quick "look, this is what we're excluding and why" moment.
 
 ---
 
-## 3.4 Soil moisture — final target
+<!-- _class: two-col -->
 
-![w:520](../figures/targets/gfv2-spatial-targets/soil_moisture_target_monthly_bounds_map.png) ![w:520](../figures/targets/gfv2-spatial-targets/soil_moisture_target_monthly_climatology.png)
+## 3.4 Soil moisture — target output
 
-<span class="caption">Left: monthly lower / upper bound maps, normalised 0–1. Right: per-calendar-month climatology, CONUS mean.</span>
+<div class="grid">
+<div class="figs tall-second">
+
+![](../figures/targets/gfv2-spatial-targets/soil_moisture_target_monthly_bounds_map.png)
+![](../figures/targets/gfv2-spatial-targets/soil_moisture_target_annual_representative_series.png)
+
+<span class="caption">Top: monthly bound maps (0–1 normalised). Bottom: annual representative HRU series.</span>
+
+</div>
+<div class="notes">
+
+<div class="figs">
+
+![](../figures/targets/gfv2-spatial-targets/soil_moisture_target_monthly_climatology.png)
+
+<span class="caption">Per-calendar-month CONUS-mean climatology — seasonal-cycle view of the bound.</span>
+
+</div>
 
 - `soil_moisture_target_monthly_coverage_timeseries.png` — bound coverage across the 1982–2010 window.
-- Annual companions on disk: `..._annual_representative_series.png`, `..._annual_conus_series.png`, `..._annual_nan_map.png`, `..._annual_nn_fill_series.png`.
 - NCs on disk: `soil_moisture_targets_monthly.nc`, `..._annual.nc`, plus `_nn_filled` variants.
 
 <div class="callout">
@@ -522,6 +739,9 @@ it's a quick "look, this is what we're excluding and why" moment.
 together, Febs together, …) vs annual normalisation (single 1982–2010 window)
 gives meaningfully different bound widths, especially in spring shoulder
 seasons. Is the modelling team using monthly, annual, or both?
+</div>
+
+</div>
 </div>
 
 <!--
@@ -535,23 +755,30 @@ modeller-side decision — we emit both NCs.
 
 ---
 
+<!-- _class: two-col -->
+
 ## 3.5 Snow-covered area — sources & method
 
+<div class="grid">
+<div class="figs solo">
+
+![](../figures/consolidated/gfv2-spatial-targets/snow_covered_area_raw_panels.png)
+
+<span class="caption">Raw MOD10C1 v061 panels — CI-gated SCA fraction at 0.05° resolution before HRU aggregation.</span>
+
+</div>
+<div class="notes">
+
 **Source** (single):
+- **MOD10C1 v061** `Day_CMG_Snow_Cover` + `Day_CMG_Clear_Index` — 2000–present
 
-- **MOD10C1 v061** — 0.05° daily MODIS snow cover, global. Variables `Day_CMG_Snow_Cover` (sca) and `Day_CMG_Clear_Index` (CI).
-
-**Method.** Per-pixel filter: only days/cells with **CI > 0.70** contribute
-(TM 6-B10). `pre_aggregate_hook` applies the CI gate and masks flag values >100;
-`masked_mean` aggregation. Aggregated NCs carry CI-gated sca as a daily 0–1 fraction.
-
-**Builder.** `src/nhf_spatial_targets/targets/sca.py` — **<span class="status-todo">STUB (18 lines, raises NotImplementedError)</span>**
+**Method.** Per-pixel **CI > 0.70** filter (TM 6-B10). `pre_aggregate_hook` applies the gate and masks flag values > 100; `masked_mean` aggregation. Aggregated NCs carry CI-gated SCA as a daily 0–1 fraction.
 
 <div class="callout">
-<strong>Open gap.</strong> TM 6-B10 §3.5 calls for upper/lower bounds derived from
-the daily SCA value and its associated CI. <code>PRMSobjfun.f</code> is not
-publicly available, so the exact bound formula has not been reconstructed.
-See <code>docs/references/known-gaps-resolved.md</code> → "Still open".
+<strong>Open gap.</strong> Target builder (<code>targets/sca.py</code>) is a <span class="status-todo">STUB</span> — raises NotImplementedError. TM 6-B10 §3.5 calls for bounds from daily SCA + CI; <code>PRMSobjfun.f</code> not publicly available, so the exact bound formula has not been reconstructed.
+</div>
+
+</div>
 </div>
 
 <!--
@@ -564,15 +791,35 @@ Worth airing for input.
 
 ---
 
+<!-- _class: two-col -->
+
 ## 3.5 Snow-covered area — aggregated bounds
 
-![w:520](../figures/aggregated/gfv2-spatial-targets/snow_covered_area_native_units_map.png) ![w:520](../figures/aggregated/gfv2-spatial-targets/snow_covered_area_time_series.png)
+<div class="grid">
+<div class="figs tall-second">
 
-<span class="caption">Left: HRU SCA fraction (CI-gated). Right: HRU time series showing seasonal cycle.</span>
+![](../figures/aggregated/gfv2-spatial-targets/snow_covered_area_normalized_comparison.png)
+![](../figures/aggregated/gfv2-spatial-targets/snow_covered_area_time_series.png)
 
+<span class="caption">Top: aggregated HRU SCA fraction, MOD10C1 v061 (CI > 70 % gate), 0–1 scale. Bottom: representative HRU time series.</span>
+
+</div>
+<div class="notes">
+
+<div class="figs">
+
+![](../figures/aggregated/gfv2-spatial-targets/snow_covered_area_histogram.png)
+
+<span class="caption">HRU value distribution — bimodal as expected (snow / snow-free).</span>
+
+</div>
+
+- Single source (MOD10C1 v061) — figures are within-source diagnostics, not cross-source.
 - Strong seasonal cycle in snowy HRUs; near-zero year-round in southern CONUS.
 - `snow_covered_area_coverage.png` — coverage drops in winter at high latitudes where CI is rarely > 70 % under polar night.
-- `snow_covered_area_histogram.png` — bimodal as expected (snow-covered / snow-free).
+
+</div>
+</div>
 
 <!--
 The polar-night coverage drop is worth knowing — it's not a pipeline bug, it's
@@ -583,7 +830,7 @@ coverage filter.
 
 ---
 
-## 3.5 Snow-covered area — final target *(placeholder — builder pending)*
+## 3.5 Snow-covered area — target output *(placeholder — builder pending)*
 
 <div class="callout">
 <strong>Final target NC not yet produced.</strong> <code>targets/sca.py</code> is a
@@ -609,22 +856,34 @@ question. Steer toward "what does the modelling team need by when?".
 
 ---
 
+<!-- _class: two-col -->
+
 ## 3.6 SWE — sources & method
 
-**Sources** (all daily):
+<div class="grid">
+<div class="figs solo">
 
-- **Daymet** v4 R1 `swe` — 1 km daily, NA/HI/PR; kg/m² (≡ mm).
-- **SNODAS** `swe` — 1 km daily CONUS, 2003+; kg/m² (≡ mm). WGS84-native — heavy weight gen.
-- **ERA5-Land** `sd` — 0.1° daily, 1979+; m water-eq → mm.
-- **Margulis WUS-SR** `SWE` — 500 m daily, **Oregon-only** (`fabric_scope`); 1985–2021; m water-eq → mm.
+![](../figures/consolidated/gfv2-spatial-targets/swe_normalized_comparison.png)
 
-**Method.** All four aggregated to HRU polygons, harmonised to mm, then
-converted to **inches** in `targets/swe.py`. NaN-aware multi-source `nanmin / nanmax`
-with **year-chunked streaming** to bound peak RAM (PR #139). Margulis contributes
-only inside its Oregon `fabric_scope` window; non-OR fabrics get a 3-source bound.
+<span class="caption">Raw-grid scale before HRU aggregation — all four sources rescaled to inches on a common SNODAS-CONUS footprint (Margulis Western-US only by design).</span>
 
-**Builder.** `src/nhf_spatial_targets/targets/swe.py` — implemented (454 lines).
-End-to-end run for gfv2 still **<span class="status-wip">in progress</span>**.
+</div>
+<div class="notes">
+
+**Sources** (daily):
+- **Daymet v4 R1** `swe` — 1980–2024
+- **SNODAS** `swe` — 2003–present *(WGS84-native, heavy weight gen)*
+- **ERA5-Land** `sd` — 1979–present
+- **Margulis WUS-SR** `SWE` — 1985–2021 *(Oregon-only via `fabric_scope`)*
+
+**Method.** HRU aggregation → harmonised to mm → **inches** in `targets/swe.py`. NaN-aware multi-source min/max with **year-chunked streaming** (PR #139). Margulis contributes only inside its OR scope; non-OR fabrics get a 3-source bound.
+
+<div class="callout">
+<strong>Status.</strong> Builder implemented (454 lines). End-to-end gfv2 run still <span class="status-wip">in progress</span> — see panel B for per-source aggregation status.
+</div>
+
+</div>
+</div>
 
 <!--
 The year-chunked streaming was the implementation detail that made SWE tractable
@@ -634,23 +893,43 @@ memory at fabric scale. Mention if anyone asks why SWE took longer than runoff.
 
 ---
 
+<!-- _class: two-col -->
+
 ## 3.6 SWE — aggregated bounds (per-source status)
 
-![w:520](../figures/aggregated/gfv2-spatial-targets/swe_native_units_map.png) ![w:520](../figures/aggregated/gfv2-spatial-targets/swe_time_series.png)
+<div class="grid">
+<div class="figs tall-second">
 
-<span class="caption">Left: per-source HRU map, native units (mm). Right: HRU time series across the four sources.</span>
+![](../figures/aggregated/gfv2-spatial-targets/swe_normalized_comparison.png)
+![](../figures/aggregated/gfv2-spatial-targets/swe_time_series.png)
 
-| Source | Period available | Aggregation status on gfv2 |
+<span class="caption">Top: cross-source magnitude check (mm basis). Bottom: representative HRU time series, per source.</span>
+
+</div>
+<div class="notes">
+
+<div class="figs">
+
+![](../figures/aggregated/gfv2-spatial-targets/swe_histogram.png)
+
+<span class="caption">HRU value distribution, per source.</span>
+
+</div>
+
+| Source | Period | Status on gfv2 |
 |---|---|---|
-| Daymet v4 | 1980–2024 | <span class="status-done">✅ done</span> |
-| SNODAS | 2003–2024 | <span class="status-wip">⏳ recent runs in flight</span> (see `logs/agg_snodas_*.out`) |
-| ERA5-Land `sd` | 1979–present | <span class="status-done">✅ done</span> |
-| Margulis WUS-SR | 1985–2021 (OR only) | <span class="status-done">✅ done</span> |
+| Daymet v4 | 1980–2024 | <span class="status-done">✅</span> |
+| SNODAS | 2003–2024 | <span class="status-wip">⏳ in flight</span> |
+| ERA5-Land `sd` | 1979–present | <span class="status-done">✅</span> |
+| Margulis WUS-SR | 1985–2021 (OR) | <span class="status-done">✅</span> |
 
 <div class="callout">
 <strong>Verify on talk day.</strong> SNODAS per-year status changes most week-to-week.
 Re-check <code>find &lt;project&gt;/data/aggregated/snodas -name '*.nc' | wc -l</code> and the
 most recent <code>logs/agg_snodas_*.out</code> before this slide.
+</div>
+
+</div>
 </div>
 
 <!--
@@ -662,7 +941,7 @@ That's why SNODAS is the trailing item on the SWE list.
 
 ---
 
-## 3.6 SWE — final target *(placeholder — end-to-end run pending)*
+## 3.6 SWE — target output *(placeholder — end-to-end run pending)*
 
 <div class="callout">
 <strong>Final target NCs not yet on gfv2.</strong> Builder is implemented; the
@@ -717,8 +996,8 @@ we ship are intentionally wider where products disagree.
 
 ## Open questions to bring to the room
 
-1. **SCA bound formula** — binary CI > 70 % filter, CI-weighted bound, or wait on `PRMSobjfun.f` recovery? (Part 3.5)
-2. **SWE end-to-end run** — order of operations for the remaining SNODAS aggregation; do we cut a gfv2 SWE target as soon as it lands, or wait on additional QA? (Part 3.6)
+1. **SCA bound formula** — binary CI > 70 % filter, CI-weighted bound, or wait on `PRMSobjfun.f` recovery? (SCA walkthrough)
+2. **SWE end-to-end run** — order of operations for the remaining SNODAS aggregation; do we cut a gfv2 SWE target as soon as it lands, or wait on additional QA? (SWE walkthrough)
 3. **Period-of-record locks** per category — runoff & AET intersect at 2000–2020 because of MWBM ClimGrid; do we extend with 2-source bounds past 2020?
 4. **NN-fill default** — which targets ship `_nn_filled` as the consumer default vs the honest-NaN file? Currently we emit both for runoff / AET / recharge / soil moisture; choice belongs to the modelling team.
 5. **Fabric-coarse-grid exclusions** for the next fabric — WaterGAP (recharge) and NCEP/NCAR (soil moisture) are gfv2-specific; are we ready to codify a per-fabric exclusion mechanism?
@@ -761,7 +1040,7 @@ that have been quietly accumulating; airing them is the point of this slide.
 
 ## Next steps before the next checkpoint
 
-1. **SCA target builder** — pick a bound formula (Part 3.5), implement against existing aggregated NC, ship `sca_targets.nc`.
+1. **SCA target builder** — pick a bound formula (SCA walkthrough), implement against existing aggregated NC, ship `sca_targets.nc`.
 2. **SWE end-to-end run on gfv2** — once SNODAS aggregation finishes, run `nhf-targets run-swe`, render `notebooks/targets/inspect_target_swe.ipynb`, swap the SWE placeholder slide for real figures.
 3. **Per-fabric exclusion mechanism** — if other fabrics need WaterGAP / NCEP-NCAR re-included, lift the hard-coded `gfv2` exclusion into a config-driven per-fabric override.
 
