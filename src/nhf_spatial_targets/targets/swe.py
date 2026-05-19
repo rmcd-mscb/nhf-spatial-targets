@@ -199,6 +199,40 @@ def _filter_sources_by_fabric_scope(
     return kept
 
 
+def _filter_sources_by_availability(
+    project: Project, requested: list[str], shims: dict[str, SourceShim]
+) -> list[str]:
+    """Drop sources whose aggregated NC directory is empty or missing.
+
+    A source listed in ``snow_water_equivalent.sources`` but never
+    aggregated (e.g. Margulis on an Oregon-token project where
+    ``agg margulis-wus-sr`` hasn't been run yet) would otherwise crash
+    the per-year loop with ``FileNotFoundError`` on the first iteration.
+    Pre-flighting the check here lets the build proceed against whatever
+    sources *are* aggregated, with a single WARNING per missing source
+    instead of a per-year repeat.
+    """
+    kept: list[str] = []
+    for src in requested:
+        shim = shims[src]
+        agg_dir = project.aggregated_dir() / shim.source_key
+        pattern = f"{shim.source_key}_*_agg.nc"
+        if not any(agg_dir.glob(pattern)):
+            logger.warning(
+                "swe: skipping source '%s' — no aggregated NCs found under %s "
+                "(pattern: %s). Run "
+                "'pixi run nhf-targets agg %s --project-dir %s' to include it.",
+                src,
+                agg_dir,
+                pattern,
+                shim.source_key.replace("_", "-"),
+                project.workdir,
+            )
+            continue
+        kept.append(src)
+    return kept
+
+
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
@@ -245,6 +279,15 @@ def build(project: Project) -> None:
             f"snow_water_equivalent.sources={requested_sources!r} resolved to "
             f"zero sources after fabric_scope filtering (fabric token="
             f"{fabric_token!r}). Add a non-scoped source or set fabric.token."
+        )
+
+    sources = _filter_sources_by_availability(project, sources, shims)
+    if not sources:
+        raise ValueError(
+            f"snow_water_equivalent.sources={requested_sources!r} resolved to "
+            f"zero sources after dropping unaggregated sources. Run "
+            f"'pixi run nhf-targets agg <source> --project-dir {project.workdir}' "
+            f"for at least one requested source before building the SWE target."
         )
 
     logger.info(
