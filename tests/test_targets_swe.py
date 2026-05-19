@@ -238,6 +238,86 @@ def test_fabric_scope_filter_drops_scoped_source_when_token_mismatches():
 
 
 # ---------------------------------------------------------------------------
+# Availability filter (logic-level + end-to-end)
+# ---------------------------------------------------------------------------
+
+
+def test_availability_filter_drops_unaggregated_source(tmp_path: Path, caplog):
+    """A requested source whose aggregated dir is empty is dropped with a
+    WARNING; aggregated sources pass through unchanged."""
+    import logging
+
+    from nhf_spatial_targets.targets._common import shims_by_config_label
+    from nhf_spatial_targets.targets.swe import (
+        SHIMS,
+        _filter_sources_by_availability,
+    )
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_swe_project(
+        tmp_path,
+        fabric_token="or",
+        write_margulis=False,
+        nn_fill=False,
+    )
+    project = load(workdir)
+    shims = shims_by_config_label(SHIMS)
+    with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.targets.swe"):
+        kept = _filter_sources_by_availability(
+            project, ["daymet", "snodas", "era5_land", "margulis_wus_sr"], shims
+        )
+    assert kept == ["daymet", "snodas", "era5_land"]
+    assert "margulis_wus_sr" in caplog.text
+    assert "no aggregated NCs found" in caplog.text
+
+
+def test_build_oregon_without_margulis_succeeds_with_three_sources(
+    tmp_path: Path, caplog
+):
+    """End-to-end: fabric_token='or' requests all 4 sources, but Margulis
+    has never been aggregated. Build succeeds against the other 3 with a
+    WARNING; n_sources stays at 3 everywhere, source attr drops Margulis."""
+    import logging
+
+    from nhf_spatial_targets.targets.swe import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_swe_project(
+        tmp_path,
+        fabric_token="or",
+        write_margulis=False,
+        nn_fill=False,
+    )
+    project = load(workdir)
+    with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.targets.swe"):
+        build(project)
+    with xr.open_dataset(project.targets_dir() / "swe_targets.nc") as ds:
+        assert (ds["n_sources"].values == 3).all()
+        assert "Margulis" not in ds.attrs["source"]
+    assert "margulis_wus_sr" in caplog.text
+
+
+def test_build_all_sources_unaggregated_raises(tmp_path: Path):
+    """If every requested source is unaggregated, the build raises a clear
+    error pointing the operator at the right ``agg`` command."""
+    from nhf_spatial_targets.targets.swe import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_swe_project(
+        tmp_path,
+        fabric_token="or",
+        write_daymet=False,
+        write_snodas=False,
+        write_era5_sd=False,
+        write_margulis=False,
+        nn_fill=False,
+    )
+    project = load(workdir)
+    with pytest.raises(ValueError, match="zero sources after dropping unaggregated"):
+        build(project)
+
+
+# ---------------------------------------------------------------------------
 # End-to-end build
 # ---------------------------------------------------------------------------
 
