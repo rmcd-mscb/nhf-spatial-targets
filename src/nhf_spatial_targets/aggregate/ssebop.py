@@ -47,6 +47,7 @@ def _process_batch(
     batch_gdf: gpd.GeoDataFrame,
     batch_id: int,
     collection,
+    collection_id: str,
     id_col: str,
     time_period: list[str],
     workdir: Path,
@@ -55,14 +56,22 @@ def _process_batch(
 
     Weights are cached on disk per batch and reused across years because
     the SSEBop source grid is invariant across the archive. A ``.csv.meta``
-    sidecar records the batch HRU fingerprint so a different ``--batch-size``
-    or fabric swap invalidates the cache instead of silently mapping stale
-    weights to the wrong HRU partition (mirror of ``_driver.py``'s
-    ``compute_or_load_weights``).
+    sidecar records the batch HRU fingerprint so a different ``--batch-size``,
+    fabric swap, or STAC collection change invalidates the cache instead of
+    silently mapping stale weights to the wrong HRU partition (mirror of
+    ``_driver.py``'s ``compute_or_load_weights``). The ``collection_id``
+    arm fingerprints SSEBop's source-grid identity the same way
+    ``source_crs`` does for file-based sources.
     """
     wp = _weight_path(workdir, batch_id)
     fp_path = _weight_cache_fingerprint_path(wp)
-    expected_fp = _batch_fingerprint(batch_gdf, id_col)
+    # SSEBop's NHGFStacZarrData does not take an explicit source_crs; the
+    # grid identity is bound to the STAC collection_id. Pass that in as
+    # the fingerprint's source-identity arm so a future SSEBop migration
+    # to a different collection invalidates the cache.
+    expected_fp = _batch_fingerprint(
+        batch_gdf, id_col, source_crs=f"stac:{collection_id}"
+    )
 
     weights: pd.DataFrame | None = None
     if wp.exists():
@@ -75,8 +84,8 @@ def _process_batch(
                 logger.warning(
                     "Batch %d: cached weights at %s have stale batch "
                     "fingerprint (cached=%s..., expected=%s...). The cache "
-                    "predates a batch_size or fabric change since the "
-                    "weights were written. Recomputing.",
+                    "predates a batch_size, fabric, or STAC collection "
+                    "change since the weights were written. Recomputing.",
                     batch_id,
                     wp,
                     cached_fp[:12],
@@ -145,6 +154,9 @@ def aggregate_ssebop(
     period: str,
     workdir: str | Path,
     batch_size: int = 500,
+    *,
+    worker_index: int = 0,
+    n_workers: int = 1,
 ) -> None:
     """Aggregate SSEBop monthly AET to fabric HRU polygons, one NC per year.
 
@@ -159,6 +171,12 @@ def aggregate_ssebop(
     idempotency reuses the on-disk NCs and re-attempts the manifest
     update, healing the divergence.
 
+    SLURM-array support (issue #156): ``worker_index`` / ``n_workers``
+    select a round-robin slice of years for this worker. Default
+    ``(0, 1)`` is serial; with ``n_workers > 1`` the contiguous-year
+    check is skipped and the manifest update merges file lists across
+    workers (flock-protected by :func:`update_manifest`).
+
     Parameters
     ----------
     fabric_path : str | Path
@@ -171,7 +189,11 @@ def aggregate_ssebop(
         Project directory.
     batch_size : int
         Target number of HRUs per spatial batch.
+    worker_index, n_workers : int
+        SLURM-array round-robin sharding.
     """
+    from nhf_spatial_targets.aggregate._driver import _assign_worker_years
+
     # Validate period before any network or fabric work — a malformed
     # `--period` should fail in milliseconds, not after a STAC round-trip
     # and a fabric load.
@@ -213,17 +235,40 @@ def aggregate_ssebop(
     fabric_batched = load_and_batch_fabric(fabric_path, batch_size=batch_size)
     n_batches = int(fabric_batched["batch_id"].nunique())
     logger.info("Fabric split into %d spatial batches", n_batches)
-    years = list(range(start_year, end_year + 1))
-    logger.info(
-        "ssebop: %d year(s) to aggregate (%d-%d) across %d batches",
-        len(years),
-        start_year,
-        end_year,
-        n_batches,
+    all_years = list(range(start_year, end_year + 1))
+    # SLURM-array round-robin: each worker takes 1/n_workers of the
+    # years. Default n_workers=1 -> single worker takes everything.
+    assigned_pairs = _assign_worker_years(
+        [(y, None) for y in all_years], worker_index, n_workers
     )
+    if not assigned_pairs:
+        logger.info(
+            "ssebop: worker %d/%d has no years to process",
+            worker_index,
+            n_workers,
+        )
+        return
+    assigned_years = [y for y, _ in assigned_pairs]
+    if n_workers == 1:
+        logger.info(
+            "ssebop: %d year(s) to aggregate (%d-%d) across %d batches",
+            len(assigned_years),
+            start_year,
+            end_year,
+            n_batches,
+        )
+    else:
+        logger.info(
+            "ssebop: worker %d/%d aggregating %d of %d years across %d batches",
+            worker_index,
+            n_workers,
+            len(assigned_years),
+            len(all_years),
+            n_batches,
+        )
 
     per_year_paths: list[Path] = []
-    for year in years:
+    for year in assigned_years:
         out_path = per_year_output_path(project, _SOURCE_KEY, year)
         if out_path.exists():
             # A zero-byte stub is left if anything truncated the file
@@ -259,6 +304,7 @@ def aggregate_ssebop(
                     batch_gdf,
                     int(bid),
                     collection,
+                    collection_id,
                     id_col,
                     time_period,
                     project.workdir,
@@ -282,9 +328,11 @@ def aggregate_ssebop(
     # Scope the contiguity check to the requested window so a later run
     # with a disjoint --period (e.g. 2010/2012 after a prior 2000/2002)
     # doesn't trip "missing 2003-2009" — the gap is intentional, not a bug.
-    _verify_year_coverage(
-        per_source_dir, _SOURCE_KEY, period=f"{start_year}/{end_year}"
-    )
+    # Skip under SLURM-array: other workers may still be producing years.
+    if n_workers == 1:
+        _verify_year_coverage(
+            per_source_dir, _SOURCE_KEY, period=f"{start_year}/{end_year}"
+        )
 
     rel_outputs = [str(p.relative_to(project.workdir)) for p in per_year_paths]
     weight_files = [
@@ -301,6 +349,8 @@ def aggregate_ssebop(
         period=f"{start_year}-01-01/{end_year}-12-31",
         output_files=rel_outputs,
         weight_files=weight_files,
+        batch_size=batch_size,
+        n_workers=n_workers,
     )
     logger.info(
         "ssebop: %d per-year NCs written to %s",

@@ -48,7 +48,115 @@ def test_agg_subcommand_dispatches(subcommand, target_fn, tmp_path, monkeypatch)
     assert kwargs["fabric_path"] == str(tmp_path / "fabric.gpkg")
     assert kwargs["id_col"] == "nhm_id"
     assert kwargs["workdir"] == tmp_path
+    # Default batch_size now sourced from DEFAULTS["fabric"]["batch_size"]
+    # (500) via _resolve_agg_config when no CLI flag is set (issue #156).
     assert kwargs["batch_size"] == 500
+    # SLURM-array sharding defaults to the serial (0, 1) path.
+    assert kwargs["worker_index"] == 0
+    assert kwargs["n_workers"] == 1
+
+
+def test_agg_subcommand_honors_batch_size_from_config(tmp_path):
+    """``fabric.batch_size`` in config.yml feeds through to the aggregator
+    when no ``--batch-size`` CLI flag is set (issue #156)."""
+    import json
+
+    import yaml
+
+    from nhf_spatial_targets.cli import app
+
+    (tmp_path / "config.yml").write_text(
+        yaml.dump(
+            {
+                "fabric": {
+                    "path": str(tmp_path / "fabric.gpkg"),
+                    "id_col": "nhm_id",
+                    "batch_size": 1234,
+                },
+                "datastore": str(tmp_path / "datastore"),
+            }
+        )
+    )
+    (tmp_path / "fabric.json").write_text(json.dumps({"sha256": "f00"}))
+
+    with patch("nhf_spatial_targets.cli.aggregate_era5_land") as mock_agg:
+        with pytest.raises(SystemExit):
+            app(["agg", "era5-land", "--project-dir", str(tmp_path)])
+    assert mock_agg.call_args.kwargs["batch_size"] == 1234
+
+
+def test_agg_subcommand_cli_batch_size_overrides_config(tmp_path):
+    """``--batch-size`` CLI flag wins over ``fabric.batch_size`` in config (issue #156)."""
+    import json
+
+    import yaml
+
+    from nhf_spatial_targets.cli import app
+
+    (tmp_path / "config.yml").write_text(
+        yaml.dump(
+            {
+                "fabric": {
+                    "path": str(tmp_path / "fabric.gpkg"),
+                    "id_col": "nhm_id",
+                    "batch_size": 1234,
+                },
+                "datastore": str(tmp_path / "datastore"),
+            }
+        )
+    )
+    (tmp_path / "fabric.json").write_text(json.dumps({"sha256": "f00"}))
+
+    with patch("nhf_spatial_targets.cli.aggregate_era5_land") as mock_agg:
+        with pytest.raises(SystemExit):
+            app(
+                [
+                    "agg",
+                    "era5-land",
+                    "--project-dir",
+                    str(tmp_path),
+                    "--batch-size",
+                    "9999",
+                ]
+            )
+    assert mock_agg.call_args.kwargs["batch_size"] == 9999
+
+
+def test_agg_subcommand_forwards_worker_index_and_n_workers(tmp_path):
+    """``--worker-index`` and ``--n-workers`` flow through to the aggregator (issue #156)."""
+    import json
+
+    import yaml
+
+    from nhf_spatial_targets.cli import app
+
+    (tmp_path / "config.yml").write_text(
+        yaml.dump(
+            {
+                "fabric": {"path": str(tmp_path / "fabric.gpkg"), "id_col": "nhm_id"},
+                "datastore": str(tmp_path / "datastore"),
+            }
+        )
+    )
+    (tmp_path / "fabric.json").write_text(json.dumps({"sha256": "f00"}))
+
+    with patch("nhf_spatial_targets.cli.aggregate_snodas") as mock_agg:
+        with pytest.raises(SystemExit):
+            app(
+                [
+                    "agg",
+                    "snodas",
+                    "--project-dir",
+                    str(tmp_path),
+                    "--worker-index",
+                    "2",
+                    "--n-workers",
+                    "4",
+                ]
+            )
+    kwargs = mock_agg.call_args.kwargs
+    assert kwargs["worker_index"] == 2
+    assert kwargs["n_workers"] == 4
 
 
 def test_agg_all_runs_every_source(tmp_path):
