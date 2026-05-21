@@ -390,8 +390,15 @@ def apply_cf_metadata(
         # when the parent has no units encoding but a bounds variable
         # is present). Use setdefault so source-specific encoding is
         # preserved when present.
+        #
+        # Calendar is pinned to ``proleptic_gregorian`` and the on-disk dtype
+        # to ``float64`` to match the aggregated/target layers (issue #165
+        # ST4): a single standardized time representation across all three
+        # pipeline stages. Pre-#165 NCs written with ``calendar="standard"``
+        # still decode without raising — this only changes new writes.
         ds["time"].encoding.setdefault("units", "days since 1970-01-01")
-        ds["time"].encoding.setdefault("calendar", "standard")
+        ds["time"].encoding.setdefault("calendar", "proleptic_gregorian")
+        ds["time"].encoding.setdefault("dtype", "float64")
 
     # 7. Add time_bnds for monthly data
     if time_step == "monthly" and "time_bnds" not in ds:
@@ -569,7 +576,13 @@ def consolidate_merra2(
 
         out_path = source_dir / "merra2_consolidated.nc"
         logger.info("Writing consolidated file: %s", out_path)
-        encoding = {"time": {"units": "days since 1970-01-01", "calendar": "standard"}}
+        encoding = {
+            "time": {
+                "units": "days since 1970-01-01",
+                "calendar": "proleptic_gregorian",
+                "dtype": "float64",
+            }
+        }
         _write_netcdf(ds, out_path, encoding=encoding)
         logger.info("Wrote %s", out_path)
     finally:
