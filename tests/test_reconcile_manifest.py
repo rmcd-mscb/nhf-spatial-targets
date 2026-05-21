@@ -118,3 +118,15 @@ def test_apply_records_dry_run_does_not_write(tmp_path):
     result = reconcile._apply_records(project, "mod16a2_v061", records, dry_run=True)
     assert result.added == 1
     assert not (tmp_path / "manifest.json").exists()  # nothing written
+
+
+def test_apply_records_noop_when_all_present_does_not_rewrite(tmp_path):
+    project = _make_project(tmp_path)
+    records = [{"year": 2020, "path": "p", "provenance": "reconciled"}]
+    reconcile._apply_records(project, "mod16a2_v061", records, dry_run=False)
+    before = (tmp_path / "manifest.json").read_text()
+    # Re-applying the same records adds nothing and must not rewrite the file.
+    result = reconcile._apply_records(project, "mod16a2_v061", records, dry_run=False)
+    assert result.status == "no-op"
+    assert result.added == 0
+    assert (tmp_path / "manifest.json").read_text() == before

@@ -120,6 +120,7 @@ def _apply_records(
     """
     manifest_path = project.manifest_path
     lock_path = manifest_path.with_suffix(".lock")
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
     with open(lock_path, "a") as lock_f:
         if _HAVE_FLOCK:
             _fcntl.flock(lock_f, _fcntl.LOCK_EX)
@@ -128,16 +129,16 @@ def _apply_records(
         created = source_key not in manifest["sources"]
         entry = manifest["sources"].get(source_key, {})
         existing_files = entry.get("files", [])
-        merged, added = _gap_fill(existing_files, records)
+        merged, new_records = _gap_fill(existing_files, records)
 
         result = SourceReconcileResult(
             source_key=source_key,
-            status="reconciled" if added else "no-op",
+            status="reconciled" if new_records else "no-op",
             on_disk=len(records),
-            already_recorded=len(records) - len(added),
-            added=len(added),
+            already_recorded=len(records) - len(new_records),
+            added=len(new_records),
         )
-        if dry_run or not added:
+        if dry_run or not new_records:
             return result
 
         entry["files"] = merged
