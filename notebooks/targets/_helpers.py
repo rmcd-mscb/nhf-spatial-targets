@@ -140,15 +140,38 @@ def discover_target_nc(
     return (raw if raw.exists() else None, filled if filled.exists() else None)
 
 
-def open_target_nc(path: Path) -> xr.Dataset:
+def open_target_nc(
+    path: Path,
+    *,
+    time: slice | tuple[str | pd.Timestamp, str | pd.Timestamp] | None = None,
+) -> xr.Dataset:
     """Open a target NC and detach from the file handle.
 
     Loads into memory and closes the underlying handle before return.
-    Targets are typically a few hundred MB (132 months × ~360k HRUs ×
-    3-4 vars × float32/int8) — fits comfortably for an interactive
-    notebook session.
+    Monthly targets are a few hundred MB (132 months × ~360k HRUs ×
+    3-4 vars × float32/int8) and fit comfortably for an interactive
+    notebook session, so the default ``time=None`` loads everything.
+
+    The **daily** SWE target is the exception: ~11 GB per file on the
+    gfv2 fabric (``time=16802 × nat_hru_id=361471`` for three vars), and
+    ``.load()`` on the whole thing OOMs a default-mem kernel (issue
+    #163). Pass ``time=`` to subset on-disk *before* materialising into
+    memory:
+
+        open_target_nc(path, time=("2009-10-01", "2010-09-30"))  # WY2010
+        open_target_nc(path, time=slice("2009-10-01", "2010-09-30"))
+
+    A 2-tuple is interpreted as the endpoints of a ``slice`` (inclusive,
+    label-based, the same convention as ``ds.sel(time=slice(a, b))``).
+    The netCDF4 auto-chunking puts ~431 days in each time-chunk, so a
+    one-water-year window reads ~1-2 time-chunks (~160-320 MB
+    compressed) rather than the full 11 GB.
     """
     with xr.open_dataset(path) as ds:
+        if time is not None:
+            if isinstance(time, tuple):
+                time = slice(*time)
+            ds = ds.sel(time=time)
         return ds.load()
 
 
