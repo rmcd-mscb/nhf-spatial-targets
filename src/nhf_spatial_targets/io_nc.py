@@ -53,9 +53,11 @@ _TIME_ENCODING = {
 def _fill_value_for(dtype: np.dtype) -> Any:
     """Layer-agnostic ``_FillValue`` policy keyed on the encoded dtype.
 
-    Floats use NaN; packed ``int16`` uses the project's ``-9999`` sentinel;
-    all other integer dtypes (notably the ``int8`` diagnostics) carry no fill
-    value, matching the pre-#165 ``targets/_common.py`` writer.
+    Floats use NaN and non-``int16`` integers (notably the ``int8``
+    diagnostics) carry no fill value — matching the pre-#165
+    ``targets/_common.py`` writer, which only ever wrote float32 and int8
+    encodings. Packed ``int16`` uses the project's ``-9999`` sentinel (the
+    SNODAS/aggregate-layer convention); the targets writer had no int16 path.
     """
     if np.issubdtype(dtype, np.floating):
         return dtype.type(np.nan)
@@ -135,9 +137,19 @@ def build_encoding(
         )
     if hru_dim is None:
         raise ValueError(f"hru_dim is required for layer={layer!r}")
+    # Fail loudly on a drifted/mistyped dim name. Without this guard the
+    # data-var loop below silently skips every variable and returns a dict
+    # with only time encoding — producing an unchunked, uncompressed NetCDF
+    # with no error, defeating this module's entire purpose.
+    if hru_dim not in ds.sizes:
+        raise ValueError(
+            f"hru_dim={hru_dim!r} not found in dataset dims {tuple(ds.sizes)} "
+            f"for layer={layer!r}; cannot build per-HRU chunking. Check that "
+            f"the project id_col matches the dataset."
+        )
 
     var_dtype = var_dtype or {}
-    n_hru = int(ds.sizes[hru_dim]) if hru_dim in ds.sizes else None
+    n_hru = int(ds.sizes[hru_dim])
     time_size = int(ds.sizes["time"]) if "time" in ds.sizes else None
     if timesteps_per_file is None and time_size is not None:
         timesteps_per_file = time_size
@@ -152,7 +164,13 @@ def build_encoding(
         if hru_dim not in da.dims:
             continue
         dtype = np.dtype(var_dtype.get(name, da.dtype))
-        chunk_hru = _chunk_hru(time_chunk, n_hru, dtype.itemsize, target_chunk_bytes)
+        # Size the HRU chunk against this variable's own time extent: a static
+        # per-HRU var (no time dim) chunks on HRU alone rather than carrying a
+        # phantom time factor that would under-fill the byte budget.
+        var_time_chunk = time_chunk if "time" in da.dims else 1
+        chunk_hru = _chunk_hru(
+            var_time_chunk, n_hru, dtype.itemsize, target_chunk_bytes
+        )
         chunksizes = tuple(
             time_chunk
             if dim == "time"

@@ -167,6 +167,39 @@ def test_unknown_layer_raises():
         build_encoding(ds, layer="bogus", hru_dim="nhm_id")
 
 
+def test_none_hru_dim_raises():
+    from nhf_spatial_targets.io_nc import build_encoding
+
+    ds = _make_aggregated_ds()
+    with pytest.raises(ValueError, match="hru_dim"):
+        build_encoding(ds, layer="aggregated", hru_dim=None)
+
+
+def test_absent_hru_dim_raises_loudly():
+    """A drifted/mistyped hru_dim must fail loudly, not silently skip chunking."""
+    from nhf_spatial_targets.io_nc import build_encoding
+
+    ds = _make_aggregated_ds()  # dim is ``nhm_id``
+    with pytest.raises(ValueError, match="nhm_X"):
+        build_encoding(ds, layer="aggregated", hru_dim="nhm_X", timesteps_per_file=365)
+
+
+def test_static_hru_only_var_fills_byte_budget():
+    """A var with hru_dim but no time dim chunks on HRU alone (no phantom time factor)."""
+    from nhf_spatial_targets.io_nc import build_encoding
+
+    ds = _make_aggregated_ds(n_time=365, n_hru=5_000)
+    # A static per-HRU diagnostic riding alongside the (time, hru) data var.
+    ds["hru_area"] = (("nhm_id",), np.ones(5_000, dtype="float32"))
+    enc = build_encoding(
+        ds, layer="aggregated", hru_dim="nhm_id", timesteps_per_file=365
+    )
+    # No time factor -> ceil(1 MiB / 4) = 262144, capped at the 5000-HRU fabric.
+    assert enc["hru_area"]["chunksizes"] == (5_000,)
+    # The (time, hru) var is unaffected by the static var's presence.
+    assert enc["ro"]["chunksizes"] == (365, math.ceil(1_048_576 / (365 * 4)))
+
+
 # --- atomic_to_netcdf ---------------------------------------------------
 
 
