@@ -713,6 +713,30 @@ def test_apply_cf_metadata_monthly():
     assert result.attrs["Conventions"] == "CF-1.6"
 
 
+def test_apply_cf_metadata_pins_proleptic_gregorian_time_encoding():
+    """Time encoding is pinned to proleptic_gregorian / float64 (issue #165 ST4)."""
+    from nhf_spatial_targets.fetch.consolidate import apply_cf_metadata
+
+    lat = np.arange(25.0, 50.0, 5.0)
+    lon = np.arange(-125.0, -65.0, 10.0)
+    time = pd.date_range("2010-01-15", periods=3, freq="MS")
+    ds = xr.Dataset(
+        {
+            "SoilM_0_10cm": (
+                ["time", "y", "x"],
+                np.random.rand(3, len(lat), len(lon)).astype(np.float32),
+            ),
+        },
+        coords={"time": time, "y": lat, "x": lon},
+    )
+
+    result = apply_cf_metadata(ds, "nldas_mosaic", "monthly")
+
+    assert result["time"].encoding["calendar"] == "proleptic_gregorian"
+    assert result["time"].encoding["dtype"] == "float64"
+    assert result["time"].encoding["units"] == "days since 1970-01-01"
+
+
 def test_apply_cf_metadata_daily_no_time_bnds():
     """apply_cf_metadata does not add time_bnds for daily data."""
     from nhf_spatial_targets.fetch.consolidate import apply_cf_metadata
@@ -1032,7 +1056,7 @@ def test_time_bnds_roundtrip_no_warning(tmp_path):
     raw = xr.open_dataset(out, decode_times=False)
     try:
         assert raw.time.attrs.get("units") == "days since 1970-01-01"
-        assert raw.time.attrs.get("calendar") == "standard"
+        assert raw.time.attrs.get("calendar") == "proleptic_gregorian"
         assert raw.time_bnds.dtype.kind == "i"
         # Bounds variable itself has no units attr per CF-1.6 §7.1 inheritance.
         assert "units" not in raw.time_bnds.attrs
