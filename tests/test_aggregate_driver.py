@@ -407,6 +407,63 @@ def test_aggregate_source_writes_multi_var_nc_and_manifest(tmp_path, tiny_fabric
     ]
 
 
+def test_atomic_write_netcdf_chunks_and_compresses_with_id_col(tmp_path):
+    """#165 ST3: id_col triggers io_nc aggregated chunking + compression.
+
+    Native float64 dtype is preserved (storage-only change), and the
+    grid-mapping container (``crs``) is left contiguous/uncompressed.
+    """
+    import math
+
+    import netCDF4
+
+    from nhf_spatial_targets.aggregate._driver import _atomic_write_netcdf
+
+    n_time, n_hru = 12, 50_000
+    times = pd.date_range("2000-01-01", periods=n_time, freq="MS")
+    rng = np.random.default_rng(0)
+    ds = xr.Dataset(
+        {
+            "ro": (("time", "hru_id"), rng.random((n_time, n_hru))),  # float64
+            "crs": (("hru_id",), np.zeros(n_hru, dtype="float64")),
+        },
+        coords={"time": times, "hru_id": np.arange(n_hru)},
+    )
+    ds["crs"].attrs["grid_mapping_name"] = "latitude_longitude"
+
+    out = tmp_path / "agg.nc"
+    _atomic_write_netcdf(ds, out, id_col="hru_id")
+
+    exp_hru = min(math.ceil(1_048_576 / (n_time * 8)), n_hru)  # 10923, float64
+    with netCDF4.Dataset(out) as nc:
+        assert tuple(nc.variables["ro"].chunking()) == (n_time, exp_hru)
+        assert nc.variables["ro"].filters()["zlib"] is True
+        assert nc.variables["ro"].dtype == np.float64  # native dtype preserved
+        # grid-mapping container is metadata — must stay untouched.
+        assert nc.variables["crs"].chunking() == "contiguous"
+        assert nc.variables["crs"].filters()["zlib"] is False
+
+
+def test_atomic_write_netcdf_plain_without_id_col(tmp_path):
+    """daymet/ssebop path: omitting id_col writes plain (no chunk/compression)."""
+    import netCDF4
+
+    from nhf_spatial_targets.aggregate._driver import _atomic_write_netcdf
+
+    ds = xr.Dataset(
+        {"ro": (("time", "hru_id"), np.ones((12, 1_000)))},
+        coords={
+            "time": pd.date_range("2000-01-01", periods=12, freq="MS"),
+            "hru_id": np.arange(1_000),
+        },
+    )
+    out = tmp_path / "plain.nc"
+    _atomic_write_netcdf(ds, out)
+    with netCDF4.Dataset(out) as nc:
+        assert nc.variables["ro"].filters()["zlib"] is False
+        assert nc.variables["ro"].chunking() == "contiguous"
+
+
 def test_aggregate_source_files_glob_supports_subdirectory(tmp_path, tiny_fabric):
     """files_glob accepts a directory component to handle multi-subdir
     datastores.

@@ -320,6 +320,7 @@ def aggregate_ssebop(
         _attach_cf_global_attrs(year_ds, _SOURCE_KEY, meta)
         # Canonical id_col-ascending row order on emission (issue #93).
         year_ds = year_ds.sortby(id_col)
+        # ssebop outputs are left as-is (#165 ST3): no added chunking/compression.
         _atomic_write_netcdf(year_ds, out_path)
         logger.info("ssebop: year %d: wrote %s", year, out_path)
         per_year_paths.append(out_path)

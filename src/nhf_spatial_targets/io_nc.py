@@ -163,6 +163,11 @@ def build_encoding(
     for name, da in ds.data_vars.items():
         if hru_dim not in da.dims:
             continue
+        # A CF grid-mapping container (e.g. ``crs``) may carry the hru_dim in
+        # some aggregated NCs, but it is metadata, not a data field — adding
+        # chunksizes/zlib/_FillValue would corrupt it. Leave it untouched.
+        if "grid_mapping_name" in da.attrs:
+            continue
         dtype = np.dtype(var_dtype.get(name, da.dtype))
         # Size the HRU chunk against this variable's own time extent: a static
         # per-HRU var (no time dim) chunks on HRU alone rather than carrying a

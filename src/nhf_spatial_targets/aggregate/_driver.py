@@ -301,17 +301,37 @@ def per_year_output_path(project: Project, source_key: str, year: int) -> Path:
     )
 
 
-def _atomic_write_netcdf(ds: xr.Dataset, path: Path) -> None:
-    """Atomically write a Dataset to disk via tempfile + rename."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".nc.tmp")
-    os.close(tmp_fd)
-    try:
-        ds.to_netcdf(tmp_path)
-        Path(tmp_path).replace(path)
-    except Exception:
-        Path(tmp_path).unlink(missing_ok=True)
-        raise
+def _atomic_write_netcdf(
+    ds: xr.Dataset, path: Path, *, id_col: str | None = None
+) -> None:
+    """Atomically write an aggregated Dataset via tempfile + rename.
+
+    When ``id_col`` is given, encoding is delegated to
+    :func:`io_nc.build_encoding` (``layer="aggregated"``) so the per-year NC is
+    zlib-compressed and chunked ``(time, chunk_hru)`` for fast
+    per-HRU-time-series reads (issue #165 ST3). Native variable dtypes are
+    preserved — the aggregated layer keeps the source's native units/values, so
+    no float64→float32 downcast happens here (that would be a values change,
+    not a storage-layer change), and the grid-mapping container (``crs``) is
+    left untouched.
+
+    When ``id_col`` is ``None`` the Dataset is written without added
+    encoding (the pre-#165 behavior). The daymet (zarr) and ssebop (STAC)
+    aggregators take this path: their outputs are produced from already-chunked
+    remote sources and are intentionally left as-is.
+    """
+    from nhf_spatial_targets.io_nc import atomic_to_netcdf, build_encoding
+
+    if id_col is not None:
+        encoding = build_encoding(
+            ds,
+            layer="aggregated",
+            hru_dim=id_col,
+            timesteps_per_file=ds.sizes.get("time"),
+        )
+    else:
+        encoding = None
+    atomic_to_netcdf(ds, path, encoding=encoding)
 
 
 def _migrate_legacy_layout(project: Project, source_key: str) -> None:
@@ -541,7 +561,7 @@ def aggregate_year(
     # downstream consumers a stable invariant.
     year_ds = year_ds.sortby(id_col)
 
-    _atomic_write_netcdf(year_ds, out_path)
+    _atomic_write_netcdf(year_ds, out_path, id_col=id_col)
     logger.info("%s: year %d: wrote %s", adapter.source_key, year, out_path)
     return out_path
 
