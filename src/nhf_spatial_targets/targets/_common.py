@@ -223,6 +223,24 @@ def shims_by_config_label(
     return out
 
 
+_AGG_READ_CHUNK_BYTES = 256 * 1024 * 1024
+
+
+def _read_chunk_hru(
+    n_time: int, itemsize: int, target_bytes: int = _AGG_READ_CHUNK_BYTES
+) -> int:
+    """HRU-dim dask chunk length for reading aggregated NCs (#165 ST3).
+
+    Reads use full-time chunks (``{"time": -1}``) so a file's on-disk time
+    chunk is never split (which would re-inflate the same compressed chunk on
+    every time slab). The HRU dim is chunked to ~``target_bytes`` per chunk to
+    keep per-chunk memory and the dask graph reasonable — deliberately larger
+    than the on-disk ~1 MiB HRU chunk, trading chunk granularity for a smaller
+    graph on a full-source read.
+    """
+    return max(1, target_bytes // (max(n_time, 1) * itemsize))
+
+
 def read_aggregated_source(
     project: Project,
     source_key: str,
@@ -257,9 +275,11 @@ def read_aggregated_source(
         ``(start_iso, end_iso)`` tuple, both inclusive (e.g.
         ``("2000-01-01", "2010-12-31")``).
     chunks
-        Forwarded to ``xr.open_mfdataset``. Defaults to
-        ``{"time": 12, project.id_col: -1}`` (one calendar year per chunk,
-        all HRUs in one chunk).
+        Forwarded to ``xr.open_mfdataset``. When ``None``, defaults to
+        ``{"time": -1, project.id_col: <chunk_hru>}`` — full time per chunk,
+        HRU dim chunked to ~256 MiB — to align reads with the columnar
+        on-disk layout written by the aggregator (#165 ST3). Pass an explicit
+        dict to override.
 
     Raises
     ------
@@ -281,7 +301,20 @@ def read_aggregated_source(
         )
 
     if chunks is None:
-        chunks = {"time": 12, project.id_col: -1}
+        # Align dask chunks to the new columnar on-disk layout (#165 ST3):
+        # full time per chunk so a file's on-disk time chunk is never split
+        # (splitting would force the compressor to re-inflate the same chunk
+        # on every time slab — ~30x amplification on a daily source), with the
+        # HRU dim chunked to ~256 MiB. Works for both the new chunked NCs and
+        # legacy contiguous NCs (the latter read as bounded strided slabs, not
+        # a whole-array load). open_mfdataset chunks per file along the concat
+        # dim, so ``{"time": -1}`` yields one time chunk per file — size the
+        # HRU chunk from one file's time length (probed cheaply from the first
+        # file) so each per-file chunk lands near the byte budget.
+        with xr.open_dataset(paths[0], engine="netcdf4") as probe:
+            n_time = int(probe.sizes.get("time", 1))
+            itemsize = probe[var].dtype.itemsize if var in probe.data_vars else 8
+        chunks = {"time": -1, project.id_col: _read_chunk_hru(n_time, itemsize)}
 
     ds = xr.open_mfdataset(
         [str(p) for p in paths],

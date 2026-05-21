@@ -373,6 +373,7 @@ def aggregate_daymet(
             year_ds.attrs["daymet_region"] = region
             # Canonical id_col-ascending row order on emission (issue #93).
             year_ds = year_ds.sortby(id_col)
+            # daymet outputs are left as-is (#165 ST3): no added chunking/compression.
             _atomic_write_netcdf(year_ds, out_path)
             logger.info("daymet: year %d: wrote %s", year, out_path)
             per_year_paths.append(out_path)

@@ -115,6 +115,22 @@ def test_integer_dtype_gets_shuffle_and_no_nan_fill():
     assert enc["n_sources"]["_FillValue"] is None
 
 
+def test_skips_grid_mapping_container_var():
+    """A CF grid_mapping container (e.g. ``crs``) must not be compressed/filled.
+
+    The aggregated layer carries a ``crs`` data var with the hru_dim; adding
+    chunksizes/zlib/_FillValue to a grid_mapping container corrupts it.
+    """
+    from nhf_spatial_targets.io_nc import build_encoding
+
+    ds = _make_aggregated_ds(n_time=12, n_hru=5_000)
+    ds["crs"] = (("nhm_id",), np.zeros(5_000, dtype="float64"))
+    ds["crs"].attrs["grid_mapping_name"] = "latitude_longitude"
+    enc = build_encoding(ds, layer="aggregated", hru_dim="nhm_id")
+    assert "crs" not in enc  # skipped entirely
+    assert "ro" in enc  # real data var still encoded
+
+
 def test_per_var_dtype_override():
     from nhf_spatial_targets.io_nc import build_encoding
 

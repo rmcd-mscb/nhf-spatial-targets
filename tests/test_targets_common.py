@@ -462,6 +462,38 @@ def test_write_target_nc_atomic_no_partial_on_failure(tmp_path: Path, monkeypatc
     assert not out.exists()
 
 
+def test_read_chunk_hru_sizes_to_byte_budget():
+    """HRU read-chunk shrinks as the time axis grows, capped at >=1 (#165 ST3)."""
+    from nhf_spatial_targets.targets._common import _read_chunk_hru
+
+    # 256 MiB budget, float64: daily multi-year -> a few thousand HRUs/chunk.
+    assert _read_chunk_hru(14_600, 8) == (256 * 1024 * 1024) // (14_600 * 8)
+    # Short monthly axis -> very wide HRU chunk.
+    assert _read_chunk_hru(12, 8) == (256 * 1024 * 1024) // (12 * 8)
+    # Never returns 0 even for an absurdly long axis.
+    assert _read_chunk_hru(10**9, 8) == 1
+
+
+def test_read_aggregated_source_uses_full_time_chunks(tmp_path: Path):
+    """Default read chunking is full-time columnar, not the old time-slab (#165 ST3)."""
+    from nhf_spatial_targets.targets._common import read_aggregated_source
+    from nhf_spatial_targets.workspace import load
+    from tests.conftest import make_minimal_project, write_year_nc
+
+    workdir = make_minimal_project(tmp_path)
+    src, var = "era5_land", "ro"
+    src_dir = workdir / "data" / "aggregated" / src
+    write_year_nc(src_dir / f"{src}_2000_agg.nc", 2000, var)
+    write_year_nc(src_dir / f"{src}_2001_agg.nc", 2001, var)
+
+    project = load(workdir)
+    da = read_aggregated_source(project, src, var, period=("2000-01-01", "2001-12-31"))
+    # open_mfdataset chunks per file along time, so each file's full 12-month
+    # span is one chunk — the on-disk time chunk is never split (no per-slab
+    # re-decompression). The old default split time into 12-step slabs.
+    assert da.chunksizes["time"] == (12, 12)
+
+
 def test_write_target_nc_applies_target_layer_chunking(tmp_path: Path):
     """write_target_nc delegates to io_nc.build_encoding (#165 ST2).
 
