@@ -163,9 +163,12 @@ def open_target_nc(
 
     A 2-tuple is interpreted as the endpoints of a ``slice`` (inclusive,
     label-based, the same convention as ``ds.sel(time=slice(a, b))``).
-    The netCDF4 auto-chunking puts ~431 days in each time-chunk, so a
-    one-water-year window reads ~1-2 time-chunks (~160-320 MB
-    compressed) rather than the full 11 GB.
+    A window outside the file's time range clips (or returns an empty
+    ``time`` dim) rather than raising. The netCDF4 build *currently*
+    auto-chunks the bound vars at ~431 days/time-chunk (not pinned — see
+    issue #163), so a one-water-year window reads roughly one to two
+    time-chunks (order hundreds of MB compressed) rather than the full
+    11 GB.
     """
     with xr.open_dataset(path) as ds:
         if time is not None:

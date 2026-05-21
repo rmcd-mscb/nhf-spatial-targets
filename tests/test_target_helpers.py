@@ -71,6 +71,8 @@ def test_open_target_nc_tuple_window_is_inclusive(helpers, daily_target_nc):
     assert times.max() == pd.Timestamp("2010-09-30")
     # WY2010 (Oct 1 2009 – Sep 30 2010) is 365 days.
     assert ds.sizes["time"] == 365
+    # The windowed path is also eagerly materialised (handle detached).
+    assert isinstance(ds["lower_bound"].data, np.ndarray)
 
 
 def test_open_target_nc_slice_window_matches_tuple(helpers, daily_target_nc):
@@ -91,3 +93,44 @@ def test_open_target_nc_window_contains_target_date(helpers, daily_target_nc):
     # The at-date choropleth panels do ds.sel(time=TARGET_DATE) — must hit.
     sel = ds.sel(time=target_date)
     assert sel.sizes == {"nat_hru_id": 5}
+
+
+def test_open_target_nc_subsets_before_load(helpers, daily_target_nc, monkeypatch):
+    """The window is applied on-disk *before* .load() — the point of #163.
+
+    Shape assertions alone can't catch a load-first regression
+    (``ds.load().sel(...)`` returns the same window), so spy on
+    ``xr.Dataset.load`` and assert it ran against the already-subset
+    dataset (365 days) rather than the full file (730 days).
+    """
+    seen: dict[str, int] = {}
+    orig_load = xr.Dataset.load
+
+    def spy_load(self, *args, **kwargs):
+        seen["time_size"] = self.sizes.get("time", 0)
+        return orig_load(self, *args, **kwargs)
+
+    monkeypatch.setattr(xr.Dataset, "load", spy_load)
+    helpers.open_target_nc(daily_target_nc, time=("2009-10-01", "2010-09-30"))
+    assert seen["time_size"] == 365  # not the full 730-day file
+
+
+def test_open_target_nc_window_outside_range_is_empty(helpers, daily_target_nc):
+    """A window entirely outside the file range clips to an empty time dim.
+
+    Pins the silent-empty contract: callers (e.g. an out-of-range
+    TARGET_DATE) get a 0-length time axis rather than an exception here
+    — the KeyError surfaces later at the at-date ``sel``, not in the
+    loader.
+    """
+    ds = helpers.open_target_nc(daily_target_nc, time=("2030-01-01", "2030-12-31"))
+    assert ds.sizes["time"] == 0
+
+
+def test_open_target_nc_window_clips_to_available_range(helpers, daily_target_nc):
+    """A window straddling the file's lower edge clips, not raises."""
+    # File starts 2009-10-01; ask from before that.
+    ds = helpers.open_target_nc(daily_target_nc, time=("2009-01-01", "2009-10-31"))
+    times = pd.DatetimeIndex(ds["time"].values)
+    assert times.min() == pd.Timestamp("2009-10-01")
+    assert times.max() == pd.Timestamp("2009-10-31")
