@@ -39,8 +39,9 @@ def test_aggregated_float_var_gets_chunks_and_compression():
     assert enc["ro"]["zlib"] is True
     assert enc["ro"]["complevel"] == 4
     assert enc["ro"]["dtype"] == "float32"
-    # floats do not get the byte-shuffle filter
-    assert enc["ro"].get("shuffle", False) is False
+    # floats get shuffle explicitly disabled (netCDF4 would default it True
+    # under zlib, so the key must be present, not merely omitted)
+    assert enc["ro"]["shuffle"] is False
     assert np.isnan(enc["ro"]["_FillValue"])
 
 
@@ -252,6 +253,7 @@ def test_on_disk_chunking_matches_encoding(tmp_path: Path):
     from nhf_spatial_targets.io_nc import atomic_to_netcdf, build_encoding
 
     ds = _make_aggregated_ds(n_time=365, n_hru=50_000)
+    ds["n_sources"] = (("time", "nhm_id"), np.ones(ds["ro"].shape, dtype="int8"))
     enc = build_encoding(
         ds, layer="aggregated", hru_dim="nhm_id", timesteps_per_file=365
     )
@@ -260,3 +262,8 @@ def test_on_disk_chunking_matches_encoding(tmp_path: Path):
 
     with netCDF4.Dataset(out) as nc:
         assert tuple(nc.variables["ro"].chunking()) == enc["ro"]["chunksizes"]
+        # shuffle policy must hold on disk, not just in the encoding dict:
+        # netCDF4 defaults shuffle=True under zlib, so the float must come
+        # back shuffle=False and the int8 shuffle=True.
+        assert nc.variables["ro"].filters()["shuffle"] is False
+        assert nc.variables["n_sources"].filters()["shuffle"] is True

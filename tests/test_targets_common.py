@@ -462,6 +462,51 @@ def test_write_target_nc_atomic_no_partial_on_failure(tmp_path: Path, monkeypatc
     assert not out.exists()
 
 
+def test_write_target_nc_applies_target_layer_chunking(tmp_path: Path):
+    """write_target_nc delegates to io_nc.build_encoding (#165 ST2).
+
+    Uses a fabric large enough that the per-HRU-time-series chunk formula
+    (chunk_hru = ceil(1 MiB / (n_time * 4))) differs from netCDF4's default
+    auto-chunking, so this asserts the policy actually reached HDF5.
+    """
+    import math
+
+    import netCDF4
+
+    from nhf_spatial_targets.targets._common import write_target_nc
+
+    n_time, n_hru = 12, 50_000
+    times = pd.date_range("2000-01-01", periods=n_time, freq="MS")
+    hrus = np.arange(1, n_hru + 1, dtype="int64")
+    rng = np.random.default_rng(0)
+    lower = rng.random((n_time, n_hru)).astype("float32")
+    ds = xr.Dataset(
+        {
+            "lower_bound": (("time", "nhm_id"), lower),
+            "upper_bound": (("time", "nhm_id"), lower + 1.0),
+            "n_sources": (("time", "nhm_id"), np.ones((n_time, n_hru), dtype="int8")),
+        },
+        coords={"time": times, "nhm_id": hrus},
+    )
+    out = tmp_path / "big_target.nc"
+    write_target_nc(ds, out, title="chunk test", sort_dim="nhm_id")
+
+    # chunk_hru is dtype-specific: float32 (4 B) caps the byte budget at ~21846
+    # HRUs; int8 (1 B) fits all 50000 HRUs in one sub-1-MiB chunk.
+    exp_f32 = min(math.ceil(1_048_576 / (n_time * 4)), n_hru)  # 21846
+    exp_i8 = min(math.ceil(1_048_576 / (n_time * 1)), n_hru)  # 50000
+    with netCDF4.Dataset(out) as nc:
+        for v in ("lower_bound", "upper_bound"):
+            assert tuple(nc.variables[v].chunking()) == (n_time, exp_f32)
+        assert tuple(nc.variables["n_sources"].chunking()) == (n_time, exp_i8)
+        # dtype + compression policy preserved from the pre-#165 writer.
+        assert nc.variables["lower_bound"].dtype == np.float32
+        assert nc.variables["n_sources"].dtype == np.int8
+        # Integer diagnostics gain the byte-shuffle filter under the new policy.
+        assert nc.variables["n_sources"].filters()["shuffle"] is True
+        assert nc.variables["lower_bound"].filters()["shuffle"] is False
+
+
 def test_reindex_to_month_start_rejects_non_ms_freq():
     """A freq='ME' master_index must raise, not silently produce all-NaN."""
     from nhf_spatial_targets.targets._common import reindex_to_month_start

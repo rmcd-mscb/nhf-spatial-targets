@@ -185,9 +185,11 @@ def build_encoding(
             "complevel": compression_level,
             "chunksizes": chunksizes,
             "_FillValue": _fill_value_for(dtype),
+            # Set shuffle explicitly for both kinds: netCDF4-python defaults
+            # shuffle=True whenever zlib is on, so omitting the key for floats
+            # would silently enable it on disk, contradicting the policy.
+            "shuffle": bool(np.issubdtype(dtype, np.integer)),
         }
-        if np.issubdtype(dtype, np.integer):
-            var_enc["shuffle"] = True
         encoding[name] = var_enc
 
     for tvar in ("time", "time_bnds"):

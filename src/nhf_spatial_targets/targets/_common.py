@@ -587,6 +587,37 @@ def compute_hru_area_and_centroids(project: Project) -> "pd.DataFrame":
     return df
 
 
+def _target_encoding_without_chunks(
+    ds: xr.Dataset, var_dtype: dict[str, str]
+) -> dict[str, dict]:
+    """Target encoding (dtype/zlib/fill/time) minus per-HRU ``chunksizes``.
+
+    Only used by :func:`write_target_nc` when no ``sort_dim``/``id_col`` is
+    supplied, so the per-HRU chunk dimension is unknown and HDF5 auto-chunks.
+    Reuses ``io_nc``'s fill-value and time policy so this fallback stays
+    consistent with the chunked ``build_encoding`` path.
+    """
+    from nhf_spatial_targets.io_nc import _TIME_ENCODING, _fill_value_for
+
+    encoding: dict[str, dict] = {}
+    for name, dt in var_dtype.items():
+        dtype = np.dtype(dt)
+        enc: dict = {
+            "dtype": str(dtype),
+            "zlib": True,
+            "complevel": 4,
+            "_FillValue": _fill_value_for(dtype),
+            # Explicit shuffle: netCDF4 defaults it True under zlib (see
+            # io_nc.build_encoding), so omitting it for floats would enable it.
+            "shuffle": bool(np.issubdtype(dtype, np.integer)),
+        }
+        encoding[name] = enc
+    for tvar in ("time", "time_bnds"):
+        if tvar in ds.variables:
+            encoding[tvar] = dict(_TIME_ENCODING)
+    return encoding
+
+
 def write_target_nc(
     ds: xr.Dataset,
     output_path: Path,
@@ -600,10 +631,15 @@ def write_target_nc(
     coordinates (``time_bnds``, ``centroid_lat``, ``centroid_lon``), and
     per-variable attrs (``units``, ``long_name``, ``cell_methods``, etc.).
     This helper sets the global ``Conventions`` / ``title`` / ``history`` /
-    ``software_version`` attrs, applies float32+zlib encoding for the bound
-    variables and int8+zlib encoding for the diagnostic variables, and
-    writes via tempfile + rename so a partial NetCDF never lands at the
-    final path.
+    ``software_version`` attrs, then delegates encoding to
+    :func:`io_nc.build_encoding` (``layer="target"``): float32+zlib bounds,
+    int8+zlib diagnostics, the pinned ``proleptic_gregorian`` time axis, and
+    per-HRU-time-series ``chunksizes`` so a single HRU's calibration read is
+    one ~1 MiB chunk (issue #165 ST2). The write goes through
+    :func:`io_nc.atomic_to_netcdf` (tempfile + rename) so a partial NetCDF
+    never lands at the final path. When ``sort_dim`` is omitted the HRU
+    chunk dim is unknown, so the same dtype/compression/time policy is applied
+    without per-HRU chunking.
 
     When ``sort_dim`` is given, the Dataset is sorted ascending on that
     dimension before write. Target builders pass ``project.id_col`` here
@@ -633,43 +669,30 @@ def write_target_nc(
     if extra_global_attrs:
         ds.attrs.update(extra_global_attrs)
 
-    encoding: dict = {}
-    for v in ("lower_bound", "upper_bound"):
-        if v in ds.data_vars:
-            encoding[v] = {
-                "dtype": "float32",
-                "zlib": True,
-                "complevel": 4,
-                "_FillValue": np.float32("nan"),
-            }
-    for v in ("n_sources", "nn_filled"):
-        if v in ds.data_vars:
-            encoding[v] = {
-                "dtype": "int8",
-                "zlib": True,
-                "complevel": 4,
-                "_FillValue": None,
-            }
-    if "time" in ds.coords or "time" in ds.dims or "time" in ds.variables:
-        encoding["time"] = {
-            "dtype": "float64",
-            "units": "days since 1970-01-01 00:00:00",
-            "calendar": "proleptic_gregorian",
-        }
-    if "time_bnds" in ds.variables:
-        encoding["time_bnds"] = {
-            "dtype": "float64",
-            "units": "days since 1970-01-01 00:00:00",
-            "calendar": "proleptic_gregorian",
-        }
+    from nhf_spatial_targets.io_nc import atomic_to_netcdf, build_encoding
 
-    tmp = output_path.with_suffix(output_path.suffix + ".tmp")
-    try:
-        ds.to_netcdf(tmp, format="NETCDF4", encoding=encoding)
-        tmp.rename(output_path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
+    # Pin the on-disk dtype for each known target var: float32 bounds, int8
+    # diagnostics. build_encoding derives _FillValue / shuffle from the dtype
+    # (NaN + no-shuffle for floats, no-fill + shuffle for the int8 diagnostics).
+    target_dtypes = {
+        v: "float32" for v in ("lower_bound", "upper_bound") if v in ds.data_vars
+    }
+    target_dtypes.update(
+        {v: "int8" for v in ("n_sources", "nn_filled") if v in ds.data_vars}
+    )
+
+    if sort_dim is not None:
+        encoding = build_encoding(
+            ds, layer="target", hru_dim=sort_dim, var_dtype=target_dtypes
+        )
+    else:
+        # No id_col known — production target builders always pass sort_dim, so
+        # this is only the bare ``write_target_nc(ds, out, title=...)`` path.
+        # Apply the same dtype/compression/time policy minus per-HRU chunking
+        # (HDF5 auto-chunks), since the HRU dim name is unavailable here.
+        encoding = _target_encoding_without_chunks(ds, target_dtypes)
+
+    atomic_to_netcdf(ds, output_path, encoding=encoding)
     logger.info("Wrote %s (%.1f MB)", output_path, output_path.stat().st_size / 1e6)
 
 
