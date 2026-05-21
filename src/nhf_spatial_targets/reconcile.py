@@ -12,12 +12,12 @@ import hashlib
 from pathlib import Path
 
 
-def _record_identity(rec: dict) -> tuple[str, object]:
+def _record_identity(rec: dict) -> tuple[str, str | int]:
     """Stable dedupe identity for a file record: year if present, else path."""
     if "year" in rec:
         return ("year", int(rec["year"]))
     if "path" in rec:
-        return ("path", rec["path"])
+        return ("path", str(rec["path"]))
     raise ValueError(f"reconcile record lacks both 'year' and 'path': {rec!r}")
 
 
@@ -31,7 +31,7 @@ def _gap_fill(
     (no year/path) are tolerated — they stay in ``merged`` and never block
     an append.
     """
-    seen: set[tuple[str, object]] = set()
+    seen: set[tuple[str, str | int]] = set()
     for r in existing:
         try:
             seen.add(_record_identity(r))
