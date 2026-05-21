@@ -9,7 +9,9 @@ downgraded to ``reconciled``.
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
+import logging
 import os
 import tempfile
 from dataclasses import dataclass
@@ -25,6 +27,8 @@ try:
     _HAVE_FLOCK = True
 except ImportError:  # pragma: no cover - Windows
     _HAVE_FLOCK = False
+
+logger = logging.getLogger(__name__)
 
 
 def _record_identity(rec: dict) -> tuple[str, str | int]:
@@ -153,3 +157,46 @@ def _apply_records(
         manifest["sources"][source_key] = entry
         _atomic_write(manifest_path, manifest)
     return result
+
+
+# source_key -> "module:function". Imported lazily so reconciling one source
+# doesn't pull in every fetch module's heavy deps (earthaccess, cdsapi).
+_RECONCILERS: dict[str, str] = {
+    "era5_land": "nhf_spatial_targets.fetch.era5_land:reconcile",
+    "mod16a2_v061": "nhf_spatial_targets.fetch.modis:reconcile_mod16a2",
+}
+
+
+def _call_hook(spec: str, project: Project, *, checksum: bool) -> list[dict]:
+    module_name, func_name = spec.split(":")
+    module = importlib.import_module(module_name)
+    func = getattr(module, func_name)
+    return func(project, checksum=checksum)
+
+
+def reconcile_manifest(
+    project: Project,
+    *,
+    sources: list[str] | None = None,
+    dry_run: bool = False,
+    checksum: bool = False,
+) -> list[SourceReconcileResult]:
+    """Backfill manifest.json from the datastore for the requested sources.
+
+    ``sources=None`` means every catalog source (those without a registered
+    reconcile hook are reported with status ``no-hook``). Gap-fill only; see
+    module docstring.
+    """
+    keys = sources if sources else list(_catalog.sources().keys())
+    results: list[SourceReconcileResult] = []
+    for key in keys:
+        spec = _RECONCILERS.get(key)
+        if spec is None:
+            results.append(SourceReconcileResult(key, "no-hook"))
+            continue
+        records = _call_hook(spec, project, checksum=checksum)
+        if not records:
+            results.append(SourceReconcileResult(key, "empty"))
+            continue
+        results.append(_apply_records(project, key, records, dry_run=dry_run))
+    return results

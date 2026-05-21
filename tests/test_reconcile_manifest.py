@@ -130,3 +130,51 @@ def test_apply_records_noop_when_all_present_does_not_rewrite(tmp_path):
     assert result.status == "no-op"
     assert result.added == 0
     assert (tmp_path / "manifest.json").read_text() == before
+
+
+def test_reconcile_manifest_dispatches_registered_hooks(tmp_path, monkeypatch):
+    project = _make_project(tmp_path)
+
+    def fake_hook(proj, *, checksum=False):
+        return [{"year": 2020, "path": "p", "provenance": "reconciled"}]
+
+    # Register a fake hook under a real catalog key.
+    monkeypatch.setattr(
+        reconcile,
+        "_RECONCILERS",
+        {"mod16a2_v061": "tests.test_reconcile_manifest:_HOOK"},
+    )
+    monkeypatch.setattr(
+        reconcile, "_call_hook", lambda spec, proj, *, checksum: fake_hook(proj)
+    )
+
+    results = reconcile.reconcile_manifest(
+        project, sources=["mod16a2_v061"], dry_run=False
+    )
+    assert len(results) == 1
+    assert results[0].status == "reconciled"
+    assert results[0].added == 1
+
+
+def test_reconcile_manifest_reports_no_hook_for_unregistered_source(
+    tmp_path, monkeypatch
+):
+    project = _make_project(tmp_path)
+    monkeypatch.setattr(reconcile, "_RECONCILERS", {})
+    results = reconcile.reconcile_manifest(
+        project, sources=["era5_land"], dry_run=False
+    )
+    assert results[0].status == "no-hook"
+
+
+def test_reconcile_manifest_reports_empty_when_hook_returns_nothing(
+    tmp_path, monkeypatch
+):
+    project = _make_project(tmp_path)
+    monkeypatch.setattr(reconcile, "_RECONCILERS", {"era5_land": "x:y"})
+    monkeypatch.setattr(reconcile, "_call_hook", lambda spec, proj, *, checksum: [])
+    results = reconcile.reconcile_manifest(
+        project, sources=["era5_land"], dry_run=False
+    )
+    assert results[0].status == "empty"
+    assert not (tmp_path / "manifest.json").exists()
