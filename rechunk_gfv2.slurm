@@ -32,12 +32,18 @@
 set -euo pipefail
 export PYTHONUNBUFFERED=1
 
-# REPO_DIR defaults to the #165 worktree (rechunk is on main; the worktree has
-# the code + a warm pixi env). Override to a main checkout if you prefer.
-REPO_DIR="${REPO_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/nhf-spatial-targets/.worktrees/feature-165}"
+# REPO_DIR defaults to the repo this script lives in (resolved from the script
+# path), so it works from any checkout. Override to point at a different
+# checkout if you prefer. The checkout must have the #165 rechunk command.
+REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && git rev-parse --show-toplevel)}"
 PROJECT_DIR="${PROJECT_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2-spatial-targets}"
 
 cd "$REPO_DIR" || { echo "ERROR: REPO_DIR=$REPO_DIR not found" >&2; exit 1; }
+[ -f src/nhf_spatial_targets/rechunk.py ] || {
+    echo "ERROR: $REPO_DIR lacks the #165 rechunk command. Checkout main or" \
+         "rebase your branch onto origin/main first." >&2
+    exit 1
+}
 
 # Source keys = aggregated/ subdir names. daymet/ssebop excluded by design.
 SOURCES=(
