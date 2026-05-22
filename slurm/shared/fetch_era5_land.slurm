@@ -26,7 +26,7 @@
 # Usage:
 #   mkdir -p logs
 #   export PROJECT_DIR=/path/to/your/project
-#   sbatch fetch_era5_land.slurm
+#   sbatch slurm/shared/fetch_era5_land.slurm
 #
 # To change the number of workers (must edit BOTH --array and N_WORKERS):
 #   Edit  --array=0-2  and  N_WORKERS=3  below for 3 workers, etc.
@@ -35,7 +35,7 @@
 # Completed years are detected from manifest.json + on-disk file presence.
 #
 # To fetch a subset of years only:
-#   PERIOD=2000/2010 sbatch fetch_era5_land.slurm
+#   PERIOD=2000/2010 sbatch slurm/shared/fetch_era5_land.slurm
 #
 # GOTCHA — `sd` (snow depth water equivalent) backfill on old projects:
 #   ERA5-Land grew a 4th variable `sd` in PR #100 (SWE category fetch
@@ -62,7 +62,7 @@ export PYTHONUNBUFFERED=1
 N_WORKERS=4
 
 REPO_DIR="${REPO_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/nhf-spatial-targets}"
-PROJECT_DIR="${PROJECT_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2-spatial-targets}"
+PROJECT_DIR="${PROJECT_DIR:?set PROJECT_DIR to the target project dir, e.g. PROJECT_DIR=/caldera/.../gfv2-spatial-targets}"
 PERIOD="${PERIOD:-1979/2025}"
 
 echo "=== ERA5-Land fetch: worker ${SLURM_ARRAY_TASK_ID}/${N_WORKERS} ==="

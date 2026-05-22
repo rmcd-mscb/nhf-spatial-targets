@@ -56,9 +56,10 @@ provenance in `manifest.json`.
    ```
 
    Without `--period`, ~125 per-year aggregated NetCDFs are written
-   (1895/96 through 2020). The HPC SLURM script `agg_all.slurm`
-   passes `1979/2020` for the mwbm-climgrid task by default; edit
-   `AGG_PERIODS[10]` to change it.
+   (1895/96 through 2020). The HPC aggregation array
+   (`slurm/shared/agg_all.body.sh`, sourced by the per-fabric
+   `agg_all_<fabric>.slurm`) passes `1979/2020` for the mwbm-climgrid task by
+   default; edit `AGG_PERIODS[11]` to change it.
 
 ## Sharing across projects
 

@@ -32,10 +32,10 @@
 # Usage:
 #   mkdir -p logs
 #   export PROJECT_DIR=/path/to/oregon-project
-#   sbatch fetch_margulis_wus_sr.slurm
+#   sbatch slurm/project_or/fetch_margulis_wus_sr.slurm
 #
 # To fetch a subset of years only:
-#   PERIOD=2000/2010 sbatch fetch_margulis_wus_sr.slurm
+#   PERIOD=2000/2010 sbatch slurm/project_or/fetch_margulis_wus_sr.slurm
 
 set -euo pipefail
 
@@ -45,7 +45,7 @@ set -euo pipefail
 export PYTHONUNBUFFERED=1
 
 REPO_DIR="${REPO_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/nhf-spatial-targets}"
-PROJECT_DIR="${PROJECT_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2-spatial-targets}"
+PROJECT_DIR="${PROJECT_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/or-spatial-targets}"
 PERIOD="${PERIOD:-1985/2021}"
 
 echo "=== Margulis WUS-SR fetch ==="

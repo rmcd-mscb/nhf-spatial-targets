@@ -1,58 +1,27 @@
-#!/bin/bash
-#SBATCH --job-name=nhf-agg
-#SBATCH --account=impd
-#SBATCH --partition=cpu
-#SBATCH --array=0-13
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=1
-#SBATCH --mem=128G
-#SBATCH --time=24:00:00
-#SBATCH --output=logs/agg_%a_%A.out
-#SBATCH --error=logs/agg_%a_%A.err
-
-# NHF Spatial Targets — parallel aggregation array (tier-1 + tier-2)
-# Submits one SLURM job per aggregation source (14 total). SSEBop is the
-# remote-STAC aggregator and has its own separate script (agg_ssebop.slurm).
-# Daymet has its own script too (agg_daymet.slurm) because it requires
-# a --region argument (no useful default — projects pick na/hi/pr based
-# on their fabric) plus an operator-staged zarr root.
-# Each job aggregates independently; they can run concurrently on separate
-# compute nodes.
+# Shared body for the per-fabric aggregation array wrappers
+# (slurm/project_*/agg_all_*.slurm). NOT submitted directly — it is `source`d
+# by a wrapper that has already declared the #SBATCH headers and set
+# PROJECT_DIR + REPO_DIR. Keeping the task array + dispatch here means the two
+# fabrics differ only in their wrapper's PROJECT_DIR default.
 #
-# Prerequisites:
-#   - Datastore already hydrated (see fetch_all.slurm)
-#   - `nhf-targets validate` has produced $PROJECT_DIR/fabric.json
-#
-# Usage (REPO_DIR and PROJECT_DIR are overridable via environment):
-#   mkdir -p logs                         # required — SLURM refuses to start
-#                                         # with no log output if logs/ is missing
-#   export PROJECT_DIR=/path/to/your/project
-#   sbatch agg_all.slurm
-#
-# Run a single source by index (e.g. MOD10C1 = 9):
-#   sbatch --array=9 agg_all.slurm
-#
-# Bump memory for a MODIS rerun:
-#   sbatch --array=8-9 --mem=256G agg_all.slurm
+# Submits one SLURM array task per aggregation source (14 total). SSEBop is the
+# remote-STAC aggregator and has its own script (slurm/shared/agg_ssebop.slurm).
+# Daymet has its own script too (slurm/shared/agg_daymet.slurm) because it
+# requires a --region argument plus an operator-staged zarr root.
 #
 # Override spatial batch size (default 10000 HRUs/batch, tuned for 128 GB):
-#   BATCH_SIZE=2500 sbatch agg_all.slurm
+#   BATCH_SIZE=2500 sbatch slurm/project_<fabric>/agg_all_<fabric>.slurm
 
-set -euo pipefail
-
-# Flush Python stdout per-line so slurm logs (--output=...) update in
-# real time instead of dumping batches when the 8 KB block buffer fills.
-# Slow workloads can otherwise look frozen for tens of minutes.
+# Flush Python stdout per-line so slurm logs (--output=...) update in real time
+# instead of dumping batches when the 8 KB block buffer fills.
 export PYTHONUNBUFFERED=1
 
-# Repo and project directories — override via environment, or edit these
-# defaults for your site. The repo default mirrors the USGS Hovenweep path;
-# $PROJECT_DIR must be a project directory created by `nhf-targets init`.
-REPO_DIR="${REPO_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/nhf-spatial-targets}"
-PROJECT_DIR="${PROJECT_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2-spatial-targets}"
 BATCH_SIZE="${BATCH_SIZE:-10000}"
 
-cd "$REPO_DIR" || { echo "ERROR: REPO_DIR=$REPO_DIR not found" >&2; exit 1; }
+cd "$REPO_DIR" || {
+    echo "ERROR: REPO_DIR=$REPO_DIR not found" >&2
+    exit 1
+}
 
 # Map array index -> pixi task name
 AGG_TASKS=(
@@ -74,9 +43,8 @@ AGG_TASKS=(
 
 # Optional --period override per task. Empty string means "no clip"; the
 # aggregator iterates every year present in the source files. Used by
-# monolithic single-file sources (mwbm-climgrid: 1895-2020 in one NC)
-# where the fetch period is provenance-only and can't subset bytes —
-# clip at agg time instead. Indices align with AGG_TASKS.
+# monolithic single-file sources (mwbm-climgrid: 1895-2020 in one NC) where the
+# fetch period is provenance-only and can't subset bytes — clip at agg time.
 AGG_PERIODS=(
     ""              # 0  era5-land
     ""              # 1  gldas
@@ -94,7 +62,7 @@ AGG_PERIODS=(
     ""              # 13 margulis-wus-sr (1985-2020 on disk; clip via --period if desired)
 )
 
-if (( SLURM_ARRAY_TASK_ID < 0 || SLURM_ARRAY_TASK_ID >= ${#AGG_TASKS[@]} )); then
+if ((SLURM_ARRAY_TASK_ID < 0 || SLURM_ARRAY_TASK_ID >= ${#AGG_TASKS[@]})); then
     echo "ERROR: SLURM_ARRAY_TASK_ID=$SLURM_ARRAY_TASK_ID out of range [0, ${#AGG_TASKS[@]})" >&2
     exit 2
 fi

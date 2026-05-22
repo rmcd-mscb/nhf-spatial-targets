@@ -5,8 +5,8 @@ executes it via ``jupyter nbconvert --execute --inplace``, and lets the
 notebooks' embedded ``save_figure`` calls populate
 ``docs/figures/{consolidated,aggregated}/``.
 
-The startup hook is the same trick used by inspect_aggregated.slurm /
-inspect_consolidated.slurm: a temp file is written to disk and exported via
+The startup hook is the same trick used by slurm/shared/inspect_aggregated.slurm
+/ slurm/shared/inspect_consolidated.slurm: a temp file is written to disk and exported via
 ``PYTHONSTARTUP`` so the executing kernel sets ``_helpers.SAVE_FIGURES = True``
 before any plotting cell runs.
 
@@ -16,8 +16,8 @@ Usage::
     pixi run -e dev render-figures-consolidated # 5 consolidated only
     pixi run -e dev render-figures-aggregated   # 5 aggregated only
 
-For HPC-scale memory, prefer ``sbatch inspect_consolidated.slurm`` /
-``sbatch inspect_aggregated.slurm`` — those run the same nbconvert command
+For HPC-scale memory, prefer ``sbatch slurm/shared/inspect_consolidated.slurm`` /
+``sbatch slurm/shared/inspect_aggregated.slurm`` — those run the same nbconvert command
 under SLURM with 128–192 GB of RAM per task.
 """
 

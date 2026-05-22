@@ -54,7 +54,7 @@ The fetch module constructs daily URLs from each date and streams the
 - **~24 GB RAM per worker** for the consolidation step. A full year of
   CONUS SNODAS is `(365, 3351, 6935)` int16 = ~17 GB held as a single
   numpy array while the year NC is being assembled; peak RSS during
-  `to_netcdf` runs higher. The default `fetch_snodas.slurm` memory
+  `to_netcdf` runs higher. The default `slurm/shared/fetch_snodas.slurm` memory
   grant must accommodate this — bump `--mem` per worker if a SLURM
   array job OOM-kills during consolidation.
 
@@ -70,7 +70,7 @@ nhf-targets fetch snodas \
 Or via the SLURM array job:
 
 ```bash
-sbatch fetch_snodas.slurm   # 4-worker array by default
+sbatch slurm/shared/fetch_snodas.slurm   # 4-worker array by default
 ```
 
 The command:
@@ -131,7 +131,7 @@ so parallel workers do not lose each other's year records.
 Operator scenario after this PR merges: the 2003–2024 raw corpus is
 already on disk from PRs #100 / #103 / #106 / #108 but no per-year
 daily NCs exist. The next run of `fetch_snodas` (or
-`sbatch fetch_snodas.slurm`) consolidates every year-already-on-disk
+`sbatch slurm/shared/fetch_snodas.slurm`) consolidates every year-already-on-disk
 **without re-downloading**:
 
 1. The completion check now requires both `n_granules > 0` AND a
@@ -205,7 +205,7 @@ phases run in straight metric math. See
 [CRS-cost note in the transformation-pipeline doc](../architecture/transformation-pipeline.md#operational-cost-source-crs-vs-aggregator-cost)
 for the breakdown. Issue #121 tracks a pre-projection optimization.
 
-## SLURM wiring (`agg_all.slurm` array index 10)
+## SLURM wiring (`slurm/project_<fabric>/agg_all_<fabric>.slurm` array index 10)
 
 The slurm array script runs SNODAS in parallel with the other
 tier-1/tier-2 sources. Default `--batch-size=10000` (tuned for 128 GB

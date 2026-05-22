@@ -18,10 +18,10 @@
 #   mkdir -p logs
 #   export REPO_DIR=/path/to/nhf-spatial-targets
 #   export PROJECT_DIR=/path/to/your/project
-#   sbatch fetch_all.slurm
+#   sbatch slurm/shared/fetch_all.slurm
 #
 # To run a single source only (e.g. index 2 = merra2):
-#   sbatch --array=2 fetch_all.slurm
+#   sbatch --array=2 slurm/shared/fetch_all.slurm
 #
 # Force re-fetch (bypasses the manifest-based year-skip; the entry in
 # manifest.json is overwritten on completion). Only applies to sources
@@ -31,7 +31,7 @@
 # log line.
 #
 #   export FORCE=1
-#   sbatch --array=8 fetch_all.slurm   # MOD16A2 only, force re-fetch
+#   sbatch --array=8 slurm/shared/fetch_all.slurm   # MOD16A2 only, force re-fetch
 #
 # Use this after a pipeline change has invalidated the existing
 # consolidated NCs (e.g. PR #88's MOD16A2 fill-mask fix).
@@ -60,7 +60,7 @@ export PYTHONUNBUFFERED=1
 # defaults for your site. The repo default mirrors the USGS Hovenweep path;
 # $PROJECT_DIR must be a project directory created by `nhf-targets init`.
 REPO_DIR="${REPO_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/nhf-spatial-targets}"
-PROJECT_DIR="${PROJECT_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2-spatial-targets}"
+PROJECT_DIR="${PROJECT_DIR:?set PROJECT_DIR to the target project dir, e.g. PROJECT_DIR=/caldera/.../gfv2-spatial-targets}"
 
 cd "$REPO_DIR"
 
