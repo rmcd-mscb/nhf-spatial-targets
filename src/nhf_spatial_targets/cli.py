@@ -287,6 +287,86 @@ def rechunk(
         sys.exit(1)
 
 
+@app.command(name="reconcile-manifest")
+def reconcile_manifest_cmd(
+    workdir: Annotated[
+        Path,
+        Parameter(
+            name=["--project-dir", "-d"],
+            help="Project created by 'nhf-targets init'.",
+        ),
+    ],
+    source: Annotated[
+        list[str] | None,
+        Parameter(
+            name=["--source"],
+            help="Catalog source key to reconcile (repeatable). Default: all.",
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        Parameter(name=["--dry-run"], help="Report what would change; write nothing."),
+    ] = False,
+    checksum: Annotated[
+        bool,
+        Parameter(name=["--checksum"], help="Compute sha256 for each record (slow)."),
+    ] = False,
+):
+    """Backfill manifest.json from consolidated NCs already in the datastore.
+
+    Use after creating a new project against a datastore that another project
+    already populated. Adds 'provenance: reconciled' file records for sources
+    found on disk but missing from this project's manifest; never overwrites
+    existing records. See docs/architecture/reconcile-manifest.md.
+    """
+    from rich.console import Console
+    from rich.table import Table
+
+    from nhf_spatial_targets import workspace
+    from nhf_spatial_targets.reconcile import reconcile_manifest
+
+    console = Console()
+    if not workdir.exists():
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
+        sys.exit(2)
+
+    try:
+        project = workspace.load(workdir)
+        results = reconcile_manifest(
+            project, sources=source, dry_run=dry_run, checksum=checksum
+        )
+    except (FileNotFoundError, ValueError, KeyError, OSError) as e:
+        print(f"reconcile-manifest failed: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    title = (
+        "reconcile-manifest (dry run — no changes written)"
+        if dry_run
+        else "reconcile-manifest"
+    )
+    table = Table(title=title)
+    table.add_column("source", style="bold")
+    table.add_column("status")
+    table.add_column("on disk", justify="right")
+    table.add_column("already recorded", justify="right")
+    table.add_column("added", justify="right")
+    for r in results:
+        table.add_row(
+            r.source_key,
+            r.status,
+            str(r.on_disk),
+            str(r.already_recorded),
+            str(r.added),
+        )
+    console.print(table)
+
+    total_added = sum(r.added for r in results)
+    verb = "would add" if dry_run else "added"
+    console.print(
+        f"[bold green]{verb} {total_added} reconciled record(s).[/bold green]"
+    )
+
+
 @app.command
 def init(
     workdir: Annotated[
