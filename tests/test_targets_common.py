@@ -1355,6 +1355,110 @@ def test_stitch_applies_canonical_attrs_and_history(tmp_path: Path):
         assert "stitched from 1 per-year NCs" in ds.attrs["history"]
 
 
+def test_stitch_writes_columnar_chunks_and_preserves_values(tmp_path: Path):
+    """Stitched output is columnar (full-time, chunk_hru) + value-correct (#165 ST3b)."""
+    import math
+
+    import netCDF4
+
+    from nhf_spatial_targets.targets._common import stitch_year_chunks_to_target
+
+    inter = tmp_path / "intermediates"
+    _write_year_chunk_nc(inter / "swe_targets_2003.nc", 2003, bound_value=2.0)
+    _write_year_chunk_nc(inter / "swe_targets_2004.nc", 2004, bound_value=2.0)
+
+    out = tmp_path / "swe_targets.nc"
+    stitch_year_chunks_to_target(
+        sorted(inter.glob("swe_targets_*.nc")),
+        out,
+        title="t",
+        extra_global_attrs=None,
+        sort_dim="nhm_id",
+    )
+
+    n_time = 731  # 365 + 366
+    chunk_hru = min(math.ceil(1_048_576 / (n_time * 4)), 3)  # capped at 3 HRUs
+    with netCDF4.Dataset(out) as nc:
+        # Time axis whole within a chunk → per-HRU calibration read is 1 chunk.
+        assert tuple(nc.variables["lower_bound"].chunking()) == (n_time, chunk_hru)
+        assert nc.variables["lower_bound"].filters()["zlib"] is True
+        assert nc.variables["lower_bound"].filters()["shuffle"] is False
+        assert nc.variables["n_sources"].filters()["shuffle"] is True
+    with xr.open_dataset(out) as ds:
+        assert float(ds["lower_bound"].isel(time=0, nhm_id=0)) == 2.0
+        assert float(ds["upper_bound"].isel(time=0, nhm_id=0)) == 3.0
+
+
+def test_stitch_columnar_preserves_distinct_values_and_nn_filled(tmp_path: Path):
+    """Multi-HRU-chunk columnar stitch preserves distinct per-cell values + nn_filled int8.
+
+    The constant-fill single-chunk case can't catch a transpose/misalignment;
+    this uses distinct per-(time, HRU) values and enough HRUs to force >=2 HRU
+    chunks, and exercises the nn_filled int8 path (the second swe.py stitch call).
+    """
+    import math
+
+    import netCDF4
+
+    from nhf_spatial_targets.targets._common import stitch_year_chunks_to_target
+
+    inter = tmp_path / "intermediates"
+    inter.mkdir(parents=True, exist_ok=True)
+    n_hru = 400
+    hrus = np.arange(1, n_hru + 1)
+
+    def _write(year: int) -> None:
+        times = pd.date_range(f"{year}-01-01", f"{year}-12-31", freq="D")
+        nt = len(times)
+        base = (np.arange(nt)[:, None] + hrus[None, :] + year).astype("float32")
+        xr.Dataset(
+            {
+                "lower_bound": (("time", "nhm_id"), base),
+                "upper_bound": (("time", "nhm_id"), base + 1.0),
+                "n_sources": (
+                    ("time", "nhm_id"),
+                    np.full((nt, n_hru), 3, dtype="int8"),
+                ),
+                "nn_filled": (
+                    ("time", "nhm_id"),
+                    np.tile((hrus % 2).astype("int8"), (nt, 1)),
+                ),
+            },
+            coords={"time": times, "nhm_id": hrus},
+            attrs={"year_chunk": year},
+        ).to_netcdf(inter / f"swe_targets_{year}_nn_filled.nc")
+
+    _write(2003)
+    _write(2004)
+
+    out = tmp_path / "swe_nn_filled.nc"
+    stitch_year_chunks_to_target(
+        sorted(inter.glob("*.nc")),
+        out,
+        title="t",
+        extra_global_attrs=None,
+        sort_dim="nhm_id",
+    )
+
+    n_time = 731
+    chunk_hru = min(math.ceil(1_048_576 / (n_time * 4)), n_hru)
+    assert chunk_hru < n_hru  # ensure the test actually spans >=2 HRU chunks
+    with netCDF4.Dataset(out) as nc:
+        assert tuple(nc.variables["lower_bound"].chunking()) == (n_time, chunk_hru)
+        assert nc.variables["nn_filled"].dtype == np.dtype("int8")
+
+    # Full value comparison against a manual concat — catches any misalignment.
+    parts = [
+        xr.open_dataset(inter / f"swe_targets_{y}_nn_filled.nc") for y in (2003, 2004)
+    ]
+    expected = xr.concat(parts, dim="time").sortby("nhm_id")
+    with xr.open_dataset(out) as got:
+        for v in ("lower_bound", "upper_bound", "n_sources", "nn_filled"):
+            np.testing.assert_array_equal(got[v].values, expected[v].values)
+    for p in parts:
+        p.close()
+
+
 def test_stitch_fails_loud_on_hru_coord_mismatch(tmp_path: Path):
     """join='exact' must raise when per-year files don't share HRU
     coords — this catches per-year-build corruption (fabric drift,
@@ -1369,7 +1473,7 @@ def test_stitch_fails_loud_on_hru_coord_mismatch(tmp_path: Path):
     )  # HRU 99 instead of 3
 
     out = tmp_path / "swe_targets.nc"
-    with pytest.raises((ValueError, Exception)):
+    with pytest.raises(ValueError):
         stitch_year_chunks_to_target(
             sorted(inter.glob("swe_targets_*.nc")),
             out,
