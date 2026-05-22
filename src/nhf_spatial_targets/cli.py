@@ -216,9 +216,9 @@ def rechunk(
     """Backfill existing aggregated/target NCs to the chunked+compressed layout.
 
     Rewrites contiguous/uncompressed NetCDFs (built before #165) in place to the
-    canonical io_nc layout: bit-identical, atomic, and idempotent. Does not touch
-    the shared datastore's consolidated NCs, nor the daymet/ssebop aggregated
-    outputs (left as-is by #165 ST3a).
+    canonical io_nc layout: value-preserving, atomic, and idempotent. Does not
+    touch the shared datastore's consolidated NCs, nor the daymet/ssebop
+    aggregated outputs (left as-is by #165 ST3).
     """
     from nhf_spatial_targets.rechunk import rechunk_project
     from nhf_spatial_targets.workspace import load as load_project
@@ -246,18 +246,28 @@ def rechunk(
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
+    # A mistyped --source would otherwise be a silent no-op; fail loudly.
+    if source is not None and not (project.aggregated_dir() / source).is_dir():
+        print(
+            f"Error: no aggregated source directory '{source}' under "
+            f"{project.aggregated_dir()}.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
     results = rechunk_project(project, layer=layer, source=source, dry_run=dry_run)
 
     rechunked = [r for r in results if r["status"] == "rechunked"]
-    skipped = [r for r in results if r["status"] == "skipped"]
+    skipped = [r for r in results if r["status"].startswith("skipped")]
     planned = [r for r in results if r["status"] == "would-rechunk"]
+    failed = [r for r in results if r["status"] == "failed"]
     total_before = sum(r["size_before"] for r in results)
     total_after = sum(r["size_after"] for r in results if r["size_after"] is not None)
 
     if dry_run:
         print(
             f"[dry-run] {len(planned)} file(s) would be rechunked, "
-            f"{len(skipped)} already chunked "
+            f"{len(skipped)} skipped "
             f"({total_before / 1e9:.2f} GB candidate)."
         )
     else:
@@ -265,10 +275,16 @@ def rechunk(
         reclaimed_from = sum(r["size_before"] for r in rechunked)
         pct = 100.0 * saved / reclaimed_from if reclaimed_from else 0.0
         print(
-            f"Rechunked {len(rechunked)} file(s), skipped {len(skipped)} "
-            f"already-chunked. Reclaimed {saved / 1e9:.2f} GB "
+            f"Rechunked {len(rechunked)} file(s), skipped {len(skipped)}. "
+            f"Reclaimed {saved / 1e9:.2f} GB "
             f"({pct:.0f}% of the rewritten files)."
         )
+
+    if failed:
+        print(f"Error: {len(failed)} file(s) failed to rechunk:", file=sys.stderr)
+        for r in failed:
+            print(f"  {r['path'].name}: {r.get('error')}", file=sys.stderr)
+        sys.exit(1)
 
 
 @app.command

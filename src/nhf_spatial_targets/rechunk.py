@@ -3,22 +3,30 @@
 The #165 writers only chunk+compress NCs they newly write; projects built
 before ST2/ST3 still hold contiguous, uncompressed NetCDFs. ``rechunk_project``
 rewrites those in place to the canonical chunked+zlib layout produced by
-:func:`io_nc.build_encoding`, reclaiming disk (≈85% on sparse daily sources)
-without re-aggregating.
+:func:`io_nc.build_encoding`, reclaiming substantial disk (largest on
+sparse/NaN-heavy daily sources, where contiguous storage dominated) without
+re-aggregating.
 
 Guarantees:
 
-- **Idempotent** — a file whose data variables are already chunked+compressed
-  is skipped (detected via ``netCDF4.Variable.chunking()`` / ``.filters()``).
+- **Idempotent** — a file is skipped only when *every* field variable is
+  already chunked+compressed (detected via ``netCDF4.Variable.chunking()`` /
+  ``.filters()``); a mixed-state file is rewritten.
 - **Atomic** — each file is rewritten to ``<file>.rechunk.tmp`` then renamed,
   so an interrupted run never leaves a half-written NC at the canonical path.
-- **Bit-identical** — every data variable is compared (NaN-aware for floats)
-  against the original before the rename; a mismatch aborts that file. Native
-  dtypes are preserved, so rechunking changes storage layout only.
+- **Value-preserving** — every variable (data vars *and* coordinates,
+  including the re-encoded ``time`` / ``time_bnds``) is compared decoded and
+  NaN-aware against the original before the rename; a mismatch aborts that file
+  with no replacement. Native dtypes are preserved, so the change is
+  storage-layout only (the on-disk bytes differ — chunking, zlib, and an added
+  ``_FillValue`` — but the decoded values do not).
 - **Scoped** — operates only on a project's ``data/aggregated/`` and
   ``targets/`` trees. It never touches the shared datastore's *consolidated*
   NCs (those use issue #158's per-source tile sizes, a different policy), and
-  it skips the daymet/ssebop aggregated outputs left as-is by ST3a.
+  it skips the daymet/ssebop aggregated outputs left as-is by ST3.
+- **Per-file isolated** — one file's failure (bit-identity mismatch, disk
+  full, a stray NC missing the HRU dim) is recorded and the run continues; the
+  CLI surfaces failures and exits non-zero.
 """
 
 from __future__ import annotations
@@ -38,26 +46,33 @@ logger = logging.getLogger(__name__)
 
 _VALID_LAYERS = ("aggregated", "target")
 
-#: Aggregated sources intentionally left unchunked by ST3a (already chunked,
+#: Aggregated sources intentionally left unchunked by ST3 (already chunked,
 #: remote-sourced) — rechunk skips them for the same reason.
 _SKIP_SOURCES = frozenset({"daymet", "ssebop"})
 
 
-def _first_field_var(nc: netCDF4.Dataset) -> netCDF4.Variable | None:
-    """The first ``>=2D`` data variable — representative for chunk detection."""
-    for v in nc.variables.values():
-        if v.ndim >= 2:
-            return v
-    return None
-
-
 def is_rechunked(path: Path) -> bool:
-    """True if *path*'s field variables are already chunked + zlib-compressed."""
+    """True only if *every* field (>=2D) variable is chunked + zlib-compressed.
+
+    Checking all field variables — not just the first — is essential: a file
+    where one variable is chunked but another is still contiguous (e.g. an
+    interrupted earlier run) must be rewritten, not silently skipped. A
+    mixed-chunk-state file is logged at WARNING and reported as not-yet-rechunked.
+    """
     with netCDF4.Dataset(path) as nc:
-        v = _first_field_var(nc)
-        if v is None:
+        field_vars = [v for v in nc.variables.values() if v.ndim >= 2]
+        if not field_vars:
             return False
-        return v.chunking() != "contiguous" and bool(v.filters().get("zlib"))
+        states = [
+            v.chunking() != "contiguous" and bool(v.filters().get("zlib"))
+            for v in field_vars
+        ]
+        if any(states) and not all(states):
+            logger.warning(
+                "%s has mixed chunk state across field variables; will rechunk.",
+                path,
+            )
+        return all(states)
 
 
 def _arrays_equal(a: np.ndarray, b: np.ndarray) -> bool:
@@ -96,8 +111,10 @@ def rechunk_file(
 ) -> dict[str, Any]:
     """Rewrite one NC to the io_nc chunked layout; return a result record.
 
-    ``status`` is one of ``"skipped"`` (already chunked), ``"would-rechunk"``
-    (dry run), or ``"rechunked"``. Raises if the bit-identity check fails.
+    ``status`` is one of ``"skipped"`` (already chunked), ``"skipped-no-hru"``
+    (no HRU dim — not a fabric-aligned NC), ``"would-rechunk"`` (dry run), or
+    ``"rechunked"``. Raises if the write fails or the value-preservation check
+    detects a mismatch (the original is left untouched in that case).
     """
     size_before = path.stat().st_size
     if is_rechunked(path):
@@ -116,6 +133,15 @@ def rechunk_file(
         }
 
     with xr.open_dataset(path) as ds_lazy:
+        # A stray, non-fabric NC (no HRU dim) can't be chunked by the
+        # aggregated/target formula — skip it rather than crash build_encoding.
+        if id_col not in ds_lazy.dims:
+            return {
+                "path": path,
+                "status": "skipped-no-hru",
+                "size_before": size_before,
+                "size_after": size_before,
+            }
         ds = ds_lazy.load()
     encoding = build_encoding(
         ds, layer=layer, hru_dim=id_col, timesteps_per_file=ds.sizes.get("time")
@@ -124,8 +150,12 @@ def rechunk_file(
     try:
         ds.to_netcdf(tmp, format="NETCDF4", encoding=encoding)
         with xr.open_dataset(tmp) as got:
-            for name, da in ds.data_vars.items():
-                if not _arrays_equal(da.values, got[name].values):
+            # Compare every variable — data vars AND coordinates. time/time_bnds
+            # are re-encoded (float64 epoch), so verifying coords is not optional.
+            for name in ds.variables:
+                if not _arrays_equal(
+                    np.asarray(ds[name].values), np.asarray(got[name].values)
+                ):
                     raise RuntimeError(
                         f"rechunk altered values for '{name}' in {path}; "
                         f"aborting (no file replaced)."
@@ -177,8 +207,23 @@ def rechunk_project(
             f"invalid layer {layer!r}; expected one of {_VALID_LAYERS} or None"
         )
     id_col = project.id_col
-    results = [
-        rechunk_file(path, file_layer, id_col, dry_run=dry_run)
-        for path, file_layer in _iter_layer_files(project, layer, source)
-    ]
+    results: list[dict[str, Any]] = []
+    for path, file_layer in _iter_layer_files(project, layer, source):
+        try:
+            results.append(rechunk_file(path, file_layer, id_col, dry_run=dry_run))
+        except Exception as exc:
+            # Per-file isolation: one bad file (mismatch, disk full, corrupt
+            # source) is recorded and the run continues. The original is left
+            # untouched by rechunk_file's atomic guard; the CLI surfaces the
+            # failure and exits non-zero so it can't pass silently.
+            logger.error("rechunk failed for %s: %s", path, exc)
+            results.append(
+                {
+                    "path": path,
+                    "status": "failed",
+                    "error": str(exc),
+                    "size_before": path.stat().st_size if path.exists() else 0,
+                    "size_after": None,
+                }
+            )
     return results
