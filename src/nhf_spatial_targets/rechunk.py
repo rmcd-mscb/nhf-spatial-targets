@@ -31,6 +31,7 @@ Guarantees:
 
 from __future__ import annotations
 
+import gc
 import logging
 from pathlib import Path
 from typing import Any
@@ -241,4 +242,14 @@ def rechunk_project(
                     "size_after": None,
                 }
             )
+        finally:
+            # rechunk_file eagerly `.load()`s the whole dataset; xarray Datasets
+            # form reference cycles, so the just-processed file's arrays linger
+            # until the cyclic collector runs rather than being freed on the
+            # function return. Force a collect between files so peak RSS stays
+            # at ~one file's footprint instead of accumulating across files —
+            # without this, two large targets in one process roughly double the
+            # peak (the gfv2 SWE pair OOM-killed a 160G job at ~154 GB RSS,
+            # though each file alone fits comfortably).
+            gc.collect()
     return results

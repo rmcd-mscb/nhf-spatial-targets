@@ -430,6 +430,43 @@ def test_rechunk_invalid_layer_raises(tmp_path: Path):
         rechunk_project(load(workdir), layer="bogus")
 
 
+def test_rechunk_project_collects_between_files(tmp_path: Path, monkeypatch):
+    """A gc.collect() fires once per file so peak RSS doesn't accumulate.
+
+    rechunk_file eagerly loads whole datasets; xarray's reference cycles keep a
+    just-processed file's arrays alive until the cyclic collector runs. Without
+    a collect between files, two large targets in one process roughly double the
+    peak (the gfv2 SWE pair OOM-killed a 160G job). The collect lives in the
+    loop's ``finally``, so it must also fire when a file fails.
+    """
+    from nhf_spatial_targets import rechunk as R
+    from nhf_spatial_targets.workspace import load
+
+    workdir = make_minimal_project(tmp_path)
+    a = workdir / "data" / "aggregated" / "era5_land" / "era5_land_2000_agg.nc"
+    b = workdir / "data" / "aggregated" / "era5_land" / "era5_land_2001_agg.nc"
+    write_year_nc(a, 2000, "ro")
+    write_year_nc(b, 2001, "ro")
+
+    calls = {"n": 0}
+    monkeypatch.setattr(
+        R.gc, "collect", lambda *a, **k: calls.__setitem__("n", calls["n"] + 1)
+    )
+
+    real = R.rechunk_file
+
+    def _flaky(path, layer, id_col, *, dry_run=False):
+        if path.name.endswith("2000_agg.nc"):
+            raise RuntimeError("boom")
+        return real(path, layer, id_col, dry_run=dry_run)
+
+    monkeypatch.setattr(R, "rechunk_file", _flaky)
+    R.rechunk_project(load(workdir), layer="aggregated")
+
+    # One collect per file — including the one that raised (finally path).
+    assert calls["n"] == 2
+
+
 # --- CLI error/summary paths --------------------------------------------
 
 
