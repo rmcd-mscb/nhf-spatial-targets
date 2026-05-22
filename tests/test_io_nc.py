@@ -283,3 +283,46 @@ def test_on_disk_chunking_matches_encoding(tmp_path: Path):
         # back shuffle=False and the int8 shuffle=True.
         assert nc.variables["ro"].filters()["shuffle"] is False
         assert nc.variables["n_sources"].filters()["shuffle"] is True
+
+
+@pytest.mark.integration
+def test_chunk_aligned_per_hru_read_budget(tmp_path: Path):
+    """A columnar-chunked NC serves any HRU's full series from time-whole chunks.
+
+    The calibration read pattern (one HRU, all time) must not be split across
+    the time axis — that is the whole point of the (time, chunk_hru) layout.
+    Asserts the on-disk chunk spans the full time axis, and that 100 scattered
+    HRUs' full series read back correctly. (Marked integration: builds a
+    ~70 MB file.)
+    """
+    import math
+
+    import netCDF4
+
+    from nhf_spatial_targets.io_nc import atomic_to_netcdf, build_encoding
+
+    n_time, n_hru = 365, 50_000
+    rng = np.random.default_rng(0)
+    data = rng.random((n_time, n_hru)).astype("float32")
+    ds = xr.Dataset(
+        {"ro": (("time", "nhm_id"), data)},
+        coords={
+            "time": pd.date_range("2000-01-01", periods=n_time, freq="D"),
+            "nhm_id": np.arange(n_hru),
+        },
+    )
+    enc = build_encoding(
+        ds, layer="aggregated", hru_dim="nhm_id", timesteps_per_file=n_time
+    )
+    out = tmp_path / "agg.nc"
+    atomic_to_netcdf(ds, out, encoding=enc)
+
+    chunk_hru = math.ceil(1_048_576 / (n_time * 4))
+    with netCDF4.Dataset(out) as nc:
+        v = nc.variables["ro"]
+        # Time axis is whole within a chunk → one HRU's full series is one
+        # ~1 MiB chunk, not n_time chunks. This is the read budget guarantee.
+        assert tuple(v.chunking()) == (n_time, chunk_hru)
+        scattered = rng.choice(n_hru, size=100, replace=False)
+        for h in scattered:
+            np.testing.assert_array_equal(v[:, int(h)], data[:, int(h)])
