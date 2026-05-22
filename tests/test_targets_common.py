@@ -1194,7 +1194,9 @@ def test_build_n_sources_attrs_three_sources():
     attrs = build_n_sources_attrs(3)
     assert attrs["units"] == "1"
     assert attrs["long_name"] == "number of finite source contributions"
-    assert attrs["flag_values"] == [0, 1, 2, 3]
+    # int8 to match the on-disk n_sources dtype (CF §3.5, issue #182).
+    assert attrs["flag_values"].dtype == np.dtype("int8")
+    assert list(attrs["flag_values"]) == [0, 1, 2, 3]
     assert attrs["flag_meanings"] == "none one two three"
     assert attrs["coordinates"] == "centroid_lat centroid_lon"
 
@@ -1204,7 +1206,8 @@ def test_build_n_sources_attrs_one_source():
     from nhf_spatial_targets.targets._common import build_n_sources_attrs
 
     attrs = build_n_sources_attrs(1)
-    assert attrs["flag_values"] == [0, 1]
+    assert attrs["flag_values"].dtype == np.dtype("int8")
+    assert list(attrs["flag_values"]) == [0, 1]
     assert attrs["flag_meanings"] == "none one"
 
 

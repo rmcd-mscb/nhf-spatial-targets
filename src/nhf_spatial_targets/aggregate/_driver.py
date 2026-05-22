@@ -301,10 +301,101 @@ def per_year_output_path(project: Project, source_key: str, year: int) -> Path:
     )
 
 
+def _infer_hru_dim(ds: xr.Dataset) -> str | None:
+    """Best-effort HRU dimension name when ``id_col`` isn't passed in."""
+    cand = [d for d in ds.sizes if d not in ("time", "nv", "bnds", "nbnds")]
+    return cand[0] if len(cand) == 1 else None
+
+
+def _cadence_to_period_freq(cadence: str | None) -> str | None:
+    """Map a catalog ``time_step`` phrase to a pandas period freq for time_bnds.
+
+    Returns ``"M"`` / ``"Y"`` for monthly/annual aggregated outputs (so the
+    bound brackets the calendar month/year regardless of where the timestamp
+    sits within it), or ``None`` for daily/instantaneous (point) sources,
+    which represent an instant and carry no averaging interval.
+    """
+    if not cadence:
+        return None
+    c = cadence.lower()
+    if "monthly" in c:
+        return "M"
+    if "annual" in c:
+        return "Y"
+    return None
+
+
+def _normalize_cf_fabric_metadata(
+    ds: xr.Dataset, *, id_col: str | None = None, cadence: str | None = None
+) -> xr.Dataset:
+    """Make an aggregated Dataset CF-1.6 clean at the write boundary.
+
+    Three fixes, all driven by how gdptools + the per-batch merge shape the
+    output (issue #178 / #182):
+
+    - **crs (CF §5.6).** gdptools' ``crs`` attrs are correct, but the per-batch
+      ``xr.concat`` merge broadcasts the scalar onto a dimension (``id_col``
+      *or* ``time``, depending on the merge). Collapse it back to a 0-dim
+      grid-mapping variable, preserving its attrs.
+    - **time bounds (CF §7.1).** gdptools drops ``time_bnds`` during aggregation
+      but leaves the source's ``time:bounds`` attr, dangling. Reconstruct the
+      averaging interval for monthly/annual ``cadence``; strip the dangling
+      attr for instantaneous (point/daily) sources.
+    - **HRU index (CF §3).** Label the id coordinate; it is an identifier, not
+      a measurement, so it carries no units.
+    """
+    ds = ds.copy()
+
+    if "crs" in ds.variables and ds["crs"].ndim > 0:
+        ds["crs"] = xr.DataArray(np.int32(0), attrs=dict(ds["crs"].attrs))
+
+    if "time" in ds.variables:
+        freq = _cadence_to_period_freq(cadence)
+        bounds_attr = ds["time"].attrs.get("bounds")
+        if freq is not None:
+            name = bounds_attr or "time_bnds"
+            if name not in ds.variables:
+                times = pd.DatetimeIndex(np.asarray(ds["time"].values))
+                periods = times.to_period(freq)
+                tb = xr.DataArray(
+                    np.stack(
+                        [periods.start_time.values, (periods + 1).start_time.values],
+                        axis=1,
+                    ),
+                    dims=("time", "nv"),
+                    coords={"time": ds["time"].values},
+                    name=name,
+                )
+                ds[name] = tb
+                ds = ds.set_coords(name)
+                ds["time"].attrs["bounds"] = name
+        elif bounds_attr and bounds_attr not in ds.variables:
+            # Instantaneous source: no averaging interval. Drop the dangling
+            # reference the aggregation left behind.
+            ds["time"].attrs.pop("bounds", None)
+
+    hru = id_col or _infer_hru_dim(ds)
+    if hru and hru in ds.variables:
+        ds[hru].attrs.pop("units", None)
+        ds[hru].attrs["long_name"] = "HRU Index"
+    return ds
+
+
 def _atomic_write_netcdf(
-    ds: xr.Dataset, path: Path, *, id_col: str | None = None
+    ds: xr.Dataset,
+    path: Path,
+    *,
+    id_col: str | None = None,
+    time_bounds_cadence: str | None = None,
 ) -> None:
     """Atomically write an aggregated Dataset via tempfile + rename.
+
+    CF metadata is normalized at this boundary regardless of the encoding path
+    (see :func:`_normalize_cf_fabric_metadata`): the grid-mapping ``crs`` is
+    collapsed to a 0-dim scalar, the inherited ``time:bounds`` is made whole
+    (``time_bnds`` reconstructed for monthly/annual ``time_bounds_cadence``, or
+    the dangling attr stripped for instantaneous sources), and the HRU index
+    coordinate is labeled.
 
     When ``id_col`` is given, encoding is delegated to
     :func:`io_nc.build_encoding` (``layer="aggregated"``) so the per-year NC is
@@ -312,14 +403,15 @@ def _atomic_write_netcdf(
     per-HRU-time-series reads (issue #165 ST3). Native variable dtypes are
     preserved — the aggregated layer keeps the source's native units/values, so
     no float64→float32 downcast happens here (that would be a values change,
-    not a storage-layer change), and the grid-mapping container (``crs``) is
-    left untouched.
+    not a storage-layer change).
 
     When ``id_col`` is ``None`` the Dataset is written without added
     encoding (the pre-#165 behavior). The daymet (zarr) and ssebop (STAC)
     aggregators take this path: their outputs are produced from already-chunked
     remote sources and are intentionally left as-is.
     """
+    ds = _normalize_cf_fabric_metadata(ds, id_col=id_col, cadence=time_bounds_cadence)
+
     from nhf_spatial_targets.io_nc import atomic_to_netcdf, build_encoding
 
     if id_col is not None:
@@ -330,7 +422,19 @@ def _atomic_write_netcdf(
             timesteps_per_file=ds.sizes.get("time"),
         )
     else:
-        encoding = None
+        # Unchunked path (daymet/ssebop): no per-HRU chunking, but still pin the
+        # CF time axis so a reconstructed time_bnds shares time's units (xarray
+        # otherwise derives them independently — counter to CF §7.1) and carries
+        # no _FillValue.
+        from nhf_spatial_targets.io_nc import _TIME_ENCODING
+
+        encoding = {
+            tvar: dict(_TIME_ENCODING)
+            for tvar in ("time", "time_bnds")
+            if tvar in ds.variables
+        }
+        if "time_bnds" in encoding:
+            encoding["time_bnds"]["_FillValue"] = None
     atomic_to_netcdf(ds, path, encoding=encoding)
 
 
@@ -561,7 +665,9 @@ def aggregate_year(
     # downstream consumers a stable invariant.
     year_ds = year_ds.sortby(id_col)
 
-    _atomic_write_netcdf(year_ds, out_path, id_col=id_col)
+    _atomic_write_netcdf(
+        year_ds, out_path, id_col=id_col, time_bounds_cadence=meta.get("time_step")
+    )
     logger.info("%s: year %d: wrote %s", adapter.source_key, year, out_path)
     return out_path
 
