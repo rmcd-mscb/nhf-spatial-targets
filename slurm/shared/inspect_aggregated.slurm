@@ -28,22 +28,22 @@
 #
 # Prerequisites:
 #   - Aggregated outputs already exist under $PROJECT_DIR/data/aggregated/
-#     (see agg_all.slurm)
+#     (see agg_all_<fabric>.slurm)
 #   - Dev environment installed: `pixi install -e dev`
 #
 # Usage:
 #   mkdir -p logs                         # required — SLURM refuses to
 #                                         # start with no log output
-#   sbatch inspect_aggregated.slurm
+#   sbatch slurm/shared/inspect_aggregated.slurm
 #
 # Run a single notebook by index (e.g. AET = 0):
-#   sbatch --array=0 inspect_aggregated.slurm
+#   sbatch --array=0 slurm/shared/inspect_aggregated.slurm
 #
 # Bump memory for a heavier rerun:
-#   sbatch --mem=256G inspect_aggregated.slurm
+#   sbatch --mem=256G slurm/shared/inspect_aggregated.slurm
 #
 # To also save figures to docs/figures/aggregated/<project>/, set:
-#   SAVE_FIGURES=1 sbatch inspect_aggregated.slurm
+#   SAVE_FIGURES=1 sbatch slurm/shared/inspect_aggregated.slurm
 
 set -euo pipefail
 
@@ -53,7 +53,7 @@ set -euo pipefail
 export PYTHONUNBUFFERED=1
 
 REPO_DIR="${REPO_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/nhf-spatial-targets}"
-PROJECT_DIR="${PROJECT_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2-spatial-targets}"
+PROJECT_DIR="${PROJECT_DIR:?set PROJECT_DIR to the target project dir, e.g. PROJECT_DIR=/caldera/.../gfv2-spatial-targets}"
 SAVE_FIGURES="${SAVE_FIGURES:-0}"
 TIMEOUT="${TIMEOUT:-3600}"  # per-cell execution timeout in seconds
 

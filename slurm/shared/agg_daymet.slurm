@@ -13,7 +13,7 @@
 # Daymet is distributed as a single multi-year zarr store per region
 # at $daymet_root/daymet_{na,hi,pr}.zarr, recorded in manifest.json by
 # `nhf-targets fetch daymet`. Like SSEBop, the aggregator requires an
-# explicit --period, so it's kept separate from agg_all.slurm. Single
+# explicit --period, so it's kept separate from agg_all_<fabric>.slurm. Single
 # job, not an array.
 #
 # Prerequisites:
@@ -27,17 +27,17 @@
 #   mkdir -p logs                         # required — SLURM refuses to start
 #                                         # with no log output if logs/ is missing
 #   export PROJECT_DIR=/path/to/your/project
-#   sbatch agg_daymet.slurm
+#   sbatch slurm/shared/agg_daymet.slurm
 #
 # Override the period (default is Daymet catalog availability 1980/2024):
-#   PERIOD=2010/2020 sbatch agg_daymet.slurm
+#   PERIOD=2010/2020 sbatch slurm/shared/agg_daymet.slurm
 #
 # Override the region (default NA; HI and PR are not wired in this
 # build and will surface NotImplementedError):
-#   REGION=na sbatch agg_daymet.slurm
+#   REGION=na sbatch slurm/shared/agg_daymet.slurm
 #
 # Override spatial batch size (default 10000, tuned for 128 GB):
-#   BATCH_SIZE=2500 sbatch agg_daymet.slurm
+#   BATCH_SIZE=2500 sbatch slurm/shared/agg_daymet.slurm
 
 set -euo pipefail
 
@@ -47,7 +47,7 @@ set -euo pipefail
 export PYTHONUNBUFFERED=1
 
 REPO_DIR="${REPO_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/nhf-spatial-targets}"
-PROJECT_DIR="${PROJECT_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2-spatial-targets}"
+PROJECT_DIR="${PROJECT_DIR:?set PROJECT_DIR to the target project dir, e.g. PROJECT_DIR=/caldera/.../gfv2-spatial-targets}"
 PERIOD="${PERIOD:-1980/2024}"
 REGION="${REGION:-na}"
 BATCH_SIZE="${BATCH_SIZE:-10000}"

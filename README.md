@@ -307,7 +307,7 @@ Array index → source mapping (`slurm/shared/fetch_all.slurm`):
 | 9 | MOD10C1 v061 | 2000/2025 | NSIDC via earthaccess |
 | 10 | MWBM ClimGrid | 1979/2020 | ScienceBase, manual download |
 | 11 | Daymet V4 R1 | 1980/2024 | ORNL DAAC zarr, manual staging |
-| 12 | SNODAS | 2003/2024 | NSIDC G02158 via earthaccess |
+| 12 | SNODAS | 2003/2025 | NSIDC G02158 via earthaccess |
 | 13 | Margulis WUS-SR | 1985/2021 | NSIDC-0719 via earthaccess; OR-fabric only |
 
 Most fetch routines are network I/O-bound; the general script allocates 1 CPU and 128 GB RAM per task with a 24-hour wall-clock limit. Per-source scripts (`slurm/shared/fetch_era5_land.slurm`, `slurm/shared/fetch_snodas.slurm`, `slurm/project_or/fetch_margulis_wus_sr.slurm`) tune memory and concurrency for their workload — notably SNODAS uses only 8 GB because PR #110's dask-streaming consolidator bounds peak RSS. Override `PROJECT_DIR` and `REPO_DIR` via environment before submission. SLURM directives (`--account`, `--partition`) at the top of each script may need adjustment for your cluster.
@@ -342,6 +342,9 @@ STAC / region-arg). Only `PROJECT_DIR` differs between fabrics:
 - [`slurm/project_gfv2/agg_all_gfv2.slurm`](slurm/project_gfv2/agg_all_gfv2.slurm) / [`slurm/project_or/agg_all_or.slurm`](slurm/project_or/agg_all_or.slurm) — 14-element array for local-NC aggregators
 - [`slurm/shared/agg_ssebop.slurm`](slurm/shared/agg_ssebop.slurm) — single job for SSEBop (remote STAC)
 - [`slurm/shared/agg_daymet.slurm`](slurm/shared/agg_daymet.slurm) — single job for Daymet (local zarr, per-region)
+- [`slurm/shared/agg_snodas.slurm`](slurm/shared/agg_snodas.slurm) — optional sharded (4-worker) SNODAS aggregator; SNODAS is otherwise array index 10, so use this only to parallelize that one source
+
+All `slurm/shared/` scripts **require** `PROJECT_DIR` (no fabric default — fail loudly if unset); the `slurm/project_<fabric>/` wrappers default it.
 
 **Prerequisites:**
 

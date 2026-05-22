@@ -37,4 +37,14 @@ REPO_DIR="${REPO_DIR:-$(git -C "${SLURM_SUBMIT_DIR:-$PWD}" rev-parse --show-topl
     exit 1
 }
 
-source "$REPO_DIR/slurm/shared/agg_all.body.sh"
+# Guard the wrong-repo case: $SLURM_SUBMIT_DIR may sit inside a *different* git
+# checkout than the one holding these scripts. Require the shared body to exist
+# and the tree to identify as nhf-spatial-targets before sourcing, so a stale
+# clone fails loudly instead of silently running the wrong code.
+BODY="$REPO_DIR/slurm/shared/agg_all.body.sh"
+if [ ! -f "$BODY" ] || ! grep -q 'name = "nhf-spatial-targets"' "$REPO_DIR/pyproject.toml" 2>/dev/null; then
+    echo "ERROR: REPO_DIR=$REPO_DIR (resolved from ${SLURM_SUBMIT_DIR:-$PWD}) is not an nhf-spatial-targets checkout with $BODY. Set REPO_DIR=/path/to/nhf-spatial-targets and resubmit." >&2
+    exit 1
+fi
+
+source "$BODY"

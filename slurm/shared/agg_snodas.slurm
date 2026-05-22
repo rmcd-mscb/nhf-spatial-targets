@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=128G           # Per-worker peak ≈ one batch's weight-gen +
                              # one batch's aggregation working set. 128G
-                             # matches the proven --mem in agg_all.slurm
+                             # matches the proven --mem in agg_all_<fabric>.slurm
                              # for the 1 km SNODAS source × CONUS fabric;
                              # first attempt at 64G OOM-killed on all 4
                              # array tasks at the smaller batch_size=500
@@ -38,7 +38,7 @@
 # fingerprint (issue #156), so the PR #155 EPSG:4326 -> EPSG:5070
 # class of stale-cache bug can't recur silently.
 #
-# Year sharding is round-robin (same as fetch_snodas.slurm): worker 0
+# Year sharding is round-robin (same as slurm/shared/fetch_snodas.slurm): worker 0
 # takes years [0::N], worker 1 takes [1::N], etc. This keeps load
 # balanced when per-year cost is uneven (early years sparse, late
 # years not).
@@ -46,7 +46,7 @@
 # Usage:
 #   mkdir -p logs
 #   export PROJECT_DIR=/path/to/your/project
-#   sbatch agg_snodas.slurm
+#   sbatch slurm/shared/agg_snodas.slurm
 #
 # To change the number of workers (must edit BOTH --array and N_WORKERS):
 #   Edit  --array=0-2  and  N_WORKERS=3  below for 3 workers, etc.
@@ -58,7 +58,7 @@
 # safely adds any newly-produced files to the existing entry.
 #
 # To restrict to a subset of years:
-#   PERIOD=2010/2020 sbatch agg_snodas.slurm
+#   PERIOD=2010/2020 sbatch slurm/shared/agg_snodas.slurm
 
 set -euo pipefail
 
@@ -70,7 +70,7 @@ export PYTHONUNBUFFERED=1
 N_WORKERS=4
 
 REPO_DIR="${REPO_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/nhf-spatial-targets}"
-PROJECT_DIR="${PROJECT_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2-spatial-targets}"
+PROJECT_DIR="${PROJECT_DIR:?set PROJECT_DIR to the target project dir, e.g. PROJECT_DIR=/caldera/.../gfv2-spatial-targets}"
 PERIOD="${PERIOD:-}"
 
 echo "=== SNODAS agg: worker ${SLURM_ARRAY_TASK_ID}/${N_WORKERS} ==="
