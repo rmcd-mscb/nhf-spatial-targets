@@ -46,6 +46,9 @@ ipykernel = ">=6.0"
 jupyterlab = ">=4.0"
 pre-commit = ">=4.0"
 gh = ">=2.0"
+# cfchecker: CEDA CF-conventions compliance checker; provides the `cfchecks`
+# CLI for validating that pipeline-written NetCDFs are CF-1.6 compliant.
+cfchecker = ">=4.1"
 
 [environments]
 default = { solve-group = "default" }
