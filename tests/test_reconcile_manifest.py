@@ -262,3 +262,13 @@ def test_end_to_end_dry_run_reports_without_writing(tmp_path):
     results = reconcile.reconcile_manifest(project, sources=["era5_land"], dry_run=True)
     assert results[0].added == 2
     assert not (tmp_path / "manifest.json").exists()
+
+
+# --- CLI wiring ---------------------------------------------------------
+
+
+def test_cli_command_is_registered():
+    """The reconcile-manifest command is wired into the cyclopts app."""
+    from nhf_spatial_targets import cli
+
+    assert "reconcile-manifest" in cli.app
