@@ -4,8 +4,16 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from nhf_spatial_targets import reconcile
 from nhf_spatial_targets.workspace import Project
+
+
+def _HOOK(project, *, checksum=False):
+    """A real module-level reconcile hook, used to exercise the lazy-import
+    dispatch in `_call_hook` (importlib + getattr) against a live symbol."""
+    return [{"year": 2020, "path": "p", "provenance": "reconciled"}]
 
 
 def test_gap_fill_appends_only_new_year_records():
@@ -135,17 +143,13 @@ def test_apply_records_noop_when_all_present_does_not_rewrite(tmp_path):
 def test_reconcile_manifest_dispatches_registered_hooks(tmp_path, monkeypatch):
     project = _make_project(tmp_path)
 
-    def fake_hook(proj, *, checksum=False):
-        return [{"year": 2020, "path": "p", "provenance": "reconciled"}]
-
-    # Register a fake hook under a real catalog key.
+    # Point a real catalog key at this module's real _HOOK and let the real
+    # _call_hook resolve it (importlib.import_module + getattr) — so this
+    # exercises the lazy-import dispatch, not a stubbed-out shortcut.
     monkeypatch.setattr(
         reconcile,
         "_RECONCILERS",
         {"mod16a2_v061": "tests.test_reconcile_manifest:_HOOK"},
-    )
-    monkeypatch.setattr(
-        reconcile, "_call_hook", lambda spec, proj, *, checksum: fake_hook(proj)
     )
 
     results = reconcile.reconcile_manifest(
@@ -272,3 +276,106 @@ def test_cli_command_is_registered():
     from nhf_spatial_targets import cli
 
     assert "reconcile-manifest" in cli.app
+
+
+# --- robustness: corrupt manifest, per-source error isolation, dedupe ---
+
+
+def test_apply_records_raises_on_corrupt_manifest(tmp_path):
+    """A non-JSON manifest fails loud (does not clobber) — the #97 guard."""
+    project = _make_project(tmp_path)
+    (tmp_path / "manifest.json").write_text("{ this is not json")
+    records = [{"year": 2020, "path": "p", "provenance": "reconciled"}]
+    with pytest.raises(ValueError, match="corrupt"):
+        reconcile._apply_records(project, "mod16a2_v061", records, dry_run=False)
+
+
+def _BOOM(project, *, checksum=False):
+    raise OSError("disk gone")
+
+
+def test_reconcile_manifest_isolates_a_failing_source(tmp_path, monkeypatch):
+    """One source's hook raising is reported as 'error', not fatal; the other
+    sources still reconcile and the full table is returned."""
+    project = _make_project(tmp_path)
+    _seed_era5(project, 2019, 2020)
+    monkeypatch.setattr(
+        reconcile,
+        "_RECONCILERS",
+        {
+            "mod16a2_v061": "tests.test_reconcile_manifest:_BOOM",
+            "era5_land": "nhf_spatial_targets.fetch.era5_land:reconcile",
+        },
+    )
+    results = reconcile.reconcile_manifest(
+        project, sources=["mod16a2_v061", "era5_land"]
+    )
+    by_key = {r.source_key: r for r in results}
+    assert by_key["mod16a2_v061"].status == "error"
+    assert by_key["era5_land"].status == "reconciled"
+    assert by_key["era5_land"].added == 2
+    # The good source's records landed despite the other source erroring.
+    entry = json.loads((tmp_path / "manifest.json").read_text())["sources"]["era5_land"]
+    assert {f["year"] for f in entry["files"]} == {2019, 2020}
+
+
+def test_gap_fill_dedupes_str_and_int_year(tmp_path):
+    """A fetch record with a string year and a reconcile record with an int
+    year for the same year are one record, not two (the int() coercion in
+    _record_identity is load-bearing)."""
+    existing = [{"year": "2001", "path": "fetch"}]  # str year, as fetch writes
+    new = [{"year": 2001, "path": "reconciled"}]  # int year, as hooks emit
+    merged, added = reconcile._gap_fill(existing, new)
+    assert added == []
+    assert merged == existing
+
+
+# --- CLI execution (exit codes + argument forwarding) -------------------
+
+
+def test_cli_reconcile_missing_project_exits_2(tmp_path):
+    from nhf_spatial_targets import cli
+
+    with pytest.raises(SystemExit) as exc:
+        cli.reconcile_manifest_cmd(workdir=tmp_path / "nope")
+    assert exc.value.code == 2
+
+
+def test_cli_reconcile_reports_error_and_exits_1(tmp_path, monkeypatch):
+    from tests.conftest import make_minimal_project
+
+    from nhf_spatial_targets import cli
+
+    workdir = make_minimal_project(tmp_path)
+
+    def _raise(*a, **k):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(reconcile, "reconcile_manifest", _raise)
+    with pytest.raises(SystemExit) as exc:
+        cli.reconcile_manifest_cmd(workdir=workdir)
+    assert exc.value.code == 1
+
+
+def test_cli_reconcile_forwards_flags(tmp_path, monkeypatch):
+    """--source/--dry-run/--checksum reach reconcile_manifest as kwargs."""
+    from tests.conftest import make_minimal_project
+
+    from nhf_spatial_targets import cli
+
+    workdir = make_minimal_project(tmp_path)
+    captured = {}
+
+    def _fake(project, *, sources, dry_run, checksum):
+        captured.update(sources=sources, dry_run=dry_run, checksum=checksum)
+        return [reconcile.SourceReconcileResult("era5_land", "empty")]
+
+    monkeypatch.setattr(reconcile, "reconcile_manifest", _fake)
+    cli.reconcile_manifest_cmd(
+        workdir=workdir, source=["era5_land"], dry_run=True, checksum=True
+    )
+    assert captured == {
+        "sources": ["era5_land"],
+        "dry_run": True,
+        "checksum": True,
+    }

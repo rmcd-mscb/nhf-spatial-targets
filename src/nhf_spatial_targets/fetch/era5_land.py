@@ -930,18 +930,24 @@ def reconcile(project: Project, *, checksum: bool = False) -> list[dict]:
         monthly_path = monthly_dir / f"era5_land_monthly_{year}.nc"
         if not monthly_path.exists():
             continue
-        mtime = max(daily_path.stat().st_mtime, monthly_path.stat().st_mtime)
-        rec = {
-            "year": year,
-            "daily_path": str(daily_path),
-            "monthly_path": str(monthly_path),
-            "consolidated_utc": datetime.fromtimestamp(
-                mtime, tz=timezone.utc
-            ).isoformat(),
-            "provenance": "reconciled",
-        }
-        if checksum:
-            rec["sha256_daily"] = sha256_file(daily_path)
-            rec["sha256_monthly"] = sha256_file(monthly_path)
+        try:
+            mtime = max(daily_path.stat().st_mtime, monthly_path.stat().st_mtime)
+            rec = {
+                "year": year,
+                "daily_path": str(daily_path),
+                "monthly_path": str(monthly_path),
+                "consolidated_utc": datetime.fromtimestamp(
+                    mtime, tz=timezone.utc
+                ).isoformat(),
+                "provenance": "reconciled",
+            }
+            if checksum:
+                rec["sha256_daily"] = sha256_file(daily_path)
+                rec["sha256_monthly"] = sha256_file(monthly_path)
+        except OSError as exc:
+            # A file can vanish between glob and stat/hash on a shared datastore
+            # being mutated by a concurrent fetch — skip it, don't abort.
+            logger.warning("skipping ERA5-Land %d during reconcile: %s", year, exc)
+            continue
         records.append(rec)
     return records

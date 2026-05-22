@@ -1011,18 +1011,24 @@ def _reconcile_modis(
         m = pat.search(nc.name)
         if not m:
             continue
-        st = nc.stat()
-        rec = {
-            "year": int(m.group(1)),
-            "path": str(nc),
-            "size_bytes": st.st_size,
-            "downloaded_utc": datetime.fromtimestamp(
-                st.st_mtime, tz=timezone.utc
-            ).isoformat(),
-            "provenance": "reconciled",
-        }
-        if checksum:
-            rec["sha256"] = sha256_file(nc)
+        try:
+            st = nc.stat()
+            rec = {
+                "year": int(m.group(1)),
+                "path": str(nc),
+                "size_bytes": st.st_size,
+                "downloaded_utc": datetime.fromtimestamp(
+                    st.st_mtime, tz=timezone.utc
+                ).isoformat(),
+                "provenance": "reconciled",
+            }
+            if checksum:
+                rec["sha256"] = sha256_file(nc)
+        except OSError as exc:
+            # A file can vanish between glob and stat/hash on a shared datastore
+            # being mutated by a concurrent fetch — skip it, don't abort.
+            logger.warning("skipping %s during reconcile: %s", nc.name, exc)
+            continue
         records.append(rec)
     return records
 

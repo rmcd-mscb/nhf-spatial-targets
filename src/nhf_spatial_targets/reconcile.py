@@ -17,6 +17,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from nhf_spatial_targets import catalog as _catalog
 from nhf_spatial_targets.workspace import Project
@@ -29,6 +30,13 @@ except ImportError:  # pragma: no cover - Windows
     _HAVE_FLOCK = False
 
 logger = logging.getLogger(__name__)
+
+#: Closed set of per-source outcomes. ``error`` is set by the orchestrator when
+#: a source's hook or writer raises, so one bad source doesn't abort the run.
+ReconcileStatus = Literal["reconciled", "no-op", "no-hook", "empty", "error"]
+
+#: One-time guard so the no-flock warning fires once per process, not per source.
+_warned_no_flock = False
 
 
 def _record_identity(rec: dict) -> tuple[str, str | int]:
@@ -79,7 +87,7 @@ class SourceReconcileResult:
     """Per-source outcome of a reconcile pass (drives the CLI table + tests)."""
 
     source_key: str
-    status: str  # "reconciled" | "no-op" | "no-hook" | "empty"
+    status: ReconcileStatus
     on_disk: int = 0
     already_recorded: int = 0
     added: int = 0
@@ -122,9 +130,19 @@ def _apply_records(
     (source_key, access_url, derived period, reconciled_utc) only when the
     source has no existing entry; an existing entry's metadata is left alone.
     """
+    global _warned_no_flock
     manifest_path = project.manifest_path
     lock_path = manifest_path.with_suffix(".lock")
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    if not _HAVE_FLOCK and not _warned_no_flock:
+        # No fcntl (Windows): the read-merge-write is NOT serialized, so a
+        # concurrent reconcile/fetch could lose a merge. Surface it once rather
+        # than silently pretending to lock. (No-op on this Linux HPC pipeline.)
+        logger.warning(
+            "fcntl unavailable: manifest writes are not lock-serialized; "
+            "avoid running reconcile concurrently with fetch on this platform."
+        )
+        _warned_no_flock = True
     with open(lock_path, "a") as lock_f:
         if _HAVE_FLOCK:
             _fcntl.flock(lock_f, _fcntl.LOCK_EX)
@@ -186,6 +204,11 @@ def reconcile_manifest(
     ``sources=None`` means every catalog source (those without a registered
     reconcile hook are reported with status ``no-hook``). Gap-fill only; see
     module docstring.
+
+    A single source whose hook or writer raises is isolated: it is logged and
+    reported with status ``error`` so the run still backfills the other sources
+    and the caller sees the full table, rather than aborting on the first
+    failure (e.g. a file vanishing mid-scan on a shared datastore).
     """
     keys = sources if sources else list(_catalog.sources().keys())
     results: list[SourceReconcileResult] = []
@@ -194,9 +217,13 @@ def reconcile_manifest(
         if spec is None:
             results.append(SourceReconcileResult(key, "no-hook"))
             continue
-        records = _call_hook(spec, project, checksum=checksum)
-        if not records:
-            results.append(SourceReconcileResult(key, "empty"))
-            continue
-        results.append(_apply_records(project, key, records, dry_run=dry_run))
+        try:
+            records = _call_hook(spec, project, checksum=checksum)
+            if not records:
+                results.append(SourceReconcileResult(key, "empty"))
+                continue
+            results.append(_apply_records(project, key, records, dry_run=dry_run))
+        except Exception:
+            logger.exception("reconcile failed for source %r; skipping", key)
+            results.append(SourceReconcileResult(key, "error"))
     return results
