@@ -178,3 +178,87 @@ def test_reconcile_manifest_reports_empty_when_hook_returns_nothing(
     )
     assert results[0].status == "empty"
     assert not (tmp_path / "manifest.json").exists()
+
+
+# --- end-to-end through the real era5_land hook -------------------------
+
+
+def _seed_era5(project, *years):
+    root = project.raw_dir("era5_land")
+    (root / "daily").mkdir(parents=True, exist_ok=True)
+    (root / "monthly").mkdir(parents=True, exist_ok=True)
+    for y in years:
+        (root / "daily" / f"era5_land_daily_{y}.nc").write_bytes(b"d")
+        (root / "monthly" / f"era5_land_monthly_{y}.nc").write_bytes(b"m")
+
+
+def test_end_to_end_empty_datastore_is_noop(tmp_path):
+    project = _make_project(tmp_path)
+    results = reconcile.reconcile_manifest(project, sources=["era5_land"])
+    assert results[0].status == "empty"
+    assert not (tmp_path / "manifest.json").exists()
+
+
+def test_end_to_end_full_backfill(tmp_path):
+    project = _make_project(tmp_path)
+    _seed_era5(project, 2019, 2020, 2021)
+    results = reconcile.reconcile_manifest(project, sources=["era5_land"])
+    assert results[0].added == 3
+
+    entry = json.loads((tmp_path / "manifest.json").read_text())["sources"]["era5_land"]
+    assert {f["year"] for f in entry["files"]} == {2019, 2020, 2021}
+    assert all(f["provenance"] == "reconciled" for f in entry["files"])
+    assert entry["period"] == "2019/2021"
+
+
+def test_end_to_end_gap_fill_is_idempotent_and_preserves_fetch(tmp_path):
+    project = _make_project(tmp_path)
+    _seed_era5(project, 2019, 2020, 2021)
+    # Pre-existing manifest with a true fetch record for 2020.
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "sources": {
+                    "era5_land": {
+                        "source_key": "era5_land",
+                        "period": "2020/2020",
+                        "files": [
+                            {
+                                "year": 2020,
+                                "daily_path": "real_d",
+                                "monthly_path": "real_m",
+                                "consolidated_utc": "T",
+                            }
+                        ],
+                    }
+                },
+                "steps": [],
+            }
+        )
+    )
+    first = reconcile.reconcile_manifest(project, sources=["era5_land"])
+    assert first[0].added == 2  # 2019, 2021
+    manifest_after_first = (tmp_path / "manifest.json").read_text()
+
+    # Idempotent: a second run adds nothing and leaves the file identical.
+    second = reconcile.reconcile_manifest(project, sources=["era5_land"])
+    assert second[0].added == 0
+    assert second[0].status == "no-op"
+    assert (tmp_path / "manifest.json").read_text() == manifest_after_first
+
+    files = json.loads(manifest_after_first)["sources"]["era5_land"]["files"]
+    rec_2020 = next(f for f in files if f["year"] == 2020)
+    assert rec_2020 == {
+        "year": 2020,
+        "daily_path": "real_d",
+        "monthly_path": "real_m",
+        "consolidated_utc": "T",
+    }  # untouched fetch record, no provenance key
+
+
+def test_end_to_end_dry_run_reports_without_writing(tmp_path):
+    project = _make_project(tmp_path)
+    _seed_era5(project, 2019, 2020)
+    results = reconcile.reconcile_manifest(project, sources=["era5_land"], dry_run=True)
+    assert results[0].added == 2
+    assert not (tmp_path / "manifest.json").exists()
