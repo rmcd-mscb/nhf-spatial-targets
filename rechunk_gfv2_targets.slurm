@@ -4,7 +4,7 @@
 #SBATCH --partition=cpu
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=64G
+#SBATCH --mem=160G
 #SBATCH --time=2:00:00
 #SBATCH --output=logs/rechunk_tgt_%j.out
 #SBATCH --error=logs/rechunk_tgt_%j.err
@@ -12,9 +12,16 @@
 # Convert a project's target NCs to the canonical columnar layout (#165 ST3b).
 # The 11 GB swe_targets.nc + nn_filled written by the old streaming stitch carry
 # time-slab chunks; shape-aware rechunk (PR #172) converts them so a per-HRU
-# calibration read is 1 chunk instead of ~39. --mem=64G covers loading an 11 GB
-# file whole (+ tmp write + read-back bit-identity verify). Idempotent +
-# value-checked per file; safe to re-run (already-canonical targets are skipped).
+# calibration read is 1 chunk instead of ~39. Idempotent + value-checked per
+# file; safe to re-run (already-canonical targets are skipped).
+#
+# --mem=160G: rechunk_file is EAGER — it `.load()`s the whole dataset, then the
+# verify loop reads each var back from the tmp file to compare. The gfv2 SWE
+# targets are ~11 GB on disk but ~55 GB DECOMPRESSED (16802 x 361471 float32
+# bounds x2 + int8 n_sources), so peak RSS is ~load(55) + largest-var read-back
+# (~24) + numpy temporaries ~= 100 GB. 64G OOM-killed it at the SWE step (job
+# 21635275); 160G leaves headroom on the 512 GB cn nodes. A project whose
+# largest target is smaller can drop this back down.
 #
 # USAGE
 #   mkdir -p logs
