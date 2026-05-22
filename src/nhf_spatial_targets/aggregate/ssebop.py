@@ -215,7 +215,7 @@ def aggregate_ssebop(
     # data/aggregated/ssebop_agg_aet.nc. _migrate_legacy_layout only
     # handles the <source_key>_agg.nc convention, so we have to unlink
     # this bespoke filename ourselves. missing_ok defends against a
-    # parallel agg_all.slurm task already having removed it.
+    # parallel aggregation-array task already having removed it.
     legacy_consolidated = project.aggregated_dir() / "ssebop_agg_aet.nc"
     legacy_consolidated.unlink(missing_ok=True)
     _migrate_legacy_layout(project, _SOURCE_KEY)

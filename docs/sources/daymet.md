@@ -145,15 +145,15 @@ against SNODAS's WGS84 grid — see
 Daily aggregation runs at ~3-4 s per batch once weights are cached;
 the cache is reused across all years.
 
-### SLURM wiring (`agg_daymet.slurm`, standalone)
+### SLURM wiring (`slurm/shared/agg_daymet.slurm`, standalone)
 
-Daymet has its own slurm script rather than slotting into
-`agg_all.slurm` because `agg daymet` requires `--period` and `agg
+Daymet has its own slurm script rather than slotting into the
+`agg_all_<fabric>.slurm` array because `agg daymet` requires `--period` and `agg
 all` doesn't forward periods. Run via:
 
 ```bash
-PROJECT_DIR=/path/to/project PERIOD=1980/2024 sbatch agg_daymet.slurm
+PROJECT_DIR=/path/to/project PERIOD=1980/2024 sbatch slurm/shared/agg_daymet.slurm
 ```
 
-`REGION` defaults to `na`; override with `REGION=na sbatch agg_daymet.slurm`
+`REGION` defaults to `na`; override with `REGION=na sbatch slurm/shared/agg_daymet.slurm`
 once HI/PR are wired up.

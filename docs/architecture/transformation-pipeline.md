@@ -301,7 +301,7 @@ for either:
 The validation cell is the field-tested practical check that the
 transformation policy is being respected. If you're refactoring how
 transformations are split between stages, run the inspect notebooks (via
-`inspect_aggregated.slurm` for memory) before and after — the % diff
+`slurm/shared/inspect_aggregated.slurm` for memory) before and after — the % diff
 column in each validation cell should be unchanged within rounding.
 
 ## Canonical row order on emission

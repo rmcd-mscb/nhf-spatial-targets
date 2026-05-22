@@ -252,12 +252,14 @@ Expect ERA5-Land and MODIS fetches to take many hours for a full 1979–2025 per
 
 #### On HPC (SLURM)
 
-Six SLURM scripts at the repo root cover all sources:
+SLURM scripts live under `slurm/`: fabric-independent ones in `slurm/shared/`,
+fabric-specific wrappers in `slurm/project_<fabric>/`. Fetch is
+fabric-independent (the datastore is shared):
 
-- [`fetch_all.slurm`](fetch_all.slurm) — 14-element array, one task per source (general case)
-- [`fetch_era5_land.slurm`](fetch_era5_land.slurm) — sharded array (default 4 workers) for ERA5-Land specifically; respects CDS per-user throttling
-- [`fetch_snodas.slurm`](fetch_snodas.slurm) — sharded array (default 4 workers) for SNODAS; per-day idempotent
-- [`fetch_margulis_wus_sr.slurm`](fetch_margulis_wus_sr.slurm) — single task; Oregon-scoped, no sharding yet
+- [`slurm/shared/fetch_all.slurm`](slurm/shared/fetch_all.slurm) — 14-element array, one task per source (general case)
+- [`slurm/shared/fetch_era5_land.slurm`](slurm/shared/fetch_era5_land.slurm) — sharded array (default 4 workers) for ERA5-Land specifically; respects CDS per-user throttling
+- [`slurm/shared/fetch_snodas.slurm`](slurm/shared/fetch_snodas.slurm) — sharded array (default 4 workers) for SNODAS; per-day idempotent
+- [`slurm/project_or/fetch_margulis_wus_sr.slurm`](slurm/project_or/fetch_margulis_wus_sr.slurm) — single task; Oregon-scoped (raw downloads still datastore-shared), no sharding yet
 
 **Prerequisites — complete these before submitting:**
 
@@ -274,13 +276,13 @@ mkdir -p logs
 export PROJECT_DIR=/path/to/gfv11-targets
 
 # General fetch-all array (14 sources):
-sbatch fetch_all.slurm
+sbatch slurm/shared/fetch_all.slurm
 
 # Single source by index (e.g. rerun MERRA-2 only):
-sbatch --array=2 fetch_all.slurm
+sbatch --array=2 slurm/shared/fetch_all.slurm
 
 # Force re-fetch (re-runs per-year work for sources that track per-year completion):
-FORCE=1 sbatch --array=8 fetch_all.slurm
+FORCE=1 sbatch --array=8 slurm/shared/fetch_all.slurm
 
 # Monitor jobs:
 squeue -u $USER
@@ -289,7 +291,7 @@ squeue -u $USER
 tail -f logs/fetch_0_*.out
 ```
 
-Array index → source mapping (`fetch_all.slurm`):
+Array index → source mapping (`slurm/shared/fetch_all.slurm`):
 
 | Index | Source | Period in script | Notes |
 |---|---|---|---|
@@ -308,7 +310,7 @@ Array index → source mapping (`fetch_all.slurm`):
 | 12 | SNODAS | 2003/2024 | NSIDC G02158 via earthaccess |
 | 13 | Margulis WUS-SR | 1985/2021 | NSIDC-0719 via earthaccess; OR-fabric only |
 
-Most fetch routines are network I/O-bound; the general script allocates 1 CPU and 128 GB RAM per task with a 24-hour wall-clock limit. Per-source scripts (`fetch_era5_land.slurm`, `fetch_snodas.slurm`, `fetch_margulis_wus_sr.slurm`) tune memory and concurrency for their workload — notably SNODAS uses only 8 GB because PR #110's dask-streaming consolidator bounds peak RSS. Override `PROJECT_DIR` and `REPO_DIR` via environment before submission. SLURM directives (`--account`, `--partition`) at the top of each script may need adjustment for your cluster.
+Most fetch routines are network I/O-bound; the general script allocates 1 CPU and 128 GB RAM per task with a 24-hour wall-clock limit. Per-source scripts (`slurm/shared/fetch_era5_land.slurm`, `slurm/shared/fetch_snodas.slurm`, `slurm/project_or/fetch_margulis_wus_sr.slurm`) tune memory and concurrency for their workload — notably SNODAS uses only 8 GB because PR #110's dask-streaming consolidator bounds peak RSS. Override `PROJECT_DIR` and `REPO_DIR` via environment before submission. SLURM directives (`--account`, `--partition`) at the top of each script may need adjustment for your cluster.
 
 ### Running Aggregation: PC vs HPC
 
@@ -333,40 +335,43 @@ Each aggregator writes one or more NetCDFs to `<project>/data/aggregated/<source
 
 #### On HPC (SLURM)
 
-Three scripts at the repo root:
+The 14-source aggregation array is a per-fabric wrapper that sources a shared
+body (`slurm/shared/agg_all.body.sh`); SSEBop and Daymet stay separate (remote
+STAC / region-arg). Only `PROJECT_DIR` differs between fabrics:
 
-- [`agg_all.slurm`](agg_all.slurm) — 12-element array for local-NC aggregators
-- [`agg_ssebop.slurm`](agg_ssebop.slurm) — single job for SSEBop (remote STAC)
-- [`agg_daymet.slurm`](agg_daymet.slurm) — single job for Daymet (local zarr, per-region)
+- [`slurm/project_gfv2/agg_all_gfv2.slurm`](slurm/project_gfv2/agg_all_gfv2.slurm) / [`slurm/project_or/agg_all_or.slurm`](slurm/project_or/agg_all_or.slurm) — 14-element array for local-NC aggregators
+- [`slurm/shared/agg_ssebop.slurm`](slurm/shared/agg_ssebop.slurm) — single job for SSEBop (remote STAC)
+- [`slurm/shared/agg_daymet.slurm`](slurm/shared/agg_daymet.slurm) — single job for Daymet (local zarr, per-region)
 
 **Prerequisites:**
 
 1. Datastore hydrated (see fetch section above)
 2. `pixi run validate -- --project-dir <dir>` completed (writes `fabric.json`)
-3. `PROJECT_DIR` set via environment or edited inside the scripts
+3. For the `shared/` scripts, `PROJECT_DIR` set via environment (the
+   `project_<fabric>/` wrappers default it to their fabric)
 
 ```bash
 mkdir -p logs
-export PROJECT_DIR=/path/to/gfv11-targets
 
-# All 12 local-NC sources (run as a SLURM array):
-sbatch agg_all.slurm
+# All 14 local-NC sources for a fabric (run as a SLURM array):
+sbatch slurm/project_gfv2/agg_all_gfv2.slurm      # or slurm/project_or/agg_all_or.slurm
 
 # Rerun a single source by index (e.g. MOD10C1 at 9):
-sbatch --array=9 agg_all.slurm
+sbatch --array=9 slurm/project_gfv2/agg_all_gfv2.slurm
 
 # Bump memory for a MODIS rerun that OOMed:
-sbatch --array=8-9 --mem=256G agg_all.slurm
+sbatch --array=8-9 --mem=256G slurm/project_gfv2/agg_all_gfv2.slurm
 
 # Smaller spatial batch size:
-BATCH_SIZE=2500 sbatch agg_all.slurm
+BATCH_SIZE=2500 sbatch slurm/project_gfv2/agg_all_gfv2.slurm
 
-# SSEBop and Daymet — separate scripts:
-sbatch agg_ssebop.slurm
-PERIOD=2010/2020 sbatch agg_daymet.slurm
+# SSEBop and Daymet — separate scripts (pass PROJECT_DIR to the shared scripts):
+export PROJECT_DIR=/path/to/gfv2-spatial-targets
+sbatch slurm/shared/agg_ssebop.slurm
+PERIOD=2010/2020 sbatch slurm/shared/agg_daymet.slurm
 ```
 
-Array index → source mapping for `agg_all.slurm`:
+Array index → source mapping for the `agg_all_<fabric>.slurm` array (14 sources):
 
 | Index | Source | Notes |
 |---|---|---|
@@ -382,8 +387,10 @@ Array index → source mapping for `agg_all.slurm`:
 | 9 | MOD10C1 v061 | 0.05° daily SCA (CI-gated + masked_mean) — memory-heavy |
 | 10 | SNODAS | ~1 km daily SWE (CONUS) — WGS84-native, weight gen is the hot path |
 | 11 | MWBM ClimGrid | 2.5 arcmin monthly, 4 vars (clipped to 1979/2020 in-script) |
+| 12 | ERA5-Land sd | 0.1° daily snow depth (SWE source) |
+| 13 | Margulis WUS-SR | 90 m daily SWE — OR-only (fabric_scope=[or]); no-op on other fabrics |
 
-All jobs are CPU/memory-bound; `agg_all.slurm` allocates 1 CPU and 128 GB RAM per task with a 24-hour wall-clock limit. Override `BATCH_SIZE` (default 10000 HRUs/batch, tuned for 128 GB) with `BATCH_SIZE=2500 sbatch agg_all.slurm` if a source OOMs. WGS84-native sources (SNODAS, GLDAS) cost ~5–8× more in weight generation than projected sources (Daymet, MODIS sinusoidal) at comparable resolution — see [`docs/architecture/transformation-pipeline.md`](docs/architecture/transformation-pipeline.md).
+All jobs are CPU/memory-bound; the agg array allocates 1 CPU and 128 GB RAM per task with a 24-hour wall-clock limit. Override `BATCH_SIZE` (default 10000 HRUs/batch, tuned for 128 GB) with `BATCH_SIZE=2500 sbatch slurm/project_<fabric>/agg_all_<fabric>.slurm` if a source OOMs. WGS84-native sources (SNODAS, GLDAS) cost ~5–8× more in weight generation than projected sources (Daymet, MODIS sinusoidal) at comparable resolution — see [`docs/architecture/transformation-pipeline.md`](docs/architecture/transformation-pipeline.md).
 
 ### Running Targets: PC vs HPC
 
@@ -396,16 +403,14 @@ pixi run run-runoff -- --project-dir /data/gfv11-targets
 pixi run run-aet    -- --project-dir /data/gfv11-targets   # stub: skipped with warning
 ```
 
-On HPC, [`run_all.slurm`](run_all.slurm) submits a 6-element array (runoff, aet, rch, som, sca, swe). Targets whose builders are still stubs raise `NotImplementedError`, which the CLI catches and logs as a `WARNING ... skipping` so the array doesn't fail noisily.
+On HPC, the per-fabric [`slurm/project_gfv2/run_gfv2.slurm`](slurm/project_gfv2/run_gfv2.slurm) / [`slurm/project_or/run_or.slurm`](slurm/project_or/run_or.slurm) submit a 6-element array (runoff, aet, rch, som, sca, swe) over a shared body. SCA is still a stub: it raises `NotImplementedError`, which the CLI catches and logs as a `WARNING ... skipping`, so the array completes without failing.
 
 ### Inspection Notebooks
 
 `notebooks/consolidated/` and `notebooks/aggregated/` contain per-target sanity-check notebooks that compare sources at the gridded (pre-aggregation) and HRU (post-aggregation) scales. Run them locally, or headlessly on HPC via:
 
-- [`inspect_consolidated.slurm`](inspect_consolidated.slurm) — 5-element array, `notebooks/consolidated/inspect_consolidated_<target>.ipynb` (192 GB by default; CONUS-wide gridded comparisons)
-- [`inspect_aggregated.slurm`](inspect_aggregated.slurm) — 5-element array, `notebooks/aggregated/inspect_aggregated_<target>.ipynb`
-
-These inspection arrays stay 5-element — there is no SWE inspection notebook yet (the SWE target builder is unimplemented; see #101).
+- [`slurm/shared/inspect_consolidated.slurm`](slurm/shared/inspect_consolidated.slurm) — array over `notebooks/consolidated/inspect_consolidated_<target>.ipynb` (192 GB by default; CONUS-wide gridded comparisons)
+- [`slurm/shared/inspect_aggregated.slurm`](slurm/shared/inspect_aggregated.slurm) — array over `notebooks/aggregated/inspect_aggregated_<target>.ipynb`
 
 Set `SAVE_FIGURES=1` to also write rendered panels under `docs/figures/{consolidated,aggregated}/<project>/`. `notebooks/targets/inspect_target_runoff.ipynb` inspects the final per-HRU runoff bounds.
 
