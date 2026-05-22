@@ -308,21 +308,33 @@ def _infer_hru_dim(ds: xr.Dataset) -> str | None:
 
 
 def _cadence_to_period_freq(cadence: str | None) -> str | None:
-    """Map a catalog ``time_step`` phrase to a pandas period freq for time_bnds.
+    """Map a :class:`SourceAdapter` ``output_cadence`` to a pandas period freq.
 
     Returns ``"M"`` / ``"Y"`` for monthly/annual aggregated outputs (so the
     bound brackets the calendar month/year regardless of where the timestamp
-    sits within it), or ``None`` for daily/instantaneous (point) sources,
-    which represent an instant and carry no averaging interval.
+    sits within it), or ``None`` for ``daily``/``8-day`` (instantaneous or
+    composite) outputs and unset cadence — these carry no calendar-period
+    averaging interval, so no ``time_bnds`` is fabricated.
+
+    Raises on an unrecognized non-empty value rather than silently returning
+    ``None`` (which would also strip a legitimate ``bounds`` attr): a bad
+    cadence is a programming error, not a no-op. SourceAdapter validates the
+    vocabulary at construction, so this only fires for the few call sites that
+    pass a literal (e.g. ssebop).
     """
-    if not cadence:
+    if cadence is None:
         return None
-    c = cadence.lower()
-    if "monthly" in c:
+    c = cadence.strip().lower()
+    if c == "monthly":
         return "M"
-    if "annual" in c:
+    if c == "annual":
         return "Y"
-    return None
+    if c in ("daily", "8-day"):
+        return None
+    raise ValueError(
+        f"unrecognized output cadence {cadence!r}; expected one of "
+        "monthly, annual, daily, 8-day (or None)"
+    )
 
 
 def _normalize_cf_fabric_metadata(
@@ -378,6 +390,14 @@ def _normalize_cf_fabric_metadata(
     if hru and hru in ds.variables:
         ds[hru].attrs.pop("units", None)
         ds[hru].attrs["long_name"] = "HRU Index"
+    elif id_col is None:
+        # Inference failed (≠1 non-time dim) on the id_col-less path. Surface
+        # it rather than silently shipping an unlabeled HRU coordinate.
+        logger.warning(
+            "could not uniquely identify the HRU dimension among %s; "
+            "skipping HRU index labeling (CF §3). Pass id_col explicitly.",
+            [d for d in ds.sizes if d not in ("time", "nv", "bnds", "nbnds")],
+        )
     return ds
 
 
@@ -405,10 +425,11 @@ def _atomic_write_netcdf(
     no float64→float32 downcast happens here (that would be a values change,
     not a storage-layer change).
 
-    When ``id_col`` is ``None`` the Dataset is written without added
-    encoding (the pre-#165 behavior). The daymet (zarr) and ssebop (STAC)
-    aggregators take this path: their outputs are produced from already-chunked
-    remote sources and are intentionally left as-is.
+    When ``id_col`` is ``None`` (the daymet/ssebop path), per-HRU chunking and
+    zlib compression are skipped — those outputs come from already-chunked
+    remote sources. Only the storage-layer chunking differs: the CF metadata
+    normalization above and the pinned time-axis encoding still apply on this
+    path.
     """
     ds = _normalize_cf_fabric_metadata(ds, id_col=id_col, cadence=time_bounds_cadence)
 
@@ -665,8 +686,12 @@ def aggregate_year(
     # downstream consumers a stable invariant.
     year_ds = year_ds.sortby(id_col)
 
+    # Cadence comes from the adapter's authoritative output_cadence, NOT the
+    # catalog time_step free-text (unreliable: one entry serves era5_land's
+    # monthly runoff + daily SWE, and "8-day (aggregate to monthly)" describes
+    # intent, not emitted stamps — see SourceAdapter.output_cadence).
     _atomic_write_netcdf(
-        year_ds, out_path, id_col=id_col, time_bounds_cadence=meta.get("time_step")
+        year_ds, out_path, id_col=id_col, time_bounds_cadence=adapter.output_cadence
     )
     logger.info("%s: year %d: wrote %s", adapter.source_key, year, out_path)
     return out_path

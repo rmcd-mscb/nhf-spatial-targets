@@ -495,3 +495,12 @@ def test_build_nn_fill_actually_fills_nan_cells(tmp_path: Path):
             filled["lower_bound"].values[:, 1],
             filled["lower_bound"].values[:, 0],
         )
+
+    # CF-1.6 on the real nn_filled flag (issue #182): on-disk flag_values dtype
+    # matches the int8 parent (§3.5), and the spatial reference is anchored.
+    import netCDF4 as _nc
+
+    with _nc.Dataset(nn_path) as ncf:
+        assert ncf["nn_filled"].flag_values.dtype == np.dtype("int8")
+        assert ncf["nn_filled"].grid_mapping == "crs"
+        assert "crs" in ncf.variables and ncf["crs"].ndim == 0

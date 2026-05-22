@@ -10,6 +10,7 @@ from nhf_spatial_targets.aggregate._driver import aggregate_source
 
 ADAPTER = SourceAdapter(
     source_key="watergap22d",
+    output_cadence="monthly",
     output_name="watergap22d_agg.nc",
     variables=["qrdif"],
     files_glob="*_cf.nc",

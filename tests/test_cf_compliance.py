@@ -20,6 +20,7 @@ from pathlib import Path
 import netCDF4 as nc
 import numpy as np
 import pandas as pd
+import pytest
 import xarray as xr
 
 ID_COL = "nat_hru_id"
@@ -132,6 +133,55 @@ def _make_aggregated_ds(*, n_time: int, broadcast_crs: bool = True) -> xr.Datase
     ds["time"].attrs.update({"standard_name": "time", "bounds": "time_bnds"})
     ds[ID_COL].attrs["feature_id"] = ID_COL
     return ds
+
+
+# --------------------------------------------------------------------------
+# cadence → period freq (E) — the parser that drives time_bnds reconstruction
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "cadence,expected",
+    [
+        ("monthly", "M"),
+        ("annual", "Y"),
+        ("daily", None),  # instantaneous: no calendar-period bound
+        ("8-day", None),  # composite: no clean calendar period (don't fabricate)
+        (None, None),
+    ],
+)
+def test_cadence_to_period_freq_known_values(cadence, expected):
+    from nhf_spatial_targets.aggregate._driver import _cadence_to_period_freq
+
+    assert _cadence_to_period_freq(cadence) == expected
+
+
+def test_cadence_to_period_freq_rejects_unknown():
+    # A bad cadence must raise, not silently return None (which would also
+    # strip a legitimate bounds attr) — the era5_land_sd-class bug guard.
+    from nhf_spatial_targets.aggregate._driver import _cadence_to_period_freq
+
+    with pytest.raises(ValueError):
+        _cadence_to_period_freq("hourly (aggregated to daily and monthly)")
+
+
+def test_every_adapter_output_cadence_is_resolvable():
+    """All adapter output_cadence values parse (no live source mis-mapped)."""
+    import importlib
+    import pkgutil
+
+    import nhf_spatial_targets.aggregate as agg
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import _cadence_to_period_freq
+
+    seen = 0
+    for mod in pkgutil.iter_modules(agg.__path__):
+        m = importlib.import_module(f"nhf_spatial_targets.aggregate.{mod.name}")
+        for obj in vars(m).values():
+            if isinstance(obj, SourceAdapter):
+                _cadence_to_period_freq(obj.output_cadence)  # must not raise
+                seen += 1
+    assert seen >= 14  # all module-level adapters validated
 
 
 # --------------------------------------------------------------------------

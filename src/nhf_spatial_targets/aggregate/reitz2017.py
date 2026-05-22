@@ -10,6 +10,7 @@ from nhf_spatial_targets.aggregate._driver import aggregate_source
 
 ADAPTER = SourceAdapter(
     source_key="reitz2017",
+    output_cadence="annual",
     output_name="reitz2017_agg.nc",
     variables=("total_recharge", "eff_recharge"),
     source_crs="EPSG:4269",  # NAD83 geographic; overrides EPSG:4326 default — not reprojected at fetch
