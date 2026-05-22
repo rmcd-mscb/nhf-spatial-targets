@@ -1079,52 +1079,46 @@ def stitch_year_chunks_to_target(
     title: str,
     extra_global_attrs: dict | None,
     sort_dim: str,
-    time_chunk_days: int = 365,
 ) -> None:
     """Lazily open per-year target NCs and stream them into one canonical NC.
 
-    Uses ``xr.open_mfdataset`` with explicit ``chunks=`` to keep the
-    dataset dask-backed, then writes via ``to_netcdf`` so the per-year
-    chunks flow through to disk one at a time instead of being
-    materialised in memory. Peak memory therefore stays bounded by one
-    year's worth of data regardless of how many years the period spans
-    — the whole point of the year-chunked build pattern.
+    Streams as **full-time HRU columns**: the dataset is rechunked to
+    ``{"time": -1, sort_dim: chunk_hru}`` so a single dask chunk spans the
+    whole time axis for a block of HRUs. This matches the columnar on-disk
+    layout that :func:`io_nc.build_encoding` writes (``(full_time, chunk_hru)``)
+    — each on-disk chunk is filled in one pass, never re-compressed across year
+    boundaries (issue #165 ST3b). Peak memory is one ~256 MiB column block, not
+    the whole target.
 
-    Per-variable encoding mirrors :func:`write_target_nc` (float32+zlib
-    for ``lower_bound`` / ``upper_bound``, int8+zlib for ``n_sources`` /
-    ``nn_filled``, ``days since 1970-01-01`` for the time axis); the
-    global attrs are taken from the first per-year file and then
-    overridden by ``extra_global_attrs`` plus a fresh ``history`` line.
+    (This replaces the earlier year-slab streaming, which bounded memory the
+    same way but produced a time-slab on-disk layout that made per-HRU
+    calibration reads pull every time chunk.)
 
-    The stitched output is sorted ascending on ``sort_dim`` (typically
-    ``project.id_col``) before write to preserve the canonical row order
-    invariant from issue #93. Atomic via tempfile + rename, same as
-    ``write_target_nc``.
+    Encoding is delegated to :func:`io_nc.build_encoding` (``layer="target"``):
+    float32+zlib bounds, int8+zlib diagnostics, pinned ``proleptic_gregorian``
+    time. Global attrs are taken from the first per-year file, then overridden
+    by ``extra_global_attrs`` plus a fresh ``history`` line. The output is
+    sorted ascending on ``sort_dim`` (issue #93) and written atomically via
+    :func:`io_nc.atomic_to_netcdf`.
 
     Parameters
     ----------
     intermediate_files
-        Per-year NC paths to stitch (already sorted by year via
-        filename glob).
+        Per-year NC paths to stitch (already sorted by year via filename glob).
     output_path
         Final canonical NC path (e.g. ``<project>/targets/swe_targets.nc``).
     title
         Global ``title`` attr for the stitched file.
     extra_global_attrs
-        Per-target metadata to overlay on top of the per-year files'
-        global attrs (e.g. ``period``, ``source``, ``fabric``).
+        Per-target metadata to overlay on the per-year files' global attrs.
     sort_dim
         Dimension to sort ascending on before write (typically
-        ``project.id_col``).
-    time_chunk_days
-        Dask chunk size along the time axis when opening intermediates.
-        Defaults to 365 — one year per chunk, which is also the natural
-        per-file boundary, so to_netcdf streams one file's worth at a
-        time.
+        ``project.id_col``); also the HRU chunk dimension.
     """
     from datetime import datetime, timezone
 
     from nhf_spatial_targets import __version__
+    from nhf_spatial_targets.io_nc import atomic_to_netcdf, build_encoding
 
     if not intermediate_files:
         raise ValueError(
@@ -1144,11 +1138,19 @@ def stitch_year_chunks_to_target(
         # weight-cache poisoning) and should fail loud, not silently
         # broadcast NaN on the union as `join="outer"` would.
         join="exact",
-        chunks={"time": time_chunk_days, sort_dim: -1},
+        chunks={},  # native per-file chunks; rechunked to columns below
         engine="netcdf4",
     )
     try:
         ds = ds.sortby(sort_dim)
+        # Rechunk to full-time HRU columns so the columnar on-disk write fills
+        # each chunk in one pass (no cross-year re-compression). chunk_hru here
+        # (~256 MiB read block) is intentionally wider than the ~1 MiB on-disk
+        # chunk: it bounds streaming memory while still spanning the full time
+        # axis, so every on-disk chunk it covers is written exactly once.
+        n_time = int(ds.sizes.get("time", 1))
+        ds = ds.chunk({"time": -1, sort_dim: _read_chunk_hru(n_time, 4)})
+
         # `combine_attrs="override"` (the open_mfdataset default) keeps
         # the first file's attrs, which include per-year-only attrs
         # like ``year_chunk`` that don't apply to the stitched
@@ -1167,45 +1169,20 @@ def stitch_year_chunks_to_target(
         if extra_global_attrs:
             ds.attrs.update(extra_global_attrs)
 
-        encoding: dict = {}
-        for v in ("lower_bound", "upper_bound"):
-            if v in ds.data_vars:
-                encoding[v] = {
-                    "dtype": "float32",
-                    "zlib": True,
-                    "complevel": 4,
-                    "_FillValue": np.float32("nan"),
-                }
-        for v in ("n_sources", "nn_filled"):
-            if v in ds.data_vars:
-                encoding[v] = {
-                    "dtype": "int8",
-                    "zlib": True,
-                    "complevel": 4,
-                    "_FillValue": None,
-                }
-        if "time" in ds.coords or "time" in ds.dims or "time" in ds.variables:
-            encoding["time"] = {
-                "dtype": "float64",
-                "units": "days since 1970-01-01 00:00:00",
-                "calendar": "proleptic_gregorian",
-            }
-        if "time_bnds" in ds.variables:
-            encoding["time_bnds"] = {
-                "dtype": "float64",
-                "units": "days since 1970-01-01 00:00:00",
-                "calendar": "proleptic_gregorian",
-            }
-
-        tmp = output_path.with_suffix(output_path.suffix + ".tmp")
-        try:
-            # Streaming write — dask schedules one chunk at a time, so
-            # peak memory stays bounded by ~one year's worth of data.
-            ds.to_netcdf(tmp, format="NETCDF4", encoding=encoding)
-            tmp.rename(output_path)
-        except BaseException:
-            tmp.unlink(missing_ok=True)
-            raise
+        target_dtypes = {
+            v: "float32" for v in ("lower_bound", "upper_bound") if v in ds.data_vars
+        }
+        target_dtypes.update(
+            {v: "int8" for v in ("n_sources", "nn_filled") if v in ds.data_vars}
+        )
+        encoding = build_encoding(
+            ds,
+            layer="target",
+            hru_dim=sort_dim,
+            var_dtype=target_dtypes,
+            timesteps_per_file=n_time,
+        )
+        atomic_to_netcdf(ds, output_path, encoding=encoding)
     finally:
         ds.close()
 

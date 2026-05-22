@@ -51,28 +51,36 @@ _VALID_LAYERS = ("aggregated", "target")
 _SKIP_SOURCES = frozenset({"daymet", "ssebop"})
 
 
-def is_rechunked(path: Path) -> bool:
-    """True only if *every* field (>=2D) variable is chunked + zlib-compressed.
+def is_rechunked(path: Path, layer: str, id_col: str) -> bool:
+    """True iff every HRU-dim data var is already in the canonical layout.
 
-    Checking all field variables — not just the first — is essential: a file
-    where one variable is chunked but another is still contiguous (e.g. an
-    interrupted earlier run) must be rewritten, not silently skipped. A
-    mixed-chunk-state file is logged at WARNING and reported as not-yet-rechunked.
+    "Canonical" means the exact ``chunksizes`` that
+    :func:`io_nc.build_encoding` would assign for *layer*, plus zlib. This is
+    deliberately **shape-aware**, not merely "is it chunked at all": a file
+    chunked in a *different* shape (e.g. a target built by the old streaming
+    stitch with netCDF4's auto-picked time-slab chunks) is reported as
+    not-yet-rechunked so ``rechunk`` converts it to the columnar layout.
+
+    Only the variables ``build_encoding`` actually chunks are checked — the
+    HRU-dim data vars. Bounds variables like ``time_bnds`` and the ``crs``
+    grid-mapping container are ignored (they are never chunked), so a target
+    NC with a ``time_bnds`` is correctly idempotent.
     """
+    with xr.open_dataset(path) as ds:
+        if id_col not in ds.dims:
+            return True  # nothing chunkable here; the skip reason is set upstream
+        enc = build_encoding(
+            ds, layer=layer, hru_dim=id_col, timesteps_per_file=ds.sizes.get("time")
+        )
+    desired = {n: tuple(e["chunksizes"]) for n, e in enc.items() if "chunksizes" in e}
+    if not desired:
+        return True
     with netCDF4.Dataset(path) as nc:
-        field_vars = [v for v in nc.variables.values() if v.ndim >= 2]
-        if not field_vars:
-            return False
-        states = [
-            v.chunking() != "contiguous" and bool(v.filters().get("zlib"))
-            for v in field_vars
-        ]
-        if any(states) and not all(states):
-            logger.warning(
-                "%s has mixed chunk state across field variables; will rechunk.",
-                path,
-            )
-        return all(states)
+        for name, want in desired.items():
+            v = nc.variables[name]
+            if tuple(v.chunking()) != want or not bool(v.filters().get("zlib")):
+                return False
+    return True
 
 
 def _arrays_equal(a: np.ndarray, b: np.ndarray) -> bool:
@@ -117,7 +125,17 @@ def rechunk_file(
     detects a mismatch (the original is left untouched in that case).
     """
     size_before = path.stat().st_size
-    if is_rechunked(path):
+    # A stray, non-fabric NC (no HRU dim) can't be chunked by the
+    # aggregated/target formula — skip it rather than crash build_encoding.
+    with xr.open_dataset(path) as ds_lazy:
+        if id_col not in ds_lazy.dims:
+            return {
+                "path": path,
+                "status": "skipped-no-hru",
+                "size_before": size_before,
+                "size_after": size_before,
+            }
+    if is_rechunked(path, layer, id_col):
         return {
             "path": path,
             "status": "skipped",
@@ -133,15 +151,6 @@ def rechunk_file(
         }
 
     with xr.open_dataset(path) as ds_lazy:
-        # A stray, non-fabric NC (no HRU dim) can't be chunked by the
-        # aggregated/target formula — skip it rather than crash build_encoding.
-        if id_col not in ds_lazy.dims:
-            return {
-                "path": path,
-                "status": "skipped-no-hru",
-                "size_before": size_before,
-                "size_after": size_before,
-            }
         ds = ds_lazy.load()
     encoding = build_encoding(
         ds, layer=layer, hru_dim=id_col, timesteps_per_file=ds.sizes.get("time")

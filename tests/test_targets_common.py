@@ -1355,6 +1355,40 @@ def test_stitch_applies_canonical_attrs_and_history(tmp_path: Path):
         assert "stitched from 1 per-year NCs" in ds.attrs["history"]
 
 
+def test_stitch_writes_columnar_chunks_and_preserves_values(tmp_path: Path):
+    """Stitched output is columnar (full-time, chunk_hru) + value-correct (#165 ST3b)."""
+    import math
+
+    import netCDF4
+
+    from nhf_spatial_targets.targets._common import stitch_year_chunks_to_target
+
+    inter = tmp_path / "intermediates"
+    _write_year_chunk_nc(inter / "swe_targets_2003.nc", 2003, bound_value=2.0)
+    _write_year_chunk_nc(inter / "swe_targets_2004.nc", 2004, bound_value=2.0)
+
+    out = tmp_path / "swe_targets.nc"
+    stitch_year_chunks_to_target(
+        sorted(inter.glob("swe_targets_*.nc")),
+        out,
+        title="t",
+        extra_global_attrs=None,
+        sort_dim="nhm_id",
+    )
+
+    n_time = 731  # 365 + 366
+    chunk_hru = min(math.ceil(1_048_576 / (n_time * 4)), 3)  # capped at 3 HRUs
+    with netCDF4.Dataset(out) as nc:
+        # Time axis whole within a chunk → per-HRU calibration read is 1 chunk.
+        assert tuple(nc.variables["lower_bound"].chunking()) == (n_time, chunk_hru)
+        assert nc.variables["lower_bound"].filters()["zlib"] is True
+        assert nc.variables["lower_bound"].filters()["shuffle"] is False
+        assert nc.variables["n_sources"].filters()["shuffle"] is True
+    with xr.open_dataset(out) as ds:
+        assert float(ds["lower_bound"].isel(time=0, nhm_id=0)) == 2.0
+        assert float(ds["upper_bound"].isel(time=0, nhm_id=0)) == 3.0
+
+
 def test_stitch_fails_loud_on_hru_coord_mismatch(tmp_path: Path):
     """join='exact' must raise when per-year files don't share HRU
     coords — this catches per-year-build corruption (fabric drift,

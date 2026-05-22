@@ -199,27 +199,56 @@ def test_rechunk_source_filter(tmp_path: Path):
 # --- safety paths surfaced by PR #170 review ----------------------------
 
 
-def test_is_rechunked_detects_mixed_chunk_state(tmp_path: Path):
-    """A file with one chunked + one contiguous field var is NOT 'rechunked'."""
+def test_is_rechunked_is_shape_aware(tmp_path: Path):
+    """A file chunked in a NON-canonical shape is reported not-yet-rechunked.
+
+    Guards the #165 ST3b reframe: rechunk must convert a target the old
+    streaming stitch wrote with auto-picked time-slab chunks, not skip it
+    just because it happens to be chunked.
+    """
     from nhf_spatial_targets.rechunk import is_rechunked
 
-    p = tmp_path / "mixed.nc"
-    n_time, n_hru = 12, 50
+    p = tmp_path / "wrongshape.nc"
+    n_time, n_hru = 24, 5_000
     ds = xr.Dataset(
-        {
-            "a": (("time", "nhm_id"), np.ones((n_time, n_hru))),
-            "b": (("time", "nhm_id"), np.ones((n_time, n_hru))),
-        },
+        {"lower_bound": (("time", "nhm_id"), np.ones((n_time, n_hru), "float32"))},
         coords={
             "time": pd.date_range("2000-01-01", periods=n_time, freq="MS"),
             "nhm_id": np.arange(n_hru),
         },
     )
-    # Chunk+compress only 'a'; leave 'b' contiguous → mixed state.
-    ds.to_netcdf(
-        p, encoding={"a": {"zlib": True, "complevel": 1, "chunksizes": (n_time, n_hru)}}
+    # Time-slab chunk (12, n_hru) — chunked + zlib, but NOT the canonical
+    # (n_time, chunk_hru) columnar shape build_encoding would assign.
+    ds.to_netcdf(p, encoding={"lower_bound": {"zlib": True, "chunksizes": (12, n_hru)}})
+    assert not is_rechunked(p, "target", "nhm_id")
+
+
+def test_is_rechunked_idempotent_with_time_bnds(tmp_path: Path):
+    """A canonically-written target with time_bnds is reported rechunked.
+
+    Regression for the #170 bug where time_bnds (a 2-D, uncompressed bounds
+    var) was counted as a field var, breaking idempotency for every target.
+    """
+    from nhf_spatial_targets.io_nc import atomic_to_netcdf, build_encoding
+    from nhf_spatial_targets.rechunk import is_rechunked
+
+    p = tmp_path / "with_bnds.nc"
+    n_time, n_hru = 24, 5_000
+    times = pd.date_range("2000-01-01", periods=n_time, freq="MS")
+    bnds = np.stack([times.values, (times + pd.offsets.MonthBegin(1)).values], axis=1)
+    ds = xr.Dataset(
+        {
+            "lower_bound": (("time", "nhm_id"), np.ones((n_time, n_hru), "float32")),
+            "time_bnds": (("time", "nv"), bnds),
+        },
+        coords={"time": times, "nhm_id": np.arange(n_hru)},
     )
-    assert not is_rechunked(p)  # would have been True under first-var-only check
+    enc = build_encoding(
+        ds, layer="target", hru_dim="nhm_id", timesteps_per_file=n_time
+    )
+    atomic_to_netcdf(ds, p, encoding=enc)
+    # time_bnds is uncompressed by design; it must NOT make the file look unchunked.
+    assert is_rechunked(p, "target", "nhm_id")
 
 
 def test_rechunk_file_aborts_on_value_mismatch_leaving_original(
