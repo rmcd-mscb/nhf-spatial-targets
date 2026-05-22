@@ -26,6 +26,7 @@ from nhf_spatial_targets.fetch.consolidate import (
     log_memory,
     resolve_license,
 )
+from nhf_spatial_targets.workspace import Project
 from nhf_spatial_targets.workspace import load as _load_project
 
 logger = logging.getLogger(__name__)
@@ -989,3 +990,49 @@ def fetch_mod10c1(workdir: Path, period: str, force: bool = False) -> dict:
         "files": files,
         "consolidated_ncs": consolidated_ncs,
     }
+
+
+def _reconcile_modis(
+    project: Project, source_key: str, *, checksum: bool = False
+) -> list[dict]:
+    """Scan the datastore for a MODIS product's per-year consolidated NCs.
+
+    Returns one record per ``{source_key}_{year}_consolidated.nc`` found,
+    tagged ``provenance="reconciled"`` with ``downloaded_utc`` from the file
+    mtime. ``checksum=True`` adds ``sha256``. Shared by every MODIS product
+    (issue #160).
+    """
+    from nhf_spatial_targets.reconcile import sha256_file
+
+    out_dir = project.raw_dir(source_key)
+    pat = re.compile(rf"{re.escape(source_key)}_(\d{{4}})_consolidated\.nc$")
+    records: list[dict] = []
+    for nc in sorted(out_dir.glob(f"{source_key}_*_consolidated.nc")):
+        m = pat.search(nc.name)
+        if not m:
+            continue
+        try:
+            st = nc.stat()
+            rec = {
+                "year": int(m.group(1)),
+                "path": str(nc),
+                "size_bytes": st.st_size,
+                "downloaded_utc": datetime.fromtimestamp(
+                    st.st_mtime, tz=timezone.utc
+                ).isoformat(),
+                "provenance": "reconciled",
+            }
+            if checksum:
+                rec["sha256"] = sha256_file(nc)
+        except OSError as exc:
+            # A file can vanish between glob and stat/hash on a shared datastore
+            # being mutated by a concurrent fetch — skip it, don't abort.
+            logger.warning("skipping %s during reconcile: %s", nc.name, exc)
+            continue
+        records.append(rec)
+    return records
+
+
+def reconcile_mod16a2(project: Project, *, checksum: bool = False) -> list[dict]:
+    """Reconcile hook for MOD16A2 v061 (issue #160)."""
+    return _reconcile_modis(project, _MOD16A2_SOURCE_KEY, checksum=checksum)
