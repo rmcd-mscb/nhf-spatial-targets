@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import tempfile
 import zipfile
 from datetime import datetime, timezone
@@ -33,6 +34,7 @@ import nhf_spatial_targets.catalog as _catalog
 from nhf_spatial_targets import __version__
 from nhf_spatial_targets.fetch._period import years_in_period
 from nhf_spatial_targets.fetch.consolidate import apply_cf_metadata, resolve_license
+from nhf_spatial_targets.workspace import Project
 from nhf_spatial_targets.workspace import load as _load_project
 
 logger = logging.getLogger(__name__)
@@ -903,3 +905,43 @@ def _update_manifest(
             raise
         # flock released automatically when the `with open(lock_path)` block exits.
     logger.info("Updated manifest.json with ERA5-Land provenance")
+
+
+def reconcile(project: Project, *, checksum: bool = False) -> list[dict]:
+    """Scan the datastore for consolidated ERA5-Land NCs (issue #160).
+
+    Returns one record per year that has *both* a daily and a monthly NC on
+    disk, tagged ``provenance="reconciled"`` with ``consolidated_utc`` from
+    the newer of the pair's mtimes. A year with only one of the pair is
+    skipped (incomplete). ``checksum=True`` adds ``sha256_daily`` /
+    ``sha256_monthly``.
+    """
+    from nhf_spatial_targets.reconcile import sha256_file
+
+    raw_root = project.raw_dir(_SOURCE_KEY)
+    daily_dir = raw_root / "daily"
+    monthly_dir = raw_root / "monthly"
+    records: list[dict] = []
+    for daily_path in sorted(daily_dir.glob("era5_land_daily_*.nc")):
+        m = re.search(r"era5_land_daily_(\d{4})\.nc$", daily_path.name)
+        if not m:
+            continue
+        year = int(m.group(1))
+        monthly_path = monthly_dir / f"era5_land_monthly_{year}.nc"
+        if not monthly_path.exists():
+            continue
+        mtime = max(daily_path.stat().st_mtime, monthly_path.stat().st_mtime)
+        rec = {
+            "year": year,
+            "daily_path": str(daily_path),
+            "monthly_path": str(monthly_path),
+            "consolidated_utc": datetime.fromtimestamp(
+                mtime, tz=timezone.utc
+            ).isoformat(),
+            "provenance": "reconciled",
+        }
+        if checksum:
+            rec["sha256_daily"] = sha256_file(daily_path)
+            rec["sha256_monthly"] = sha256_file(monthly_path)
+        records.append(rec)
+    return records
