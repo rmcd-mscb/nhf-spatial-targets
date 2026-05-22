@@ -223,6 +223,51 @@ def test_is_rechunked_is_shape_aware(tmp_path: Path):
     assert not is_rechunked(p, "target", "nhm_id")
 
 
+def test_rechunk_converts_wrong_shape_chunked_file(tmp_path: Path):
+    """End-to-end: a chunked-but-non-canonical target is CONVERTED, not skipped.
+
+    The whole point of #165 ST3b — a target the old stitch wrote with time-slab
+    chunks must be rewritten to canonical columnar, with values preserved.
+    """
+    import math
+
+    import netCDF4
+
+    from nhf_spatial_targets.rechunk import rechunk_project
+    from nhf_spatial_targets.workspace import load
+
+    workdir = make_minimal_project(tmp_path)
+    f = workdir / "targets" / "runoff_targets.nc"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    n_time, n_hru = 24, 5_000
+    times = pd.date_range("2000-01-01", periods=n_time, freq="MS")
+    lower = np.random.default_rng(3).random((n_time, n_hru)).astype("float32")
+    ds = xr.Dataset(
+        {
+            "lower_bound": (("time", "nhm_id"), lower),
+            "n_sources": (("time", "nhm_id"), np.ones((n_time, n_hru), dtype="int8")),
+        },
+        coords={"time": times, "nhm_id": np.arange(1, n_hru + 1)},
+    )
+    # Wrong (time-slab) chunking — chunked + zlib but NOT canonical columnar.
+    ds.to_netcdf(
+        f,
+        encoding={
+            "lower_bound": {"zlib": True, "chunksizes": (12, n_hru)},
+            "n_sources": {"zlib": True, "chunksizes": (12, n_hru)},
+        },
+    )
+
+    results = rechunk_project(load(workdir), layer="target")
+    assert {r["path"].name: r["status"] for r in results}[f.name] == "rechunked"
+
+    exp_f32 = min(math.ceil(1_048_576 / (n_time * 4)), n_hru)
+    with netCDF4.Dataset(f) as nc:
+        assert tuple(nc.variables["lower_bound"].chunking()) == (n_time, exp_f32)
+    with xr.open_dataset(f) as got:
+        np.testing.assert_array_equal(got["lower_bound"].values, lower)
+
+
 def test_is_rechunked_idempotent_with_time_bnds(tmp_path: Path):
     """A canonically-written target with time_bnds is reported rechunked.
 

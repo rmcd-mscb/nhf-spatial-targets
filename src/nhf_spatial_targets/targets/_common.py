@@ -1182,9 +1182,24 @@ def stitch_year_chunks_to_target(
             var_dtype=target_dtypes,
             timesteps_per_file=n_time,
         )
+        expected_sizes = {"time": n_time, sort_dim: int(ds.sizes[sort_dim])}
         atomic_to_netcdf(ds, output_path, encoding=encoding)
     finally:
         ds.close()
+
+    # Cheap post-write coverage check: a truncated or mis-shaped stream would
+    # change the dim sizes. The per-year intermediates remain on disk, so a
+    # loud failure here is recoverable (re-run regenerates the stitch).
+    with xr.open_dataset(output_path) as _check:
+        got_sizes = {
+            "time": _check.sizes.get("time"),
+            sort_dim: _check.sizes.get(sort_dim),
+        }
+    if got_sizes != expected_sizes:
+        raise RuntimeError(
+            f"stitched output {output_path} has dims {got_sizes}, expected "
+            f"{expected_sizes}; the stitch did not write the full extent."
+        )
 
     logger.info(
         "Stitched %d per-year NCs -> %s (%.1f MB)",

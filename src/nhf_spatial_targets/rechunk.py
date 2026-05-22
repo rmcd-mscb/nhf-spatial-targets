@@ -65,10 +65,16 @@ def is_rechunked(path: Path, layer: str, id_col: str) -> bool:
     HRU-dim data vars. Bounds variables like ``time_bnds`` and the ``crs``
     grid-mapping container are ignored (they are never chunked), so a target
     NC with a ``time_bnds`` is correctly idempotent.
+
+    A file with no ``id_col`` dimension has nothing this tool can chunk, so the
+    predicate is vacuously ``True`` ("no non-canonical chunkable vars"). Callers
+    that need to distinguish "not a fabric NC" from "already canonical" must
+    check the dimension themselves first — ``rechunk_file`` does, returning a
+    ``skipped-no-hru`` status before this is consulted.
     """
     with xr.open_dataset(path) as ds:
         if id_col not in ds.dims:
-            return True  # nothing chunkable here; the skip reason is set upstream
+            return True  # vacuously canonical: nothing here is chunkable
         enc = build_encoding(
             ds, layer=layer, hru_dim=id_col, timesteps_per_file=ds.sizes.get("time")
         )
