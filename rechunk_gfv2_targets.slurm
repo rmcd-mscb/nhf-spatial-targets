@@ -25,10 +25,16 @@
 set -euo pipefail
 export PYTHONUNBUFFERED=1
 
-# REPO_DIR defaults to the repo this script lives in; override if desired.
-REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && git rev-parse --show-toplevel)}"
+# REPO_DIR defaults to the repo you ran `sbatch` from. sbatch copies the script
+# to a spool dir before executing, so ${BASH_SOURCE[0]} does NOT point at the
+# repo under SLURM — use $SLURM_SUBMIT_DIR (the submit cwd), falling back to
+# $PWD when run directly. The 2>/dev/null||true lets the friendly cd/guard
+# message below fire instead of a raw git error. Override REPO_DIR if desired.
+REPO_DIR="${REPO_DIR:-$(git -C "${SLURM_SUBMIT_DIR:-$PWD}" rev-parse --show-toplevel 2>/dev/null || true)}"
 PROJECT_DIR="${PROJECT_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2-spatial-targets}"
 
+[ -n "$REPO_DIR" ] || { echo "ERROR: could not resolve REPO_DIR (not a git" \
+    "checkout?). Set REPO_DIR=... explicitly." >&2; exit 1; }
 cd "$REPO_DIR" || { echo "ERROR: REPO_DIR=$REPO_DIR not found" >&2; exit 1; }
 [ -f src/nhf_spatial_targets/rechunk.py ] || {
     echo "ERROR: $REPO_DIR lacks the #165 rechunk command. Checkout main or" \
