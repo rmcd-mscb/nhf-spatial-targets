@@ -200,6 +200,10 @@ def build_encoding(
     for tvar in ("time", "time_bnds"):
         if tvar in ds.variables:
             encoding[tvar] = dict(_TIME_ENCODING)
+    # time_bnds is a CF boundary variable and must not carry _FillValue
+    # (CF §7.1). xarray adds a default _FillValue=NaN unless we pin it off.
+    if "time_bnds" in ds.variables:
+        encoding["time_bnds"]["_FillValue"] = None
 
     return encoding
 

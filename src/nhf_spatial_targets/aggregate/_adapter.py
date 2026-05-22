@@ -66,6 +66,15 @@ class SourceAdapter:
     stat_method: str = "mean"
     catalog_key: str | None = None
     raw_dir_key: str | None = None
+    #: Cadence of the *emitted* aggregated NC, driving CF time_bnds at the
+    #: write boundary. This is the adapter's authoritative output cadence — NOT
+    #: the catalog ``time_step`` free-text (which is unreliable: one entry can
+    #: serve two adapters, e.g. era5_land's monthly runoff vs daily SWE, and
+    #: "8-day (aggregate to monthly)" describes intent, not the emitted stamps).
+    #: ``monthly``/``annual`` get reconstructed calendar-period bounds; the
+    #: instantaneous/composite cadences (``daily``/``8-day``) and ``None`` get
+    #: none. See aggregate/_driver.py:_cadence_to_period_freq.
+    output_cadence: str | None = None
 
     def __post_init__(self) -> None:
         # Coerce list → tuple so callers can pass list literals.
@@ -100,6 +109,13 @@ class SourceAdapter:
                 f"SourceAdapter.stat_method={self.stat_method!r} is not a "
                 f"gdptools STATSMETHODS value; expected one of "
                 f"{sorted(_ALLOWED_STAT_METHODS)}"
+            )
+        _ALLOWED_CADENCES = {None, "monthly", "annual", "daily", "8-day"}
+        if self.output_cadence not in _ALLOWED_CADENCES:
+            raise ValueError(
+                f"SourceAdapter.output_cadence={self.output_cadence!r} is not "
+                f"recognized; expected one of {sorted(c for c in _ALLOWED_CADENCES if c)} "
+                f"or None"
             )
         # Named invariant: which declared variable is used to infer the source
         # grid for WeightGen. Defaults to the first variable; drivers/tests that

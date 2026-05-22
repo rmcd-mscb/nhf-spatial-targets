@@ -10,6 +10,7 @@ from nhf_spatial_targets.aggregate._driver import aggregate_source
 
 ADAPTER = SourceAdapter(
     source_key="mwbm_climgrid",
+    output_cadence="monthly",
     output_name="mwbm_climgrid_agg.nc",
     variables=("runoff", "aet", "soilstorage", "swe"),
     files_glob="ClimGrid_WBM.nc",

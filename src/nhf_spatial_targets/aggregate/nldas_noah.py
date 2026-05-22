@@ -10,6 +10,7 @@ from nhf_spatial_targets.aggregate._driver import aggregate_source
 
 ADAPTER = SourceAdapter(
     source_key="nldas_noah",
+    output_cadence="monthly",
     output_name="nldas_noah_agg.nc",
     variables=[
         "SoilM_0_10cm",

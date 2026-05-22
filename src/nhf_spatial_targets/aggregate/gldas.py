@@ -26,6 +26,7 @@ def _derive_runoff_total(ds: xr.Dataset) -> xr.Dataset:
 
 ADAPTER = SourceAdapter(
     source_key=_SOURCE_KEY,
+    output_cadence="monthly",
     output_name="gldas_agg.nc",
     variables=("Qs_acc", "Qsb_acc", "runoff_total"),
     files_glob="gldas_noah_v21_monthly*.nc",

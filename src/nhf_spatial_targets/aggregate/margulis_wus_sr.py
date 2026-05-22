@@ -31,6 +31,7 @@ from nhf_spatial_targets.aggregate._driver import aggregate_source
 
 ADAPTER = SourceAdapter(
     source_key="margulis_wus_sr",
+    output_cadence="daily",
     output_name="margulis_wus_sr_agg.nc",
     variables=("SWE",),
     source_crs="EPSG:4326",

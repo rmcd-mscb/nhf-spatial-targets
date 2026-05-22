@@ -53,6 +53,7 @@ def _mask_snodas_fill(ds: xr.Dataset) -> xr.Dataset:
 
 ADAPTER = SourceAdapter(
     source_key="snodas",
+    output_cadence="daily",
     output_name="snodas_agg.nc",
     variables=("swe",),
     # Pre-projected at consolidate time (issue #121); matches the

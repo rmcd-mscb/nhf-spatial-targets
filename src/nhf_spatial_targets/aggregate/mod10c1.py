@@ -171,6 +171,7 @@ def _rename_valid_mask(year_ds: xr.Dataset) -> xr.Dataset:
 
 ADAPTER = SourceAdapter(
     source_key=_SOURCE_KEY,
+    output_cadence="daily",
     output_name=_OUTPUT_NAME,
     variables=("Day_CMG_Snow_Cover", "Day_CMG_Clear_Index", "valid_mask"),
     grid_variable="Day_CMG_Snow_Cover",

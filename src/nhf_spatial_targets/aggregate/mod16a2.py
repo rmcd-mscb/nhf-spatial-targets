@@ -51,6 +51,7 @@ def _mask_et_fill(ds: xr.Dataset) -> xr.Dataset:
 
 ADAPTER = SourceAdapter(
     source_key="mod16a2_v061",
+    output_cadence="8-day",
     output_name="mod16a2_agg.nc",
     variables=["ET_500m"],
     source_crs="EPSG:4326",  # consolidate_mod16a2 reprojects tiles to WGS84

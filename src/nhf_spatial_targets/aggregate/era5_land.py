@@ -31,6 +31,7 @@ from nhf_spatial_targets.aggregate._driver import aggregate_source
 
 ADAPTER = SourceAdapter(
     source_key="era5_land",
+    output_cadence="monthly",
     output_name="era5_land_agg.nc",
     variables=("ro", "sro", "ssro"),
     # No x_coord/y_coord overrides: the monthly NCs carry CF axis attrs
@@ -50,6 +51,7 @@ ADAPTER = SourceAdapter(
 # adapter reading from <datastore>/era5_land/daily/*.nc.
 ADAPTER_SD = SourceAdapter(
     source_key="era5_land_sd",
+    output_cadence="daily",
     catalog_key="era5_land",
     raw_dir_key="era5_land",
     output_name="era5_land_sd_agg.nc",

@@ -648,6 +648,10 @@ def _target_encoding_without_chunks(
     for tvar in ("time", "time_bnds"):
         if tvar in ds.variables:
             encoding[tvar] = dict(_TIME_ENCODING)
+    # time_bnds is a CF boundary variable and must not carry _FillValue
+    # (CF §7.1); mirror io_nc.build_encoding and pin it off.
+    if "time_bnds" in ds.variables:
+        encoding["time_bnds"]["_FillValue"] = None
     return encoding
 
 
@@ -701,6 +705,26 @@ def write_target_nc(
     ds.attrs.setdefault("software_version", __version__)
     if extra_global_attrs:
         ds.attrs.update(extra_global_attrs)
+
+    # CF §5.6: anchor the spatial reference. Target bound vars carry
+    # grid_mapping="crs" (inherited from the aggregated sources), but no crs
+    # container flows through the multi-source combine, leaving the reference
+    # dangling. The HRU centroid coords (centroid_lat/lon) are EPSG:4326, so
+    # mint a 0-dim WGS84 latitude_longitude grid-mapping variable to match.
+    from pyproj import CRS as _CRS
+
+    _wgs84 = _CRS.from_epsg(4326)
+    _crs_attrs = dict(_wgs84.to_cf())
+    _crs_attrs.setdefault("crs_wkt", _wgs84.to_wkt())
+    ds["crs"] = xr.DataArray(np.int32(0), attrs=_crs_attrs)
+    for _v in ("lower_bound", "upper_bound", "n_sources", "nn_filled"):
+        if _v in ds.data_vars:
+            ds[_v].attrs["grid_mapping"] = "crs"
+    # CF §3: the HRU index coordinate is an identifier, not a measurement —
+    # label it and carry no units.
+    if sort_dim is not None and sort_dim in ds.variables:
+        ds[sort_dim].attrs.pop("units", None)
+        ds[sort_dim].attrs["long_name"] = "HRU Index"
 
     from nhf_spatial_targets.io_nc import atomic_to_netcdf, build_encoding
 
@@ -824,7 +848,9 @@ def build_n_sources_attrs(
     return {
         "units": "1",
         "long_name": "number of finite source contributions",
-        "flag_values": list(range(0, n_sources_count + 1)),
+        # int8 to match the on-disk n_sources dtype (CF §3.5 requires
+        # flag_values dtype == parent variable dtype).
+        "flag_values": np.array(range(0, n_sources_count + 1), dtype="int8"),
         "flag_meanings": " ".join(flag_labels[: n_sources_count + 1]),
         "coordinates": ancillary_coords,
     }
@@ -1018,7 +1044,8 @@ def write_bounds_target(
         {
             "units": "1",
             "long_name": "nearest-neighbor fill flag",
-            "flag_values": [0, 1],
+            # int8 to match the on-disk nn_filled dtype (CF §3.5).
+            "flag_values": np.array([0, 1], dtype="int8"),
             "flag_meanings": "not_filled filled",
             "coordinates": "centroid_lat centroid_lon",
         }

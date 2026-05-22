@@ -10,6 +10,7 @@ from nhf_spatial_targets.aggregate._driver import aggregate_source
 
 ADAPTER = SourceAdapter(
     source_key="ncep_ncar",
+    output_cadence="monthly",
     output_name="ncep_ncar_agg.nc",
     variables=["soilw_0_10cm", "soilw_10_200cm"],
 )

@@ -10,6 +10,7 @@ from nhf_spatial_targets.aggregate._driver import aggregate_source
 
 ADAPTER = SourceAdapter(
     source_key="merra2",
+    output_cadence="monthly",
     output_name="merra2_agg.nc",
     variables=["GWETTOP", "GWETROOT", "GWETPROF"],
 )
