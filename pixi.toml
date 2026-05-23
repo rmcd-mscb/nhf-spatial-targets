@@ -141,3 +141,4 @@ install-kernel = { cmd = "python -m ipykernel install --user --name nhf-spatial-
 render-figures              = { cmd = "python scripts/render_figures.py --group all",          description = "Re-execute all inspection notebooks and save figures to docs/figures/<group>/<project>/" }
 render-figures-consolidated = { cmd = "python scripts/render_figures.py --group consolidated", description = "Re-execute consolidated notebooks and save to docs/figures/consolidated/<project>/" }
 render-figures-aggregated   = { cmd = "python scripts/render_figures.py --group aggregated",   description = "Re-execute aggregated notebooks and save to docs/figures/aggregated/<project>/" }
+render-figures-targets      = { cmd = "python scripts/render_figures.py --group targets",      description = "Re-execute target inspection notebooks and save to docs/figures/targets/<project>/" }
