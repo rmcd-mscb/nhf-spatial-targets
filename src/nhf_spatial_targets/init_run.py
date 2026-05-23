@@ -21,6 +21,12 @@ fabric:
   # Equal-area CRS used for HRU area + NN-fill distances. EPSG:5070 is
   # CONUS Albers — override for AK / HI / PR (e.g. EPSG:3338 for Alaska).
   area_crs: "EPSG:5070"
+  # Optional fabric-scope token. Sources tagged with `fabric_scope` in
+  # catalog/sources.yml (e.g. margulis_wus_sr -> [or]) are silently skipped
+  # at both agg and target stages when this is unset. Set to one of
+  # catalog.FABRIC_SCOPE_TOKENS (currently {"or"}) on fabric-restricted
+  # projects to opt in.
+  # token: or
   # KD-tree partition target HRUs/batch. The same partition is reused
   # across every source's aggregation. Override per-run with CLI
   # --batch-size. Changing this value invalidates any cached weight
@@ -139,6 +145,29 @@ targets:
     output_file: swe_targets.nc
     nn_fill: true
     nn_max_candidates: 10
+
+# ---------------------------------------------------------------------------
+# Inspection-notebook overrides (optional)
+# ---------------------------------------------------------------------------
+# Per-target representative HRU points used by the inspect_* notebooks'
+# time-series cells. When unset, each notebook falls back to its hardcoded
+# CONUS-spanning defaults (Olympic / Iowa / Phoenix / Appalachians) — fine
+# for gfv2, but those points lie outside regional fabrics (e.g. Oregon's PNW
+# extent) and lookup_hrus_by_points will raise. Set per-target lists of
+# `"label": [lon, lat]` inside the fabric to override. YAML anchors keep
+# one set across all targets if desired.
+#
+# representative_points:
+#   aet: &rep_pts
+#     "Region A": [-121.7, 45.4]
+#     "Region B": [-123.0, 44.6]
+#     "Region C": [-118.6, 42.7]
+#     "Region D": [-123.5, 45.0]
+#   runoff: *rep_pts
+#   recharge: *rep_pts
+#   soil_moisture: *rep_pts
+#   snow_covered_area: *rep_pts
+#   swe: *rep_pts
 """
 
 _CREDENTIALS_TEMPLATE = {

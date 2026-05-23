@@ -63,3 +63,46 @@ def test_init_no_data_raw(tmp_path):
     workdir = tmp_path / "ws"
     init_project(workdir)
     assert not (workdir / "data" / "raw").exists()
+
+
+# --- commented-out stubs in the init template (#182 follow-up) --------------
+
+
+def test_init_config_template_parses_as_valid_yaml(tmp_path):
+    """The shipped template (incl. the new commented stubs) is valid YAML."""
+    workdir = tmp_path / "ws"
+    init_project(workdir)
+    cfg = yaml.safe_load((workdir / "config.yml").read_text())
+    assert cfg["fabric"]["id_col"] == "nhm_id"
+    # The commented stubs are not active by default:
+    assert "token" not in cfg["fabric"]
+    assert "representative_points" not in cfg
+
+
+def test_init_config_template_carries_fabric_token_stub(tmp_path):
+    """The fabric.token stub is present (commented) and points operators
+    at FABRIC_SCOPE_TOKENS — without this we silently skipped Margulis on
+    Oregon (#182)."""
+    workdir = tmp_path / "ws"
+    init_project(workdir)
+    text = (workdir / "config.yml").read_text()
+    assert "# token: or" in text
+    assert "FABRIC_SCOPE_TOKENS" in text
+
+
+def test_init_config_template_carries_representative_points_stub(tmp_path):
+    """The representative_points stub teaches operators about the per-target
+    notebook override before lookup_hrus_by_points raises mid-render (#192)."""
+    workdir = tmp_path / "ws"
+    init_project(workdir)
+    text = (workdir / "config.yml").read_text()
+    assert "# representative_points:" in text
+    for tgt in (
+        "aet",
+        "runoff",
+        "recharge",
+        "soil_moisture",
+        "snow_covered_area",
+        "swe",
+    ):
+        assert tgt in text
