@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HELPERS_PATH = REPO_ROOT / "notebooks" / "targets" / "_helpers.py"
@@ -165,3 +166,44 @@ def test_load_fabric_still_reads_gpkg(helpers, tmp_path):
     _tiny_fabric_gdf().to_file(path, driver="GPKG")
     gdf = helpers.load_fabric({"path": str(path), "id_col": "nhm_id"})
     assert list(gdf.index) == [10, 20, 30]
+
+
+# --- load_representative_points: per-project override (#182) ----------------
+
+
+def _write_or_config(tmp_path, **extra_blocks):
+    cfg = {"fabric": {"path": "x", "id_col": "nhm_id"}, "datastore": "/x"}
+    cfg.update(extra_blocks)
+    (tmp_path / "config.yml").write_text(yaml.safe_dump(cfg))
+    return tmp_path
+
+
+def test_load_representative_points_reads_per_target_map(helpers, tmp_path):
+    project_dir = _write_or_config(
+        tmp_path,
+        representative_points={
+            "swe": {"Mt Hood": [-121.7, 45.4], "Steens": [-118.6, 42.7]},
+        },
+    )
+    pts = helpers.load_representative_points(project_dir, "swe")
+    assert pts == {"Mt Hood": (-121.7, 45.4), "Steens": (-118.6, 42.7)}
+    assert all(
+        isinstance(v, tuple) and all(isinstance(x, float) for x in v)
+        for v in pts.values()
+    )
+
+
+def test_load_representative_points_returns_none_when_target_absent(helpers, tmp_path):
+    project_dir = _write_or_config(
+        tmp_path, representative_points={"aet": {"X": [-120.0, 45.0]}}
+    )
+    assert helpers.load_representative_points(project_dir, "swe") is None
+
+
+def test_load_representative_points_returns_none_without_block(helpers, tmp_path):
+    project_dir = _write_or_config(tmp_path)
+    assert helpers.load_representative_points(project_dir, "aet") is None
+
+
+def test_load_representative_points_returns_none_when_config_missing(helpers, tmp_path):
+    assert helpers.load_representative_points(tmp_path, "aet") is None

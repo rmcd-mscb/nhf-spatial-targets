@@ -130,6 +130,39 @@ def load_fabric(
     return gdf
 
 
+def load_representative_points(
+    project_dir: Path, target: str
+) -> dict[str, tuple[float, float]] | None:
+    """Return per-project REPRESENTATIVE_POINTS for *target*, or ``None``.
+
+    Reads ``<project_dir>/config.yml`` for a top-level
+    ``representative_points:`` block keyed by the notebook's ``TARGET``
+    (``aet``, ``recharge``, ``runoff``, ``soil_moisture``,
+    ``snow_covered_area``, ``swe``). When absent (gfv2's case), returns
+    ``None`` so the notebook can fall back to its hardcoded CONUS defaults.
+
+    Schema::
+
+        representative_points:
+          aet:
+            "Cascades (Mt. Hood)": [-121.7, 45.4]
+            "Willamette Valley": [-123.0, 44.6]
+          swe:
+            ...
+
+    Mirrors ``notebooks/aggregated/_helpers.py:load_representative_points``.
+    """
+    cfg_path = Path(project_dir) / "config.yml"
+    if not cfg_path.exists():
+        return None
+    cfg = yaml.safe_load(cfg_path.read_text()) or {}
+    block = cfg.get("representative_points") or {}
+    raw = block.get(target)
+    if not raw:
+        return None
+    return {label: (float(coords[0]), float(coords[1])) for label, coords in raw.items()}
+
+
 def discover_target_nc(
     project_dir: Path, target: str
 ) -> tuple[Path | None, Path | None]:

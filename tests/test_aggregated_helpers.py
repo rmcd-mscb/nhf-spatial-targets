@@ -384,3 +384,57 @@ def test_load_fabric_still_reads_gpkg(helpers, tmp_path):
     _tiny_fabric_gdf().to_file(path, driver="GPKG")
     gdf = helpers.load_fabric({"path": str(path), "id_col": "nhm_id"})
     assert list(gdf.index) == [10, 20, 30]
+
+
+# --- load_representative_points: per-project override (#182) ----------------
+
+
+def _write_or_config(tmp_path, **extra_blocks):
+    cfg = {
+        "fabric": {"path": "x", "id_col": "nhm_id"},
+        "datastore": "/x",
+    }
+    cfg.update(extra_blocks)
+    (tmp_path / "config.yml").write_text(yaml.safe_dump(cfg))
+    return tmp_path
+
+
+def test_load_representative_points_reads_per_target_map(helpers, tmp_path):
+    project_dir = _write_or_config(
+        tmp_path,
+        representative_points={
+            "aet": {
+                "Cascades": [-121.7, 45.4],
+                "Willamette Valley": [-123.0, 44.6],
+            },
+            "swe": {"Mt Hood": [-121.7, 45.4]},
+        },
+    )
+    pts = helpers.load_representative_points(project_dir, "aet")
+    assert pts == {
+        "Cascades": (-121.7, 45.4),
+        "Willamette Valley": (-123.0, 44.6),
+    }
+    # Coords are tuples of floats, matching the notebooks' hardcoded form.
+    assert all(
+        isinstance(v, tuple) and all(isinstance(x, float) for x in v)
+        for v in pts.values()
+    )
+
+
+def test_load_representative_points_returns_none_when_target_absent(helpers, tmp_path):
+    project_dir = _write_or_config(
+        tmp_path, representative_points={"aet": {"X": [-120.0, 45.0]}}
+    )
+    assert helpers.load_representative_points(project_dir, "swe") is None
+
+
+def test_load_representative_points_returns_none_without_block(helpers, tmp_path):
+    """gfv2's path: no representative_points block -> notebook falls back."""
+    project_dir = _write_or_config(tmp_path)  # no override block
+    assert helpers.load_representative_points(project_dir, "aet") is None
+
+
+def test_load_representative_points_returns_none_when_config_missing(helpers, tmp_path):
+    """A project_dir without config.yml shouldn't raise."""
+    assert helpers.load_representative_points(tmp_path, "aet") is None
