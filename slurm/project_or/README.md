@@ -22,6 +22,11 @@ PROJECT_DIR=$OR sbatch slurm/shared/agg_daymet.slurm   # edit --region (na) insi
 # 3. Build the 5 implemented targets (runoff/aet/rch/som/swe; sca self-skips).
 #    Submit after the aggregations above have completed.
 sbatch slurm/project_or/run_or.slurm
+
+# 4. Render the per-project inspection figures (consolidated + aggregated +
+#    targets) to docs/figures/.../or-spatial-targets/. Submit after the
+#    targets above have built. Pass GROUP=targets for a faster subset.
+sbatch slurm/project_or/render_or.slurm
 ```
 
 Notes:
