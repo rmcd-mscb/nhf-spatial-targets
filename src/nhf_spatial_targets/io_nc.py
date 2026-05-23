@@ -50,6 +50,55 @@ _TIME_ENCODING = {
 }
 
 
+def mask_netcdf_default_fills(ds: xr.Dataset) -> xr.Dataset:
+    """Replace netCDF default-fill cells (per-dtype) with NaN on float data vars.
+
+    netCDF's per-dtype default fill (``NC_FILL_FLOAT == NC_FILL_DOUBLE ==
+    9.969209968386869e+36``, ``NC_FILL_INT``, etc., per
+    :data:`netCDF4.default_fillvals` and netCDF NUG Annex A) is what some
+    upstreams emit verbatim into in-memory arrays for missing values without
+    attaching a matching ``_FillValue`` attribute. Notably, gdptools'
+    ``AggGen`` writes ``NC_FILL_DOUBLE`` for HRUs whose geometry has no
+    overlap with the source grid (regional fabrics that poke outside a
+    CONUS-only source's data extent). Our writer policy in
+    :func:`_fill_value_for` declares ``_FillValue=NaN`` for floats, so an
+    on-disk cell holding the sentinel survives ``decode_cf`` (xarray masks via
+    value-equality, NaN never equals anything) — silently surviving as
+    ``~1e36`` real data and contaminating any ``np.fmax`` downstream
+    (issue #204).
+
+    This helper is the single-source policy that both the **write boundary**
+    (aggregate/_driver.py:_atomic_write_netcdf — substitutes the sentinel
+    before write, so future NCs have ``data=NaN`` matching the declared
+    ``_FillValue=NaN``) and the **read boundary** (targets/_common.py:
+    read_aggregated_source — substitutes after load, so existing on-disk NCs
+    with the encoding mismatch decode correctly without rewrite) call.
+
+    Today only floats are substituted — the aggregated layer doesn't emit
+    integer data vars from gdptools. The :data:`default_fillvals` lookup is
+    keyed by dtype, so a future int-data-var path is a one-line addition.
+
+    CF grid-mapping containers (variables carrying ``grid_mapping_name``) are
+    skipped — they're metadata, not measurements. Returns a shallow copy with
+    substituted data vars; input is not mutated.
+    """
+    from netCDF4 import default_fillvals
+
+    ds = ds.copy()
+    for name, da in ds.data_vars.items():
+        if "grid_mapping_name" in da.attrs:
+            continue
+        # default_fillvals keys are dtype strings without endianness ('f4','f8',
+        # 'i4', ...). dtype.str is e.g. '<f8'; strip the byte-order prefix.
+        sentinel = default_fillvals.get(da.dtype.str.lstrip("<>=|"))
+        if sentinel is None or not np.issubdtype(da.dtype, np.floating):
+            continue
+        # `.where(cond)` keeps cells where `cond` is True, NaN-masks elsewhere.
+        # Equality is exact: the sentinel is a bit-pattern constant.
+        ds[name] = da.where(da != sentinel)
+    return ds
+
+
 def _fill_value_for(dtype: np.dtype) -> Any:
     """Layer-agnostic ``_FillValue`` policy keyed on the encoded dtype.
 

@@ -1528,3 +1528,64 @@ def test_stitch_atomic_write_no_partial_on_failure(tmp_path: Path, monkeypatch):
     assert not leftover, f"tempfile leak: {leftover}"
     # restore (paranoia — monkeypatch undoes it but be explicit)
     monkeypatch.setattr(xr.Dataset, "to_netcdf", real_to_netcdf)
+
+
+# --- read_aggregated_source: netCDF default-fill masking (#204) -------------
+
+
+def test_read_aggregated_source_masks_netcdf_default_fill_cells(tmp_path: Path):
+    """An aggregated NC with gdptools' NC_FILL_DOUBLE sentinel cells decodes
+    as NaN through the reader, even when ``_FillValue=NaN`` is declared (the
+    pre-fix encoding mismatch that contaminated OR runoff/aet/swe before #204).
+    Mirrors the write-side fix; ensures existing on-disk NCs work without
+    rewrite.
+    """
+    from netCDF4 import default_fillvals
+
+    from nhf_spatial_targets.targets._common import read_aggregated_source
+
+    sentinel = default_fillvals["f8"]  # NC_FILL_DOUBLE == 9.969209968386869e+36
+
+    workdir = make_minimal_project(tmp_path)
+    src = "mwbm_climgrid"
+    var = "aet"
+    src_dir = workdir / "data" / "aggregated" / src
+    src_dir.mkdir(parents=True)
+
+    # One-year NC matching the broken-on-disk state: data carries the sentinel
+    # in some cells, encoding declares _FillValue=NaN (the bug shape — xarray
+    # would not mask it on decode without our reader-side helper).
+    times = pd.date_range("2000-01-01", periods=12, freq="MS")
+    hrus = np.array([10, 20, 30], dtype="int64")
+    data = np.full((12, 3), 25.0, dtype="float64")
+    data[:, 1] = sentinel  # HRU 20 is "outside coverage" — fill sentinel
+    ds = xr.Dataset(
+        {var: (("time", "nhm_id"), data)},
+        coords={"time": times, "nhm_id": hrus},
+    )
+    ds.to_netcdf(
+        src_dir / f"{src}_2000_agg.nc",
+        encoding={var: {"_FillValue": np.nan}},  # the pre-#204 declaration
+    )
+
+    # Confirm the file is in fact in the "broken" state before the reader
+    # touches it: data has sentinel, encoding declares NaN, xarray's own
+    # decode_cf does NOT mask the sentinel.
+    raw = xr.open_dataset(src_dir / f"{src}_2000_agg.nc")
+    try:
+        assert raw[var].values[0, 1] == sentinel
+        assert not np.isnan(raw[var].values[0, 1])
+    finally:
+        raw.close()
+
+    # Now exercise the reader — our mask_netcdf_default_fills call inside
+    # read_aggregated_source should convert the sentinel cells to NaN.
+    project = load(workdir)
+    da = read_aggregated_source(
+        project, src, var, period=("2000-01-01", "2000-12-31"), chunks={"time": 12}
+    )
+    vals = da.values
+    assert vals.shape == (12, 3)
+    assert np.all(vals[:, 0] == 25.0)
+    assert np.all(np.isnan(vals[:, 1]))  # the masked HRU
+    assert np.all(vals[:, 2] == 25.0)

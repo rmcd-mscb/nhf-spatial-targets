@@ -433,7 +433,20 @@ def _atomic_write_netcdf(
     """
     ds = _normalize_cf_fabric_metadata(ds, id_col=id_col, cadence=time_bounds_cadence)
 
-    from nhf_spatial_targets.io_nc import atomic_to_netcdf, build_encoding
+    from nhf_spatial_targets.io_nc import (
+        atomic_to_netcdf,
+        build_encoding,
+        mask_netcdf_default_fills,
+    )
+
+    # Substitute gdptools' missing-coverage sentinel (NC_FILL_DOUBLE) with NaN
+    # so the on-disk values agree with the declared `_FillValue=NaN` for floats
+    # in `io_nc._fill_value_for`. Without this, xarray decode leaves the
+    # ~1e36 cells as legitimate data and they poison multi-source `np.fmax`
+    # downstream. Mirrored at the read boundary in
+    # `targets/_common.py:read_aggregated_source` so existing on-disk NCs
+    # written before this fix decode correctly without a rewrite. Issue #204.
+    ds = mask_netcdf_default_fills(ds)
 
     if id_col is not None:
         encoding = build_encoding(
