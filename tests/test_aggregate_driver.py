@@ -13,7 +13,11 @@ import xarray as xr
 import yaml
 from shapely.geometry import box
 
-from nhf_spatial_targets.aggregate._driver import update_manifest
+from nhf_spatial_targets.aggregate._driver import (
+    _atomic_write_netcdf,
+    update_manifest,
+)
+from nhf_spatial_targets.io_nc import mask_netcdf_default_fills
 from nhf_spatial_targets.workspace import load as load_project
 
 
@@ -2292,3 +2296,130 @@ def test_defaults_fabric_batch_size_is_500():
     # apply_defaults falls back to default when unset.
     merged = apply_defaults({"fabric": {}})
     assert merged["fabric"]["batch_size"] == 500
+
+
+# --- mask_netcdf_default_fills (#204) -----------------------------------------
+
+
+class TestMaskNetcdfDefaultFills:
+    """gdptools writes NC_FILL_DOUBLE into the in-memory array for missing-
+    coverage HRUs, but our writer declares ``_FillValue=NaN``. Without this
+    helper the on-disk cell holds the netCDF default sentinel while metadata
+    says NaN, and xarray decode leaves it as legitimate data ~1e36 — which
+    poisons multi-source ``np.fmax`` downstream (#204)."""
+
+    @staticmethod
+    def _fill_f8():
+        """Float64 netCDF default fill (9.969209968386869e+36)."""
+        from netCDF4 import default_fillvals
+
+        return default_fillvals["f8"]
+
+    def test_substitutes_float_sentinel_with_nan(self):
+        sentinel = self._fill_f8()
+        ds = xr.Dataset(
+            {
+                "aet": (
+                    ("time", "nhm_id"),
+                    np.array([[1.0, sentinel, 3.0]], dtype="float64"),
+                ),
+            },
+            coords={"time": [0], "nhm_id": [1, 2, 3]},
+        )
+        out = mask_netcdf_default_fills(ds)
+        assert out["aet"].values[0, 0] == 1.0
+        assert np.isnan(out["aet"].values[0, 1])
+        assert out["aet"].values[0, 2] == 3.0
+
+    def test_preserves_legitimate_finite_data(self):
+        # No sentinels — should round-trip unchanged.
+        ds = xr.Dataset(
+            {"x": (("nhm_id",), np.array([0.0, 30.5, -1.2, 999.0]))},
+            coords={"nhm_id": [1, 2, 3, 4]},
+        )
+        out = mask_netcdf_default_fills(ds)
+        np.testing.assert_array_equal(out["x"].values, ds["x"].values)
+
+    def test_preserves_pre_existing_nan(self):
+        # NaN cells (e.g. from a pre_aggregate_hook fill mask) survive.
+        ds = xr.Dataset(
+            {"x": (("nhm_id",), np.array([1.0, np.nan, 3.0]))},
+            coords={"nhm_id": [1, 2, 3]},
+        )
+        out = mask_netcdf_default_fills(ds)
+        assert out["x"].values[0] == 1.0
+        assert np.isnan(out["x"].values[1])
+        assert out["x"].values[2] == 3.0
+
+    def test_skips_grid_mapping_container(self):
+        # A CF grid-mapping variable carries the sentinel-shaped grid info;
+        # we must not NaN-mask it just because some attr value matches.
+        sentinel = self._fill_f8()
+        ds = xr.Dataset(
+            {
+                "crs": xr.DataArray(
+                    np.float64(sentinel),  # absurd, but exercises the guard
+                    attrs={
+                        "grid_mapping_name": "latitude_longitude",
+                        "longitude_of_prime_meridian": 0.0,
+                    },
+                ),
+                "aet": (("nhm_id",), np.array([1.0, sentinel])),
+            },
+            coords={"nhm_id": [1, 2]},
+        )
+        out = mask_netcdf_default_fills(ds)
+        # crs untouched (grid mapping marker preserved); aet sentinel masked.
+        assert float(out["crs"].values) == sentinel
+        assert out["aet"].values[0] == 1.0
+        assert np.isnan(out["aet"].values[1])
+
+    def test_skips_integer_dtypes(self):
+        # Today we don't NaN-mask ints (no NaN equivalent for int); future
+        # work can substitute the project -9999 sentinel. The helper must
+        # at least not crash on int data vars.
+        ds = xr.Dataset(
+            {"n_sources": (("nhm_id",), np.array([0, 1, 2, 3], dtype="int8"))},
+            coords={"nhm_id": [1, 2, 3, 4]},
+        )
+        out = mask_netcdf_default_fills(ds)
+        np.testing.assert_array_equal(out["n_sources"].values, [0, 1, 2, 3])
+
+    def test_does_not_mutate_input(self):
+        sentinel = self._fill_f8()
+        arr = np.array([1.0, sentinel])
+        ds = xr.Dataset(
+            {"x": (("nhm_id",), arr)},
+            coords={"nhm_id": [1, 2]},
+        )
+        before = ds["x"].values.copy()
+        _ = mask_netcdf_default_fills(ds)
+        np.testing.assert_array_equal(ds["x"].values, before)
+
+    def test_atomic_write_decodes_to_nan_on_read(self, tmp_path):
+        """End-to-end: a Dataset with a sentinel cell, written via the
+        aggregator's atomic writer, round-trips through xarray decode as NaN —
+        proving the substitution + the io_nc encoding agree on disk."""
+        sentinel = self._fill_f8()
+        nc = tmp_path / "agg.nc"
+        ds = xr.Dataset(
+            {
+                "aet": (
+                    ("time", "nhm_id"),
+                    np.array([[1.0, sentinel]], dtype="float64"),
+                ),
+            },
+            coords={
+                "time": pd.date_range("2000-01-01", periods=1, freq="MS"),
+                "nhm_id": np.array([1, 2], dtype="int64"),
+            },
+        )
+        _atomic_write_netcdf(ds, nc, id_col="nhm_id", time_bounds_cadence="monthly")
+        rt = xr.open_dataset(nc)
+        try:
+            assert rt["aet"].values[0, 0] == 1.0
+            assert np.isnan(rt["aet"].values[0, 1])
+            # Encoding metadata declares NaN — invariant the helper preserves.
+            assert np.isnan(rt["aet"].encoding["_FillValue"])
+        finally:
+            rt.close()

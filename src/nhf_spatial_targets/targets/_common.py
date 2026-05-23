@@ -337,6 +337,18 @@ def read_aggregated_source(
     # in VPU-grouped batch order — this defensive sort keeps positional
     # checks against the fabric correct without forcing a re-aggregate.
     ds = ds.sortby(project.id_col)
+    # Substitute netCDF default-fill cells (NC_FILL_DOUBLE etc.) with NaN.
+    # Aggregated NCs written before issue #204's fix declare _FillValue=NaN
+    # but hold the ~1e36 sentinel in cells gdptools couldn't fill (e.g. OR
+    # HRUs outside MWBM CONUS extent). xarray's decode masks via value
+    # equality and NaN never matches, so the sentinel survives and poisons
+    # downstream np.fmax. Mirrors the write-side fix in
+    # aggregate/_driver.py:_atomic_write_netcdf — keeping both means
+    # existing on-disk NCs decode correctly without a rewrite while fresh
+    # writes are self-consistent on disk.
+    from nhf_spatial_targets.io_nc import mask_netcdf_default_fills
+
+    ds = mask_netcdf_default_fills(ds)
     sliced = ds[var].sel(time=slice(period[0], period[1]))
     if sliced.sizes.get("time", 0) == 0:
         # Years parsed from sorted filenames -- avoids triggering dask compute
