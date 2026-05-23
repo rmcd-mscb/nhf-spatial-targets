@@ -25,8 +25,12 @@ sbatch slurm/project_or/run_or.slurm
 
 # 4. Render the per-project inspection figures (consolidated + aggregated +
 #    targets) to docs/figures/.../or-spatial-targets/. Submit after the
-#    targets above have built. Pass GROUP=targets for a faster subset.
-sbatch slurm/project_or/render_or.slurm
+#    targets above have built. Array indices: 0=consolidated, 1=aggregated,
+#    2=targets — submit a subset to re-render one group without redoing
+#    the others.
+sbatch slurm/project_or/render_or.slurm                # all 3 groups
+sbatch --array=2   slurm/project_or/render_or.slurm    # targets only
+sbatch --array=1-2 slurm/project_or/render_or.slurm    # aggregated + targets
 ```
 
 Notes:
