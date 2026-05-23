@@ -46,14 +46,17 @@ GROUPS = {
     "consolidated": {
         "dir": REPO_ROOT / "notebooks" / "consolidated",
         "helpers_dir": "notebooks/consolidated",
+        "figures_subdir": "consolidated",
     },
     "aggregated": {
         "dir": REPO_ROOT / "notebooks" / "aggregated",
         "helpers_dir": "notebooks/aggregated",
+        "figures_subdir": "aggregated",
     },
     "targets": {
         "dir": REPO_ROOT / "notebooks" / "targets",
         "helpers_dir": "notebooks/targets",
+        "figures_subdir": "targets",
     },
 }
 
@@ -67,20 +70,37 @@ _PROJECT_DIR_RE = re.compile(
 )
 
 
-def _startup_payload(helpers_dir: str, project: str | None) -> str:
+def _startup_payload(
+    helpers_dir: str, project: str | None, figures_dir: str | None = None
+) -> str:
     """Build the PYTHONSTARTUP snippet that toggles save_figure for headless runs.
+
+    Both ``helpers_dir`` (the directory containing ``_helpers.py``, added to
+    ``sys.path``) and ``figures_dir`` (overrides ``_helpers.FIGURES_DIR``)
+    should be **absolute** paths. The kernel's working directory varies with
+    where the notebook lives — for the ``--project-dir`` path the notebook is
+    a /tmp temp, so any relative path here would resolve under /tmp instead of
+    the repo, breaking both the ``_helpers`` import and figure output paths.
 
     Uses ``repr()`` to quote the string values so that paths or project tags
     containing ``"``, ``\\``, or other Python-source-significant characters
     can't break the resulting payload (or worse, smuggle code into it).
     """
     project_line = f"_helpers.PROJECT = {project!r}\n" if project is not None else ""
+    figures_line = (
+        f"_helpers.FIGURES_DIR = Path({figures_dir!r})\n"
+        if figures_dir is not None
+        else ""
+    )
+    pathlib_import = "from pathlib import Path\n" if figures_dir is not None else ""
     return (
         "import sys\n"
+        f"{pathlib_import}"
         f"sys.path.insert(0, {helpers_dir!r})\n"
         "import _helpers\n"
         "_helpers.SAVE_FIGURES = True\n"
         f"{project_line}"
+        f"{figures_line}"
     )
 
 
@@ -173,7 +193,24 @@ def render_group(
     startup_path = Path(fh.name)
     try:
         with fh:
-            fh.write(_startup_payload(cfg["helpers_dir"], project))
+            # Both paths must be ABSOLUTE: the kernel's CWD on the
+            # --project-dir path is /tmp (the temp notebook's parent), so any
+            # relative helpers_dir or figures_dir would resolve under /tmp.
+            # figures_subdir is optional so tests can use minimal GROUPS dicts;
+            # the production entries always set it.
+            figures_subdir = cfg.get("figures_subdir")
+            figures_dir = (
+                str(REPO_ROOT / "docs" / "figures" / figures_subdir)
+                if figures_subdir
+                else None
+            )
+            fh.write(
+                _startup_payload(
+                    str(REPO_ROOT / cfg["helpers_dir"]),
+                    project,
+                    figures_dir=figures_dir,
+                )
+            )
         for nb in notebooks:
             # Print the *logical* notebook name (the committed path under the
             # repo). On the --project-dir path the actual file handed to

@@ -75,6 +75,25 @@ def test_startup_payload_empty_string_project_is_emitted(render):
     assert "_helpers.PROJECT = ''" in payload
 
 
+def test_startup_payload_sets_absolute_figures_dir_when_passed(render):
+    # The kernel's CWD on the --project-dir path is /tmp; FIGURES_DIR must be
+    # overridden to an absolute path or save_figure would write under /tmp.
+    payload = render._startup_payload(
+        "/abs/helpers", "or-spatial-targets", figures_dir="/abs/docs/figures/aggregated"
+    )
+    assert "from pathlib import Path" in payload
+    assert "_helpers.FIGURES_DIR = Path('/abs/docs/figures/aggregated')" in payload
+    compile(payload, "<test>", "exec")
+
+
+def test_startup_payload_omits_figures_dir_when_unset(render):
+    # Back-compat: pre-figures_dir callers don't get a spurious FIGURES_DIR
+    # override (the notebooks would then load their own default).
+    payload = render._startup_payload("/abs/helpers", "p")
+    assert "_helpers.FIGURES_DIR" not in payload
+    assert "from pathlib import Path" not in payload
+
+
 def test_render_group_raises_on_empty_glob(render, tmp_path, monkeypatch):
     # Point GROUPS at an empty dir to simulate the "no notebooks found" case.
     fake_groups = {
