@@ -188,3 +188,40 @@ def test_render_group_with_project_dir_uses_temp(render, tmp_path, monkeypatch):
     assert not seen[0].exists()
     # Committed notebook is untouched on disk.
     assert "/data/gfv2-spatial-targets" in nb_path.read_text()
+
+
+def test_render_group_logs_logical_notebook_not_temp(
+    render, tmp_path, monkeypatch, capsys
+):
+    """The `=== executing ... ===` line shows the committed nb, not /tmp/...
+
+    Regression for an early --project-dir build that called
+    ``temp_nb.relative_to(REPO_ROOT)`` and crashed with ``ValueError`` because
+    the temp lives under /tmp. Two contracts: (1) the print does not raise,
+    and (2) it names the logical notebook so the operator can see which
+    inspect_* notebook is running.
+    """
+    nb_path = tmp_path / "inspect_consolidated_aet.ipynb"
+    nb_path.write_text(
+        json.dumps(_make_nb(['PROJECT_DIR = Path("/data/gfv2-spatial-targets")\n']))
+    )
+    monkeypatch.setattr(
+        render,
+        "GROUPS",
+        {"consolidated": {"dir": tmp_path, "helpers_dir": "notebooks/consolidated"}},
+    )
+    monkeypatch.setattr(render, "_execute", lambda *a, **k: None)
+    render.render_group(
+        "consolidated",
+        timeout=1,
+        project="or-spatial-targets",
+        project_dir="/data/or-spatial-targets",
+    )
+    out = capsys.readouterr().out
+    # The logical fixture path is logged ...
+    assert str(nb_path) in out
+    # ... and the random-suffixed temp from _make_project_dir_temp_notebook
+    # (prefix "inspect_consolidated_aet.<HEX>.ipynb") is NOT.
+    import re as _re
+
+    assert not _re.search(r"inspect_consolidated_aet\.[A-Za-z0-9_]+\.ipynb", out), out
