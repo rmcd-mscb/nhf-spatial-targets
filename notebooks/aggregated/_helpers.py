@@ -149,8 +149,17 @@ def load_fabric(fabric_cfg: dict) -> gpd.GeoDataFrame:
     Kept in EPSG:4326 for plotting; downstream area calculations
     re-project to EPSG:5070 (CONUS Albers) so we don't pay that cost
     on every map.
+
+    Dispatches on the file suffix to mirror :mod:`validate`: parquet/
+    geoparquet use the geopandas-native ``read_parquet`` so this works
+    even when the GDAL build lacks the ``ogr_Parquet`` plugin. Anything
+    else (.gpkg, .shp, …) goes through ``read_file``/pyogrio.
     """
-    gdf = gpd.read_file(fabric_cfg["path"])
+    path = Path(fabric_cfg["path"])
+    if path.suffix.lower() in (".parquet", ".geoparquet"):
+        gdf = gpd.read_parquet(path)
+    else:
+        gdf = gpd.read_file(path)
     gdf = gdf.set_index(fabric_cfg["id_col"])
     return gdf
 

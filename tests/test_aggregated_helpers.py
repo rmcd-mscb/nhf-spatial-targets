@@ -355,3 +355,32 @@ def test_save_figure_no_subdir_when_project_none(helpers, tmp_path, monkeypatch)
         helpers.save_figure(fig, "test_no_project")
     plt.close(fig)
     assert (tmp_path / "figures" / "test_no_project.png").exists()
+
+
+# --- load_fabric: parquet vs gpkg dispatch (Oregon fabric is parquet) -------
+
+
+def _tiny_fabric_gdf(id_col: str = "nhm_id") -> gpd.GeoDataFrame:
+    return gpd.GeoDataFrame(
+        {id_col: [10, 20, 30]},
+        geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1), box(2, 0, 3, 1)],
+        crs="EPSG:4326",
+    )
+
+
+def test_load_fabric_reads_parquet_without_gdal_plugin(helpers, tmp_path):
+    """Oregon's fabric is .parquet — must use gpd.read_parquet (geopandas-
+    native), not gpd.read_file (which would need the ogr_Parquet GDAL
+    plugin). Regression for the render_or.slurm crash in #182."""
+    path = tmp_path / "fabric.parquet"
+    _tiny_fabric_gdf().to_parquet(path)
+    gdf = helpers.load_fabric({"path": str(path), "id_col": "nhm_id"})
+    assert list(gdf.index) == [10, 20, 30]
+
+
+def test_load_fabric_still_reads_gpkg(helpers, tmp_path):
+    """gfv2's .gpkg path must keep working (read_file/pyogrio)."""
+    path = tmp_path / "fabric.gpkg"
+    _tiny_fabric_gdf().to_file(path, driver="GPKG")
+    gdf = helpers.load_fabric({"path": str(path), "id_col": "nhm_id"})
+    assert list(gdf.index) == [10, 20, 30]

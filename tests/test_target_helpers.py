@@ -134,3 +134,34 @@ def test_open_target_nc_window_clips_to_available_range(helpers, daily_target_nc
     times = pd.DatetimeIndex(ds["time"].values)
     assert times.min() == pd.Timestamp("2009-10-01")
     assert times.max() == pd.Timestamp("2009-10-31")
+
+
+# --- load_fabric: parquet vs gpkg dispatch (Oregon fabric is parquet) -------
+
+
+def _tiny_fabric_gdf():
+    import geopandas as gpd
+    from shapely.geometry import box
+
+    return gpd.GeoDataFrame(
+        {"nhm_id": [10, 20, 30]},
+        geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1), box(2, 0, 3, 1)],
+        crs="EPSG:4326",
+    )
+
+
+def test_load_fabric_reads_parquet_without_gdal_plugin(helpers, tmp_path):
+    """Oregon's fabric is .parquet — must use gpd.read_parquet (geopandas-
+    native), not gpd.read_file. Regression for #182 render_or.slurm crash."""
+    path = tmp_path / "fabric.parquet"
+    _tiny_fabric_gdf().to_parquet(path)
+    gdf = helpers.load_fabric({"path": str(path), "id_col": "nhm_id"})
+    assert list(gdf.index) == [10, 20, 30]
+
+
+def test_load_fabric_still_reads_gpkg(helpers, tmp_path):
+    """gfv2's .gpkg path must keep working (read_file/pyogrio)."""
+    path = tmp_path / "fabric.gpkg"
+    _tiny_fabric_gdf().to_file(path, driver="GPKG")
+    gdf = helpers.load_fabric({"path": str(path), "id_col": "nhm_id"})
+    assert list(gdf.index) == [10, 20, 30]
