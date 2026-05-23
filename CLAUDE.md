@@ -92,6 +92,25 @@ tests/
 - **Docstrings** on public functions only (not stubs)
 - **Ruff** for lint and format (line length 88); run before committing
 
+## Config schema additions
+
+When you add a new optional parameter to the project config (top-level key
+or nested commented stub), update all four in the same PR. The first three
+keep new projects current; the fourth keeps existing projects discoverable.
+
+1. **`src/nhf_spatial_targets/init_run.py:_CONFIG_TEMPLATE`** — add the
+   parameter as a commented stub (schema + example value + reason it's
+   optional).
+2. **`config/pipeline.yml`** — mirror the addition.
+3. **`tests/test_init_run.py`** — assert the new key (or commented-stub
+   line) appears in the rendered template.
+4. **`src/nhf_spatial_targets/upgrade_config.py:OPTIONAL_CONFIG_FEATURES`**
+   — append an `OptionalConfigFeature` entry so existing-project operators
+   discover the addition via `nhf-targets upgrade-config -d <dir>`.
+
+`upgrade-config` is **report-only** — it never mutates an operator's
+`config.yml`; it prints what's missing and the literal block to paste.
+
 ## Data & Catalog Conventions
 
 - All data source metadata lives in `catalog/sources.yml` — do not hardcode URLs or product names in Python modules

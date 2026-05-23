@@ -367,6 +367,68 @@ def reconcile_manifest_cmd(
     )
 
 
+@app.command(name="upgrade-config")
+def upgrade_config_cmd(
+    workdir: Annotated[
+        Path,
+        Parameter(
+            name=["--project-dir", "-d"],
+            help="Project created by 'nhf-targets init'.",
+        ),
+    ],
+):
+    """Report optional-config features missing from the project's config.yml.
+
+    Existing projects don't pick up new optional features (e.g. fabric.token,
+    representative_points) added to the init template, because they were
+    created before those features existed. This command compares the project's
+    config.yml against the registry in upgrade_config.OPTIONAL_CONFIG_FEATURES
+    and prints the literal commented block to paste for each missing feature.
+
+    Report-only: never mutates the operator's config.yml. Exits 0 if in sync,
+    1 on drift (so scripted heartbeats can detect it).
+    """
+    from rich.console import Console
+    from rich.table import Table
+
+    from nhf_spatial_targets.upgrade_config import check_drift
+
+    console = Console()
+    if not workdir.exists():
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
+        sys.exit(2)
+    try:
+        missing = check_drift(workdir)
+    except FileNotFoundError as e:
+        print(f"upgrade-config failed: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if not missing:
+        console.print(
+            "[bold green]Project config is in sync with the latest "
+            "optional-feature stubs in the init template.[/bold green]"
+        )
+        return
+
+    table = Table(title="Optional features missing from this project's config.yml")
+    table.add_column("feature", style="bold")
+    table.add_column("added")
+    table.add_column("why")
+    for feat in missing:
+        table.add_row(feat.name, feat.added, feat.why)
+    console.print(table)
+
+    console.print(
+        "\nPaste each block below into config.yml (or see "
+        "src/nhf_spatial_targets/init_run.py:_CONFIG_TEMPLATE for context). "
+        "This command never edits your file.\n"
+    )
+    for feat in missing:
+        console.print(f"[bold]# --- {feat.name} ---[/bold]")
+        console.print(feat.block)
+    sys.exit(1)
+
+
 @app.command
 def init(
     workdir: Annotated[
