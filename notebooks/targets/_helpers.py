@@ -113,7 +113,14 @@ def load_fabric(
     aggregation, prefer reloading without simplification or accept the
     rounding error (sub-1% per polygon).
     """
-    gdf = gpd.read_file(fabric_cfg["path"])
+    # Dispatch on suffix (mirrors validate._gather_fabric_meta): parquet
+    # fabrics use geopandas-native read_parquet so this works even when GDAL
+    # lacks the ogr_Parquet plugin; everything else goes through pyogrio.
+    path = Path(fabric_cfg["path"])
+    if path.suffix.lower() in (".parquet", ".geoparquet"):
+        gdf = gpd.read_parquet(path)
+    else:
+        gdf = gpd.read_file(path)
     gdf = gdf.set_index(fabric_cfg["id_col"])
     if simplify_tolerance_deg is not None and simplify_tolerance_deg > 0:
         gdf = gdf.copy()
