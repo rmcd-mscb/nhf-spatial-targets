@@ -98,7 +98,6 @@ def _execute(nb_path: Path, startup: Path, timeout: int) -> None:
     ]
     env = os.environ.copy()
     env["PYTHONSTARTUP"] = str(startup)
-    print(f"=== executing {nb_path.relative_to(REPO_ROOT)} ===", flush=True)
     subprocess.run(cmd, check=True, cwd=REPO_ROOT, env=env)
 
 
@@ -176,6 +175,18 @@ def render_group(
         with fh:
             fh.write(_startup_payload(cfg["helpers_dir"], project))
         for nb in notebooks:
+            # Print the *logical* notebook name (the committed path under the
+            # repo). On the --project-dir path the actual file handed to
+            # nbconvert is a /tmp temp copy, which isn't under REPO_ROOT;
+            # showing its temp filename in the log would be noise (and used to
+            # crash on `.relative_to(REPO_ROOT)`, issue #182 follow-up). Fall
+            # back to the bare path for notebooks outside the repo (tests,
+            # scratch fixtures).
+            try:
+                display = nb.relative_to(REPO_ROOT)
+            except ValueError:
+                display = nb
+            print(f"=== executing {display} ===", flush=True)
             if project_dir is None:
                 _execute(nb, startup_path, timeout)
                 continue
