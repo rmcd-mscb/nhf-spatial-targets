@@ -50,9 +50,54 @@ gh = ">=2.0"
 # CLI for validating that pipeline-written NetCDFs are CF-1.6 compliant.
 cfchecker = ">=4.1"
 
+[feature.marp.dependencies]
+# Marp slide-deck rendering toolchain. Kept in its own feature (not dev) so
+# operators who only run the pipeline don't pay the nodejs + chrome download
+# cost (~250 MB total) unless they need to render presentation decks.
+#
+# Two-step install:
+#     pixi install -e marp           # pulls nodejs (+ chrome system deps on linux)
+#     pixi run -e marp marp-setup    # downloads chrome-headless-shell via puppeteer
+#                                    # (~50 MB; cached in ~/.cache/puppeteer)
+#
+# Chromium isn't on conda-forge directly, so we use puppeteer's official
+# chrome-headless-shell downloader instead — it pins a revision compatible
+# with the puppeteer that marp-cli bundles internally, which is what we want
+# for reproducible PDF rendering across machines.
+nodejs = ">=20"
+
+[feature.marp.target.linux-64.dependencies]
+# chrome-headless-shell on bare HPC needs two system libs that aren't part of
+# a minimal cluster image: libgbm (graphics buffer manager — even headless
+# rendering uses it for off-screen buffer alloc) and alsa-lib (audio
+# subsystem — chrome calls into it on startup even with no audio). Both
+# Linux-only. macOS / Windows operators already have system Chrome and use
+# the workstation render path documented in docs/presentations/README.md.
+libgbm = ">=1.0"
+alsa-lib = ">=1.2"
+
+[feature.marp.target.linux-64.activation.env]
+# Chrome is a pre-built non-conda binary downloaded by `marp-setup`, so it
+# doesn't have rpath pointing at the pixi env's libdir. Prepend
+# $CONDA_PREFIX/lib so chrome-headless-shell finds the libgbm + alsa-lib
+# pulled in above. Scoped to the marp env's activation (does not leak into
+# default/dev).
+#
+# The `${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}` form (vs the obvious
+# `:$LD_LIBRARY_PATH`) only appends the colon when the variable is set
+# and non-empty. Without the guard, an unset $LD_LIBRARY_PATH expands to
+# an empty string and leaves a trailing `:` — which per `ld.so(8)` means
+# "search current dir" (mild security smell + nondeterminism).
+# silent-failure-hunter review of #209.
+LD_LIBRARY_PATH = "$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
 [environments]
 default = { solve-group = "default" }
 dev = { features = ["dev"], solve-group = "default" }
+# Marp feature is nodejs-only (chrome is downloaded post-install by
+# `pixi run -e marp marp-setup`), so it solves cleanly on every workspace
+# platform without needing the default solve-group's deeper pin matrix.
+marp = { features = ["marp"], solve-group = "marp" }
 
 [tasks]
 # Initialise a project.
@@ -142,3 +187,16 @@ render-figures              = { cmd = "python scripts/render_figures.py --group 
 render-figures-consolidated = { cmd = "python scripts/render_figures.py --group consolidated", description = "Re-execute consolidated notebooks and save to docs/figures/consolidated/<project>/" }
 render-figures-aggregated   = { cmd = "python scripts/render_figures.py --group aggregated",   description = "Re-execute aggregated notebooks and save to docs/figures/aggregated/<project>/" }
 render-figures-targets      = { cmd = "python scripts/render_figures.py --group targets",      description = "Re-execute target inspection notebooks and save to docs/figures/targets/<project>/" }
+
+# Marp slide-deck rendering — runs puppeteer's downloaded chrome under
+# marp-cli so the same `--pdf`/`--html`/`--server` workflow works on HPC
+# as on a workstation with system Chrome. Two-step install:
+#     pixi install -e marp           # pulls nodejs
+#     pixi run -e marp marp-setup    # downloads chrome into ~/.cache/puppeteer
+# Then:
+#     pixi run -e marp render-deck docs/presentations/<file>.slides.md --pdf
+#     pixi run -e marp render-deck docs/presentations/<file>.slides.md --html
+#     pixi run -e marp render-deck docs/presentations/ --server
+[feature.marp.tasks]
+marp-setup = { cmd = "npx --yes puppeteer browsers install chrome-headless-shell", description = "One-shot: download chrome-headless-shell via puppeteer (smaller + fewer system deps than full chrome — works on bare HPC)" }
+render-deck = { cmd = "python scripts/render_deck.py", description = "Render a Marp .slides.md deck (PDF/HTML/server) via marp-cli" }
