@@ -10,23 +10,20 @@ from MOD10C1's native 0-100 integer scale to fractional [0, 1]:
     ci      = Day_CMG_Clear_Index / 100
 
 For each (HRU, day) where the HRU-mean clear index passes the configured
-threshold (``ci >= snow_covered_area.ci_threshold``, default 0.70 — same
-constant the Fortran hardcodes)::
+threshold (``ci >= snow_covered_area.ci_threshold``, default 0.70 — the
+fractional equivalent of the Fortran ``70.0`` on the native scale)::
 
     lower = ci * sca_obs
     upper = lower + (1 - ci)
 
-``upper`` is algebraically capped at 1.0 (sca_obs ∈ [0, 1], ci ∈ [0, 1]).
+``upper`` is algebraically capped at 1.0:
+``ci*sca + (1-ci) ≤ ci*1 + (1-ci) = 1`` for any ``sca`` in ``[0, 1]``.
 Cells whose HRU-mean CI is below threshold produce NaN bounds.
 
 July and August are forced to ``(lower, upper) = (0, 0)`` for every CI-
 passing HRU, again mirroring calcSCA. This is honest in the PNW where
 the snowpack is gone by July; it is questionable in deep-snowpack HRUs
-(Cascades high-elevation) where late-summer snow persists. The forcing
-is hardcoded here (rather than configurable) because it matches the
-calibration reference exactly — making it a knob is a follow-up if a
-future fabric needs it (a config-schema addition that would touch
-init_run, defaults, upgrade_config, and tests in lockstep per CLAUDE.md).
+(Cascades high-elevation) where late-summer snow persists.
 
 **Pre-pipeline gate vs. post-aggregation gate.** ``aggregate/mod10c1.py``
 already applies a *per-pixel* ``CI > 70`` gate inside
@@ -39,14 +36,26 @@ of a partly-cloudy day survived). Re-gating at HRU scale matches what
 ``calcSCA`` does with the per-HRU input it sees.
 
 **Single-source ``n_sources`` semantics.** With one source the
-``n_sources`` diagnostic is binary: 0 where the CI gate dropped the
-cell (either at pre-aggregation, leaving NaN snow, or at this stage),
-1 where a bound was produced. The shared write helper writes int8 with
-flag_values ``[0, 1]`` and flag_meanings ``"none one"``.
+``n_sources`` diagnostic is binary: 1 where a finite bound was produced
+(CI gate passed AND ``sca_obs`` is finite), 0 elsewhere. The shared
+write helper writes int8 with flag_values ``[0, 1]`` and flag_meanings
+``"none one"``.
 
 If ``snow_covered_area.nn_fill`` is True (default), a second file
 ``<output>_nn_filled.nc`` is written with NaN bounds filled by the
 nearest finite HRU's bound at the same day.
+
+.. warning::
+
+   Per-year intermediates under ``<project>/targets/.sca_intermediates/``
+   are keyed by year only — they are NOT fingerprinted by
+   ``ci_threshold`` or by the code version that wrote them. After
+   changing ``ci_threshold`` or after any change to this module that
+   alters the formula, ``rm -rf <project>/targets/.sca_intermediates/``
+   before re-running, otherwise stale intermediates will be silently
+   reused. The active ``ci_threshold`` is logged whenever the per-year
+   skip branch fires so operators can cross-check. Tracked for a
+   shared-with-SWE automatic fix in issue #213.
 """
 
 from __future__ import annotations
@@ -72,16 +81,21 @@ from nhf_spatial_targets.workspace import Project
 
 logger = logging.getLogger(__name__)
 
-# MOD10C1 v061 is the only source. The catalog key, on-disk aggregated
-# subdir, and per-year filename prefix all match this string.
 _MOD10C1_KEY = "mod10c1_v061"
 _SCA_VAR = "Day_CMG_Snow_Cover"
 _CI_VAR = "Day_CMG_Clear_Index"
 
-# July/August are hardcoded to a (0, 0) bound per PRMSobjfun.f90:calcSCA
-# lines 1056-1059. Captured as a constant so the global attr in the output
-# NC can name the months explicitly.
+# Captured as a constant so the output NC's global ``summer_zero_months``
+# attr can name the months explicitly. Matches PRMSobjfun.f90:calcSCA.
 _SUMMER_ZERO_MONTHS = (7, 8)
+
+# Operator-visible warning threshold: if fewer than this fraction of
+# (HRU, day) cells in a year produce a valid bound, the build emits a
+# WARNING with the actual fraction. Mirrors the per-year warning shape
+# in aggregate/mod10c1.py:_log_low_valid_coverage so an upstream
+# regression (all-NaN CI, fabric mismatch, fully-cloudy season) is
+# loud rather than silently producing an all-zero n_sources year.
+_LOW_VALID_WARN_FRACTION = 0.01
 
 
 def build(project: Project) -> None:
@@ -91,9 +105,8 @@ def build(project: Project) -> None:
     computes per-day bounds, and writes a per-year intermediate. The
     intermediates are then stitched into the canonical
     ``sca_targets.nc``. Year chunking bounds peak memory regardless of
-    period length — important for full-CONUS fabrics where the 25-year
-    daily build of two source variables would otherwise materialise
-    ~30 GB in one shot.
+    period length — for a multi-decade CONUS-scale daily build the
+    single-shot alternative would materialise O(10s of GB).
     """
     sca_cfg = project.target("snow_covered_area")
     if list(sca_cfg["sources"]) != [_MOD10C1_KEY]:
@@ -232,7 +245,19 @@ def _build_year(
     year_unfilled = intermediates_dir / f"sca_targets_{year}.nc"
     year_nn = intermediates_dir / f"sca_targets_{year}_nn_filled.nc"
     if year_unfilled.exists() and ((not nn_fill) or year_nn.exists()):
-        logger.info("Year %d intermediates exist; skipping", year)
+        # Intermediates are path-keyed only — not fingerprinted by
+        # ci_threshold or code version. Log the active threshold so an
+        # operator re-reading the run output can cross-check it against
+        # the file's global attrs (see module docstring warning).
+        logger.info(
+            "Year %d intermediates exist; skipping. Active ci_threshold=%.2f "
+            "— if it has changed since the intermediates were written, "
+            "rm %s/sca_targets_%d*.nc and re-run.",
+            year,
+            ci_threshold,
+            intermediates_dir,
+            year,
+        )
         return
 
     year_master_idx = pd.date_range(year_period[0], year_period[1], freq="D")
@@ -280,10 +305,31 @@ def _build_year(
     lower = xr.where(summer & valid, 0.0, lower)
     upper = xr.where(summer & valid, 0.0, upper)
 
-    # Single-source binary diagnostic: 1 where the bound is finite, 0
-    # otherwise. build_n_sources_attrs(1) → flag_values=[0, 1],
-    # flag_meanings="none one".
-    n_sources = valid.astype(np.int8)
+    # Single-source binary diagnostic: 1 where a FINITE bound was
+    # produced (CI gate passed AND sca_obs is finite), 0 elsewhere.
+    # ``valid`` alone would mis-flag the rare case where CI passed at
+    # HRU scale but the pre-aggregation per-pixel CI gate dropped every
+    # snow pixel — there the bound is NaN even though ``valid`` is True.
+    # build_n_sources_attrs(1) → flag_values=[0, 1], flag_meanings="none one".
+    valid_bound = valid & sca_obs.notnull()
+    n_sources = valid_bound.astype(np.int8)
+
+    # Operator-visible warning when an upstream regression or
+    # genuinely fully-cloudy season produces near-zero coverage for
+    # the year. Cheap single-scalar reduction; mirrors the per-year
+    # warning shape in aggregate/mod10c1.py:_log_low_valid_coverage.
+    frac_valid = float(valid_bound.mean().compute())
+    if frac_valid < _LOW_VALID_WARN_FRACTION:
+        logger.warning(
+            "sca year %d: only %.4f%% of (HRU, day) cells produced a "
+            "valid CI-passing bound (threshold for warning: %.2f%%). "
+            "Either the aggregated mod10c1 NC is degenerate for this year "
+            "or ci_threshold=%.2f is too strict.",
+            year,
+            frac_valid * 100,
+            _LOW_VALID_WARN_FRACTION * 100,
+            ci_threshold,
+        )
 
     write_bounds_target(
         project=project,
