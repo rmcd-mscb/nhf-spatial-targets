@@ -282,7 +282,10 @@ See `catalog/sources.yml` `status:` and `notes:` fields for per-source gaps.
 See `docs/references/known-gaps-resolved.md` for resolved items.
 
 **Still open:**
-- SCA CI-bounds formula — PRMSobjfun.f not publicly available; formula unconfirmed
+- *(none currently — the SCA CI-bounds formula gap closed 2026-05-24 when the
+  PRMSobjfun source landed in [`docs/references/PRMSobjfun.f90`](docs/references/PRMSobjfun.f90);
+  formula is in `calcSCA` lines 1043-1050 and `targets/sca.py` can be promoted
+  from stub to implementation. See [`docs/references/prmsobjfun-summary.md`](docs/references/prmsobjfun-summary.md).)*
 
 ## Testing
 
