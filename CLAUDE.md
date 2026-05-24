@@ -18,7 +18,8 @@ pixi run validate -- --project-dir /data/nhf-runs/my-run
 # Run the full pipeline against a project
 pixi run run -- --project-dir /data/nhf-runs/my-run
 
-# Run a single target (runoff is implemented; aet/rch/som/sca are stubs)
+# Run a single target (runoff / aet / rch / som / swe are implemented; sca is a
+# stub pending the #210 implementation of the calcSCA formula from PRMSobjfun.f90)
 pixi run run-runoff -- --project-dir /data/nhf-runs/my-run
 pixi run run-aet -- --project-dir /data/nhf-runs/my-run
 
@@ -284,7 +285,7 @@ See `docs/references/known-gaps-resolved.md` for resolved items.
 **Still open:**
 - *(none currently — the SCA CI-bounds formula gap closed 2026-05-24 when the
   PRMSobjfun source landed in [`docs/references/PRMSobjfun.f90`](docs/references/PRMSobjfun.f90);
-  formula is in `calcSCA` lines 1043-1050 and `targets/sca.py` can be promoted
+  formula is in `calcSCA` lines 1052-1061 and `targets/sca.py` can be promoted
   from stub to implementation. See [`docs/references/prmsobjfun-summary.md`](docs/references/prmsobjfun-summary.md).)*
 
 ## Testing

@@ -78,11 +78,18 @@ alsa-lib = ">=1.2"
 
 [feature.marp.target.linux-64.activation.env]
 # Chrome is a pre-built non-conda binary downloaded by `marp-setup`, so it
-# doesn't have rpath pointing at the pixi env's libdir. Force LD_LIBRARY_PATH
-# to include $CONDA_PREFIX/lib so chrome-headless-shell finds the libgbm +
-# alsa-lib pulled in above. Scoped to the marp env's activation (does not
-# leak into default/dev).
-LD_LIBRARY_PATH = "$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
+# doesn't have rpath pointing at the pixi env's libdir. Prepend
+# $CONDA_PREFIX/lib so chrome-headless-shell finds the libgbm + alsa-lib
+# pulled in above. Scoped to the marp env's activation (does not leak into
+# default/dev).
+#
+# The `${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}` form (vs the obvious
+# `:$LD_LIBRARY_PATH`) only appends the colon when the variable is set
+# and non-empty. Without the guard, an unset $LD_LIBRARY_PATH expands to
+# an empty string and leaves a trailing `:` — which per `ld.so(8)` means
+# "search current dir" (mild security smell + nondeterminism).
+# silent-failure-hunter review of #209.
+LD_LIBRARY_PATH = "$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 [environments]
 default = { solve-group = "default" }

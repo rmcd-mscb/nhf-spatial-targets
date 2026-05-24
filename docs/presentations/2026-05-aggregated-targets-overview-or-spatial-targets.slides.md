@@ -248,7 +248,7 @@ at urban-HRU bound width.
 
 </div>
 
-- All three sources show the expected east-wet / west-dry CONUS gradient at HRU resolution.
+- All three sources show the expected east-wet / west-dry PNW gradient (wet Cascades + Coast Range vs dry east-OR Owyhee) at HRU resolution.
 - ERA5-Land and GLDAS agree closely in the humid east; MWBM ClimGrid runs lower in arid HRUs.
 
 </div>
@@ -282,7 +282,7 @@ disagree in a way that suggests a unit bug?" check. They don't.
 
 ![](../figures/targets/or-spatial-targets/runoff_target_conus_series.png)
 
-<span class="caption">CONUS-mean lower / upper envelope.</span>
+<span class="caption">OR-mean lower / upper envelope.</span>
 
 </div>
 
@@ -404,13 +404,13 @@ smoking gun.
 
 ![](../figures/targets/or-spatial-targets/aet_target_conus_series.png)
 
-<span class="caption">CONUS-mean lower / upper envelope (PR #127 21-year run).</span>
+<span class="caption">OR-mean lower / upper envelope (PR #127 21-year run).</span>
 
 </div>
 
 - Bound shrinks in winter — all three sources agree on near-zero AET.
 - Bound opens in summer where MOD16A2 and SSEBop diverge; that's the calibration-relevant disagreement.
-- CONUS-mean envelope confirms the seasonal asymmetry at aggregate scale.
+- OR-mean envelope confirms the seasonal asymmetry at aggregate scale.
 
 </div>
 </div>
@@ -540,7 +540,7 @@ materially changes what the bound captures.
 
 ![](../figures/targets/or-spatial-targets/recharge_target_conus_series.png)
 
-<span class="caption">CONUS-mean lower / upper envelope.</span>
+<span class="caption">OR-mean lower / upper envelope.</span>
 
 </div>
 
@@ -669,7 +669,7 @@ why" moment.
 
 ![](../figures/targets/or-spatial-targets/soil_moisture_target_monthly_climatology.png)
 
-<span class="caption">Per-calendar-month CONUS-mean climatology — seasonal-cycle view of the bound.</span>
+<span class="caption">Per-calendar-month OR-mean climatology — seasonal-cycle view of the bound.</span>
 
 </div>
 
@@ -677,9 +677,10 @@ why" moment.
 
 <div class="callout">
 <strong>Discussion hook.</strong> Monthly normalisation (per calendar month — Jans
-together, Febs together, …) vs annual normalisation (single 1982–2010 window)
-gives meaningfully different bound widths, especially in spring shoulder
-seasons. Is the modelling team using monthly, annual, or both?
+together, Febs together, …) vs annual normalisation (single 1980-2024 OR
+window — TM 6-B10's original gfv2 default was 1982-2010) gives meaningfully
+different bound widths, especially in spring shoulder seasons. Is the
+modelling team using monthly, annual, or both?
 </div>
 
 </div>
@@ -687,7 +688,7 @@ seasons. Is the modelling team using monthly, annual, or both?
 
 <!--
 The bounds_map shows the per-HRU envelope at a snapshot month; the climatology
-panel shows the seasonal cycle of the CONUS-mean bound after per-calendar-month
+panel shows the seasonal cycle of the OR-mean bound after per-calendar-month
 normalisation. The annual figures aren't shown inline to keep the slide tight,
 but the file list above signals to the room that they exist if anyone wants to
 dig into the annual cadence. The choice of monthly-vs-annual is genuinely a
@@ -720,7 +721,7 @@ modeller-side decision — we emit both NCs.
 <div>
 
 <div class="callout">
-<strong>Gap recently closed.</strong> Target builder (<code>targets/sca.py</code>) is still a <span class="status-todo">STUB</span> — but the bound formula is no longer missing. <code>PRMSobjfun.f90</code> landed in the repo 2026-05-24 (<code>docs/references/PRMSobjfun.f90</code>); <code>calcSCA</code> lines 1043-1050 build the bound from <code>(CI, SCA_obs)</code> when CI > 70%: <code>lower = (CI/100)·SCA_obs</code>, <code>upper = lower + (1 − CI/100)</code>, with July/August forced to (0, 0). Implementation tracked in <strong>#210</strong>.
+<strong>Gap recently closed.</strong> Target builder (<code>targets/sca.py</code>) is still a <span class="status-todo">STUB</span> — but the bound formula is no longer missing. <code>PRMSobjfun.f90</code> landed in the repo 2026-05-24 (<code>docs/references/PRMSobjfun.f90</code>); <code>calcSCA</code> lines 1052-1061 build the bound from <code>(CI, SCA_obs)</code> when CI > 70%: <code>lower = (CI/100)·SCA_obs</code>, <code>upper = lower + (1 − CI/100)</code>, with July/August forced to (0, 0). Implementation tracked in <strong>#210</strong>.
 </div>
 
 </div>
@@ -779,7 +780,7 @@ coverage filter.
 ## 3.5 Snow-covered area — target output *(placeholder — builder pending implementation in #210)*
 
 <div class="callout">
-<strong>Final target NC not yet produced — but the formula is in hand.</strong> <code>targets/sca.py</code> is still a stub; <strong>#210</strong> tracks promotion to a real implementation now that <code>PRMSobjfun.f90:calcSCA</code> (<code>docs/references/PRMSobjfun.f90</code>, lines 1043-1050) makes the bound formula explicit. Expected outputs once implemented: <code>sca_targets.nc</code> (per-HRU per-day lower / upper bound, fraction 0-1) plus optional <code>sca_targets_nn_filled.nc</code>.
+<strong>Final target NC not yet produced — but the formula is in hand.</strong> <code>targets/sca.py</code> is still a stub; <strong>#210</strong> tracks promotion to a real implementation now that <code>PRMSobjfun.f90:calcSCA</code> (<code>docs/references/PRMSobjfun.f90</code>, lines 1052-1061) makes the bound formula explicit. Expected outputs once implemented: <code>sca_targets.nc</code> (per-HRU per-day lower / upper bound, fraction 0-1) plus optional <code>sca_targets_nn_filled.nc</code>.
 </div>
 
 **The reconstructed bound** (per HRU per day, MOD10C1 `CI > 70`):
@@ -901,7 +902,7 @@ That's why SNODAS is the trailing item on the SWE list.
 
 ![](../figures/targets/or-spatial-targets/swe_target_conus_series.png)
 
-<span class="caption">CONUS-mean lower / upper envelope.</span>
+<span class="caption">OR-mean lower / upper envelope.</span>
 
 </div>
 
@@ -983,7 +984,7 @@ pipeline decisions.
 
 1. **SWE in calibration** — pipeline emits 6 targets; PEST++ historically (via PRMSobjfun.f90) consumed 5. Do we add a SWE observation group to PEST++ so the OR-only 4-source SWE bound actually drives parameter selection, or hold it as inspection-only?
 2. **SCA implementation priority** — #210 reconstructs the bound formula from `PRMSobjfun.f90:calcSCA`; the July/August zero-snow hardcode may or may not be appropriate for OR's Cascades high-elevation HRUs. Is this a calibration-team-pending decision (configurable) or a pipeline-side default we ship?
-3. **Period-of-record locks** per category — OR has now extended runoff (1979-2024) and AET (2000-2024); recharge is still 2000-2009. Each extension creates variable-source-count bands and (for `normalized_minmax`) potential bound collapse. Calibration team's call on how aggressively to extend.
+3. **Period-of-record locks** per category — OR currently ships runoff 1979-2024, AET 2000-2024, recharge 2000-2013 (capped at Reitz 2017 end-date), SOM 1980-2024, SWE 1980-2024. Each window-extension creates variable-source-count bands and (for `normalized_minmax`) potential bound collapse — calibration team's call on whether the trade-off is worth it per category, and whether recharge is worth extending past 2013 with a 1-source ERA5-only tail.
 4. **NN-fill default** — which targets ship `_nn_filled` as the consumer default vs the honest-NaN file? Currently we emit both for runoff / AET / recharge / soil moisture; choice belongs to PEST++ observation-file generation.
 5. **Fabric-coarse-grid exclusions** scale beyond OR + gfv2 — both projects drop WaterGAP (recharge) and NCEP/NCAR (soil moisture) for the same intermountain-west terrain reason. Worth codifying as a catalog-level "coarse-grid for fine HRUs" tag so a future regional fabric (CO, UT, ID, …) inherits the right defaults?
 6. **Margulis WUS-SR on OR** — the only multi-source SWE bound in the system that actually includes Margulis. Worth a tighter look at how it shapes the bound vs the 3-source gfv2 case (e.g. swap Margulis out and re-render to quantify the bound-width delta).

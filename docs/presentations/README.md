@@ -30,15 +30,22 @@ chromium is bundled via the `marp` pixi feature.
 
 ### Pixi `marp` feature (recommended for HPC / fresh checkouts)
 
-Install once per checkout (pulls nodejs + chromium via conda-forge, ~300 MB):
+Two-step install — chromium isn't on conda-forge, so PDF rendering also needs
+puppeteer's chrome-headless-shell:
 
 ```bash
+# Step 1 — pulls nodejs + Linux system libs (libgbm + alsa-lib) (~100 MB)
 pixi install -e marp
+
+# Step 2 — downloads chrome-headless-shell into ~/.cache/puppeteer (~150 MB)
+# Required for --pdf / --pptx / --png / --preview output; HTML + server work
+# without it. Re-run safely to upgrade.
+pixi run -e marp marp-setup
 ```
 
 Then render any deck via the `render-deck` task (which delegates to
-`scripts/render_deck.py`, a thin wrapper that resolves chromium from the
-pixi env and sets `MARP_USER=root` for the sandboxless HPC chromium):
+`scripts/render_deck.py`, a thin wrapper that resolves chrome from the
+puppeteer cache and sets `MARP_USER=root` for the sandboxless HPC chrome):
 
 ```bash
 # Render to PDF

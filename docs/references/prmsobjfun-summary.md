@@ -63,7 +63,7 @@ end function
 
 That third consequence is load-bearing for several pipeline edge cases:
 
-- **SCA July/August (calcSCA, lines 1043-1050).** Hardcoded to
+- **SCA July/August (calcSCA, lines 1052-1061).** Hardcoded to
   `lower = upper = 0.0` for months 7 and 8 — the optimiser is *forced* to
   predict zero SCA in July/August, every HRU, every year. Honest in the PNW
   where the snowpack is gone; questionable in deep-snowpack HRUs (Cascades
@@ -104,7 +104,7 @@ The 7 split:
 | 7 | daily LOW EFCs (4-5) | median | `nmrse_median_efc_low` |
 
 EFC = Environmental Flow Components (large floods / small floods / high
-pulses / low / extreme-low; lines 232-238 of the file).
+pulses / low / extreme-low; lines 240-247 of the file).
 
 ### Per-target HRU bounds (this pipeline's deliverable)
 
@@ -141,7 +141,7 @@ Mirrors TM 6-B10 §3.6 (the staged calibration procedure).
 
 ## SCA bound formula (no longer "missing")
 
-`calcSCA` (lines 1043-1050) constructs its bounds **inside the routine**
+`calcSCA` (lines 1052-1061) constructs its bounds **inside the routine**
 from the raw MOD10C1 `(obs, CI)` pair, not from upstream files:
 
 ```fortran
@@ -178,7 +178,11 @@ sumdiff = sumdiff + (diff2 * (obsSCA(ihru, LOWER, i) + 1.0))
 (Note: PAN's comment in the source — `! NOTE: PAN - I don't understand the
 math here; should look into it` — flags that the `(LOWER + 1.0)` weight is
 applied *twice*, once inside `diff2` and once when accumulating. May be a
-typo in the original; downstream PRMS treats it as load-bearing.)
+typo in the original; downstream PRMS treats it as load-bearing. **For
+this pipeline**: `targets/sca.py` (issue #210) should emit `lower_bound`
+and `upper_bound` per the formula above and *not* replicate the double-
+weight quirk — the weight is an objective-function-side concern that
+PRMS/PEST++ applies on top of the bound, not part of the bound itself.)
 
 The bound is then `(LOWER, UPPER)` per HRU/day where CI passed the gate;
 days where CI ≤ 70 are dropped from the RMSE denominator (`n` only
@@ -227,7 +231,7 @@ Watch-outs for that build:
 
 ## SWE is not in this file
 
-PRMSobjfun has no `calcSWE` and the variable enumeration on line 142
+PRMSobjfun has no `calcSWE` and the variable enumeration at lines 135-139
 (`AET / RCH / RUN / SCA / SOM`) is explicit about the five-target set.
 SWE is a *post-TM-6-B10 extension* added by this pipeline; downstream
 calibration would need a `calcSWE` analog added to the Fortran module
