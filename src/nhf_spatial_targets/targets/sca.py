@@ -91,10 +91,18 @@ _SUMMER_ZERO_MONTHS = (7, 8)
 
 # Operator-visible warning threshold: if fewer than this fraction of
 # (HRU, day) cells in a year produce a valid bound, the build emits a
-# WARNING with the actual fraction. Mirrors the per-year warning shape
-# in aggregate/mod10c1.py:_log_low_valid_coverage so an upstream
-# regression (all-NaN CI, fabric mismatch, fully-cloudy season) is
-# loud rather than silently producing an all-zero n_sources year.
+# WARNING with the actual fraction. Catches all-NaN CI, fabric mismatch,
+# and fully-cloudy-season cases that would otherwise silently produce an
+# all-zero n_sources year.
+#
+# 1% (not the 10% threshold at ``aggregate/mod10c1.py:_LOW_COVERAGE_WARN_THRESHOLD``)
+# because the two count different things: the aggregator's 10% counts
+# zero-valid-area cells (a per-pixel HRU-coverage statistic), while this
+# 1% counts surviving finite bounds (the downstream target's usable
+# product). A healthy MOD10C1 year clears 1% trivially even in heavily
+# clouded regions where the aggregator's HRU-coverage already sits near
+# the 10% warn line — so the two thresholds are intentionally calibrated
+# to fire on different failure classes, not redundantly on the same one.
 _LOW_VALID_WARN_FRACTION = 0.01
 
 
@@ -246,13 +254,16 @@ def _build_year(
     year_nn = intermediates_dir / f"sca_targets_{year}_nn_filled.nc"
     if year_unfilled.exists() and ((not nn_fill) or year_nn.exists()):
         # Intermediates are path-keyed only — not fingerprinted by
-        # ci_threshold or code version. Log the active threshold so an
-        # operator re-reading the run output can cross-check it against
-        # the file's global attrs (see module docstring warning).
+        # ci_threshold, sources list, code version, or any other config.
+        # Log the active threshold so an operator re-reading the run
+        # output can cross-check it against the file's global attrs
+        # (see module docstring warning). Tracked for an automatic
+        # cross-target fix in #213.
         logger.info(
-            "Year %d intermediates exist; skipping. Active ci_threshold=%.2f "
-            "— if it has changed since the intermediates were written, "
-            "rm %s/sca_targets_%d*.nc and re-run.",
+            "Year %d intermediates exist; skipping. Active ci_threshold=%.2f. "
+            "Any change to sca config or to the builder module since the "
+            "intermediates were written invalidates them — "
+            "rm %s/sca_targets_%d*.nc and re-run if so.",
             year,
             ci_threshold,
             intermediates_dir,
@@ -307,9 +318,13 @@ def _build_year(
 
     # Single-source binary diagnostic: 1 where a FINITE bound was
     # produced (CI gate passed AND sca_obs is finite), 0 elsewhere.
-    # ``valid`` alone would mis-flag the rare case where CI passed at
-    # HRU scale but the pre-aggregation per-pixel CI gate dropped every
-    # snow pixel — there the bound is NaN even though ``valid`` is True.
+    # ``valid`` alone would mis-flag the case where a small set of
+    # high-CI pixels lifts the area-weighted CI mean above threshold
+    # while the snow variable's per-pixel mask (``aggregate/mod10c1.py``
+    # ``stat_method="masked_mean"`` after the strict ``CI > 70`` gate)
+    # had already annihilated coverage — there the bound is NaN even
+    # though ``valid`` is True. Guarded by
+    # ``test_n_sources_contract_when_ci_passes_but_snow_nan``.
     # build_n_sources_attrs(1) → flag_values=[0, 1], flag_meanings="none one".
     valid_bound = valid & sca_obs.notnull()
     n_sources = valid_bound.astype(np.int8)

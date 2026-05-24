@@ -439,10 +439,13 @@ def test_idempotent_skip_existing_year(tmp_path: Path, caplog):
     workdir = _make_sca_project(tmp_path, period="2005-03-01/2005-03-31")
     project = load(workdir)
     build(project)
-    # Second build: intermediates exist; should log "skipping".
+    # Second build: intermediates exist; should log "skipping" AND
+    # name the active ci_threshold so a re-running operator can
+    # cross-check against the cached value (#213 follow-up).
     with caplog.at_level(logging.INFO, logger="nhf_spatial_targets.targets.sca"):
         build(project)
     assert "skipping" in caplog.text
+    assert "ci_threshold=0.70" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -506,6 +509,10 @@ def test_heterogeneous_ci_across_hrus(tmp_path: Path):
     project = load(workdir)
     build(project)
     with xr.open_dataset(project.targets_dir() / "sca_targets.nc") as ds:
+        # Explicit time-dim sanity: a single-day period must produce
+        # exactly one time step on disk (catches a regression where the
+        # period filter silently collapses or drops the dim).
+        assert ds.sizes["time"] == 1
         # HRU 1: ci=0.90, sca=0.60 → lower=0.54, upper=0.64
         np.testing.assert_allclose(
             ds["lower_bound"].sel(nhm_id=1).values, 0.54, rtol=1e-5
@@ -582,9 +589,15 @@ def test_n_sources_value_set_is_zero_or_one(tmp_path: Path):
 def test_nn_fill_companion_actually_fills_nan_cells(tmp_path: Path):
     """The ``_nn_filled.nc`` companion replaces NaN bounds with neighbor values.
 
-    HRU 1 has a finite bound, HRU 2 has NaN (CI < threshold). The NN
-    fill should propagate HRU 1's bound to HRU 2 in the companion file,
-    while the unfilled file retains HRU 2's NaN.
+    HRU 1 and HRU 3 have finite bounds; HRU 2 has NaN (CI < threshold).
+    The NN fill should propagate a neighbor's bound to HRU 2 in the
+    companion file, while the unfilled file retains HRU 2's NaN.
+
+    The fabric in ``_write_synthetic_fabric`` places HRUs 1 and 3 as
+    equidistant neighbors of HRU 2; both donors carry ``lower=0.54``,
+    so the asserted value is tie-safe by construction — the cKDTree
+    donor walk in ``normalize/methods.py:nn_fill_bounds`` may pick
+    either, but both produce the same result.
     """
     from nhf_spatial_targets.targets.sca import build
     from nhf_spatial_targets.workspace import load
@@ -700,11 +713,13 @@ def test_idempotent_skip_with_nn_fill(tmp_path: Path, caplog):
     workdir = _make_sca_project(tmp_path, period="2005-03-01/2005-03-15", nn_fill=True)
     project = load(workdir)
     build(project)
-    # Second build with both intermediates present → skip.
+    # Second build with both intermediates present → skip, naming the
+    # active ci_threshold so a re-running operator can cross-check.
     caplog.clear()
     with caplog.at_level(logging.INFO, logger="nhf_spatial_targets.targets.sca"):
         build(project)
     assert "skipping" in caplog.text
+    assert "ci_threshold=0.70" in caplog.text
     # Delete only the nn intermediate; the predicate must fall through
     # and re-do the year (which regenerates the nn file).
     nn_intermediate = (
@@ -737,8 +752,11 @@ def test_missing_aggregated_file_surfaces_clear_error(tmp_path: Path):
     for nc in agg_dir.glob("*.nc"):
         nc.unlink()
     project = load(workdir)
-    with pytest.raises(FileNotFoundError, match="mod10c1_v061"):
+    # The error must name the source key AND the corrective ``agg``
+    # command so the operator can act on the message directly.
+    with pytest.raises(FileNotFoundError, match="mod10c1_v061") as exc_info:
         build(project)
+    assert "agg" in str(exc_info.value)
 
 
 def test_hru_coord_mismatch_surfaces_clear_error(tmp_path: Path):
@@ -794,3 +812,59 @@ def test_low_valid_coverage_emits_warning(tmp_path: Path, caplog):
     with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.targets.sca"):
         build(project)
     assert any("valid CI-passing bound" in r.message for r in caplog.records)
+
+
+def test_healthy_coverage_does_not_emit_warning(tmp_path: Path, caplog):
+    """Negative-case guard: a healthy year (all-passing CI) must NOT log
+    the low-coverage warning. Without this, a refactor that inverted the
+    comparison (``>`` instead of ``<``) or dropped the threshold guard
+    would flip the warning into an always-on fire and still pass the
+    positive-case test above."""
+    import logging
+
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_sca_project(
+        tmp_path,
+        period="2005-03-01/2005-03-31",
+        snow_native=60.0,
+        ci_native=90.0,  # fully above threshold for the whole year
+    )
+    project = load(workdir)
+    with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.targets.sca"):
+        build(project)
+    assert not any("valid CI-passing bound" in r.message for r in caplog.records)
+
+
+def test_low_valid_coverage_partial_pass_no_warning(tmp_path: Path, caplog):
+    """The warning predicate is strict ``<`` against ``_LOW_VALID_WARN_FRACTION``
+    (0.01). 1/3 of HRUs passing on every day produces ~33% coverage —
+    well above 1% — so the warning must NOT fire. Catches an off-by-one
+    boundary regression (``>`` for ``<``) that would silently flip the
+    warning to fire on every healthy year.
+    """
+    import logging
+
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    # 1/3 HRUs pass on every day → frac_valid ≈ 0.33, well above 0.01.
+    ci = np.array([[90.0, 50.0, 50.0]], dtype=np.float32)
+    snow = np.array([[60.0, 60.0, 60.0]], dtype=np.float32)
+    times_per_year = pd.date_range("2005-01-01", "2005-12-31", freq="D")
+    ci_full = np.tile(ci, (len(times_per_year), 1))
+    snow_full = np.tile(snow, (len(times_per_year), 1))
+
+    workdir = _make_sca_project(
+        tmp_path,
+        period="2005-03-01/2005-03-31",
+        snow_native=snow_full,
+        ci_native=ci_full,
+    )
+    project = load(workdir)
+    with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.targets.sca"):
+        build(project)
+    assert not any("valid CI-passing bound" in r.message for r in caplog.records), (
+        "1/3 coverage should clear the 1% threshold without warning"
+    )
