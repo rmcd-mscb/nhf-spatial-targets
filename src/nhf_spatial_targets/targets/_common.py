@@ -16,6 +16,8 @@ keeps ``mm_per_month_to_cfs``); this module is unit-agnostic.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -1109,6 +1111,179 @@ def iter_period_years(
         ye = min(end, pd.Timestamp(f"{year}-12-31"))
         out.append((year, ys.strftime("%Y-%m-%d"), ye.strftime("%Y-%m-%d")))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Cache invalidation for year-chunked intermediates (issue #213)
+# ---------------------------------------------------------------------------
+
+# Names of global attrs written to every per-year intermediate so the skip
+# branch can detect a stale cache. Kept as module-level constants so callers
+# (sca.build, swe.build) can pass the values into ``extra_global_attrs`` and
+# the on-disk schema is canonical.
+INTERMEDIATE_CONFIG_FINGERPRINT_ATTR = "config_fingerprint"
+INTERMEDIATE_CODE_VERSION_ATTR = "code_version"
+
+
+def target_config_fingerprint(project: Project, target_name: str) -> str:
+    """Stable hash of a target's config block + fabric identity.
+
+    Combines the target's config block from ``project.config["targets"]``,
+    the fabric path, and the fabric sha256 into a deterministic
+    sha256-truncated-to-12-hex-chars fingerprint. Used by the year-chunked
+    builders' skip predicate so that any change to the target's knobs
+    (sources, periods, thresholds, etc.) or a fabric swap invalidates the
+    on-disk per-year intermediates automatically.
+
+    The fabric identity is included because a fabric swap changes the HRU
+    set and CRS the target was built against — the same target config
+    against a different fabric produces semantically different output that
+    must not be silently reused.
+
+    Returns
+    -------
+    A 12-character hex string. 48 bits of entropy is more than enough to
+    distinguish realistic config variations; collisions are operationally
+    impossible.
+    """
+    target_cfg = project.config["targets"][target_name]
+    fabric_cfg = project.config.get("fabric") or {}
+    fabric_sha = (project.fabric or {}).get("sha256", "")
+    payload = {
+        "target": target_cfg,
+        "fabric_path": fabric_cfg.get("path", ""),
+        "fabric_sha256": fabric_sha,
+    }
+    canonical = json.dumps(payload, sort_keys=True, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
+
+
+def code_version_fingerprint() -> str:
+    """The package ``__version__`` used as a code-version cache tag.
+
+    Bumped on every release, so the per-year intermediates from one release
+    will not be reused after a version bump. Does NOT cover mid-version
+    edits during development — operators iterating on a target builder
+    must ``rm`` intermediates manually between code changes within the
+    same version (a known limitation; documented in each year-chunked
+    builder's module docstring).
+    """
+    from nhf_spatial_targets import __version__
+
+    return __version__
+
+
+def should_skip_year_build(
+    paths: "list[Path]",
+    *,
+    active_config_fingerprint: str,
+    active_code_version: str,
+    target_label: str,
+    year: int,
+    logger: logging.Logger,
+) -> "tuple[bool, dict | None]":
+    """Decide whether to skip rebuilding a year given existing intermediates.
+
+    Replaces the path-existence-only skip predicates that ``targets/sca.py``
+    and ``targets/swe.py`` carried before issue #213. Compares the cached
+    intermediate's ``config_fingerprint`` / ``code_version`` global attrs
+    against the active values; on mismatch (or on missing-attr / corrupt-
+    file), logs a WARNING naming both fingerprints, deletes the stale
+    intermediate(s), and falls through to a rebuild.
+
+    Parameters
+    ----------
+    paths
+        All per-year intermediate paths the caller would expect to find on
+        disk for a complete year build (the unfilled NC plus, when
+        ``nn_fill`` is on, the ``_nn_filled.nc`` companion). The first
+        path is treated as the primary attrs source; companions are read
+        only via ``.exists()``.
+    active_config_fingerprint
+        Output of :func:`target_config_fingerprint` for the current run.
+    active_code_version
+        Output of :func:`code_version_fingerprint` for the current run.
+    target_label
+        Short string used in log messages (e.g. ``"sca"``, ``"swe"``).
+    year
+        Calendar year being built; used in log messages.
+    logger
+        Caller's module logger so warnings appear under the right name.
+
+    Returns
+    -------
+    (skip, cached_attrs)
+        - ``(False, None)`` — at least one expected path missing; no cache to
+          examine; caller proceeds to build the year.
+        - ``(False, cached_attrs)`` — cached intermediate existed but was
+          stale or corrupt; this function has unlinked all paths and the
+          caller should rebuild. ``cached_attrs`` may be ``{}`` if the
+          file could not be opened.
+        - ``(True, cached_attrs)`` — cache is valid; caller may skip the
+          rebuild and use ``cached_attrs`` to re-emit any per-year
+          diagnostic warnings (e.g. low-coverage) so the operator sees
+          them on every run, not just the first.
+
+    Treats a cached intermediate that is missing the fingerprint attrs
+    as stale (pre-#213 intermediate) and triggers a rebuild — safe
+    default for the one-time upgrade transition. The cleanup pass uses
+    ``unlink(missing_ok=True)`` so a partial intermediate set (unfilled
+    present, _nn_filled missing) does not raise.
+    """
+    if not all(p.exists() for p in paths):
+        return False, None
+
+    primary = paths[0]
+    try:
+        with xr.open_dataset(primary) as cached:
+            cached_attrs = dict(cached.attrs)
+    except OSError as exc:
+        logger.warning(
+            "%s year %d: cached intermediate %s could not be opened "
+            "(%s); deleting and rebuilding.",
+            target_label,
+            year,
+            primary,
+            exc,
+        )
+        for p in paths:
+            p.unlink(missing_ok=True)
+        return False, {}
+
+    cached_fp = cached_attrs.get(INTERMEDIATE_CONFIG_FINGERPRINT_ATTR)
+    cached_ver = cached_attrs.get(INTERMEDIATE_CODE_VERSION_ATTR)
+    if cached_fp is None or cached_ver is None:
+        logger.warning(
+            "%s year %d: cached intermediate %s predates issue #213 "
+            "fingerprint support (missing %s/%s attrs); deleting and "
+            "rebuilding.",
+            target_label,
+            year,
+            primary,
+            INTERMEDIATE_CONFIG_FINGERPRINT_ATTR,
+            INTERMEDIATE_CODE_VERSION_ATTR,
+        )
+        for p in paths:
+            p.unlink(missing_ok=True)
+        return False, cached_attrs
+
+    if cached_fp != active_config_fingerprint or cached_ver != active_code_version:
+        logger.warning(
+            "%s year %d: cache fingerprint mismatch — cached config=%s "
+            "code=%s, active config=%s code=%s. Deleting stale "
+            "intermediates and rebuilding.",
+            target_label,
+            year,
+            cached_fp,
+            cached_ver,
+            active_config_fingerprint,
+            active_code_version,
+        )
+        for p in paths:
+            p.unlink(missing_ok=True)
+        return False, cached_attrs
+
+    return True, cached_attrs
 
 
 def stitch_year_chunks_to_target(

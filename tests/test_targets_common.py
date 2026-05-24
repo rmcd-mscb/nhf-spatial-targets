@@ -1589,3 +1589,286 @@ def test_read_aggregated_source_masks_netcdf_default_fill_cells(tmp_path: Path):
     assert np.all(vals[:, 0] == 25.0)
     assert np.all(np.isnan(vals[:, 1]))  # the masked HRU
     assert np.all(vals[:, 2] == 25.0)
+
+
+# ---------------------------------------------------------------------------
+# Cache invalidation for year-chunked intermediates (#213)
+# ---------------------------------------------------------------------------
+
+
+def _project_with_target(tmp_path: Path, target_block: dict, fabric_sha: str = ""):
+    """Build a minimal project skeleton that carries a target config block.
+
+    ``parents=True`` so callers can pass a sub-path of ``tmp_path`` for
+    multi-project tests where two distinct configs need separate workdirs
+    under one ``tmp_path`` fixture.
+    """
+    workdir = tmp_path / "proj"
+    workdir.mkdir(parents=True)
+    fabric_path = tmp_path / "f.gpkg"
+    cfg = {
+        "datastore": str(tmp_path / "store"),
+        "fabric": {"path": str(fabric_path), "id_col": "nhm_id"},
+        "targets": {"snow_covered_area": target_block},
+    }
+    (workdir / "config.yml").write_text(yaml.safe_dump(cfg))
+    fabric_json = {"id_col": "nhm_id"}
+    if fabric_sha:
+        fabric_json["sha256"] = fabric_sha
+    (workdir / "fabric.json").write_text(json.dumps(fabric_json))
+    return load(workdir)
+
+
+def test_target_config_fingerprint_is_stable(tmp_path: Path):
+    """Same project → same fingerprint across calls."""
+    from nhf_spatial_targets.targets._common import target_config_fingerprint
+
+    block = {"period": "2005/2010", "ci_threshold": 0.7, "nn_fill": True}
+    project = _project_with_target(tmp_path, block)
+    fp1 = target_config_fingerprint(project, "snow_covered_area")
+    fp2 = target_config_fingerprint(project, "snow_covered_area")
+    assert fp1 == fp2
+    # 12-char hex truncation per the helper contract.
+    assert len(fp1) == 12
+    assert all(c in "0123456789abcdef" for c in fp1)
+
+
+def test_target_config_fingerprint_changes_on_target_edit(tmp_path: Path):
+    """Editing any knob in the target block produces a different fingerprint."""
+    from nhf_spatial_targets.targets._common import target_config_fingerprint
+
+    block_a = {"period": "2005/2010", "ci_threshold": 0.70}
+    block_b = {"period": "2005/2010", "ci_threshold": 0.80}  # threshold bump
+    fp_a = target_config_fingerprint(
+        _project_with_target(tmp_path / "a", block_a), "snow_covered_area"
+    )
+    fp_b = target_config_fingerprint(
+        _project_with_target(tmp_path / "b", block_b), "snow_covered_area"
+    )
+    assert fp_a != fp_b
+
+
+def test_target_config_fingerprint_changes_on_fabric_swap(tmp_path: Path):
+    """Different fabric.sha256 → different fingerprint (catches fabric swap)."""
+    from nhf_spatial_targets.targets._common import target_config_fingerprint
+
+    block = {"period": "2005/2010", "ci_threshold": 0.70}
+    fp_a = target_config_fingerprint(
+        _project_with_target(tmp_path / "a", block, fabric_sha="deadbeef"),
+        "snow_covered_area",
+    )
+    fp_b = target_config_fingerprint(
+        _project_with_target(tmp_path / "b", block, fabric_sha="cafef00d"),
+        "snow_covered_area",
+    )
+    assert fp_a != fp_b
+
+
+def test_code_version_fingerprint_returns_package_version():
+    from nhf_spatial_targets import __version__
+    from nhf_spatial_targets.targets._common import code_version_fingerprint
+
+    assert code_version_fingerprint() == __version__
+
+
+def _write_fingerprinted_nc(path: Path, *, config_fp: str, code_ver: str) -> None:
+    """Helper for should_skip_year_build tests: write a 1-var NC with fingerprint attrs."""
+    from nhf_spatial_targets.targets._common import (
+        INTERMEDIATE_CODE_VERSION_ATTR,
+        INTERMEDIATE_CONFIG_FINGERPRINT_ATTR,
+    )
+
+    ds = xr.Dataset(
+        {"x": (("time",), np.array([1.0, 2.0], dtype=np.float32))},
+        coords={"time": pd.date_range("2005-01-01", periods=2, freq="D")},
+        attrs={
+            INTERMEDIATE_CONFIG_FINGERPRINT_ATTR: config_fp,
+            INTERMEDIATE_CODE_VERSION_ATTR: code_ver,
+        },
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ds.to_netcdf(path)
+
+
+def test_should_skip_year_build_returns_false_when_path_missing(tmp_path: Path):
+    """No cached intermediate → (False, None); caller proceeds to build."""
+    import logging
+
+    from nhf_spatial_targets.targets._common import should_skip_year_build
+
+    logger = logging.getLogger("test")
+    skip, attrs = should_skip_year_build(
+        [tmp_path / "missing.nc"],
+        active_config_fingerprint="abc",
+        active_code_version="0.1.0",
+        target_label="sca",
+        year=2005,
+        logger=logger,
+    )
+    assert skip is False
+    assert attrs is None
+
+
+def test_should_skip_year_build_returns_true_when_fingerprints_match(tmp_path: Path):
+    """Cached fingerprints match → (True, attrs); caller may skip rebuild."""
+    import logging
+
+    from nhf_spatial_targets.targets._common import should_skip_year_build
+
+    nc_path = tmp_path / "y2005.nc"
+    _write_fingerprinted_nc(nc_path, config_fp="abc123", code_ver="0.1.0")
+    skip, attrs = should_skip_year_build(
+        [nc_path],
+        active_config_fingerprint="abc123",
+        active_code_version="0.1.0",
+        target_label="sca",
+        year=2005,
+        logger=logging.getLogger("test"),
+    )
+    assert skip is True
+    assert attrs is not None
+    assert attrs["config_fingerprint"] == "abc123"
+    # File preserved (skip path does not unlink).
+    assert nc_path.exists()
+
+
+def test_should_skip_year_build_rebuilds_on_config_mismatch(tmp_path: Path, caplog):
+    """Cached config_fingerprint differs → WARN + unlink + (False, attrs)."""
+    import logging
+
+    from nhf_spatial_targets.targets._common import should_skip_year_build
+
+    nc_path = tmp_path / "y2005.nc"
+    _write_fingerprinted_nc(nc_path, config_fp="OLDcfg", code_ver="0.1.0")
+    with caplog.at_level(logging.WARNING):
+        skip, attrs = should_skip_year_build(
+            [nc_path],
+            active_config_fingerprint="NEWcfg",
+            active_code_version="0.1.0",
+            target_label="sca",
+            year=2005,
+            logger=logging.getLogger("test"),
+        )
+    assert skip is False
+    assert attrs is not None
+    assert attrs["config_fingerprint"] == "OLDcfg"
+    # Stale file unlinked.
+    assert not nc_path.exists()
+    # Operator-visible WARNING names both fingerprints so the operator
+    # can correlate the rebuild to a config change.
+    assert "mismatch" in caplog.text
+    assert "OLDcfg" in caplog.text
+    assert "NEWcfg" in caplog.text
+
+
+def test_should_skip_year_build_rebuilds_on_code_version_mismatch(
+    tmp_path: Path, caplog
+):
+    """Cached code_version differs → WARN + unlink + (False, attrs)."""
+    import logging
+
+    from nhf_spatial_targets.targets._common import should_skip_year_build
+
+    nc_path = tmp_path / "y2005.nc"
+    _write_fingerprinted_nc(nc_path, config_fp="abc123", code_ver="0.0.9")
+    with caplog.at_level(logging.WARNING):
+        skip, attrs = should_skip_year_build(
+            [nc_path],
+            active_config_fingerprint="abc123",
+            active_code_version="0.1.0",
+            target_label="sca",
+            year=2005,
+            logger=logging.getLogger("test"),
+        )
+    assert skip is False
+    assert not nc_path.exists()
+    assert "0.0.9" in caplog.text
+    assert "0.1.0" in caplog.text
+
+
+def test_should_skip_year_build_rebuilds_on_missing_fingerprint_attrs(
+    tmp_path: Path, caplog
+):
+    """Pre-#213 intermediate (no fingerprint attrs) → WARN + unlink + rebuild.
+
+    Required for the upgrade transition: operators with on-disk
+    intermediates from before #213 must get them automatically
+    invalidated without needing a manual rm step.
+    """
+    import logging
+
+    from nhf_spatial_targets.targets._common import should_skip_year_build
+
+    nc_path = tmp_path / "y2005.nc"
+    # NC with no fingerprint attrs (mimics pre-#213 write).
+    ds = xr.Dataset(
+        {"x": (("time",), np.array([1.0], dtype=np.float32))},
+        coords={"time": pd.date_range("2005-01-01", periods=1, freq="D")},
+    )
+    nc_path.parent.mkdir(parents=True, exist_ok=True)
+    ds.to_netcdf(nc_path)
+
+    with caplog.at_level(logging.WARNING):
+        skip, attrs = should_skip_year_build(
+            [nc_path],
+            active_config_fingerprint="abc123",
+            active_code_version="0.1.0",
+            target_label="sca",
+            year=2005,
+            logger=logging.getLogger("test"),
+        )
+    assert skip is False
+    assert not nc_path.exists()
+    assert "predates" in caplog.text or "missing" in caplog.text
+
+
+def test_should_skip_year_build_unlinks_companion_paths(tmp_path: Path):
+    """Mismatch deletes ALL expected paths (e.g. nn_filled companion), not just the primary."""
+    import logging
+
+    from nhf_spatial_targets.targets._common import should_skip_year_build
+
+    primary = tmp_path / "y2005.nc"
+    companion = tmp_path / "y2005_nn_filled.nc"
+    _write_fingerprinted_nc(primary, config_fp="OLD", code_ver="0.1.0")
+    _write_fingerprinted_nc(companion, config_fp="OLD", code_ver="0.1.0")
+
+    skip, _attrs = should_skip_year_build(
+        [primary, companion],
+        active_config_fingerprint="NEW",
+        active_code_version="0.1.0",
+        target_label="sca",
+        year=2005,
+        logger=logging.getLogger("test"),
+    )
+    assert skip is False
+    assert not primary.exists()
+    assert not companion.exists()
+
+
+def test_should_skip_year_build_handles_partial_intermediate_set(tmp_path: Path):
+    """If a required companion is missing, return (False, None) — caller rebuilds.
+
+    Treats this as a fresh build, not a mismatch — the primary may
+    exist but the operator deleted the companion intentionally to
+    force a rebuild.
+    """
+    import logging
+
+    from nhf_spatial_targets.targets._common import should_skip_year_build
+
+    primary = tmp_path / "y2005.nc"
+    _write_fingerprinted_nc(primary, config_fp="abc123", code_ver="0.1.0")
+    # Companion does NOT exist.
+    skip, attrs = should_skip_year_build(
+        [primary, tmp_path / "y2005_nn_filled.nc"],
+        active_config_fingerprint="abc123",
+        active_code_version="0.1.0",
+        target_label="sca",
+        year=2005,
+        logger=logging.getLogger("test"),
+    )
+    assert skip is False
+    assert attrs is None
+    # Primary preserved — the caller's rebuild path will overwrite it.
+    assert primary.exists()

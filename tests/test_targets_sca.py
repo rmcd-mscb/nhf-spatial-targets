@@ -439,13 +439,15 @@ def test_idempotent_skip_existing_year(tmp_path: Path, caplog):
     workdir = _make_sca_project(tmp_path, period="2005-03-01/2005-03-31")
     project = load(workdir)
     build(project)
-    # Second build: intermediates exist; should log "skipping" AND
-    # name the active ci_threshold so a re-running operator can
-    # cross-check against the cached value (#213 follow-up).
+    # Second build: intermediates valid (matching fingerprints) → skip.
+    # New (#213) log line names the active config + code fingerprints
+    # so operators can cross-check against the cached values without
+    # opening the file by hand.
     with caplog.at_level(logging.INFO, logger="nhf_spatial_targets.targets.sca"):
         build(project)
     assert "skipping" in caplog.text
-    assert "ci_threshold=0.70" in caplog.text
+    assert "config=" in caplog.text
+    assert "code=" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -714,12 +716,14 @@ def test_idempotent_skip_with_nn_fill(tmp_path: Path, caplog):
     project = load(workdir)
     build(project)
     # Second build with both intermediates present → skip, naming the
-    # active ci_threshold so a re-running operator can cross-check.
+    # active fingerprints so a re-running operator can cross-check
+    # (#213).
     caplog.clear()
     with caplog.at_level(logging.INFO, logger="nhf_spatial_targets.targets.sca"):
         build(project)
     assert "skipping" in caplog.text
-    assert "ci_threshold=0.70" in caplog.text
+    assert "config=" in caplog.text
+    assert "code=" in caplog.text
     # Delete only the nn intermediate; the predicate must fall through
     # and re-do the year (which regenerates the nn file).
     nn_intermediate = (
@@ -868,3 +872,150 @@ def test_low_valid_coverage_partial_pass_no_warning(tmp_path: Path, caplog):
     assert not any("valid CI-passing bound" in r.message for r in caplog.records), (
         "1/3 coverage should clear the 1% threshold without warning"
     )
+
+
+# ---------------------------------------------------------------------------
+# Cache invalidation by fingerprint (#213)
+# ---------------------------------------------------------------------------
+
+
+def test_fingerprint_mismatch_rebuilds_year(tmp_path: Path, caplog):
+    """Edit ci_threshold between two builds → the cached intermediate is
+    automatically rebuilt with the new threshold, no manual ``rm`` needed.
+
+    Regression guard for #213's core promise: a config change invalidates
+    the cache without operator intervention.
+    """
+    import logging
+
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    # First build: ci_threshold=0.70 (default). 60/90 input → lower=0.54.
+    workdir = _make_sca_project(
+        tmp_path,
+        period="2005-03-15/2005-03-15",
+        snow_native=60.0,
+        ci_native=90.0,
+    )
+    project = load(workdir)
+    build(project)
+    # Sanity: first build wrote bound 0.54.
+    with xr.open_dataset(project.targets_dir() / "sca_targets.nc") as ds:
+        np.testing.assert_allclose(ds["lower_bound"].values, 0.54, rtol=1e-5)
+        first_fp = ds.attrs["config_fingerprint"]
+
+    # Mutate ci_threshold to 0.95 (now strictly above the synthetic CI=0.90).
+    cfg_path = workdir / "config.yml"
+    cfg = yaml.safe_load(cfg_path.read_text())
+    cfg["targets"]["snow_covered_area"]["ci_threshold"] = 0.95
+    cfg_path.write_text(yaml.safe_dump(cfg))
+    # Also delete the stitched output so we can confirm the rebuild
+    # writes a fresh one consistent with the new threshold.
+    (project.targets_dir() / "sca_targets.nc").unlink()
+
+    project = load(workdir)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.targets._common"):
+        build(project)
+
+    # The fingerprint mismatch surfaced as a WARNING from the shared
+    # skip predicate (logged under the _common logger).
+    assert any("mismatch" in r.message for r in caplog.records), (
+        "fingerprint mismatch on cached intermediate must log a WARNING"
+    )
+    # Rebuild applied the new threshold: ci=0.90 < 0.95 → NaN bound.
+    with xr.open_dataset(project.targets_dir() / "sca_targets.nc") as ds:
+        assert np.isnan(ds["lower_bound"].values).all(), (
+            "rebuilt year must reflect the new ci_threshold (0.95)"
+        )
+        second_fp = ds.attrs["config_fingerprint"]
+    assert first_fp != second_fp
+
+
+def test_pre_213_intermediate_triggers_rebuild(tmp_path: Path, caplog):
+    """An on-disk intermediate without fingerprint attrs (legacy file
+    from before #213) must be detected, deleted, and rebuilt rather
+    than silently reused.
+
+    Required for the upgrade transition.
+    """
+    import logging
+
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_sca_project(
+        tmp_path,
+        period="2005-03-01/2005-03-15",
+        snow_native=60.0,
+        ci_native=90.0,
+    )
+    # Pre-populate intermediates_dir with a fake legacy file (no fingerprint).
+    intermediates_dir = workdir / "targets" / ".sca_intermediates"
+    intermediates_dir.mkdir(parents=True, exist_ok=True)
+    legacy_path = intermediates_dir / "sca_targets_2005.nc"
+    # Minimal valid NC with no fingerprint attrs.
+    legacy = xr.Dataset(
+        {"placeholder": (("time",), np.array([0.0], dtype=np.float32))},
+        coords={"time": pd.date_range("2005-01-01", periods=1, freq="D")},
+    )
+    legacy.to_netcdf(legacy_path)
+    project = load(workdir)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.targets._common"):
+        build(project)
+    # WARN + rebuild: the legacy file was deleted and a fresh
+    # fingerprinted intermediate written in its place.
+    assert any(
+        ("predates" in r.message or "missing" in r.message) for r in caplog.records
+    )
+    rebuilt = xr.open_dataset(legacy_path)
+    try:
+        assert "config_fingerprint" in rebuilt.attrs
+        assert "lower_bound" in rebuilt.data_vars
+    finally:
+        rebuilt.close()
+
+
+def test_low_coverage_warning_reemits_on_cached_skip(tmp_path: Path, caplog):
+    """The low-coverage WARNING must fire on EVERY build, including
+    cached-skip re-runs (#213 closes PR #212 item I1).
+
+    First build writes a low-coverage year; second build skips the
+    rebuild (fingerprints match) but reads ``frac_valid_bound`` from
+    cached attrs and re-emits the warning so the operator sees the
+    alert on every run, not just the first.
+    """
+    import logging
+
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_sca_project(
+        tmp_path,
+        period="2005-03-01/2005-03-31",
+        snow_native=60.0,
+        ci_native=10.0,  # fully below threshold → low coverage warning
+    )
+    project = load(workdir)
+    # First build: warning fires from the live computation.
+    with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.targets.sca"):
+        build(project)
+    assert any("valid CI-passing bound" in r.message for r in caplog.records)
+    first_warning_count = sum(
+        1 for r in caplog.records if "valid CI-passing bound" in r.message
+    )
+    # Second build: intermediates skip-eligible. Warning must STILL fire
+    # from the cached frac_valid_bound attr.
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.targets.sca"):
+        build(project)
+    second_warning_count = sum(
+        1 for r in caplog.records if "valid CI-passing bound" in r.message
+    )
+    assert second_warning_count >= 1, (
+        "low-coverage WARNING must re-emit on cached-skip path"
+    )
+    # The two should be the same magnitude (1 warning per year both times).
+    assert first_warning_count == second_warning_count
