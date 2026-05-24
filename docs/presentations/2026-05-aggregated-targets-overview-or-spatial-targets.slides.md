@@ -108,7 +108,7 @@ Margulis WUS-SR makes SWE a 4-source bound on OR — the flagship delta from gfv
 | Runoff | ERA5-Land · GLDAS-NOAH · MWBM ClimGrid | 1979-01 .. 2024-12¹ | Monthly |
 | AET | MOD16A2 v061 · SSEBop · MWBM ClimGrid | 2000-01 .. 2024-12² | Monthly |
 | Recharge | Reitz 2017 · ERA5-Land³ | 2000 .. 2013 | Annual |
-| Soil moisture | MERRA-2 · NLDAS-MOSAIC · NLDAS-NOAH⁴ | 1982-01 .. 2010-12 | Monthly + annual |
+| Soil moisture | MERRA-2 · NLDAS-MOSAIC · NLDAS-NOAH⁴ | 1980-01 .. 2024-12 | Monthly + annual |
 | **SWE** | Daymet · SNODAS · ERA5-Land · **Margulis WUS-SR** | 1980-01 .. 2025-12 | Daily |
 
 <span class="footnote">
