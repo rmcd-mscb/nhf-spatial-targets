@@ -105,14 +105,14 @@ Margulis WUS-SR makes SWE a 4-source bound on OR — the flagship delta from gfv
 
 | Target | Sources (active in OR build) | Period | Step |
 |---|---|---|---|
-| Runoff | ERA5-Land · GLDAS-NOAH · MWBM ClimGrid | 2000-01 .. 2010-12 | Monthly |
-| AET | MOD16A2 v061 · SSEBop · MWBM ClimGrid | 2000-01 .. 2010-12 | Monthly |
-| Recharge | Reitz 2017 · ERA5-Land¹ | 2000 .. 2009 | Annual |
-| Soil moisture | MERRA-2 · NLDAS-MOSAIC · NLDAS-NOAH² | 1982-01 .. 2010-12 | Monthly + annual |
+| Runoff | ERA5-Land · GLDAS-NOAH · MWBM ClimGrid | 1979-01 .. 2024-12¹ | Monthly |
+| AET | MOD16A2 v061 · SSEBop · MWBM ClimGrid | 2000-01 .. 2024-12² | Monthly |
+| Recharge | Reitz 2017 · ERA5-Land³ | 2000 .. 2009 | Annual |
+| Soil moisture | MERRA-2 · NLDAS-MOSAIC · NLDAS-NOAH⁴ | 1982-01 .. 2010-12 | Monthly + annual |
 | **SWE** | Daymet · SNODAS · ERA5-Land · **Margulis WUS-SR** | 1980-01 .. 2025-12 | Daily |
 
 <span class="footnote">
-¹ WaterGAP 2.2d excluded on OR — see slide 3.3A. ² NCEP/NCAR excluded on OR — see slide 3.4A. Both exclusions inherit the gfv2 coarse-grid rationale (PNW shares the intermountain-west terrain that makes those grids unusable at HRU resolution).
+¹ Runoff bound width varies across the 1979-2024 window — 2 sources 1979-1999 (ERA5+MWBM), 3 sources 2000-2020 (all), 2 sources 2021-2024 (ERA5+GLDAS; MWBM ends 2020). ² AET likewise — 3 sources 2000-2020, 2 sources 2021-2023 (MOD16A2+SSEBop), 1 source 2024 (MOD16A2 only; SSEBop ends 2023, bound collapses to a point estimate that year). ³ WaterGAP 2.2d excluded on OR — see slide 3.3A. ⁴ NCEP/NCAR excluded on OR — see slide 3.4A. Both exclusions inherit the gfv2 coarse-grid rationale (PNW shares the intermountain-west terrain).
 </span>
 
 <!--
@@ -324,12 +324,12 @@ is whether the bound width is honest with one fewer voter.
 - **SSEBop** `et` — 2000–2023
 - **MWBM ClimGrid** `aet` — 1900–2020
 
-
+**OR period:** 2000-01-01 .. 2024-12-31, with variable source count by band — 3 sources 2000-2020 (all three), 2 sources 2021-2023 (MOD16A2 + SSEBop), 1 source 2024 (MOD16A2 only).
 
 </div>
 <div>
 
-**Method.** HRU aggregation → mm/month → **inches/day** in `targets/aet.py`. Multi-source min/max.
+**Method.** HRU aggregation → mm/month → **inches/day** in `targets/aet.py`. Multi-source min/max (NaN-aware — a bound is well-defined whenever ≥1 source is finite at the HRU/time).
 
 <!-- <div class="callout">
 <strong>MOD16A2 fill-mask.</strong> Sinusoidal→WGS84 reprojection was averaging fill codes (32766/32767) into valid neighbours, widening the bound artefactually. PR #88 masks `ET_500m` fills <em>before</em> reprojection.
