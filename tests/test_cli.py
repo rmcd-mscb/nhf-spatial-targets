@@ -145,13 +145,14 @@ def test_run_skips_not_implemented_targets(tmp_path, capsys):
     assert "WARNING" in err and "aet" in err and "skipping" in err
 
 
-def test_run_sca_target_routes_to_stub_and_skips(tmp_path, capsys):
-    """SCA routes through the real _dispatch to the sca stub and is skipped.
+def test_run_sca_target_dispatches(tmp_path):
+    """--target snow_covered_area routes to the sca builder via _dispatch.
 
-    Exercises the builders-dict entry without mocking _dispatch, so a
-    mis-keyed registration would surface as an exit-1 crash here. SCA
-    is the last remaining target stub (PRMSobjfun.f CI-bounds formula
-    unconfirmed — see CLAUDE.md "Known Gaps").
+    Mirrors test_run_single_target's pattern: mock _dispatch so a
+    mis-keyed registration in the builders dict would surface as an
+    AssertionError on the first-positional check. The real builder is
+    not invoked here (it needs a full fabric fixture); end-to-end SCA
+    behavior is covered in tests/test_targets_sca.py.
     """
     workdir = _make_minimal_project(
         tmp_path,
@@ -161,10 +162,15 @@ def test_run_sca_target_routes_to_stub_and_skips(tmp_path, capsys):
         "    period: 2000-01-01/2010-12-31\n",
     )
 
-    _run("run", "--project-dir", str(workdir), "--target", "snow_covered_area")
+    with patch("nhf_spatial_targets.cli._dispatch") as mock_dispatch:
+        _run("run", "--project-dir", str(workdir), "--target", "snow_covered_area")
 
-    err = capsys.readouterr().err
-    assert "WARNING" in err and "snow_covered_area" in err and "skipping" in err
+    mock_dispatch.assert_called_once()
+    args = mock_dispatch.call_args[0]
+    assert args[0] == "snow_covered_area"
+    from nhf_spatial_targets.workspace import Project
+
+    assert isinstance(args[1], Project)
 
 
 # ---- init command ----------------------------------------------------------
