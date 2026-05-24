@@ -256,9 +256,18 @@ def open_year(
     closed before return — the SOM/MERRA-2 family of xarray bugs around
     file handles staying open is covered by ``feedback_rioxarray_close.md``.
 
+    The netCDF default-fill mask from :func:`io_nc.mask_netcdf_default_fills`
+    is applied at open time so the loaded Dataset never carries gdptools'
+    missing-coverage sentinel as real data — same fix the target builder uses
+    in ``targets/_common.py:read_aggregated_source`` (#205). Without this, OR
+    inspect figures (e.g. ``runoff_histogram.png``) read uncorrected ~1e36
+    sentinels and plot them as real values, blowing out the X-axis.
+
     Pass ``region`` for sources whose output paths encode it (Daymet:
     ``daymet_na_<year>_agg.nc``).
     """
+    from nhf_spatial_targets.io_nc import mask_netcdf_default_fills
+
     paths = discover_aggregated(project_dir, source_key, region=region)
     if paths is None:
         raise FileNotFoundError(
@@ -270,7 +279,7 @@ def open_year(
         raise FileNotFoundError(f"No {scope}_{year}_agg.nc in {paths[0].parent}")
     with xr.open_dataset(target) as ds:
         loaded = ds.load()
-    return loaded
+    return mask_netcdf_default_fills(loaded)
 
 
 def open_year_range(
@@ -284,7 +293,15 @@ def open_year_range(
     Caller is responsible for ``.sel(hru=[...])`` and ``.load()`` to bound
     memory, then ``.close()`` afterwards. Pass ``region`` for sources
     whose output paths encode it (Daymet).
+
+    Applies :func:`io_nc.mask_netcdf_default_fills` after open so the lazy
+    Dataset doesn't carry gdptools' missing-coverage sentinel through later
+    `.sel`/`.load` consumers (see :func:`open_year` for the rationale). The
+    masking creates a new Dataset wrapping the original; the file handles
+    behind it stay open until the caller closes the returned Dataset.
     """
+    from nhf_spatial_targets.io_nc import mask_netcdf_default_fills
+
     paths = discover_aggregated(project_dir, source_key, region=region)
     if paths is None:
         raise FileNotFoundError(
@@ -298,7 +315,9 @@ def open_year_range(
         raise FileNotFoundError(
             f"None of years {list(years)} present in {paths[0].parent}"
         )
-    return xr.open_mfdataset(wanted, combine="by_coords")
+    return mask_netcdf_default_fills(
+        xr.open_mfdataset(wanted, combine="by_coords")
+    )
 
 
 def plot_hru_choropleth(
