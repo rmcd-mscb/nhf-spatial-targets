@@ -107,7 +107,7 @@ Margulis WUS-SR makes SWE a 4-source bound on OR — the flagship delta from gfv
 |---|---|---|---|
 | Runoff | ERA5-Land · GLDAS-NOAH · MWBM ClimGrid | 1979-01 .. 2024-12¹ | Monthly |
 | AET | MOD16A2 v061 · SSEBop · MWBM ClimGrid | 2000-01 .. 2024-12² | Monthly |
-| Recharge | Reitz 2017 · ERA5-Land³ | 2000 .. 2009 | Annual |
+| Recharge | Reitz 2017 · ERA5-Land³ | 2000 .. 2013 | Annual |
 | Soil moisture | MERRA-2 · NLDAS-MOSAIC · NLDAS-NOAH⁴ | 1982-01 .. 2010-12 | Monthly + annual |
 | **SWE** | Daymet · SNODAS · ERA5-Land · **Margulis WUS-SR** | 1980-01 .. 2025-12 | Daily |
 
@@ -545,28 +545,26 @@ materially changes what the bound captures.
 </div>
 
 <div class="callout">
-<strong>Discussion hook.</strong> OR ships a <strong>2-source</strong> bound — Reitz 2017 +
-ERA5-Land <code>ssro</code>; WaterGAP 2.2d dropped at this fabric for the
-coarse-grid reason (slide 3.3A). The arid-HRU concern is muted on most of OR
-(majority of PNW HRUs are humid/mountainous), but <strong>eastern Oregon /
-Owyhee high-desert HRUs</strong> share gfv2's arid-west problem: Reitz is an
-empirical baseflow-regression product, so where baseflow is near zero its
-recharge estimate is also near zero, collapsing the bound to roughly
-<code>(≈0, ssro)</code>. And in deep-unsaturated-zone arid HRUs, real recharge
-lags soil-column drainage by years to decades, so <code>ssro</code> at year N
-isn't the right temporal signal either. Is that bound informative enough to
-guide calibration in eastern-OR arid HRUs?
+<strong>Period: 2000-2013 (capped at Reitz 2017 end).</strong> Reitz 2017 stops at 2013 so extending the period past that would give a single-source bound (ERA5-Land <code>ssro</code> only), which under <code>normalized_minmax</code> collapses to a point-estimate constraint every year. OR ships <strong>2000-2013 throughout</strong> to keep the 2-source bound width intact; <code>normalize_period</code> matched to the period so 0-1 normalisation uses the full window.
+</div>
+
+<div class="callout">
+<strong>Bound collapse — feature, not bug.</strong> Under <code>normalized_minmax</code>, the lower/upper bound collapse to a point estimate at any HRU/year where every contributing source hits its in-window min or max. On OR this is visible in wet years (e.g. <strong>2006</strong> at Willamette Valley / Eastern Oregon / Coast Range rep HRUs — both Reitz and ERA5 <code>ssro</code> normalised to 1.0). PEST++ sees those as <em>stricter</em> single-observation rows; the calibration team can downweight them if the agreement is judged less informative than the constraint they impose. See <code>prmsobjfun-summary.md</code> for the underlying bound-collapse semantics in the historical Fortran objfun.
+</div>
+
+<div class="callout">
+<strong>Arid-HRU caveat.</strong> The arid concern is muted on most of OR (majority of PNW HRUs are humid/mountainous), but <strong>eastern Oregon / Owyhee high-desert HRUs</strong> share gfv2's arid-west problem: Reitz is an empirical baseflow-regression product, so where baseflow is near zero its recharge estimate is also near zero, collapsing the bound to roughly <code>(≈0, ssro)</code>. And in deep-unsaturated-zone arid HRUs, real recharge lags soil-column drainage by years to decades, so <code>ssro</code> at year N isn't the right temporal signal either. Is that bound informative enough to guide calibration in eastern-OR arid HRUs?
 </div>
 
 </div>
 </div>
 
 <!--
-The two-source bound width in the arid west is the question worth airing in
-the room. There's a reasonable argument that adding WaterGAP back in for
-non-mountainous arid HRUs would help, but it's a per-cell decision and we don't
-have the per-cell logic wired up yet — currently it's an all-or-nothing
-fabric-level exclusion.
+Three callouts now: the period decision (2000-2013, capped at Reitz), the
+collapse semantics framed as feature-not-bug (PEST++ will weight the
+collapsed-bound observations), and the original arid-HRU caveat. The 2006
+collapse the user flagged in the OR review is a direct example of the
+collapse semantics — both sources hit decadal max simultaneously.
 -->
 
 ---
