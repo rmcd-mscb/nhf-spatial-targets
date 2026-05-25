@@ -869,13 +869,19 @@ def test_period_shrink_prunes_orphan_intermediates(tmp_path: Path, caplog):
 
     project = load(workdir)
     caplog.clear()
-    with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.targets._common"):
+    # The prune WARNING is emitted under the caller's logger
+    # (the swe module logger), not under _common — the helper takes
+    # the caller's logger as a parameter precisely so the message
+    # appears under the right name in operator logs.
+    with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.targets.swe"):
         build(project)
 
-    # 1. Orphan was pruned with a WARNING naming year 2004.
-    assert any("pruned" in r.message and "2004" in r.message for r in caplog.records), (
-        "prune WARNING must name the orphan year(s)"
-    )
+    # 1. Orphan was pruned with a WARNING naming year 2004 + the
+    # target label so operators can filter logs by target.
+    assert any(
+        "pruned" in r.message and "2004" in r.message and "swe" in r.message
+        for r in caplog.records
+    ), "prune WARNING must name the orphan year(s) and the target label"
     assert not (intermediates_dir / "swe_targets_2004.nc").exists()
 
     # 2. Stitched output covers ONLY 2003, not 2003-2004.
@@ -884,3 +890,42 @@ def test_period_shrink_prunes_orphan_intermediates(tmp_path: Path, caplog):
     assert years_second == [2003], (
         f"stitched output must match shrunk period; got years {years_second}"
     )
+
+
+def test_stitch_input_computed_from_period_not_glob(tmp_path: Path):
+    """Defense-in-depth (parallels the SCA test by the same name):
+    even if a stale orphan with a non-canonical filename slips past
+    the prune regex, the stitch input must be computed from
+    iter_period_years so the orphan cannot leak into the canonical
+    output.
+    """
+    from nhf_spatial_targets.targets.swe import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_swe_project(
+        tmp_path,
+        period="2003-12-15/2003-12-15",
+        fabric_token="or",
+        nn_fill=False,
+    )
+    project = load(workdir)
+    intermediates_dir = project.targets_dir() / ".swe_intermediates"
+    intermediates_dir.mkdir(parents=True, exist_ok=True)
+    # 5-digit "year" — prune regex (anchored at \d{4}) won't match,
+    # so the file stays on disk after the build.
+    orphan = intermediates_dir / "swe_targets_99999.nc"
+    orphan_ds = xr.Dataset(
+        {"placeholder": (("time",), np.array([0.0], dtype=np.float32))},
+        coords={"time": pd.date_range("9999-01-01", periods=1, freq="D")},
+    )
+    orphan_ds.to_netcdf(orphan)
+
+    build(project)
+
+    # Orphan survives the prune (regex didn't match).
+    assert orphan.exists()
+    # Stitched output excludes the orphan because the stitch input list
+    # is computed from iter_period_years, not from a directory glob.
+    with xr.open_dataset(project.targets_dir() / "swe_targets.nc") as ds:
+        years = sorted(set(pd.DatetimeIndex(ds["time"].values).year))
+    assert years == [2003]

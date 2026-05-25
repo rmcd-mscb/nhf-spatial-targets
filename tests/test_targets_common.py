@@ -2070,3 +2070,31 @@ def test_prune_orphan_year_intermediates_empty_dir(tmp_path: Path):
         logger=logging.getLogger("test"),
     )
     assert pruned == []
+
+
+def test_prune_orphan_handles_nn_filled_only_companion(tmp_path: Path):
+    """Asymmetric on-disk state: only the ``_nn_filled.nc`` companion is
+    present (operator deleted the unfilled half by hand, or a SIGKILL
+    landed mid-write). The regex must match the companion's filename
+    independently of the unfilled file's presence, and the prune must
+    unlink it when its year is out of period.
+
+    Without this guarantee, a future refactor that switched the glob
+    to exclude ``_nn_filled.nc`` would silently leave nn-fill orphans
+    on disk.
+    """
+    import logging
+
+    from nhf_spatial_targets.targets._common import prune_orphan_year_intermediates
+
+    # Only the companion file for 2006 — no unfilled.
+    _touch_nc(tmp_path / "swe_targets_2006_nn_filled.nc")
+    pruned = prune_orphan_year_intermediates(
+        tmp_path,
+        "swe_targets",
+        {2005},
+        target_label="swe",
+        logger=logging.getLogger("test"),
+    )
+    assert pruned == [2006]
+    assert not (tmp_path / "swe_targets_2006_nn_filled.nc").exists()

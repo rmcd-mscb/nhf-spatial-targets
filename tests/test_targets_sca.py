@@ -1108,15 +1108,19 @@ def test_period_shrink_prunes_orphan_intermediates(tmp_path: Path, caplog):
 
     project = load(workdir)
     caplog.clear()
-    # Capture WARNING from _common (prune + fingerprint-mismatch both
-    # log there).
-    with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.targets._common"):
+    # The prune WARNING is emitted under the caller's logger
+    # (the sca module logger), not under _common — the helper takes
+    # the caller's logger as a parameter precisely so the message
+    # appears under the right name in operator logs.
+    with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.targets.sca"):
         build(project)
 
-    # 1. Orphan was pruned with a WARNING naming year 2006.
-    assert any("pruned" in r.message and "2006" in r.message for r in caplog.records), (
-        "prune WARNING must name the orphan year(s)"
-    )
+    # 1. Orphan was pruned with a WARNING naming year 2006 + the
+    # target label so operators can filter logs by target.
+    assert any(
+        "pruned" in r.message and "2006" in r.message and "sca" in r.message
+        for r in caplog.records
+    ), "prune WARNING must name the orphan year(s) and the target label"
     assert not (intermediates_dir / "sca_targets_2006.nc").exists()
 
     # 2. Stitched output covers ONLY 2005, not 2005-2006.
@@ -1161,3 +1165,39 @@ def test_stitch_input_computed_from_period_not_glob(tmp_path: Path):
     with xr.open_dataset(project.targets_dir() / "sca_targets.nc") as ds:
         years = sorted(set(pd.DatetimeIndex(ds["time"].values).year))
     assert years == [2005]
+
+
+def test_stitch_fails_loud_on_missing_in_period_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """If an in-period per-year intermediate is missing at stitch time
+    (e.g. operator manually deleted one, or build crashed mid-loop and
+    was restarted into the skip branch), the stitch must raise a clear
+    error rather than silently producing a year-gapped stitched NC.
+
+    Before #211 the stitcher globbed the directory, so a missing
+    in-period file silently produced a year-gapped output. With the
+    computed-from-year_specs input list, the missing file surfaces
+    as an error naming the path.
+    """
+    import nhf_spatial_targets.targets.sca as sca_mod
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    # Build a 3-year target so we have multiple intermediates to choose from.
+    workdir = _make_sca_project(tmp_path, period="2005-01-01/2007-12-31")
+    project = load(workdir)
+    build(project)
+    intermediates_dir = project.targets_dir() / ".sca_intermediates"
+    # Delete the 2006 intermediate + the stitched output. Then patch
+    # _build_year to a no-op so the missing 2006 intermediate stays
+    # missing through the second build's stitch call (otherwise the
+    # build loop's should_skip_year_build would see the missing file
+    # and rebuild it).
+    (intermediates_dir / "sca_targets_2006.nc").unlink()
+    (project.targets_dir() / "sca_targets.nc").unlink()
+    monkeypatch.setattr(sca_mod, "_build_year", lambda **_kw: None)
+
+    project = load(workdir)
+    with pytest.raises((FileNotFoundError, OSError), match="2006"):
+        build(project)

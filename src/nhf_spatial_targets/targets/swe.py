@@ -52,13 +52,10 @@ builder logic WITHOUT a ``__version__`` bump still requires a manual
 ``rm`` because the ``code_version`` tag is tied to the package
 version string.
 
-**Period-shrink defense.** Downward changes to ``period`` (e.g.
-``2000-2024`` → ``2000-2023``) leave per-year intermediates from the
-removed years on disk. ``prune_orphan_year_intermediates`` (#211)
-deletes them with a WARNING before the stitch step, and the stitch
-input is computed deterministically from ``iter_period_years`` rather
-than a directory glob, so the canonical ``swe_targets.nc`` always
-matches the active period exactly.
+**Period-shrink defense.** Downward changes to ``period`` are
+handled automatically by ``prune_orphan_year_intermediates`` plus a
+``iter_period_years``-derived stitch input list — see the helper
+docstring in ``_common.py`` (#211).
 """
 
 from __future__ import annotations
@@ -400,11 +397,7 @@ def build(project: Project) -> None:
             code_version=code_ver,
         )
 
-    # 4. Defense against #211: prune any per-year intermediates left
-    # behind by a previous build against a wider period. Stitch input
-    # is then computed deterministically from year_specs, not from a
-    # directory glob, so the canonical NC always matches the active
-    # config period.
+    # 4. Prune orphans + compute stitch input from year_specs (#211).
     in_period_years = {year for year, _, _ in year_specs}
     prune_orphan_year_intermediates(
         intermediates_dir,
