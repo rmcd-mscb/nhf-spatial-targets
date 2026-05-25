@@ -1142,9 +1142,8 @@ def target_config_fingerprint(project: Project, target_name: str) -> str:
 
     Returns
     -------
-    A 12-character hex string. 48 bits of entropy is more than enough to
-    distinguish realistic config variations; collisions are operationally
-    impossible.
+    A 12-character hex string. Collisions across realistic config-edit
+    volumes are negligible.
     """
     target_cfg = project.config["targets"][target_name]
     fabric_cfg = project.config.get("fabric") or {}
@@ -1161,12 +1160,11 @@ def target_config_fingerprint(project: Project, target_name: str) -> str:
 def code_version_fingerprint() -> str:
     """The package ``__version__`` used as a code-version cache tag.
 
-    Bumped on every release, so the per-year intermediates from one release
-    will not be reused after a version bump. Does NOT cover mid-version
-    edits during development — operators iterating on a target builder
-    must ``rm`` intermediates manually between code changes within the
-    same version (a known limitation; documented in each year-chunked
-    builder's module docstring).
+    Operators bumping ``__version__`` between runs get automatic
+    invalidation; commits that change builder logic without a version
+    bump do not. Mid-version edits therefore require a manual ``rm``
+    of the intermediates directory — a known limitation documented in
+    each year-chunked builder's module docstring.
     """
     from nhf_spatial_targets import __version__
 
@@ -1213,16 +1211,26 @@ def should_skip_year_build(
     Returns
     -------
     (skip, cached_attrs)
-        - ``(False, None)`` — at least one expected path missing; no cache to
-          examine; caller proceeds to build the year.
-        - ``(False, cached_attrs)`` — cached intermediate existed but was
-          stale or corrupt; this function has unlinked all paths and the
-          caller should rebuild. ``cached_attrs`` may be ``{}`` if the
-          file could not be opened.
-        - ``(True, cached_attrs)`` — cache is valid; caller may skip the
-          rebuild and use ``cached_attrs`` to re-emit any per-year
+        Four distinct return shapes, each with a specific caller contract:
+
+        - ``(False, None)`` — at least one expected path missing. No cache
+          to examine; caller builds the year fresh.
+        - ``(False, {})`` — cached intermediate exists but could not be
+          opened (corrupt / truncated NetCDF). All paths unlinked; caller
+          rebuilds.
+        - ``(False, file_attrs)`` — cached intermediate opened cleanly but
+          its fingerprint attrs were missing (pre-#213 file) or differed
+          from the active values. All paths unlinked; caller rebuilds.
+          ``file_attrs`` is the dict that was read off disk before the
+          unlink, kept for forensic logging.
+        - ``(True, file_attrs)`` — cache is valid; caller may skip the
+          rebuild and use ``file_attrs`` to re-emit any per-year
           diagnostic warnings (e.g. low-coverage) so the operator sees
           them on every run, not just the first.
+
+    Callers should defensively guard attr lookups with
+    ``(cached_attrs or {}).get(...)`` to handle the corrupt-file shape
+    without a special case.
 
     Treats a cached intermediate that is missing the fingerprint attrs
     as stale (pre-#213 intermediate) and triggers a rebuild — safe
@@ -1237,7 +1245,12 @@ def should_skip_year_build(
     try:
         with xr.open_dataset(primary) as cached:
             cached_attrs = dict(cached.attrs)
-    except OSError as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
+        # netCDF4-backed xr.open_dataset on a corrupt/truncated file may
+        # raise OSError (HDF5 layer), RuntimeError (libnetcdf bindings),
+        # or ValueError (CF decode failure). All three are "the cache is
+        # unusable" from this function's perspective — recovery is the
+        # same: warn, unlink, let the caller rebuild.
         logger.warning(
             "%s year %d: cached intermediate %s could not be opened "
             "(%s); deleting and rebuilding.",
@@ -1252,7 +1265,10 @@ def should_skip_year_build(
 
     cached_fp = cached_attrs.get(INTERMEDIATE_CONFIG_FINGERPRINT_ATTR)
     cached_ver = cached_attrs.get(INTERMEDIATE_CODE_VERSION_ATTR)
-    if cached_fp is None or cached_ver is None:
+    # ``not`` (rather than ``is None``) also catches the empty-string case,
+    # which a malformed upstream writer could produce — treat as missing
+    # rather than equal-to-active-if-active-is-also-empty.
+    if not cached_fp or not cached_ver:
         logger.warning(
             "%s year %d: cached intermediate %s predates issue #213 "
             "fingerprint support (missing %s/%s attrs); deleting and "
@@ -1367,10 +1383,15 @@ def stitch_year_chunks_to_target(
 
         # `combine_attrs="override"` (the open_mfdataset default) keeps
         # the first file's attrs, which include per-year-only attrs
-        # like ``year_chunk`` that don't apply to the stitched
+        # like ``year_chunk`` and ``frac_valid_bound`` (SCA's per-year
+        # low-coverage diagnostic) that don't apply to the stitched
         # multi-year output. Strip them before the canonical attrs are
-        # applied so the final NC reports its actual scope honestly.
-        ds.attrs.pop("year_chunk", None)
+        # applied so the final NC reports its actual scope honestly —
+        # otherwise an operator inspecting the stitched NC's attrs
+        # would trust a single-year statistic as if it were
+        # multi-year.
+        for per_year_attr in ("year_chunk", "frac_valid_bound"):
+            ds.attrs.pop(per_year_attr, None)
         ds.attrs.setdefault("Conventions", "CF-1.6")
         ds.attrs["title"] = title
         ds.attrs["history"] = (

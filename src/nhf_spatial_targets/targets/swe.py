@@ -45,11 +45,12 @@ nearest finite HRU's value at the same day (cKDTree donor walk in
 attrs (``config_fingerprint``, ``code_version``) that the skip branch
 compares against the active values. A mismatch — caused by a config
 edit (``sources``, ``period``, ``nn_max_candidates``), a fabric swap,
-or a code version bump — logs a WARNING, deletes the stale
+or a ``__version__`` bump — logs a WARNING, deletes the stale
 intermediate, and rebuilds the year. Operators do not need to manually
-``rm`` after config or release-version changes; mid-version edits to
-this module (typical only during development) still require a manual
-``rm`` since the ``code_version`` tag only changes on release bumps.
+``rm`` after config or version-bump changes; any commit that modifies
+builder logic WITHOUT a ``__version__`` bump still requires a manual
+``rm`` because the ``code_version`` tag is tied to the package
+version string.
 """
 
 from __future__ import annotations
@@ -327,10 +328,7 @@ def build(project: Project) -> None:
     id_col = project.id_col
     fabric_hru_ids = hru_meta.index.values
 
-    # 2. Cache-invalidation fingerprints (#213). Compute once and pass
-    # through ``extra_attrs`` so they land on every per-year intermediate
-    # AND the stitched output. The skip predicate compares the cached
-    # values against these to detect a stale cache.
+    # 2. Cache fingerprints — see should_skip_year_build (#213).
     config_fp = target_config_fingerprint(project, "snow_water_equivalent")
     code_ver = code_version_fingerprint()
 

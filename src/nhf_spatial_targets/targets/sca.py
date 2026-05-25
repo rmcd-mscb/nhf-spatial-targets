@@ -49,13 +49,13 @@ nearest finite HRU's bound at the same day.
 ``<project>/targets/.sca_intermediates/`` carry two fingerprint global
 attrs (``config_fingerprint``, ``code_version``) that the skip branch
 compares against the active values. A mismatch — caused by a config
-edit (``ci_threshold``, sources, period), a fabric swap, or a code
-version bump — logs a WARNING, deletes the stale intermediate, and
-rebuilds the year. Operators do not need to manually ``rm`` after
-config or release-version changes; mid-version edits to this module
-(typical only during development) still require a manual ``rm`` since
-the ``code_version`` tag only changes on release bumps. The per-year
-low-valid-coverage WARNING is also persisted via the
+edit (``ci_threshold``, sources, period), a fabric swap, or a
+``__version__`` bump — logs a WARNING, deletes the stale intermediate,
+and rebuilds the year. Operators do not need to manually ``rm`` after
+config or version-bump changes; any commit that modifies builder logic
+WITHOUT a ``__version__`` bump still requires a manual ``rm`` because
+the ``code_version`` tag is tied to the package version string.
+The per-year low-valid-coverage WARNING is also persisted via the
 ``frac_valid_bound`` attr and re-emitted on the skip branch so it
 fires on every run, not just the first.
 """
@@ -99,7 +99,7 @@ _SUMMER_ZERO_MONTHS = (7, 8)
 # Global attr name written to every per-year intermediate that records
 # the actual fraction of (HRU, day) cells with a valid bound. Read on
 # the skip branch so the low-coverage warning can be re-emitted from a
-# cached intermediate (#213, closing PR #212 item I1).
+# cached intermediate (#213).
 _FRAC_VALID_BOUND_ATTR = "frac_valid_bound"
 
 # Operator-visible warning threshold: if fewer than this fraction of
@@ -158,10 +158,7 @@ def build(project: Project) -> None:
     id_col = project.id_col
     fabric_hru_ids = hru_meta.index.values
 
-    # Cache-invalidation fingerprints (#213). Compute once and pass through
-    # ``extra_attrs`` so they land on every per-year intermediate AND the
-    # stitched output. The skip predicate compares the cached values
-    # against these to detect a stale cache.
+    # Cache fingerprints — see should_skip_year_build (#213).
     config_fp = target_config_fingerprint(project, "snow_covered_area")
     code_ver = code_version_fingerprint()
 
@@ -256,10 +253,11 @@ def build(project: Project) -> None:
 def _warn_low_valid_coverage(year: int, frac_valid: float, ci_threshold: float) -> None:
     """Emit the per-year low-valid-coverage WARNING if below the floor.
 
-    Called from both first-build (computed ``frac_valid``) and skip-re-run
-    (cached ``frac_valid_bound`` global attr) paths, so an operator
-    re-running against a healthy-fingerprint cache continues to see the
-    alert that fired on the original build (#213, closing PR #212 item I1).
+    Called from ``_build_year`` after the live computation, and again
+    from the skip branch when ``should_skip_year_build`` returns a
+    cached ``frac_valid_bound``. Re-emitting from cache means an
+    operator re-running against a healthy-fingerprint cache continues
+    to see the alert that fired on the original build (#213).
     """
     if frac_valid < _LOW_VALID_WARN_FRACTION:
         logger.warning(

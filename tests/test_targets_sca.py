@@ -980,12 +980,17 @@ def test_pre_213_intermediate_triggers_rebuild(tmp_path: Path, caplog):
 
 def test_low_coverage_warning_reemits_on_cached_skip(tmp_path: Path, caplog):
     """The low-coverage WARNING must fire on EVERY build, including
-    cached-skip re-runs (#213 closes PR #212 item I1).
+    cached-skip re-runs (#213).
 
     First build writes a low-coverage year; second build skips the
     rebuild (fingerprints match) but reads ``frac_valid_bound`` from
     cached attrs and re-emits the warning so the operator sees the
     alert on every run, not just the first.
+
+    Explicitly asserts the second build took the SKIP path (via the
+    "intermediates valid" INFO log) so a regression that accidentally
+    re-runs the year and emits the WARNING from the live computation
+    would fail this test instead of silently passing.
     """
     import logging
 
@@ -1007,15 +1012,56 @@ def test_low_coverage_warning_reemits_on_cached_skip(tmp_path: Path, caplog):
         1 for r in caplog.records if "valid CI-passing bound" in r.message
     )
     # Second build: intermediates skip-eligible. Warning must STILL fire
-    # from the cached frac_valid_bound attr.
+    # from the cached frac_valid_bound attr. Capture INFO too so we can
+    # assert the skip path was actually taken (not a silent rebuild).
     caplog.clear()
-    with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.targets.sca"):
+    with caplog.at_level(logging.INFO, logger="nhf_spatial_targets.targets.sca"):
         build(project)
     second_warning_count = sum(
-        1 for r in caplog.records if "valid CI-passing bound" in r.message
+        1
+        for r in caplog.records
+        if r.levelno >= logging.WARNING and "valid CI-passing bound" in r.message
     )
     assert second_warning_count >= 1, (
         "low-coverage WARNING must re-emit on cached-skip path"
     )
     # The two should be the same magnitude (1 warning per year both times).
     assert first_warning_count == second_warning_count
+    # Regression guard: the second build must have hit the skip branch,
+    # not silently re-run the year. The skip log line includes
+    # "intermediates valid" + "skipping"; the rebuild path does not.
+    assert any(
+        "intermediates valid" in r.message and "skipping" in r.message
+        for r in caplog.records
+    ), "second build must take the cached-skip path, not silently rebuild"
+
+
+def test_frac_valid_bound_not_in_stitched_output(tmp_path: Path):
+    """The per-year ``frac_valid_bound`` attr must NOT appear on the
+    stitched ``sca_targets.nc``.
+
+    ``combine_attrs="override"`` in stitch picks the first per-year
+    file's attrs by default, which would leak a single-year coverage
+    fraction onto the multi-year stitched output as if it were a
+    multi-year statistic. ``stitch_year_chunks_to_target`` strips it
+    alongside ``year_chunk`` so an operator inspecting the stitched
+    NC's attrs cannot accidentally trust a misleading single-year
+    number.
+    """
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    # Two-year period so the stitch actually runs.
+    workdir = _make_sca_project(tmp_path, period="2005-01-01/2006-12-31")
+    project = load(workdir)
+    build(project)
+    # Per-year intermediate carries the attr (forensic value).
+    per_year = project.targets_dir() / ".sca_intermediates" / "sca_targets_2005.nc"
+    with xr.open_dataset(per_year) as ds:
+        assert "frac_valid_bound" in ds.attrs
+    # Stitched output must NOT carry the per-year attr.
+    with xr.open_dataset(project.targets_dir() / "sca_targets.nc") as ds:
+        assert "frac_valid_bound" not in ds.attrs
+        # Sanity: stitched output still carries the active fingerprints.
+        assert "config_fingerprint" in ds.attrs
+        assert "code_version" in ds.attrs

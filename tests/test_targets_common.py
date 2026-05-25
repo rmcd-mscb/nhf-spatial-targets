@@ -1872,3 +1872,72 @@ def test_should_skip_year_build_handles_partial_intermediate_set(tmp_path: Path)
     assert attrs is None
     # Primary preserved — the caller's rebuild path will overwrite it.
     assert primary.exists()
+
+
+def test_should_skip_year_build_recovers_from_corrupt_cache(tmp_path: Path, caplog):
+    """A corrupt/truncated cached intermediate must be detected, deleted,
+    and rebuilt rather than crashing the multi-year build.
+
+    The recovery path uses ``except (OSError, RuntimeError, ValueError)``
+    to cover the three exception classes the netCDF4 backend can raise on
+    a malformed file. Regression guard: narrowing the catch to a single
+    class (or just FileNotFoundError) would let a truncated file from a
+    SIGKILL during the previous run abort the whole build.
+    """
+    import logging
+
+    from nhf_spatial_targets.targets._common import should_skip_year_build
+
+    nc_path = tmp_path / "y2005.nc"
+    # 16 bytes of garbage — not a valid HDF5/NetCDF header.
+    nc_path.write_bytes(b"\x00\x01\x02\x03" * 4)
+    assert nc_path.exists()
+
+    with caplog.at_level(logging.WARNING):
+        skip, attrs = should_skip_year_build(
+            [nc_path],
+            active_config_fingerprint="abc123",
+            active_code_version="0.1.0",
+            target_label="sca",
+            year=2005,
+            logger=logging.getLogger("test"),
+        )
+    assert skip is False
+    # Corrupt-file branch returns the {} sentinel (no readable attrs).
+    assert attrs == {}
+    # File was unlinked so the caller can rebuild without conflict.
+    assert not nc_path.exists()
+    # Operator-visible WARNING names the recovery action.
+    assert "could not be opened" in caplog.text
+    assert "rebuilding" in caplog.text
+
+
+def test_should_skip_year_build_empty_string_fingerprint_treated_as_missing(
+    tmp_path: Path, caplog
+):
+    """A cached file with empty-string fingerprint attrs (malformed
+    upstream writer) must be treated as missing-fingerprint, not as
+    "equal to active if active is also empty."
+    """
+    import logging
+
+    from nhf_spatial_targets.targets._common import should_skip_year_build
+
+    nc_path = tmp_path / "y2005.nc"
+    # Empty-string fingerprint attrs — pathological but possible.
+    _write_fingerprinted_nc(nc_path, config_fp="", code_ver="")
+
+    with caplog.at_level(logging.WARNING):
+        skip, _attrs = should_skip_year_build(
+            [nc_path],
+            active_config_fingerprint="abc123",
+            active_code_version="0.1.0",
+            target_label="sca",
+            year=2005,
+            logger=logging.getLogger("test"),
+        )
+    assert skip is False
+    assert not nc_path.exists()
+    # The missing-attrs branch ("predates") fires, not the mismatch branch
+    # ("fingerprint mismatch") — empty string is treated as missing.
+    assert "predates" in caplog.text or "missing" in caplog.text
