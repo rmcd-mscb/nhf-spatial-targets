@@ -819,3 +819,68 @@ def test_pre_213_intermediate_triggers_rebuild(tmp_path: Path, caplog):
         assert "lower_bound" in rebuilt.data_vars
     finally:
         rebuilt.close()
+
+
+# ---------------------------------------------------------------------------
+# Period-shrink defense (#211)
+# ---------------------------------------------------------------------------
+
+
+def test_period_shrink_prunes_orphan_intermediates(tmp_path: Path, caplog):
+    """Shrinking the active period leaves out-of-period intermediates on
+    disk from the wider previous build. The next build must prune them
+    AND the stitched output must cover only the new (smaller) period.
+
+    Regression guard for #211, the original symptom that motivated this
+    fix: OR SWE's period shrunk from 1980-2025 to 1980-2024 and the
+    stitched ``swe_targets.nc`` still covered through 2025 because the
+    stitcher's directory glob silently included the orphan 2025
+    intermediate.
+    """
+    import logging
+
+    from nhf_spatial_targets.targets.swe import build
+    from nhf_spatial_targets.workspace import load
+
+    # First build: 2 years wide (2003-2004 — SNODAS era so all 4 OR
+    # sources contribute).
+    workdir = _make_swe_project(
+        tmp_path,
+        period="2003-12-01/2004-01-31",
+        fabric_token="or",
+        nn_fill=False,
+    )
+    project = load(workdir)
+    build(project)
+    intermediates_dir = project.targets_dir() / ".swe_intermediates"
+    assert (intermediates_dir / "swe_targets_2003.nc").exists()
+    assert (intermediates_dir / "swe_targets_2004.nc").exists()
+    with xr.open_dataset(project.targets_dir() / "swe_targets.nc") as ds:
+        years_first = sorted(set(pd.DatetimeIndex(ds["time"].values).year))
+    assert years_first == [2003, 2004]
+
+    # Shrink period: drop 2004. Delete the stitched output so we can
+    # confirm the rebuild writes a fresh one matching the new period.
+    cfg_path = workdir / "config.yml"
+    cfg = yaml.safe_load(cfg_path.read_text())
+    cfg["targets"]["snow_water_equivalent"]["period"] = "2003-12-01/2003-12-31"
+    cfg_path.write_text(yaml.safe_dump(cfg))
+    (project.targets_dir() / "swe_targets.nc").unlink()
+
+    project = load(workdir)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.targets._common"):
+        build(project)
+
+    # 1. Orphan was pruned with a WARNING naming year 2004.
+    assert any("pruned" in r.message and "2004" in r.message for r in caplog.records), (
+        "prune WARNING must name the orphan year(s)"
+    )
+    assert not (intermediates_dir / "swe_targets_2004.nc").exists()
+
+    # 2. Stitched output covers ONLY 2003, not 2003-2004.
+    with xr.open_dataset(project.targets_dir() / "swe_targets.nc") as ds:
+        years_second = sorted(set(pd.DatetimeIndex(ds["time"].values).year))
+    assert years_second == [2003], (
+        f"stitched output must match shrunk period; got years {years_second}"
+    )

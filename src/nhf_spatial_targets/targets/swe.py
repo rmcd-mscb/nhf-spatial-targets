@@ -51,6 +51,14 @@ intermediate, and rebuilds the year. Operators do not need to manually
 builder logic WITHOUT a ``__version__`` bump still requires a manual
 ``rm`` because the ``code_version`` tag is tied to the package
 version string.
+
+**Period-shrink defense.** Downward changes to ``period`` (e.g.
+``2000-2024`` → ``2000-2023``) leave per-year intermediates from the
+removed years on disk. ``prune_orphan_year_intermediates`` (#211)
+deletes them with a WARNING before the stitch step, and the stitch
+input is computed deterministically from ``iter_period_years`` rather
+than a directory glob, so the canonical ``swe_targets.nc`` always
+matches the active period exactly.
 """
 
 from __future__ import annotations
@@ -73,6 +81,7 @@ from nhf_spatial_targets.targets._common import (
     iter_period_years,
     multi_source_nanminmax,
     parse_period,
+    prune_orphan_year_intermediates,
     read_aggregated_source,
     reindex_to_day_start,
     shims_by_config_label,
@@ -391,12 +400,26 @@ def build(project: Project) -> None:
             code_version=code_ver,
         )
 
-    # 4. Stitch per-year intermediates into the canonical single-file
+    # 4. Defense against #211: prune any per-year intermediates left
+    # behind by a previous build against a wider period. Stitch input
+    # is then computed deterministically from year_specs, not from a
+    # directory glob, so the canonical NC always matches the active
+    # config period.
+    in_period_years = {year for year, _, _ in year_specs}
+    prune_orphan_year_intermediates(
+        intermediates_dir,
+        "swe_targets",
+        in_period_years,
+        target_label="swe",
+        logger=logger,
+    )
+
+    # 5. Stitch per-year intermediates into the canonical single-file
     # outputs. Dask-streamed so peak memory stays bounded.
     output_path = project.targets_dir() / swe_cfg["output_file"]
-    unfilled_files = sorted(
-        intermediates_dir.glob("swe_targets_[0-9][0-9][0-9][0-9].nc")
-    )
+    unfilled_files = [
+        intermediates_dir / f"swe_targets_{year}.nc" for year, _, _ in year_specs
+    ]
     stitch_year_chunks_to_target(
         unfilled_files,
         output_path,
@@ -406,9 +429,10 @@ def build(project: Project) -> None:
     )
 
     if nn_fill:
-        nn_files = sorted(
-            intermediates_dir.glob("swe_targets_[0-9][0-9][0-9][0-9]_nn_filled.nc")
-        )
+        nn_files = [
+            intermediates_dir / f"swe_targets_{year}_nn_filled.nc"
+            for year, _, _ in year_specs
+        ]
         nn_path = output_path.with_name(
             output_path.stem + "_nn_filled" + output_path.suffix
         )

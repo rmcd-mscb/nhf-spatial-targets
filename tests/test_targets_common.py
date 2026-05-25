@@ -1941,3 +1941,132 @@ def test_should_skip_year_build_empty_string_fingerprint_treated_as_missing(
     # The missing-attrs branch ("predates") fires, not the mismatch branch
     # ("fingerprint mismatch") — empty string is treated as missing.
     assert "predates" in caplog.text or "missing" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Orphan pruning for year-chunked intermediates (#211)
+# ---------------------------------------------------------------------------
+
+
+def _touch_nc(path: Path) -> None:
+    """Write a minimal NetCDF placeholder so the path exists and is readable."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ds = xr.Dataset(
+        {"placeholder": (("time",), np.array([0.0], dtype=np.float32))},
+        coords={"time": pd.date_range("2000-01-01", periods=1, freq="D")},
+    )
+    ds.to_netcdf(path)
+
+
+def test_prune_orphan_year_intermediates_keeps_in_period_files(tmp_path: Path):
+    """Files whose year is in ``expected_years`` are preserved."""
+    import logging
+
+    from nhf_spatial_targets.targets._common import prune_orphan_year_intermediates
+
+    for year in (2003, 2004, 2005):
+        _touch_nc(tmp_path / f"swe_targets_{year}.nc")
+        _touch_nc(tmp_path / f"swe_targets_{year}_nn_filled.nc")
+
+    pruned = prune_orphan_year_intermediates(
+        tmp_path,
+        "swe_targets",
+        {2003, 2004, 2005},
+        target_label="swe",
+        logger=logging.getLogger("test"),
+    )
+    assert pruned == []
+    # All 6 files still on disk.
+    assert sorted(p.name for p in tmp_path.glob("swe_targets_*.nc")) == [
+        "swe_targets_2003.nc",
+        "swe_targets_2003_nn_filled.nc",
+        "swe_targets_2004.nc",
+        "swe_targets_2004_nn_filled.nc",
+        "swe_targets_2005.nc",
+        "swe_targets_2005_nn_filled.nc",
+    ]
+
+
+def test_prune_orphan_year_intermediates_unlinks_out_of_period_files(
+    tmp_path: Path, caplog
+):
+    """Files outside ``expected_years`` are deleted; WARNING names the
+    pruned years."""
+    import logging
+
+    from nhf_spatial_targets.targets._common import prune_orphan_year_intermediates
+
+    # 2003-2005 in period; 2002 + 2006 are orphans from a wider previous build.
+    for year in (2002, 2003, 2004, 2005, 2006):
+        _touch_nc(tmp_path / f"swe_targets_{year}.nc")
+        _touch_nc(tmp_path / f"swe_targets_{year}_nn_filled.nc")
+
+    with caplog.at_level(logging.WARNING):
+        pruned = prune_orphan_year_intermediates(
+            tmp_path,
+            "swe_targets",
+            {2003, 2004, 2005},
+            target_label="swe",
+            logger=logging.getLogger("test"),
+        )
+
+    assert pruned == [2002, 2006]
+    # Both unfilled + nn_filled companion files for the orphan years are gone.
+    assert not (tmp_path / "swe_targets_2002.nc").exists()
+    assert not (tmp_path / "swe_targets_2002_nn_filled.nc").exists()
+    assert not (tmp_path / "swe_targets_2006.nc").exists()
+    assert not (tmp_path / "swe_targets_2006_nn_filled.nc").exists()
+    # In-period files are still on disk.
+    for year in (2003, 2004, 2005):
+        assert (tmp_path / f"swe_targets_{year}.nc").exists()
+        assert (tmp_path / f"swe_targets_{year}_nn_filled.nc").exists()
+    # WARNING names both orphan years and the count of pruned files.
+    assert "2002" in caplog.text
+    assert "2006" in caplog.text
+    assert "4" in caplog.text  # 2 years × 2 files each
+
+
+def test_prune_orphan_year_intermediates_ignores_unrelated_files(tmp_path: Path):
+    """Files that don't match the canonical year pattern are not pruned."""
+    import logging
+
+    from nhf_spatial_targets.targets._common import prune_orphan_year_intermediates
+
+    _touch_nc(tmp_path / "swe_targets_2005.nc")
+    # Unrelated files that shouldn't be touched:
+    _touch_nc(tmp_path / "swe_targets_summary.nc")  # not a year
+    _touch_nc(tmp_path / "swe_targets_abcd.nc")  # not 4 digits
+    _touch_nc(tmp_path / "other_targets_2005.nc")  # different base prefix
+
+    pruned = prune_orphan_year_intermediates(
+        tmp_path,
+        "swe_targets",
+        {2005},
+        target_label="swe",
+        logger=logging.getLogger("test"),
+    )
+    assert pruned == []
+    # All non-canonical files preserved.
+    for name in (
+        "swe_targets_2005.nc",
+        "swe_targets_summary.nc",
+        "swe_targets_abcd.nc",
+        "other_targets_2005.nc",
+    ):
+        assert (tmp_path / name).exists()
+
+
+def test_prune_orphan_year_intermediates_empty_dir(tmp_path: Path):
+    """Empty intermediates dir returns [] without raising."""
+    import logging
+
+    from nhf_spatial_targets.targets._common import prune_orphan_year_intermediates
+
+    pruned = prune_orphan_year_intermediates(
+        tmp_path,
+        "swe_targets",
+        {2005},
+        target_label="swe",
+        logger=logging.getLogger("test"),
+    )
+    assert pruned == []
