@@ -45,17 +45,19 @@ If ``snow_covered_area.nn_fill`` is True (default), a second file
 ``<output>_nn_filled.nc`` is written with NaN bounds filled by the
 nearest finite HRU's bound at the same day.
 
-.. warning::
-
-   Per-year intermediates under ``<project>/targets/.sca_intermediates/``
-   are keyed by year only — they are NOT fingerprinted by
-   ``ci_threshold`` or by the code version that wrote them. After
-   changing ``ci_threshold`` or after any change to this module that
-   alters the formula, ``rm -rf <project>/targets/.sca_intermediates/``
-   before re-running, otherwise stale intermediates will be silently
-   reused. The active ``ci_threshold`` is logged whenever the per-year
-   skip branch fires so operators can cross-check. Tracked for a
-   shared-with-SWE automatic fix in issue #213.
+**Cache invalidation.** Per-year intermediates under
+``<project>/targets/.sca_intermediates/`` carry two fingerprint global
+attrs (``config_fingerprint``, ``code_version``) that the skip branch
+compares against the active values. A mismatch — caused by a config
+edit (``ci_threshold``, sources, period), a fabric swap, or a
+``__version__`` bump — logs a WARNING, deletes the stale intermediate,
+and rebuilds the year. Operators do not need to manually ``rm`` after
+config or version-bump changes; any commit that modifies builder logic
+WITHOUT a ``__version__`` bump still requires a manual ``rm`` because
+the ``code_version`` tag is tied to the package version string.
+The per-year low-valid-coverage WARNING is also persisted via the
+``frac_valid_bound`` attr and re-emitted on the skip branch so it
+fires on every run, not just the first.
 """
 
 from __future__ import annotations
@@ -68,13 +70,18 @@ import pandas as pd
 import xarray as xr
 
 from nhf_spatial_targets.targets._common import (
+    INTERMEDIATE_CODE_VERSION_ATTR,
+    INTERMEDIATE_CONFIG_FINGERPRINT_ATTR,
     check_hru_coords,
+    code_version_fingerprint,
     compute_hru_centroids,
     iter_period_years,
     parse_period,
     read_aggregated_source,
     reindex_to_day_start,
+    should_skip_year_build,
     stitch_year_chunks_to_target,
+    target_config_fingerprint,
     write_bounds_target,
 )
 from nhf_spatial_targets.workspace import Project
@@ -88,6 +95,12 @@ _CI_VAR = "Day_CMG_Clear_Index"
 # Captured as a constant so the output NC's global ``summer_zero_months``
 # attr can name the months explicitly. Matches PRMSobjfun.f90:calcSCA.
 _SUMMER_ZERO_MONTHS = (7, 8)
+
+# Global attr name written to every per-year intermediate that records
+# the actual fraction of (HRU, day) cells with a valid bound. Read on
+# the skip branch so the low-coverage warning can be re-emitted from a
+# cached intermediate (#213).
+_FRAC_VALID_BOUND_ATTR = "frac_valid_bound"
 
 # Operator-visible warning threshold: if fewer than this fraction of
 # (HRU, day) cells in a year produce a valid bound, the build emits a
@@ -145,6 +158,10 @@ def build(project: Project) -> None:
     id_col = project.id_col
     fabric_hru_ids = hru_meta.index.values
 
+    # Cache fingerprints — see should_skip_year_build (#213).
+    config_fp = target_config_fingerprint(project, "snow_covered_area")
+    code_ver = code_version_fingerprint()
+
     extra_attrs = {
         "source": (
             "MOD10C1 v061 Day_CMG_Snow_Cover + Day_CMG_Clear_Index "
@@ -160,6 +177,8 @@ def build(project: Project) -> None:
         "area_crs": project.area_crs,
         "ci_threshold": ci_threshold,
         "summer_zero_months": ",".join(str(m) for m in _SUMMER_ZERO_MONTHS),
+        INTERMEDIATE_CONFIG_FINGERPRINT_ATTR: config_fp,
+        INTERMEDIATE_CODE_VERSION_ATTR: code_ver,
     }
 
     year_specs = iter_period_years(period[0], period[1])
@@ -193,6 +212,8 @@ def build(project: Project) -> None:
             intermediates_dir=intermediates_dir,
             nn_fill=nn_fill,
             nn_max_candidates=nn_max_candidates,
+            config_fingerprint=config_fp,
+            code_version=code_ver,
         )
 
     output_path = project.targets_dir() / sca_cfg["output_file"]
@@ -229,6 +250,28 @@ def build(project: Project) -> None:
         )
 
 
+def _warn_low_valid_coverage(year: int, frac_valid: float, ci_threshold: float) -> None:
+    """Emit the per-year low-valid-coverage WARNING if below the floor.
+
+    Called from ``_build_year`` after the live computation, and again
+    from the skip branch when ``should_skip_year_build`` returns a
+    cached ``frac_valid_bound``. Re-emitting from cache means an
+    operator re-running against a healthy-fingerprint cache continues
+    to see the alert that fired on the original build (#213).
+    """
+    if frac_valid < _LOW_VALID_WARN_FRACTION:
+        logger.warning(
+            "sca year %d: only %.4f%% of (HRU, day) cells produced a "
+            "valid CI-passing bound (threshold for warning: %.2f%%). "
+            "Either the aggregated mod10c1 NC is degenerate for this year "
+            "or ci_threshold=%.2f is too strict.",
+            year,
+            frac_valid * 100,
+            _LOW_VALID_WARN_FRACTION * 100,
+            ci_threshold,
+        )
+
+
 def _build_year(
     *,
     project: Project,
@@ -242,33 +285,43 @@ def _build_year(
     intermediates_dir: Path,
     nn_fill: bool,
     nn_max_candidates: int,
+    config_fingerprint: str,
+    code_version: str,
 ) -> None:
     """Build SCA bounds for one calendar year and write per-year NCs.
 
-    Idempotent: if both expected per-year NCs already exist
-    (``sca_targets_<year>.nc`` and, when ``nn_fill``,
-    ``sca_targets_<year>_nn_filled.nc``), the build is skipped — useful
-    when re-running after a partial OOM mid-period.
+    Idempotent: if both expected per-year NCs already exist AND their
+    fingerprint global attrs match the active config + code version,
+    the build is skipped. On a fingerprint mismatch the stale
+    intermediate(s) are deleted automatically and rebuilt — see
+    :func:`nhf_spatial_targets.targets._common.should_skip_year_build`.
+
+    On a healthy skip, the cached ``frac_valid_bound`` global attr is
+    read and the low-valid-coverage WARNING is re-emitted if the
+    cached fraction is below threshold, so an operator re-running
+    against a valid cache continues to see the alert.
     """
     year_unfilled = intermediates_dir / f"sca_targets_{year}.nc"
     year_nn = intermediates_dir / f"sca_targets_{year}_nn_filled.nc"
-    if year_unfilled.exists() and ((not nn_fill) or year_nn.exists()):
-        # Intermediates are path-keyed only — not fingerprinted by
-        # ci_threshold, sources list, code version, or any other config.
-        # Log the active threshold so an operator re-reading the run
-        # output can cross-check it against the file's global attrs
-        # (see module docstring warning). Tracked for an automatic
-        # cross-target fix in #213.
+    expected_paths = [year_unfilled] + ([year_nn] if nn_fill else [])
+    skip, cached_attrs = should_skip_year_build(
+        expected_paths,
+        active_config_fingerprint=config_fingerprint,
+        active_code_version=code_version,
+        target_label="sca",
+        year=year,
+        logger=logger,
+    )
+    if skip:
         logger.info(
-            "Year %d intermediates exist; skipping. Active ci_threshold=%.2f. "
-            "Any change to sca config or to the builder module since the "
-            "intermediates were written invalidates them — "
-            "rm %s/sca_targets_%d*.nc and re-run if so.",
+            "Year %d intermediates valid (config=%s code=%s); skipping.",
             year,
-            ci_threshold,
-            intermediates_dir,
-            year,
+            config_fingerprint,
+            code_version,
         )
+        cached_frac = (cached_attrs or {}).get(_FRAC_VALID_BOUND_ATTR)
+        if cached_frac is not None:
+            _warn_low_valid_coverage(year, float(cached_frac), ci_threshold)
         return
 
     year_master_idx = pd.date_range(year_period[0], year_period[1], freq="D")
@@ -331,20 +384,10 @@ def _build_year(
 
     # Operator-visible warning when an upstream regression or
     # genuinely fully-cloudy season produces near-zero coverage for
-    # the year. Cheap single-scalar reduction; mirrors the per-year
-    # warning shape in aggregate/mod10c1.py:_log_low_valid_coverage.
+    # the year. Persisted to global attrs so the skip branch can re-emit
+    # it on a cached re-run (#213).
     frac_valid = float(valid_bound.mean().compute())
-    if frac_valid < _LOW_VALID_WARN_FRACTION:
-        logger.warning(
-            "sca year %d: only %.4f%% of (HRU, day) cells produced a "
-            "valid CI-passing bound (threshold for warning: %.2f%%). "
-            "Either the aggregated mod10c1 NC is degenerate for this year "
-            "or ci_threshold=%.2f is too strict.",
-            year,
-            frac_valid * 100,
-            _LOW_VALID_WARN_FRACTION * 100,
-            ci_threshold,
-        )
+    _warn_low_valid_coverage(year, frac_valid, ci_threshold)
 
     write_bounds_target(
         project=project,
@@ -360,7 +403,11 @@ def _build_year(
         output_path=year_unfilled,
         title=f"NHM SCA calibration target year {year} (intermediate)",
         nn_title=(f"NHM SCA calibration target year {year} (NN-filled intermediate)"),
-        extra_global_attrs={**extra_attrs, "year_chunk": year},
+        extra_global_attrs={
+            **extra_attrs,
+            "year_chunk": year,
+            _FRAC_VALID_BOUND_ATTR: frac_valid,
+        },
         hru_meta=hru_meta,
         nn_fill=nn_fill,
         nn_max_candidates=nn_max_candidates,

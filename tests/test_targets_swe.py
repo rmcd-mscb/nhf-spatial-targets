@@ -715,3 +715,107 @@ def test_build_nn_fill_actually_fills_nan_cells(tmp_path: Path):
         assert (filled["nn_filled"].values[:, 1] == 1).all()
         assert (filled["nn_filled"].values[:, 0] == 0).all()
         assert (filled["nn_filled"].values[:, 2] == 0).all()
+
+
+# ---------------------------------------------------------------------------
+# Cache invalidation by fingerprint (#213)
+# ---------------------------------------------------------------------------
+
+
+def test_fingerprint_mismatch_rebuilds_year(tmp_path: Path, caplog):
+    """Edit the SWE sources list between two builds → the cached
+    intermediate is automatically rebuilt with the new source set,
+    no manual ``rm`` needed.
+
+    Regression guard for #213's core promise: a config change invalidates
+    the cache without operator intervention.
+    """
+    import logging
+
+    from nhf_spatial_targets.targets.swe import build
+    from nhf_spatial_targets.workspace import load
+
+    # First build: all 4 OR sources (period 2003-10 → SNODAS-era 2003+
+    # so all four contribute). _make_swe_project default values produce
+    # well-ordered bounds.
+    workdir = _make_swe_project(
+        tmp_path,
+        period="2003-12-15/2003-12-15",
+        fabric_token="or",
+        nn_fill=False,
+    )
+    project = load(workdir)
+    build(project)
+    with xr.open_dataset(project.targets_dir() / "swe_targets.nc") as ds:
+        first_fp = ds.attrs["config_fingerprint"]
+        # All 4 sources → n_sources=4 by construction in the test fixture.
+        assert (ds["n_sources"].values == 4).all()
+
+    # Mutate sources list: drop margulis_wus_sr. The fingerprint must
+    # change, the year intermediate must be deleted, the rebuild must
+    # produce n_sources=3.
+    cfg_path = workdir / "config.yml"
+    cfg = yaml.safe_load(cfg_path.read_text())
+    cfg["targets"]["snow_water_equivalent"]["sources"] = [
+        "daymet",
+        "snodas",
+        "era5_land",
+    ]
+    cfg_path.write_text(yaml.safe_dump(cfg))
+    # Delete stitched output so we can confirm the rebuild wrote a fresh one.
+    (project.targets_dir() / "swe_targets.nc").unlink()
+
+    project = load(workdir)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.targets._common"):
+        build(project)
+    # Skip predicate logged a fingerprint-mismatch warning under the
+    # shared _common logger.
+    assert any("mismatch" in r.message for r in caplog.records), (
+        "fingerprint mismatch on cached intermediate must log a WARNING"
+    )
+    with xr.open_dataset(project.targets_dir() / "swe_targets.nc") as ds:
+        second_fp = ds.attrs["config_fingerprint"]
+        # Rebuild reflects the trimmed sources list.
+        assert (ds["n_sources"].values == 3).all()
+        assert "Margulis" not in ds.attrs["source"]
+    assert first_fp != second_fp
+
+
+def test_pre_213_intermediate_triggers_rebuild(tmp_path: Path, caplog):
+    """A legacy intermediate without fingerprint attrs (from before
+    #213) must be detected, deleted, and rebuilt rather than silently
+    reused. Required for the upgrade transition."""
+    import logging
+
+    from nhf_spatial_targets.targets.swe import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_swe_project(
+        tmp_path,
+        period="2003-12-15/2003-12-15",
+        fabric_token="or",
+        nn_fill=False,
+    )
+    # Pre-populate intermediates_dir with a fake legacy file (no fingerprint).
+    intermediates_dir = workdir / "targets" / ".swe_intermediates"
+    intermediates_dir.mkdir(parents=True, exist_ok=True)
+    legacy_path = intermediates_dir / "swe_targets_2003.nc"
+    legacy = xr.Dataset(
+        {"placeholder": (("time",), np.array([0.0], dtype=np.float32))},
+        coords={"time": pd.date_range("2003-12-15", periods=1, freq="D")},
+    )
+    legacy.to_netcdf(legacy_path)
+    project = load(workdir)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.targets._common"):
+        build(project)
+    assert any(
+        ("predates" in r.message or "missing" in r.message) for r in caplog.records
+    )
+    rebuilt = xr.open_dataset(legacy_path)
+    try:
+        assert "config_fingerprint" in rebuilt.attrs
+        assert "lower_bound" in rebuilt.data_vars
+    finally:
+        rebuilt.close()

@@ -39,6 +39,18 @@ If ``snow_water_equivalent.nn_fill`` is True (default), a second file
 ``<output>_nn_filled.nc`` is written with bound NaNs filled by the
 nearest finite HRU's value at the same day (cKDTree donor walk in
 ``project.area_crs``).
+
+**Cache invalidation.** Per-year intermediates under
+``<project>/targets/.swe_intermediates/`` carry two fingerprint global
+attrs (``config_fingerprint``, ``code_version``) that the skip branch
+compares against the active values. A mismatch — caused by a config
+edit (``sources``, ``period``, ``nn_max_candidates``), a fabric swap,
+or a ``__version__`` bump — logs a WARNING, deletes the stale
+intermediate, and rebuilds the year. Operators do not need to manually
+``rm`` after config or version-bump changes; any commit that modifies
+builder logic WITHOUT a ``__version__`` bump still requires a manual
+``rm`` because the ``code_version`` tag is tied to the package
+version string.
 """
 
 from __future__ import annotations
@@ -52,8 +64,11 @@ import xarray as xr
 
 from nhf_spatial_targets import catalog
 from nhf_spatial_targets.targets._common import (
+    INTERMEDIATE_CODE_VERSION_ATTR,
+    INTERMEDIATE_CONFIG_FINGERPRINT_ATTR,
     SourceShim,
     check_hru_coords,
+    code_version_fingerprint,
     compute_hru_centroids,
     iter_period_years,
     multi_source_nanminmax,
@@ -61,7 +76,9 @@ from nhf_spatial_targets.targets._common import (
     read_aggregated_source,
     reindex_to_day_start,
     shims_by_config_label,
+    should_skip_year_build,
     stitch_year_chunks_to_target,
+    target_config_fingerprint,
     validate_source_units,
     write_bounds_target,
 )
@@ -311,7 +328,11 @@ def build(project: Project) -> None:
     id_col = project.id_col
     fabric_hru_ids = hru_meta.index.values
 
-    # 2. Common global attrs (same on per-year intermediates and the
+    # 2. Cache fingerprints — see should_skip_year_build (#213).
+    config_fp = target_config_fingerprint(project, "snow_water_equivalent")
+    code_ver = code_version_fingerprint()
+
+    # 3. Common global attrs (same on per-year intermediates and the
     # stitched final NC).
     extra_attrs = {
         "source": "; ".join(shims[s].description for s in sources),
@@ -323,6 +344,8 @@ def build(project: Project) -> None:
         "fabric_token": fabric_token or "",
         "period": swe_cfg["period"],
         "area_crs": project.area_crs,
+        INTERMEDIATE_CONFIG_FINGERPRINT_ATTR: config_fp,
+        INTERMEDIATE_CODE_VERSION_ATTR: code_ver,
     }
 
     # 3. Year-chunked build. SWE is the only daily-cadence multi-source
@@ -364,6 +387,8 @@ def build(project: Project) -> None:
             intermediates_dir=intermediates_dir,
             nn_fill=nn_fill,
             nn_max_candidates=nn_max_candidates,
+            config_fingerprint=config_fp,
+            code_version=code_ver,
         )
 
     # 4. Stitch per-year intermediates into the canonical single-file
@@ -414,6 +439,8 @@ def _build_year(
     intermediates_dir: Path,
     nn_fill: bool,
     nn_max_candidates: int,
+    config_fingerprint: str,
+    code_version: str,
 ) -> None:
     """Build SWE bounds for one calendar year and write per-year NCs.
 
@@ -424,15 +451,30 @@ def _build_year(
     filter, e.g., ``ds.where(ds.n_sources >= 2)`` to require 2-source
     agreement, or ``>= 3`` to require SNODAS-era completeness.
 
-    Idempotent: if both expected per-year NCs already exist
-    (``swe_targets_<year>.nc`` and, when ``nn_fill``,
-    ``swe_targets_<year>_nn_filled.nc``), the build is skipped — useful
-    when re-running after a partial OOM mid-period.
+    Idempotent: if both expected per-year NCs already exist AND their
+    fingerprint global attrs match the active config + code version,
+    the build is skipped. On a fingerprint mismatch the stale
+    intermediate(s) are deleted automatically and rebuilt — see
+    :func:`nhf_spatial_targets.targets._common.should_skip_year_build`.
     """
     year_unfilled = intermediates_dir / f"swe_targets_{year}.nc"
     year_nn = intermediates_dir / f"swe_targets_{year}_nn_filled.nc"
-    if year_unfilled.exists() and ((not nn_fill) or year_nn.exists()):
-        logger.info("Year %d intermediates exist; skipping", year)
+    expected_paths = [year_unfilled] + ([year_nn] if nn_fill else [])
+    skip, _cached_attrs = should_skip_year_build(
+        expected_paths,
+        active_config_fingerprint=config_fingerprint,
+        active_code_version=code_version,
+        target_label="swe",
+        year=year,
+        logger=logger,
+    )
+    if skip:
+        logger.info(
+            "Year %d intermediates valid (config=%s code=%s); skipping.",
+            year,
+            config_fingerprint,
+            code_version,
+        )
         return
 
     year_master_idx = pd.date_range(year_period[0], year_period[1], freq="D")
