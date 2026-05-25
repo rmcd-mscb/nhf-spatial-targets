@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -1300,6 +1301,118 @@ def should_skip_year_build(
         return False, cached_attrs
 
     return True, cached_attrs
+
+
+# ---------------------------------------------------------------------------
+# Orphan pruning for year-chunked intermediates (issue #211)
+# ---------------------------------------------------------------------------
+
+# The 4-digit anchor is load-bearing — a 5-digit "year" must NOT match
+# so that misnamed intermediates fall through to the stitch's
+# computed-from-iter_period_years input list as the second defense layer
+# (verified by test_stitch_input_computed_from_period_not_glob).
+_YEAR_INTERMEDIATE_PATTERN = re.compile(r"_(\d{4})(?:_nn_filled)?\.nc$")
+
+
+def prune_orphan_year_intermediates(
+    intermediates_dir: Path,
+    base: str,
+    expected_years: "set[int]",
+    *,
+    target_label: str,
+    logger: logging.Logger,
+) -> "list[int]":
+    """Delete per-year intermediate NCs whose year falls outside ``expected_years``.
+
+    Globs both ``<base>_<YYYY>.nc`` and ``<base>_<YYYY>_nn_filled.nc``
+    under ``intermediates_dir``, parses the 4-digit year from each
+    filename, and unlinks files whose year is not in ``expected_years``.
+    Mirrors the auto-invalidation pattern from
+    :func:`should_skip_year_build` (#213): the operator sees a WARNING
+    naming the years pruned but does not need to ``rm`` by hand.
+
+    Used by year-chunked target builders (sca, swe) to defend the stitch
+    step against orphan intermediates left behind by a previous build
+    against a wider period (#211). Without this pass the stitcher's
+    directory glob would silently include them, leaking out-of-period
+    years into the final canonical NC. Files matching the glob but
+    failing the strict year regex (e.g. operator-renamed debris) are
+    logged at DEBUG and left untouched.
+
+    Parameters
+    ----------
+    intermediates_dir
+        ``<project>/targets/.<target>_intermediates/`` for the current
+        build. Must exist (caller's responsibility).
+    base
+        Filename prefix matching the per-year writer's pattern, without
+        the trailing ``_<YYYY>``. E.g. ``"sca_targets"`` matches
+        ``sca_targets_2005.nc`` and ``sca_targets_2005_nn_filled.nc``.
+    expected_years
+        Set of calendar years the active config period covers. Files
+        whose parsed year is NOT in this set are pruned.
+    target_label
+        Short string used in log messages (e.g. ``"sca"``, ``"swe"``).
+    logger
+        Caller's module logger so the WARNING appears under the right
+        name.
+
+    Returns
+    -------
+    Sorted list of years pruned. Empty when no orphans were found.
+    """
+    pruned: dict[int, list[Path]] = {}
+    skipped: list[str] = []
+    for path in intermediates_dir.glob(f"{base}_*.nc"):
+        match = _YEAR_INTERMEDIATE_PATTERN.search(path.name)
+        if not match:
+            # Filename didn't match the canonical pattern — skip rather
+            # than risk unlinking an unrelated file. Recorded for the
+            # DEBUG breadcrumb so operators auditing the intermediates
+            # dir know prune saw them and chose not to act.
+            skipped.append(path.name)
+            continue
+        year = int(match.group(1))
+        if year in expected_years:
+            continue
+        pruned.setdefault(year, []).append(path)
+
+    if skipped:
+        logger.debug(
+            "%s: %d files in %s matched the glob but not the year "
+            "regex; left untouched (names: %s)",
+            target_label,
+            len(skipped),
+            intermediates_dir,
+            ", ".join(sorted(skipped)),
+        )
+
+    if not pruned:
+        # Audit breadcrumb — operators tailing the build log can confirm
+        # the prune pass actually ran when nothing was found.
+        logger.debug(
+            "%s: no orphan year intermediates to prune (active period covers %d years)",
+            target_label,
+            len(expected_years),
+        )
+        return []
+
+    for year_paths in pruned.values():
+        for path in year_paths:
+            path.unlink(missing_ok=True)
+
+    pruned_years = sorted(pruned)
+    logger.warning(
+        "%s: pruned %d orphan year intermediates outside the active "
+        "period (years: %s). Caused by a downward period change since "
+        "the previous build; without pruning the stitched output would "
+        "silently include these years. This is automatic recovery; no "
+        "action required.",
+        target_label,
+        sum(len(v) for v in pruned.values()),
+        ", ".join(str(y) for y in pruned_years),
+    )
+    return pruned_years
 
 
 def stitch_year_chunks_to_target(
