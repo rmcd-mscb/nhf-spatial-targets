@@ -6,7 +6,7 @@ project-level `<target>.period` config knob in each project's
 `config.yml` controls the actual output time axis; this doc documents
 what's feasible against the data on disk.
 
-Per [CLAUDE.md](../../CLAUDE.md):
+Per [CLAUDE.md](../conventions.md):
 
 > Time windows are not fixed to the report. ... `period` fields in
 > `catalog/variables.yml` reflect historical defaults, not hard
@@ -122,7 +122,7 @@ NOAH/MOSAIC).
 | **Intersection** | **2000–2025** (26 years × 365 days ≈ 9498 daily timesteps) |
 
 Single-source target — intersection equals coverage. Builder is
-currently a stub (CI-bounds formula gap per [CLAUDE.md](../../CLAUDE.md)
+currently a stub (CI-bounds formula gap per [CLAUDE.md](../conventions.md)
 Known Gaps); period extends easily once the placeholder formula
 lands.
 
@@ -158,7 +158,7 @@ match a TM 6-B10 climatology while extending the output), values
 outside the normalize window may produce normalized values `< 0` or
 `> 1` — by design, so out-of-climatology years are visibly
 out-of-range, not silently re-scaled. See
-[`normalize_0_1_over_window`](../../src/nhf_spatial_targets/normalize/methods.py)
+[`normalize_0_1_over_window`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/normalize/methods.py)
 docstrings for the formal contract.
 
 Current gfv2 defaults set `normalize_period == period` for both rch
@@ -167,12 +167,12 @@ giving a strictly-[0, 1] bound.
 
 ## Cross-references
 
-- [`catalog/sources.yml`](../../catalog/sources.yml) — per-source
+- [`catalog/sources.yml`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/catalog/sources.yml) — per-source
   `period` and `notes` fields. The `period` field there is the
   source's catalog-declared coverage (e.g. `"2000/present"`); the
   on-disk year-range may be shorter depending on the project's fetch
   / aggregate history.
-- [`catalog/variables.yml`](../../catalog/variables.yml) — per-target
+- [`catalog/variables.yml`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/catalog/variables.yml) — per-target
   `period` field reflects historical TM 6-B10 defaults; not read by
   the build code.
 - [`docs/references/calibration-target-recipes.md`](calibration-target-recipes.md)

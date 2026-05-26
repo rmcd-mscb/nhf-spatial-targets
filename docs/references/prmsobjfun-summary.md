@@ -1,6 +1,6 @@
-# PRMSobjfun.f90 — crib sheet keyed to this repo
+# https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/docs/references/PRMSobjfun.f90 — crib sheet keyed to this repo
 
-Companion reference for [`PRMSobjfun.f90`](PRMSobjfun.f90), the Fortran
+Companion reference for [`https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/docs/references/PRMSobjfun.f90`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/docs/references/PRMSobjfun.f90), the Fortran
 calibration objective function used downstream of this pipeline by PRMS-by-HRU
 calibration. The file lived outside the previously-public NHM source for years
 and is what TM 6-B10 §3 cross-references when it says "see the PRMS objective

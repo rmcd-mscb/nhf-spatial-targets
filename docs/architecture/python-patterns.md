@@ -9,12 +9,12 @@ If you are new to the repo and have Python experience but limited software-engin
 | Pattern | Where to look | Why it's there |
 |---|---|---|
 | `from __future__ import annotations` (every module) | top of any `.py` | Cheap, modern type-annotation syntax (`X \| Y`) without runtime cost |
-| `if TYPE_CHECKING:` import guards | [`cli.py:12-13`](../../src/nhf_spatial_targets/cli.py#L12-L13) | Heavy imports only at type-check time, never at runtime |
-| `Annotated[Type, Parameter(...)]` cyclopts wiring | every `@app.command` in [`cli.py`](../../src/nhf_spatial_targets/cli.py) | CLI help text lives next to the parameter; no separate argparse spec |
-| `@dataclass(frozen=True)` plugin adapters | [`aggregate/_adapter.py:SourceAdapter`](../../src/nhf_spatial_targets/aggregate/_adapter.py) | Declarative source plugins; immutable singletons safe to share |
-| Atomic file writes (tempfile + `os.replace`) | [`io_nc.py:atomic_to_netcdf`](../../src/nhf_spatial_targets/io_nc.py) | Crashed jobs never leave partial NetCDFs that look valid |
-| Manifest read-merge-write under `flock` | [`reconcile.py:_apply_records`](../../src/nhf_spatial_targets/reconcile.py) | Concurrent SLURM array jobs can't clobber each other's manifest writes |
-| Fingerprint-based cache invalidation | [`targets/_common.py:should_skip_year_build`](../../src/nhf_spatial_targets/targets/_common.py) | Year-chunked intermediates auto-rebuild when config or code changes |
+| `if TYPE_CHECKING:` import guards | [`cli.py:12-13`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/cli.py#L12-L13) | Heavy imports only at type-check time, never at runtime |
+| `Annotated[Type, Parameter(...)]` cyclopts wiring | every `@app.command` in [`cli.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/cli.py) | CLI help text lives next to the parameter; no separate argparse spec |
+| `@dataclass(frozen=True)` plugin adapters | [`aggregate/_adapter.py:SourceAdapter`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/aggregate/_adapter.py) | Declarative source plugins; immutable singletons safe to share |
+| Atomic file writes (tempfile + `os.replace`) | [`io_nc.py:atomic_to_netcdf`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/io_nc.py) | Crashed jobs never leave partial NetCDFs that look valid |
+| Manifest read-merge-write under `flock` | [`reconcile.py:_apply_records`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/reconcile.py) | Concurrent SLURM array jobs can't clobber each other's manifest writes |
+| Fingerprint-based cache invalidation | [`targets/_common.py:should_skip_year_build`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/targets/_common.py) | Year-chunked intermediates auto-rebuild when config or code changes |
 
 ## 1. `from __future__ import annotations`
 
@@ -29,7 +29,7 @@ If you are new to the repo and have Python experience but limited software-engin
 
 ## 2. `if TYPE_CHECKING:` import guards
 
-**What:** Some imports live inside an `if TYPE_CHECKING:` block at the top of a module. Example from [`cli.py:12-13`](../../src/nhf_spatial_targets/cli.py#L12-L13):
+**What:** Some imports live inside an `if TYPE_CHECKING:` block at the top of a module. Example from [`cli.py:12-13`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/cli.py#L12-L13):
 
 ```python
 from typing import TYPE_CHECKING, Annotated
@@ -58,11 +58,11 @@ workdir: Annotated[
 
 **Why:** cyclopts (our CLI framework) inspects the `Annotated` metadata to build the parser. The parameter's flag name, alias, and help string live **next to the type** rather than in a parallel declaration. The function signature is the single source of truth — no risk of the help text drifting away from the implementation.
 
-**How to extend:** when adding a new CLI command, use `Annotated[<concrete-type>, Parameter(name=..., help=...)] = <default>` for each parameter. Defaults live on the function signature (so type checkers see them); cyclopts reads `name` and `help` from the `Parameter` metadata. For parameters reused across commands (e.g. `--batch-size` on every `agg` subcommand), pull the `Parameter` into a module-level alias and reference it — see `_AGG_BATCH_SIZE_PARAM` in [`cli.py`](../../src/nhf_spatial_targets/cli.py).
+**How to extend:** when adding a new CLI command, use `Annotated[<concrete-type>, Parameter(name=..., help=...)] = <default>` for each parameter. Defaults live on the function signature (so type checkers see them); cyclopts reads `name` and `help` from the `Parameter` metadata. For parameters reused across commands (e.g. `--batch-size` on every `agg` subcommand), pull the `Parameter` into a module-level alias and reference it — see `_AGG_BATCH_SIZE_PARAM` in [`cli.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/cli.py).
 
 ## 4. `@dataclass(frozen=True)` plugin adapters
 
-**What:** Plugin extension points are declared as frozen dataclasses, not classes you subclass. The canonical example is [`aggregate/_adapter.py:SourceAdapter`](../../src/nhf_spatial_targets/aggregate/_adapter.py): a 60-field frozen dataclass with hook fields (`pre_aggregate_hook`, `post_aggregate_hook`, `stat_method`, …) that each gridded source instantiates as a module-level constant:
+**What:** Plugin extension points are declared as frozen dataclasses, not classes you subclass. The canonical example is [`aggregate/_adapter.py:SourceAdapter`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/aggregate/_adapter.py): a 60-field frozen dataclass with hook fields (`pre_aggregate_hook`, `post_aggregate_hook`, `stat_method`, …) that each gridded source instantiates as a module-level constant:
 
 ```python
 ADAPTER = SourceAdapter(
@@ -81,7 +81,7 @@ ADAPTER = SourceAdapter(
 
 ## 5. Atomic file writes (tempfile + `os.replace`)
 
-**What:** Every NetCDF and JSON write in the pipeline goes through an atomic write — write to a tempfile in the **same directory** as the final path, then `os.replace(tmp, final)`. The canonical entry is [`io_nc.py:atomic_to_netcdf`](../../src/nhf_spatial_targets/io_nc.py#L260):
+**What:** Every NetCDF and JSON write in the pipeline goes through an atomic write — write to a tempfile in the **same directory** as the final path, then `os.replace(tmp, final)`. The canonical entry is [`io_nc.py:atomic_to_netcdf`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/io_nc.py#L260):
 
 ```python
 tmp_fd, tmp_name = tempfile.mkstemp(dir=path.parent, suffix=".nc.tmp")
@@ -91,11 +91,11 @@ tmp_path.replace(path)
 
 **Why:** a partial write left by a crashed or SIGKILL'd job is worse than no write. A truncated NetCDF looks valid to `xr.open_dataset` (the file format doesn't have a "this is incomplete" marker) — it just has missing or zero-padded data at the tail. POSIX guarantees that `rename` on the same filesystem is atomic: readers see either the old file or the new file, never a partial one. The tempfile must be in the same directory as the target so the rename stays atomic (cross-filesystem renames degrade to copy+delete and are not atomic). On any exception, the tempfile is unlinked so no `.tmp` cruft accumulates.
 
-**How to extend:** never call `ds.to_netcdf(...)` or `path.write_text(...)` directly for any persisted artifact (target NCs, aggregated NCs, manifest.json, fabric.json). Route NetCDFs through `io_nc.atomic_to_netcdf`; route JSON through the same tempfile-then-rename pattern (see [`reconcile.py:_atomic_write`](../../src/nhf_spatial_targets/reconcile.py#L108) for the JSON variant). The exception is logs and scratch files (under `<project>/logs/` or `/tmp`) where a partial file is harmless.
+**How to extend:** never call `ds.to_netcdf(...)` or `path.write_text(...)` directly for any persisted artifact (target NCs, aggregated NCs, manifest.json, fabric.json). Route NetCDFs through `io_nc.atomic_to_netcdf`; route JSON through the same tempfile-then-rename pattern (see [`reconcile.py:_atomic_write`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/reconcile.py#L108) for the JSON variant). The exception is logs and scratch files (under `<project>/logs/` or `/tmp`) where a partial file is harmless.
 
 ## 6. Manifest read-merge-write under `flock`
 
-**What:** `manifest.json` lives at the project root and accumulates provenance for every fetch, aggregation, and target run. Multiple SLURM array tasks can hit it concurrently (e.g. 14 parallel fetch jobs each appending a source entry). The pipeline serializes those writes with a POSIX advisory lock. Pattern from [`reconcile.py:_apply_records`](../../src/nhf_spatial_targets/reconcile.py#L119-L180):
+**What:** `manifest.json` lives at the project root and accumulates provenance for every fetch, aggregation, and target run. Multiple SLURM array tasks can hit it concurrently (e.g. 14 parallel fetch jobs each appending a source entry). The pipeline serializes those writes with a POSIX advisory lock. Pattern from [`reconcile.py:_apply_records`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/reconcile.py#L119-L180):
 
 ```python
 with open(lock_path, "a") as lock_f:
@@ -112,7 +112,7 @@ with open(lock_path, "a") as lock_f:
 
 ## 7. Fingerprint-based cache invalidation
 
-**What:** Year-chunked target builders (SCA, SWE) write per-year intermediate NetCDFs to `<project>/targets/.sca_intermediates/<year>.nc` and stitch them on the next run. To know when a per-year intermediate is stale, each intermediate carries two global attrs: `config_fingerprint` (a hash of the active target config) and `code_version` (the package `__version__`). The skip-or-rebuild decision is in [`targets/_common.py:should_skip_year_build`](../../src/nhf_spatial_targets/targets/_common.py).
+**What:** Year-chunked target builders (SCA, SWE) write per-year intermediate NetCDFs to `<project>/targets/.sca_intermediates/<year>.nc` and stitch them on the next run. To know when a per-year intermediate is stale, each intermediate carries two global attrs: `config_fingerprint` (a hash of the active target config) and `code_version` (the package `__version__`). The skip-or-rebuild decision is in [`targets/_common.py:should_skip_year_build`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/targets/_common.py).
 
 ```python
 # In targets/sca.py: build() iterates years; for each year,
@@ -122,9 +122,9 @@ with open(lock_path, "a") as lock_f:
 # file, rebuild the year.
 ```
 
-**Why:** a 25-year daily target rebuild is expensive (hours of HRU-aggregation reads), and most edits only change one or two years' worth of computation. Fingerprinting lets the operator change `ci_threshold` in `config.yml`, rerun `pixi run run-sca`, and have just the affected years rebuild — without having to manually `rm` the intermediates dir. The same mechanism handles downward period changes (the orphan-pruning helper deletes per-year files outside the new period; see [`prune_orphan_year_intermediates`](../../src/nhf_spatial_targets/targets/_common.py) and PR #216).
+**Why:** a 25-year daily target rebuild is expensive (hours of HRU-aggregation reads), and most edits only change one or two years' worth of computation. Fingerprinting lets the operator change `ci_threshold` in `config.yml`, rerun `pixi run run-sca`, and have just the affected years rebuild — without having to manually `rm` the intermediates dir. The same mechanism handles downward period changes (the orphan-pruning helper deletes per-year files outside the new period; see [`prune_orphan_year_intermediates`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/targets/_common.py) and PR #216).
 
-**The geoscientist gotcha:** the `code_version` tag is tied to the package `__version__` string in [`src/nhf_spatial_targets/__init__.py`](../../src/nhf_spatial_targets/__init__.py). If you edit a target builder's logic **without** bumping `__version__`, the fingerprint won't change and your edit will not take effect on cached intermediates. You must `rm -rf <project>/targets/.<target>_intermediates/` to force a rebuild. The SCA and SWE module docstrings document this; the operator-visible WARNING does not fire in this case because the fingerprint sees no change. Treat mid-version builder edits as a manual-cache-clear operation until a smarter fingerprint scheme lands.
+**The geoscientist gotcha:** the `code_version` tag is tied to the package `__version__` string in [`src/nhf_spatial_targets/__init__.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/__init__.py). If you edit a target builder's logic **without** bumping `__version__`, the fingerprint won't change and your edit will not take effect on cached intermediates. You must `rm -rf <project>/targets/.<target>_intermediates/` to force a rebuild. The SCA and SWE module docstrings document this; the operator-visible WARNING does not fire in this case because the fingerprint sees no change. Treat mid-version builder edits as a manual-cache-clear operation until a smarter fingerprint scheme lands.
 
 ## Where this fits
 

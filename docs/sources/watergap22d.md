@@ -25,7 +25,7 @@ spatial subsetting happens at aggregation time, not at fetch.
 ## Access path — pangaeapy
 
 No NASA/CDS credentials needed. The fetch module
-[`fetch/pangaea.py`](../../src/nhf_spatial_targets/fetch/pangaea.py)
+[`fetch/pangaea.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/fetch/pangaea.py)
 uses [pangaeapy](https://github.com/pangaea-data-publisher/pangaeapy)
 to download the file by row index in the PanDataSet table (catalog
 `file_index: 30`). The download is sanity-checked against the
@@ -61,7 +61,7 @@ nhf-targets fetch watergap22d --project-dir <project> --period 1979/2016
 ```
 
 Or via the general SLURM fetch array, index 6
-([`slurm/shared/fetch_all.slurm`](../../slurm/shared/fetch_all.slurm)).
+([`slurm/shared/fetch_all.slurm`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/slurm/shared/fetch_all.slurm)).
 
 Note the **publisher dataset ends 2016**; `period` end-years past
 2016 are silently truncated at aggregation time (the file simply has
@@ -109,5 +109,5 @@ per-fabric decision, not a pipeline bug.
 - `RuntimeError: Failed to connect to PANGAEA dataset 918447` — check
   <https://doi.pangaea.de/10.1594/PANGAEA.918447> in a browser; the
   server is occasionally offline.
-- Catalog reference: see [`catalog/sources.yml`](../../catalog/sources.yml)
+- Catalog reference: see [`catalog/sources.yml`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/catalog/sources.yml)
   `watergap22d:` block for the file index and DOI.

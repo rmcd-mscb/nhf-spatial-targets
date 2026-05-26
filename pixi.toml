@@ -91,6 +91,29 @@ alsa-lib = ">=1.2"
 # silent-failure-hunter review of #209.
 LD_LIBRARY_PATH = "$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
+[feature.docs.dependencies]
+# MkDocs + Material documentation site (local browsing of docs/architecture,
+# docs/sources, docs/references + auto-generated API reference via
+# mkdocstrings). Kept in its own feature (not dev) so operators who only
+# run the pipeline don't pay the ~30 MB install cost unless they want to
+# browse the docs locally.
+#
+# Usage:
+#     pixi install -e docs         # ~30 MB of pure-python wheels
+#     pixi run docs-serve          # http://127.0.0.1:8000 with hot reload
+#     pixi run docs-build          # one-shot build (CI-style; --strict by default)
+#
+# mkdocstrings-python reads numpy-style docstrings from src/ to render
+# the API reference pages under docs/api/. docs-serve watches src/ so a
+# docstring edit live-refreshes the rendered API page.
+mkdocs = ">=1.6"
+mkdocs-material = ">=9.5"
+mkdocstrings = ">=0.26"
+mkdocstrings-python = ">=1.11"
+# mkdocstrings-python uses ruff to format the API-page function signatures
+# (otherwise it emits a one-line INFO complaint and renders signatures unformatted).
+ruff = ">=0.4"
+
 [environments]
 default = { solve-group = "default" }
 dev = { features = ["dev"], solve-group = "default" }
@@ -98,6 +121,9 @@ dev = { features = ["dev"], solve-group = "default" }
 # `pixi run -e marp marp-setup`), so it solves cleanly on every workspace
 # platform without needing the default solve-group's deeper pin matrix.
 marp = { features = ["marp"], solve-group = "marp" }
+# Docs feature is pure-python (mkdocs + material + mkdocstrings); solves
+# cleanly in the default solve-group alongside dev.
+docs = { features = ["docs"], solve-group = "default" }
 
 [tasks]
 # Initialise a project.
@@ -200,3 +226,14 @@ render-figures-targets      = { cmd = "python scripts/render_figures.py --group 
 [feature.marp.tasks]
 marp-setup = { cmd = "npx --yes puppeteer browsers install chrome-headless-shell", description = "One-shot: download chrome-headless-shell via puppeteer (smaller + fewer system deps than full chrome — works on bare HPC)" }
 render-deck = { cmd = "python scripts/render_deck.py", description = "Render a Marp .slides.md deck (PDF/HTML/server) via marp-cli" }
+
+# MkDocs + Material local documentation site (issue #233). Pure-python
+# install (~30 MB); no system deps. mkdocstrings consumes the existing
+# numpy-style docstrings from src/ to render API reference pages.
+#
+#     pixi install -e docs
+#     pixi run docs-serve          # http://127.0.0.1:8000 with hot reload
+#     pixi run docs-build          # one-shot build (--strict catches broken links)
+[feature.docs.tasks]
+docs-serve = { cmd = "mkdocs serve --watch src", description = "Serve docs locally at http://127.0.0.1:8000 with hot reload on docs/ and src/" }
+docs-build = { cmd = "mkdocs build --strict", description = "Build the docs site once; --strict fails on broken internal links" }

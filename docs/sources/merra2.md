@@ -60,7 +60,7 @@ nhf-targets fetch merra2 --project-dir <project> --period 1980/2025
 ```
 
 Or via the general SLURM fetch array, index 2
-([`slurm/shared/fetch_all.slurm`](../../slurm/shared/fetch_all.slurm)).
+([`slurm/shared/fetch_all.slurm`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/slurm/shared/fetch_all.slurm)).
 
 Fully **incremental**: months already recorded in `manifest.json` are
 skipped at search-result filter time, so a re-run after adding new
@@ -71,7 +71,7 @@ to preserve sibling-source provenance (issue #97).
 ## HPC memory/time notes
 
 - 1980-2025 ≈ 540 monthly granules at ~10 MB each (~5-8 GB total raw,
-  see [README.md](../../README.md) §Datastore Storage Estimates).
+  see [README.md](../getting-started.md) §Datastore Storage Estimates).
 - The general 128 GB / 24 h fetch SLURM allocation is comfortable;
   most runs finish within a few hours, dominated by network throughput
   to GES DISC.
@@ -95,6 +95,6 @@ cross-checks.
 - `Partial download: got N of M granules` warning — earthaccess saw
   fewer files arrive than CMR listed. The consolidate step proceeds
   with the files on disk; re-run to fill the gap.
-- Catalog reference: see [`catalog/sources.yml`](../../catalog/sources.yml)
+- Catalog reference: see [`catalog/sources.yml`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/catalog/sources.yml)
   `merra2:` block for variable definitions, the `layer_depth_notes`
   block on layer thicknesses, and the GES DISC links.

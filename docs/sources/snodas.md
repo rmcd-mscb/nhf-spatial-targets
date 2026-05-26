@@ -189,8 +189,8 @@ per year, `id_col` ascending (issue #93), CF-1.6 globals.
 open time — *before* the aggregator sees pixels. There is no
 `pre_aggregate_hook` constructing an explicit per-pixel mask, so the
 NaN-poisoning concern that motivates `masked_mean` in
-[`aggregate/mod10c1.py`](../../src/nhf_spatial_targets/aggregate/mod10c1.py)
-/ [`aggregate/mod16a2.py`](../../src/nhf_spatial_targets/aggregate/mod16a2.py)
+[`aggregate/mod10c1.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/aggregate/mod10c1.py)
+/ [`aggregate/mod16a2.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/aggregate/mod16a2.py)
 doesn't apply. Per CLAUDE.md's Aggregation Transformation Policy,
 this is the "geometric partial coverage / true upstream gaps" case
 — `mean` is correct, and HRUs that straddle the CONUS edge become

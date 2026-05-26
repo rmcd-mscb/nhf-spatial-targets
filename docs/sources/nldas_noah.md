@@ -32,7 +32,7 @@ already CONUS-clipped so no further spatial subsetting is needed.
 
 Granule filenames embed `AYYYYMM` (e.g.
 `NLDAS_NOAH0125_M.A200101.020.grb.SUB.nc4`). The shared NLDAS fetch
-module ([`fetch/nldas.py`](../../src/nhf_spatial_targets/fetch/nldas.py))
+module ([`fetch/nldas.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/fetch/nldas.py))
 handles both NOAH and MOSAIC variants behind the per-source key.
 
 ## On-disk layout
@@ -50,7 +50,7 @@ nhf-targets fetch nldas-noah --project-dir <project> --period 1979/2025
 ```
 
 Or via the general SLURM fetch array, index 4
-([`slurm/shared/fetch_all.slurm`](../../slurm/shared/fetch_all.slurm)).
+([`slurm/shared/fetch_all.slurm`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/slurm/shared/fetch_all.slurm)).
 
 **Incremental**: months already recorded in `manifest.json` are
 skipped at search-result filter time. Manifest writes are
@@ -59,7 +59,7 @@ read-merge-write.
 ## HPC memory/time notes
 
 - 1979-2025 ≈ 564 monthly CONUS granules, ~2-4 GB raw total (see
-  [README.md](../../README.md) §Datastore Storage Estimates).
+  [README.md](../getting-started.md) §Datastore Storage Estimates).
 - The general 128 GB / 24 h fetch SLURM allocation is far more than
   needed; full-period runs finish in 1-2 hours.
 
@@ -82,5 +82,5 @@ per year, in native `kg m-2`.
   `aggregate/nldas_*.py` adapter writes a separate aggregated NC and
   the multi-source min/max combination in `targets/som.py` keeps them
   distinct.
-- Catalog reference: see [`catalog/sources.yml`](../../catalog/sources.yml)
+- Catalog reference: see [`catalog/sources.yml`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/catalog/sources.yml)
   `nldas_noah:` block for variable definitions and GES DISC links.

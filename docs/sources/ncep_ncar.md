@@ -35,7 +35,7 @@ catalog, not from on-disk NetCDF attrs").
 ## Access path — direct HTTP (NOAA PSL)
 
 No authentication required. The fetch module
-[`fetch/ncep_ncar.py`](../../src/nhf_spatial_targets/fetch/ncep_ncar.py)
+[`fetch/ncep_ncar.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/fetch/ncep_ncar.py)
 constructs annual URLs from the catalog `file_pattern`:
 
 ```
@@ -68,7 +68,7 @@ nhf-targets fetch ncep-ncar --project-dir <project> --period 1979/2025
 ```
 
 Or via the general SLURM fetch array, index 5
-([`slurm/shared/fetch_all.slurm`](../../slurm/shared/fetch_all.slurm)).
+([`slurm/shared/fetch_all.slurm`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/slurm/shared/fetch_all.slurm)).
 
 **Incremental**: years already recorded in `manifest.json` are skipped
 before any HTTP work. Manifest writes are read-merge-write.
@@ -113,5 +113,5 @@ units-correction in the variable attrs).
   attrs drift after corrections. The aggregated NC is written by
   `apply_cf_metadata` and should agree with the catalog after the
   next aggregator run.
-- Catalog reference: see [`catalog/sources.yml`](../../catalog/sources.yml)
+- Catalog reference: see [`catalog/sources.yml`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/catalog/sources.yml)
   `ncep_ncar:` block for the `kg/m2`-mislabel notes block.

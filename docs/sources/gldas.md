@@ -30,7 +30,7 @@ conversions live in `targets/`).
 ## Access path — NASA earthaccess
 
 Authenticated via `earthaccess.login(strategy="netrc")` from
-[`fetch/_auth.py`](../../src/nhf_spatial_targets/fetch/_auth.py). Requires
+[`fetch/_auth.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/fetch/_auth.py). Requires
 a NASA Earthdata Login account with the GES DISC application linked
 (see <https://disc.gsfc.nasa.gov/earthdata-login>). Credentials are
 materialized into `~/.netrc` by
@@ -53,7 +53,7 @@ if needed.
   gldas_noah_v21_monthly.nc               # consolidated, clipped, CF-1.6
 ```
 
-The consolidator (in [`fetch/gldas.py`](../../src/nhf_spatial_targets/fetch/gldas.py))
+The consolidator (in [`fetch/gldas.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/fetch/gldas.py))
 runs `derive_runoff_total → clip_to_bbox → apply_cf_metadata` (the
 shared CF helper from `fetch/consolidate.py`) and writes atomically
 via a `.nc.tmp` rename.
@@ -65,7 +65,7 @@ nhf-targets fetch gldas --project-dir <project> --period 2000/2025
 ```
 
 Or via the general SLURM fetch array, index 1
-([`slurm/shared/fetch_all.slurm`](../../slurm/shared/fetch_all.slurm)).
+([`slurm/shared/fetch_all.slurm`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/slurm/shared/fetch_all.slurm)).
 
 The function fails fast (raises `ValueError`) if `earthaccess.search_data`
 returns no granules, and raises `RuntimeError` on partial downloads —
@@ -96,6 +96,6 @@ one per year.
   0/360) mismatch. The clipper converts 0/360→-180/180 automatically;
   if this raises anyway, file an issue with the offending file's
   lon/lat range from the error message.
-- Catalog reference: see [`catalog/sources.yml`](../../catalog/sources.yml)
+- Catalog reference: see [`catalog/sources.yml`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/catalog/sources.yml)
   `gldas_noah_v21_monthly:` block for the `_acc` convention note and
   the runoff target's mm-conversion factor.

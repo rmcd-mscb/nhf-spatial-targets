@@ -4,7 +4,7 @@ Short reference for agents working on `src/nhf_spatial_targets/targets/` and
 `catalog/variables.yml`. Authoritative source: Hay et al. (2023),
 **Techniques and Methods 6-B10**, doi:[10.3133/tm6B10](https://doi.org/10.3133/tm6B10).
 
-- Full PDF: [`tm6b10.pdf`](./tm6b10.pdf) (62 pp., 13 MB)
+- Full PDF: [tm6b10.pdf](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/docs/references/tm6b10.pdf) (62 pp., 13 MB)
 - Searchable markdown: [`tm6b10.md`](./tm6b10.md) (pymupdf4llm; figures/equations
   marked `==> picture intentionally omitted <==`)
 

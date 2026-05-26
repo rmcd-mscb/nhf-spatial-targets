@@ -12,7 +12,7 @@ tells you to route through `io_nc` instead, and why.
 ## TL;DR
 
 - **Never call `ds.to_netcdf(...)` directly.** Use
-  [`io_nc.build_encoding`](../../src/nhf_spatial_targets/io_nc.py) to build the
+  [`io_nc.build_encoding`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/io_nc.py) to build the
   encoding dict and `io_nc.atomic_to_netcdf` to write it. One module owns the
   policy so a future codec change is a one-file edit.
 - **Chunk `(time, hru)` data variables `(timesteps_per_file, chunk_hru)`**,
@@ -115,9 +115,9 @@ concern, and that is where the policy pays off.
 
 ## Cross-references
 
-- [`io_nc.py`](../../src/nhf_spatial_targets/io_nc.py) — `build_encoding` /
+- [`io_nc.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/io_nc.py) — `build_encoding` /
   `atomic_to_netcdf` (the single policy home).
-- [`rechunk.py`](../../src/nhf_spatial_targets/rechunk.py) — the backfill CLI.
+- [`rechunk.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/rechunk.py) — the backfill CLI.
 - [transformation-pipeline.md](transformation-pipeline.md) — *where* transforms
   live (this doc is *how* NCs are encoded); canonical `id_col`-ascending row
   order (issue #93) is preserved through all of this.
