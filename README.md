@@ -448,7 +448,14 @@ nhf-spatial-targets/
 ├── docs/
 │   ├── architecture/        # transformation-pipeline, nc-encoding, python-patterns
 │   ├── references/          # TM 6-B10 crib sheet, lessons-learned, known-gaps-resolved
-│   ├── sources/             # per-source operator notes (manual-staging caveats etc.)
+│   ├── sources/             # per-source operator notes (one per catalog source)
+│   │                        #   runoff: era5_land.md, gldas.md
+│   │                        #   AET: ssebop.md, mod16a2_v061.md
+│   │                        #   recharge: reitz2017.md, watergap22d.md
+│   │                        #   soil moisture: merra2.md, ncep_ncar.md, nldas_mosaic.md, nldas_noah.md
+│   │                        #   snow-covered area: mod10c1_v061.md
+│   │                        #   SWE: daymet.md, snodas.md, margulis_wus_sr.md
+│   │                        #   integrated water balance: mwbm_climgrid.md
 │   └── figures/             # rendered inspection panels (gitignored except small samples)
 ├── notebooks/
 │   ├── consolidated/        # gridded source sanity checks (pre-aggregation)
