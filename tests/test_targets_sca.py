@@ -1184,7 +1184,7 @@ def test_stitch_fails_loud_on_missing_in_period_file(
     computed-from-year_specs input list, the missing file surfaces
     as an error naming the path.
     """
-    import nhf_spatial_targets.targets.sca as sca_mod
+    import nhf_spatial_targets.targets._driver as driver_mod
     from nhf_spatial_targets.targets.sca import build
     from nhf_spatial_targets.workspace import load
 
@@ -1193,14 +1193,14 @@ def test_stitch_fails_loud_on_missing_in_period_file(
     project = load(workdir)
     build(project)
     intermediates_dir = project.targets_dir() / ".sca_intermediates"
-    # Delete the 2006 intermediate + the stitched output. Then patch
-    # _build_year to a no-op so the missing 2006 intermediate stays
-    # missing through the second build's stitch call (otherwise the
-    # build loop's should_skip_year_build would see the missing file
-    # and rebuild it).
+    # Delete the 2006 intermediate + the stitched output. Then patch the
+    # driver's per-year write to a no-op so the missing 2006 intermediate
+    # stays missing through the second build's stitch call (2005 + 2007
+    # hit should_skip_year_build's healthy-cache branch and don't write;
+    # 2006 would otherwise be rebuilt, but the no-op write swallows it).
     (intermediates_dir / "sca_targets_2006.nc").unlink()
     (project.targets_dir() / "sca_targets.nc").unlink()
-    monkeypatch.setattr(sca_mod, "_build_year", lambda **_kw: None)
+    monkeypatch.setattr(driver_mod, "write_bounds_target", lambda **_kw: None)
 
     project = load(workdir)
     with pytest.raises((FileNotFoundError, OSError), match="2006"):
