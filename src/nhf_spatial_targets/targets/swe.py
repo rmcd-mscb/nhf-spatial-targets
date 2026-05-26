@@ -55,38 +55,31 @@ version string.
 **Period-shrink defense.** Downward changes to ``period`` are
 handled automatically by ``prune_orphan_year_intermediates`` plus a
 ``iter_period_years``-derived stitch input list — see the helper
-docstring in ``_common.py`` (#211).
+docstring in ``targets/_intermediates.py`` (#211).
 """
 
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import xarray as xr
 
 from nhf_spatial_targets import catalog
-from nhf_spatial_targets.targets._common import (
-    INTERMEDIATE_CODE_VERSION_ATTR,
-    INTERMEDIATE_CONFIG_FINGERPRINT_ATTR,
-    SourceShim,
+from nhf_spatial_targets.targets._adapter import (
+    SourceLoaderResult,
+    TargetAdapter,
+)
+from nhf_spatial_targets.targets._combine import multi_source_nanminmax
+from nhf_spatial_targets.targets._io import (
     check_hru_coords,
-    code_version_fingerprint,
-    compute_hru_centroids,
-    iter_period_years,
-    multi_source_nanminmax,
-    parse_period,
-    prune_orphan_year_intermediates,
     read_aggregated_source,
     reindex_to_day_start,
+)
+from nhf_spatial_targets.targets._shims import (
+    SourceShim,
     shims_by_config_label,
-    should_skip_year_build,
-    stitch_year_chunks_to_target,
-    target_config_fingerprint,
     validate_source_units,
-    write_bounds_target,
 )
 from nhf_spatial_targets.workspace import Project
 
@@ -138,10 +131,7 @@ def margulis_to_mm(da: xr.DataArray) -> xr.DataArray:
 # (the on-disk storage key, matching aggregate/era5_land.py:ADAPTER_SD's
 # output dir under <project>/data/aggregated/era5_land_sd/) but
 # ``config_label="era5_land"`` so the project config can keep a single
-# logical "era5_land" entry in ``snow_water_equivalent.sources``. The
-# label→shim map is derived from this tuple at module load via
-# :func:`shims_by_config_label` — there is no parallel dict to keep in
-# sync.
+# logical "era5_land" entry in ``snow_water_equivalent.sources``.
 SHIMS: tuple[SourceShim, ...] = (
     SourceShim(
         source_key="daymet",
@@ -184,23 +174,14 @@ def mm_to_inches(da: xr.DataArray) -> xr.DataArray:
 
 
 # ---------------------------------------------------------------------------
-# Fabric scope filter
+# Fabric scope + availability filters (single-pass before per-year loop)
 # ---------------------------------------------------------------------------
 
 
 def _filter_sources_by_fabric_scope(
     requested: list[str], fabric_token: str | None
 ) -> list[str]:
-    """Drop sources whose ``fabric_scope`` excludes this project's fabric.
-
-    Reads each requested source's ``catalog.source(...)['fabric_scope']``
-    (validated via :func:`catalog.validate_fabric_scope`) and keeps only
-    those whose ``fabrics`` list contains ``fabric_token``. Sources with
-    no ``fabric_scope`` block pass through unconditionally. A ``None``
-    fabric token causes every fabric-scoped source to be dropped, which
-    is the safe default for projects that haven't explicitly identified
-    their fabric.
-    """
+    """Drop sources whose ``fabric_scope`` excludes this project's fabric."""
     kept: list[str] = []
     for src in requested:
         meta = catalog.source(src)
@@ -225,16 +206,7 @@ def _filter_sources_by_fabric_scope(
 def _filter_sources_by_availability(
     project: Project, requested: list[str], shims: dict[str, SourceShim]
 ) -> list[str]:
-    """Drop sources whose aggregated NC directory is empty or missing.
-
-    A source listed in ``snow_water_equivalent.sources`` but never
-    aggregated (e.g. Margulis on an Oregon-token project where
-    ``agg margulis-wus-sr`` hasn't been run yet) would otherwise crash
-    the per-year loop with ``FileNotFoundError`` on the first iteration.
-    Pre-flighting the check here lets the build proceed against whatever
-    sources *are* aggregated, with a single WARNING per missing source
-    instead of a per-year repeat.
-    """
+    """Drop sources whose aggregated NC directory is empty or missing."""
     kept: list[str] = []
     for src in requested:
         shim = shims[src]
@@ -256,39 +228,21 @@ def _filter_sources_by_availability(
     return kept
 
 
-# ---------------------------------------------------------------------------
-# Orchestration
-# ---------------------------------------------------------------------------
+def _resolve_sources(project: Project) -> tuple[list[str], list[str], str | None]:
+    """Resolve the effective source list for the current build.
 
-
-def build(project: Project) -> None:
-    """Build the SWE calibration target.
-
-    Reads each enabled source's per-year aggregated NCs, harmonizes time
-    coords onto a master day-start index over
-    ``snow_water_equivalent.period``, converts each to inches, combines
-    via NaN-aware min/max, and writes a CF-1.6 NetCDF. If
-    ``snow_water_equivalent.nn_fill`` is True, additionally writes
-    ``<output>_nn_filled.nc``.
+    Returns ``(effective_sources, requested_sources, fabric_token)``. Cached
+    by the per-year loader's first call so the filter loops don't re-run
+    every year (the inputs are config-derived and constant across years).
     """
     swe_cfg = project.target("snow_water_equivalent")
-    period = parse_period(swe_cfg["period"])
-    requested_sources = list(swe_cfg["sources"])
+    requested = list(swe_cfg["sources"])
     fabric_cfg = project.config.get("fabric") or {}
     fabric_token = fabric_cfg.get("token")
     shims = shims_by_config_label(SHIMS)
 
-    # Fail loud at startup if a requested source has no matching shim or
-    # if a catalog cf_units string has drifted from a shim's hardcoded
-    # conversion factor (issue #130). Run on `requested_sources` (before
-    # fabric-scope filtering) so an unknown source surfaces a clear
-    # "no matching SourceShim" message rather than a KeyError from the
-    # catalog lookup inside `_filter_sources_by_fabric_scope`.
-    validate_source_units(SHIMS, requested_sources)
+    validate_source_units(SHIMS, requested)
 
-    # Validate the project's fabric token if set, to catch typos like
-    # "oregon" instead of "or" before silently filtering every fabric-
-    # scoped source out.
     if fabric_token is not None and fabric_token not in catalog.FABRIC_SCOPE_TOKENS:
         raise ValueError(
             f"fabric.token={fabric_token!r} is not a recognised fabric token. "
@@ -296,10 +250,10 @@ def build(project: Project) -> None:
             f"fabric, extend catalog.FABRIC_SCOPE_TOKENS."
         )
 
-    sources = _filter_sources_by_fabric_scope(requested_sources, fabric_token)
+    sources = _filter_sources_by_fabric_scope(requested, fabric_token)
     if not sources:
         raise ValueError(
-            f"snow_water_equivalent.sources={requested_sources!r} resolved to "
+            f"snow_water_equivalent.sources={requested!r} resolved to "
             f"zero sources after fabric_scope filtering (fabric token="
             f"{fabric_token!r}). Add a non-scoped source or set fabric.token."
         )
@@ -307,197 +261,39 @@ def build(project: Project) -> None:
     sources = _filter_sources_by_availability(project, sources, shims)
     if not sources:
         raise ValueError(
-            f"snow_water_equivalent.sources={requested_sources!r} resolved to "
+            f"snow_water_equivalent.sources={requested!r} resolved to "
             f"zero sources after dropping unaggregated sources. Run "
             f"'pixi run nhf-targets agg <source> --project-dir {project.workdir}' "
             f"for at least one requested source before building the SWE target."
         )
 
-    logger.info(
-        "Building SWE target: %d sources (%s) [requested %d (%s)], "
-        "period %s..%s, fabric=%s (token=%r)",
-        len(sources),
-        ",".join(sources),
-        len(requested_sources),
-        ",".join(requested_sources),
-        period[0],
-        period[1],
-        project.config["fabric"]["path"],
-        fabric_token,
-    )
-
-    # 1. Per-HRU centroids (only centroids needed for NN-fill — SWE has
-    # no per-HRU-area unit conversion). Computed once and reused across
-    # every per-year build to amortise the fabric load (~361k polygons
-    # on gfv2).
-    hru_meta = compute_hru_centroids(project)
-    id_col = project.id_col
-    fabric_hru_ids = hru_meta.index.values
-
-    # 2. Cache fingerprints — see should_skip_year_build (#213).
-    config_fp = target_config_fingerprint(project, "snow_water_equivalent")
-    code_ver = code_version_fingerprint()
-
-    # 3. Common global attrs (same on per-year intermediates and the
-    # stitched final NC).
-    extra_attrs = {
-        "source": "; ".join(shims[s].description for s in sources),
-        "references": (
-            "Hay et al. 2022, doi:10.3133/tm6B10; Markstrom et al. 2015, TM 6-B7"
-        ),
-        "fabric": project.config["fabric"]["path"],
-        "fabric_sha256": project.fabric.get("sha256", ""),
-        "fabric_token": fabric_token or "",
-        "period": swe_cfg["period"],
-        "area_crs": project.area_crs,
-        INTERMEDIATE_CONFIG_FINGERPRINT_ATTR: config_fp,
-        INTERMEDIATE_CODE_VERSION_ATTR: code_ver,
-    }
-
-    # 3. Year-chunked build. SWE is the only daily-cadence multi-source
-    # target in the pipeline; materialising the full assembled Dataset
-    # in one shot blows past the large-mem partition (~575 GB peak for
-    # 46 yrs × gfv2 × 3 sources). The year-chunked path keeps peak
-    # bounded by one year's worth of data regardless of period length.
-    year_specs = iter_period_years(period[0], period[1])
-    if not year_specs:
-        raise ValueError(
-            f"snow_water_equivalent.period {swe_cfg['period']} produces "
-            f"no years to build."
-        )
-
-    intermediates_dir = project.targets_dir() / ".swe_intermediates"
-    intermediates_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(
-        "Year-chunked build: %d years, intermediates -> %s "
-        "(retained after stitch for forensic value; rm to reclaim disk)",
-        len(year_specs),
-        intermediates_dir,
-    )
-
-    nn_fill = bool(swe_cfg["nn_fill"])
-    nn_max_candidates = int(swe_cfg["nn_max_candidates"])
-
-    for year, year_start, year_end in year_specs:
-        _build_year(
-            project=project,
-            year=year,
-            year_period=(year_start, year_end),
-            sources=sources,
-            shims=shims,
-            hru_meta=hru_meta,
-            fabric_hru_ids=fabric_hru_ids,
-            id_col=id_col,
-            n_sources_count=len(sources),
-            extra_attrs=extra_attrs,
-            intermediates_dir=intermediates_dir,
-            nn_fill=nn_fill,
-            nn_max_candidates=nn_max_candidates,
-            config_fingerprint=config_fp,
-            code_version=code_ver,
-        )
-
-    # 4. Prune orphans + compute stitch input from year_specs (#211).
-    in_period_years = {year for year, _, _ in year_specs}
-    prune_orphan_year_intermediates(
-        intermediates_dir,
-        "swe_targets",
-        in_period_years,
-        target_label="swe",
-        logger=logger,
-    )
-
-    # 5. Stitch per-year intermediates into the canonical single-file
-    # outputs. Dask-streamed so peak memory stays bounded.
-    output_path = project.targets_dir() / swe_cfg["output_file"]
-    unfilled_files = [
-        intermediates_dir / f"swe_targets_{year}.nc" for year, _, _ in year_specs
-    ]
-    stitch_year_chunks_to_target(
-        unfilled_files,
-        output_path,
-        title="NHM SWE calibration target (lower/upper bounds in inches)",
-        extra_global_attrs=extra_attrs,
-        sort_dim=id_col,
-    )
-
-    if nn_fill:
-        nn_files = [
-            intermediates_dir / f"swe_targets_{year}_nn_filled.nc"
-            for year, _, _ in year_specs
-        ]
-        nn_path = output_path.with_name(
-            output_path.stem + "_nn_filled" + output_path.suffix
-        )
-        nn_attrs = dict(extra_attrs)
-        nn_attrs["nn_fill_max_candidates"] = nn_max_candidates
-        nn_attrs["nn_fill_distance_crs"] = project.area_crs
-        stitch_year_chunks_to_target(
-            nn_files,
-            nn_path,
-            title="NHM SWE calibration target (NN-filled, inches)",
-            extra_global_attrs=nn_attrs,
-            sort_dim=id_col,
-        )
+    return sources, requested, fabric_token
 
 
-def _build_year(
+def _load_year(
     *,
     project: Project,
-    year: int,
-    year_period: tuple[str, str],
-    sources: list[str],
-    shims: dict[str, SourceShim],
-    hru_meta: pd.DataFrame,
-    fabric_hru_ids: np.ndarray,
+    adapter: TargetAdapter,
+    period: tuple[str, str],
+    hru_meta,
+    fabric_hru_ids,
     id_col: str,
-    n_sources_count: int,
-    extra_attrs: dict,
-    intermediates_dir: Path,
-    nn_fill: bool,
-    nn_max_candidates: int,
-    config_fingerprint: str,
-    code_version: str,
-) -> None:
-    """Build SWE bounds for one calendar year and write per-year NCs.
+    year_context,
+) -> SourceLoaderResult:
+    """SWE per-year loader.
 
-    Per-year contributions follow the period-union semantics — sources
-    whose coverage doesn't include this year are silently skipped (with
-    a log line) and contribute NaN to that year's bound. The ``n_sources``
-    diagnostic carries the per-cell count so downstream consumers can
-    filter, e.g., ``ds.where(ds.n_sources >= 2)`` to require 2-source
-    agreement, or ``>= 3`` to require SNODAS-era completeness.
-
-    Idempotent: if both expected per-year NCs already exist AND their
-    fingerprint global attrs match the active config + code version,
-    the build is skipped. On a fingerprint mismatch the stale
-    intermediate(s) are deleted automatically and rebuilt — see
-    :func:`nhf_spatial_targets.targets._common.should_skip_year_build`.
+    Year-scoped read of every enabled source, NaN-aware min/max combine,
+    mm → inches conversion. Per-year source-coverage gaps surface as INFO
+    logs and contribute NaN to that year's bound.
     """
-    year_unfilled = intermediates_dir / f"swe_targets_{year}.nc"
-    year_nn = intermediates_dir / f"swe_targets_{year}_nn_filled.nc"
-    expected_paths = [year_unfilled] + ([year_nn] if nn_fill else [])
-    skip, _cached_attrs = should_skip_year_build(
-        expected_paths,
-        active_config_fingerprint=config_fingerprint,
-        active_code_version=code_version,
-        target_label="swe",
-        year=year,
-        logger=logger,
-    )
-    if skip:
-        logger.info(
-            "Year %d intermediates valid (config=%s code=%s); skipping.",
-            year,
-            config_fingerprint,
-            code_version,
-        )
-        return
+    sources, requested_sources, fabric_token = _resolve_sources(project)
+    shims = shims_by_config_label(SHIMS)
+    year, year_start, year_end = year_context
 
-    year_master_idx = pd.date_range(year_period[0], year_period[1], freq="D")
+    year_master_idx = pd.date_range(year_start, year_end, freq="D")
     if len(year_master_idx) == 0:
         raise ValueError(
-            f"Year {year}: empty master index from period {year_period!r}."
+            f"Year {year}: empty master index from period ({year_start}, {year_end})."
         )
 
     year_sources: dict[str, xr.DataArray] = {}
@@ -508,7 +304,7 @@ def _build_year(
                 project,
                 shim.source_key,
                 shim.aggregated_var,
-                year_period,
+                (year_start, year_end),
                 chunks={"time": 365, id_col: -1},
             )
         except ValueError as exc:
@@ -534,23 +330,79 @@ def _build_year(
 
     lower, upper, n_sources = multi_source_nanminmax(year_sources)
 
-    write_bounds_target(
-        project=project,
+    extra_attrs = {
+        "source": "; ".join(shims[s].description for s in sources),
+        "fabric_token": fabric_token or "",
+    }
+
+    return SourceLoaderResult(
         lower=lower,
         upper=upper,
         n_sources=n_sources,
-        n_sources_count=n_sources_count,
+        n_sources_count=len(sources),
         time_index=year_master_idx,
         time_offset_unit=pd.offsets.Day(1),
-        bounds_units="inches",
-        bounds_long_name_kind="daily SWE",
-        cell_methods="time: point",
-        output_path=year_unfilled,
-        title=f"NHM SWE calibration target year {year} (intermediate)",
-        nn_title=f"NHM SWE calibration target year {year} (NN-filled intermediate)",
-        extra_global_attrs={**extra_attrs, "year_chunk": year},
-        hru_meta=hru_meta,
-        nn_fill=nn_fill,
-        nn_max_candidates=nn_max_candidates,
-        id_col=id_col,
+        extra_attrs=extra_attrs,
     )
+
+
+# ---------------------------------------------------------------------------
+# Adapter declaration
+# ---------------------------------------------------------------------------
+
+
+ADAPTER = TargetAdapter(
+    target_key="swe",
+    config_key="snow_water_equivalent",
+    cadence="daily",
+    bounds_units="inches",
+    bounds_long_name_kind="daily SWE",
+    cell_methods="time: point",
+    title="NHM SWE calibration target (lower/upper bounds in inches)",
+    nn_title="NHM SWE calibration target (NN-filled, inches)",
+    references=("Hay et al. 2022, doi:10.3133/tm6B10; Markstrom et al. 2015, TM 6-B7"),
+    year_chunked=True,
+    intermediates_subdir=".swe_intermediates",
+    intermediate_base="swe_targets",
+    source_loader=_load_year,
+    per_year_title_template="NHM SWE calibration target year {year} (intermediate)",
+    per_year_nn_title_template=(
+        "NHM SWE calibration target year {year} (NN-filled intermediate)"
+    ),
+)
+
+
+def build(project: Project) -> None:
+    """Build the SWE calibration target.
+
+    Reads each enabled source's per-year aggregated NCs, harmonizes time
+    coords onto a master day-start index over
+    ``snow_water_equivalent.period``, converts each to inches, combines
+    via NaN-aware min/max, and writes a CF-1.6 NetCDF. If
+    ``snow_water_equivalent.nn_fill`` is True, additionally writes
+    ``<output>_nn_filled.nc``.
+
+    Thin wrapper around :func:`targets._driver.build`. Source filtering
+    (fabric_scope + availability) runs inside the loader so it is
+    visible in test fixtures that drive the loader directly without the
+    full driver. Per-year contributions follow the period-union
+    semantics — sources whose coverage doesn't include a given year are
+    silently skipped (with a log line) and contribute NaN to that
+    year's bound.
+    """
+    from nhf_spatial_targets.targets._driver import build as run_driver
+
+    sources, requested, fabric_token = _resolve_sources(project)
+    swe_cfg = project.target("snow_water_equivalent")
+    logger.info(
+        "Building SWE target: %d sources (%s) [requested %d (%s)], "
+        "period %s, fabric=%s (token=%r)",
+        len(sources),
+        ",".join(sources),
+        len(requested),
+        ",".join(requested),
+        swe_cfg["period"],
+        project.config["fabric"]["path"],
+        fabric_token,
+    )
+    run_driver(ADAPTER, project)

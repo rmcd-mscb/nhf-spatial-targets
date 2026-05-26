@@ -26,17 +26,20 @@ import logging
 import pandas as pd
 import xarray as xr
 
-from nhf_spatial_targets.targets._common import (
-    SourceShim,
+from nhf_spatial_targets.targets._adapter import (
+    SourceLoaderResult,
+    TargetAdapter,
+)
+from nhf_spatial_targets.targets._combine import multi_source_nanminmax
+from nhf_spatial_targets.targets._io import (
     check_hru_coords,
-    compute_hru_area_and_centroids,
-    multi_source_nanminmax,
-    parse_period,
     read_aggregated_source,
     reindex_to_month_start,
+)
+from nhf_spatial_targets.targets._shims import (
+    SourceShim,
     shims_by_key,
     validate_source_units,
-    write_bounds_target,
 )
 from nhf_spatial_targets.workspace import Project
 
@@ -128,21 +131,21 @@ def mm_per_month_to_cfs(da: xr.DataArray, hru_area_m2: xr.DataArray) -> xr.DataA
 
 
 # ---------------------------------------------------------------------------
-# Orchestration
+# Source loader
 # ---------------------------------------------------------------------------
 
 
-def build(project: Project) -> None:
-    """Build the runoff calibration target.
-
-    Reads each enabled source's per-year aggregated NCs, harmonizes time
-    coords onto a master month-start index over ``runoff.period``,
-    converts each to cfs using per-HRU area, combines via NaN-aware
-    min/max, and writes a CF-1.6 NetCDF. If ``runoff.nn_fill`` is True,
-    additionally writes ``runoff_targets_nn_filled.nc``.
-    """
-    runoff_cfg = project.target("runoff")
-    period = parse_period(runoff_cfg["period"])
+def _load(
+    *,
+    project: Project,
+    adapter: TargetAdapter,
+    period: tuple[str, str],
+    hru_meta,
+    fabric_hru_ids,
+    id_col: str,
+    year_context=None,
+) -> SourceLoaderResult:
+    runoff_cfg = project.target(adapter.config_key)
     sources = list(runoff_cfg["sources"])
     chunk_months = int(runoff_cfg["chunk_months"])
 
@@ -159,9 +162,6 @@ def build(project: Project) -> None:
         project.config["fabric"]["path"],
     )
 
-    # 1. Per-HRU area + centroids (computed once from fabric).
-    hru_meta = compute_hru_area_and_centroids(project)
-    id_col = project.id_col
     hru_area_da = xr.DataArray(
         hru_meta["area_m2"].values,
         dims=(id_col,),
@@ -169,17 +169,12 @@ def build(project: Project) -> None:
         name="area_m2",
     )
 
-    # 2. Master month-start index over the requested period.
     master_idx = pd.date_range(period[0], period[1], freq="MS")
     if len(master_idx) == 0:
         raise ValueError(
             f"runoff.period {runoff_cfg['period']} produces no months at "
             f"freq='MS'. Check the date range."
         )
-
-    # 3. Read, convert, reindex each source.
-    # Fabric HRU IDs as a numpy array for coord-agreement checks.
-    fabric_hru_ids = hru_meta.index.values
 
     shims = shims_by_key(SHIMS)
     sources_cfs: dict[str, xr.DataArray] = {}
@@ -197,36 +192,50 @@ def build(project: Project) -> None:
         da_cfs = mm_per_month_to_cfs(da_mm, hru_area_da)
         sources_cfs[src] = reindex_to_month_start(da_cfs, master_idx)
 
-    # 4. NaN-aware combination across sources.
     lower, upper, n_sources = multi_source_nanminmax(sources_cfs)
 
-    # 5. Assemble + write (with optional NN-fill companion).
     extra_attrs = {
         "source": "; ".join(shims[s].description for s in sources),
-        "references": "Hay et al. 2022, doi:10.3133/tm6B10",
-        "fabric": project.config["fabric"]["path"],
-        "fabric_sha256": project.fabric.get("sha256", ""),
-        "period": runoff_cfg["period"],
-        "area_crs": project.area_crs,
     }
-    output_path = project.targets_dir() / runoff_cfg["output_file"]
-    write_bounds_target(
-        project=project,
+
+    return SourceLoaderResult(
         lower=lower,
         upper=upper,
         n_sources=n_sources,
         n_sources_count=len(sources),
         time_index=master_idx,
         time_offset_unit=pd.offsets.MonthBegin(1),
-        bounds_units="cfs",
-        bounds_long_name_kind="monthly runoff",
-        cell_methods="time: sum",
-        output_path=output_path,
-        title="NHM runoff calibration target (lower/upper bounds in cfs)",
-        nn_title="NHM runoff calibration target (NN-filled, cfs)",
-        extra_global_attrs=extra_attrs,
-        hru_meta=hru_meta,
-        nn_fill=runoff_cfg["nn_fill"],
-        nn_max_candidates=int(runoff_cfg["nn_max_candidates"]),
-        id_col=id_col,
+        extra_attrs=extra_attrs,
     )
+
+
+# ---------------------------------------------------------------------------
+# Adapter declaration
+# ---------------------------------------------------------------------------
+
+
+ADAPTER = TargetAdapter(
+    target_key="runoff",
+    config_key="runoff",
+    cadence="monthly",
+    bounds_units="cfs",
+    bounds_long_name_kind="monthly runoff",
+    cell_methods="time: sum",
+    title="NHM runoff calibration target (lower/upper bounds in cfs)",
+    nn_title="NHM runoff calibration target (NN-filled, cfs)",
+    needs_hru_area=True,
+    source_loader=_load,
+)
+
+
+def build(project: Project) -> None:
+    """Build the runoff calibration target.
+
+    Thin wrapper around :func:`targets._driver.build` for the runoff
+    :data:`ADAPTER`. The driver runs the read → unit-convert → NaN-aware
+    min/max → write pipeline; this module owns the per-source unit shims
+    (mm/month → cfs via per-HRU area + days_in_month).
+    """
+    from nhf_spatial_targets.targets._driver import build as run_driver
+
+    run_driver(ADAPTER, project)

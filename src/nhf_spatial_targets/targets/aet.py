@@ -37,17 +37,20 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from nhf_spatial_targets.targets._common import (
-    SourceShim,
+from nhf_spatial_targets.targets._adapter import (
+    SourceLoaderResult,
+    TargetAdapter,
+)
+from nhf_spatial_targets.targets._combine import multi_source_nanminmax
+from nhf_spatial_targets.targets._io import (
     check_hru_coords,
-    compute_hru_centroids,
-    multi_source_nanminmax,
-    parse_period,
     read_aggregated_source,
     reindex_to_month_start,
+)
+from nhf_spatial_targets.targets._shims import (
+    SourceShim,
     shims_by_key,
     validate_source_units,
-    write_bounds_target,
 )
 from nhf_spatial_targets.workspace import Project
 
@@ -195,26 +198,24 @@ def mm_per_month_to_inches_per_day(da: xr.DataArray) -> xr.DataArray:
 
 
 # ---------------------------------------------------------------------------
-# Orchestration
+# Source loader
 # ---------------------------------------------------------------------------
 
 
-def build(project: Project) -> None:
-    """Build the AET calibration target.
-
-    Reads each enabled source's per-year aggregated NCs, harmonizes time
-    coords onto a master month-start index over ``aet.period``, converts
-    each to inches/day, combines via NaN-aware min/max, and writes a
-    CF-1.6 NetCDF. If ``aet.nn_fill`` is True, additionally writes
-    ``aet_targets_nn_filled.nc``.
-    """
-    aet_cfg = project.target("aet")
-    period = parse_period(aet_cfg["period"])
+def _load(
+    *,
+    project: Project,
+    adapter: TargetAdapter,
+    period: tuple[str, str],
+    hru_meta,
+    fabric_hru_ids,
+    id_col: str,
+    year_context=None,
+) -> SourceLoaderResult:
+    aet_cfg = project.target(adapter.config_key)
     sources = list(aet_cfg["sources"])
     chunk_months = int(aet_cfg["chunk_months"])
 
-    # Fail loud at startup if a catalog cf_units string has drifted from
-    # the per-source shim's hardcoded conversion factor (issue #130).
     validate_source_units(SHIMS, sources)
 
     logger.info(
@@ -226,12 +227,6 @@ def build(project: Project) -> None:
         project.config["fabric"]["path"],
     )
 
-    # 1. Per-HRU centroids (computed once from fabric; only centroids are
-    # needed for NN-fill — AET has no per-HRU-area unit conversion).
-    hru_meta = compute_hru_centroids(project)
-    id_col = project.id_col
-
-    # 2. Master month-start index over the requested period.
     master_idx = pd.date_range(period[0], period[1], freq="MS")
     if len(master_idx) == 0:
         raise ValueError(
@@ -239,8 +234,6 @@ def build(project: Project) -> None:
             "Check the date range."
         )
 
-    # 3. Read, convert, reindex each source.
-    fabric_hru_ids = hru_meta.index.values
     shims = shims_by_key(SHIMS)
     sources_in_day: dict[str, xr.DataArray] = {}
     for src in sources:
@@ -260,36 +253,49 @@ def build(project: Project) -> None:
         da_in_day = mm_per_month_to_inches_per_day(da_mm)
         sources_in_day[src] = reindex_to_month_start(da_in_day, master_idx)
 
-    # 4. NaN-aware combination across sources.
     lower, upper, n_sources = multi_source_nanminmax(sources_in_day)
 
-    # 5. Assemble + write (with optional NN-fill companion).
     extra_attrs = {
         "source": "; ".join(shims[s].description for s in sources),
-        "references": "Hay et al. 2022, doi:10.3133/tm6B10",
-        "fabric": project.config["fabric"]["path"],
-        "fabric_sha256": project.fabric.get("sha256", ""),
-        "period": aet_cfg["period"],
-        "area_crs": project.area_crs,
     }
-    output_path = project.targets_dir() / aet_cfg["output_file"]
-    write_bounds_target(
-        project=project,
+
+    return SourceLoaderResult(
         lower=lower,
         upper=upper,
         n_sources=n_sources,
         n_sources_count=len(sources),
         time_index=master_idx,
         time_offset_unit=pd.offsets.MonthBegin(1),
-        bounds_units="inches/day",
-        bounds_long_name_kind="monthly AET",
-        cell_methods="time: mean",
-        output_path=output_path,
-        title="NHM AET calibration target (lower/upper bounds in inches/day)",
-        nn_title="NHM AET calibration target (NN-filled, inches/day)",
-        extra_global_attrs=extra_attrs,
-        hru_meta=hru_meta,
-        nn_fill=aet_cfg["nn_fill"],
-        nn_max_candidates=int(aet_cfg["nn_max_candidates"]),
-        id_col=id_col,
+        extra_attrs=extra_attrs,
     )
+
+
+# ---------------------------------------------------------------------------
+# Adapter declaration
+# ---------------------------------------------------------------------------
+
+
+ADAPTER = TargetAdapter(
+    target_key="aet",
+    config_key="aet",
+    cadence="monthly",
+    bounds_units="inches/day",
+    bounds_long_name_kind="monthly AET",
+    cell_methods="time: mean",
+    title="NHM AET calibration target (lower/upper bounds in inches/day)",
+    nn_title="NHM AET calibration target (NN-filled, inches/day)",
+    source_loader=_load,
+)
+
+
+def build(project: Project) -> None:
+    """Build the AET calibration target.
+
+    Thin wrapper around :func:`targets._driver.build` for the AET
+    :data:`ADAPTER`. The driver runs the read → unit-convert → NaN-aware
+    min/max → write pipeline; this module owns the per-source unit shims
+    (the MOD16A2 8-day → mm/month resampler, then mm/month → inches/day).
+    """
+    from nhf_spatial_targets.targets._driver import build as run_driver
+
+    run_driver(ADAPTER, project)
