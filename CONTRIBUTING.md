@@ -41,6 +41,8 @@ pixi run -e dev test          # run full test suite
 - Ruff for lint and format (line length 88)
 - New modules in `fetch/`, `aggregate/`, `normalize/`, or `targets/` must have a corresponding `tests/test_<module>.py`
 
+If you have Python experience but limited software-engineering background and want to understand the non-obvious patterns (`if TYPE_CHECKING:`, frozen dataclass adapters, atomic NetCDF writes, `flock`-guarded manifest writes, fingerprint-based cache invalidation), read [`docs/architecture/python-patterns.md`](docs/architecture/python-patterns.md). It explains why every module looks the way it does in ~7 short sections.
+
 ## Data Sources
 
 - All source metadata lives in `catalog/sources.yml` — do not hardcode URLs or product names

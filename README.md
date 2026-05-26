@@ -446,7 +446,7 @@ nhf-spatial-targets/
 ├── config/
 │   └── pipeline.yml         # reference run configuration
 ├── docs/
-│   ├── architecture/        # transformation-pipeline policy & rationale
+│   ├── architecture/        # transformation-pipeline, nc-encoding, python-patterns
 │   ├── references/          # TM 6-B10 crib sheet, lessons-learned, known-gaps-resolved
 │   ├── sources/             # per-source operator notes (manual-staging caveats etc.)
 │   └── figures/             # rendered inspection panels (gitignored except small samples)
