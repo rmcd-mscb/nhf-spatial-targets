@@ -309,18 +309,24 @@ def publishable_sources() -> dict:
 
     A source is eligible iff:
 
-    - its ``status`` is not ``"superseded"`` — superseded sources never
-      ship (`mod16a2`, `mod10c1` v006 variants, `merra_land`,
-      `watergap22a`, etc. are catalog-archive entries only); AND
+    - it carries no ``superseded_by`` field — superseded sources never
+      ship as catalog-archive entries only (this is the same marker
+      :func:`test_every_current_source_has_status_field` uses, robust
+      against status-string variants like ``"superseded_registration_required"``); AND
     - its ``release.publishable`` is True (the default).
 
     The returned dict mirrors :func:`sources` but excludes filtered keys.
     Order is preserved from the underlying YAML to keep deterministic
     output across release builds.
+
+    Note: this function is informational on PR-A. Downstream enforcement
+    (refusing to build a release for a non-publishable source) lands with
+    PR-D/PR-E. Callers that need a hard gate should not assume this
+    function's return value is acted on yet.
     """
     out: dict = {}
     for key, src in sources().items():
-        if src.get("status") == "superseded":
+        if src.get("superseded_by") is not None:
             continue
         rb = release_block(key)
         if rb["publishable"]:
