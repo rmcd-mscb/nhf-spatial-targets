@@ -13,7 +13,7 @@ Two adapters for one upstream source:
 
 The two outputs live in separate per-source directories so the loose
 ``{source_key}_*_agg.nc`` glob in
-``targets._common.read_aggregated_source`` cannot pick up both cadences
+``targets._io.read_aggregated_source`` cannot pick up both cadences
 when a target asks for one. The daily adapter sets ``catalog_key`` and
 ``raw_dir_key`` to ``"era5_land"`` so it inherits the real source's CF
 metadata and reads from ``<datastore>/era5_land/daily/`` while still

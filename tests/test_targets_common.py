@@ -16,7 +16,7 @@ from tests.conftest import make_minimal_project, write_year_nc
 
 
 def test_read_aggregated_source_concats_per_year_nc(tmp_path: Path):
-    from nhf_spatial_targets.targets._common import read_aggregated_source
+    from nhf_spatial_targets.targets._io import read_aggregated_source
 
     workdir = make_minimal_project(tmp_path)
     src = "era5_land"
@@ -36,7 +36,7 @@ def test_read_aggregated_source_concats_per_year_nc(tmp_path: Path):
 
 
 def test_read_aggregated_source_slices_to_period(tmp_path: Path):
-    from nhf_spatial_targets.targets._common import read_aggregated_source
+    from nhf_spatial_targets.targets._io import read_aggregated_source
 
     workdir = make_minimal_project(tmp_path)
     src = "era5_land"
@@ -54,7 +54,7 @@ def test_read_aggregated_source_slices_to_period(tmp_path: Path):
 
 
 def test_read_aggregated_source_raises_when_dir_empty(tmp_path: Path):
-    from nhf_spatial_targets.targets._common import read_aggregated_source
+    from nhf_spatial_targets.targets._io import read_aggregated_source
 
     workdir = make_minimal_project(tmp_path)
     project = load(workdir)
@@ -65,7 +65,7 @@ def test_read_aggregated_source_raises_when_dir_empty(tmp_path: Path):
 
 
 def test_read_aggregated_source_raises_when_period_outside_coverage(tmp_path: Path):
-    from nhf_spatial_targets.targets._common import read_aggregated_source
+    from nhf_spatial_targets.targets._io import read_aggregated_source
 
     workdir = make_minimal_project(tmp_path)
     src = "era5_land"
@@ -79,7 +79,7 @@ def test_read_aggregated_source_raises_when_period_outside_coverage(tmp_path: Pa
 
 
 def test_read_aggregated_source_raises_diagnostic_on_missing_var(tmp_path: Path):
-    from nhf_spatial_targets.targets._common import read_aggregated_source
+    from nhf_spatial_targets.targets._io import read_aggregated_source
 
     workdir = make_minimal_project(tmp_path)
     src = "era5_land"
@@ -106,7 +106,7 @@ def _da_with_time(times, hrus=(1, 2, 3), values=None) -> xr.DataArray:
 
 
 def test_reindex_to_month_start_maps_eom_to_ms():
-    from nhf_spatial_targets.targets._common import reindex_to_month_start
+    from nhf_spatial_targets.targets._io import reindex_to_month_start
 
     eom = _da_with_time(["2000-01-31", "2000-02-29", "2000-03-31"])
     master = pd.date_range("2000-01-01", "2000-03-01", freq="MS")
@@ -116,7 +116,7 @@ def test_reindex_to_month_start_maps_eom_to_ms():
 
 
 def test_reindex_to_month_start_maps_mid_month_to_ms():
-    from nhf_spatial_targets.targets._common import reindex_to_month_start
+    from nhf_spatial_targets.targets._io import reindex_to_month_start
 
     mid = _da_with_time(["2000-01-15", "2000-02-15", "2000-03-15"])
     master = pd.date_range("2000-01-01", "2000-03-01", freq="MS")
@@ -126,7 +126,7 @@ def test_reindex_to_month_start_maps_mid_month_to_ms():
 
 def test_reindex_to_month_start_pads_missing_months_with_nan():
     """Months in master_index but absent from the source come out as NaN."""
-    from nhf_spatial_targets.targets._common import reindex_to_month_start
+    from nhf_spatial_targets.targets._io import reindex_to_month_start
 
     partial = _da_with_time(["2000-01-01", "2000-02-01"])
     master = pd.date_range("2000-01-01", "2000-04-01", freq="MS")
@@ -137,7 +137,7 @@ def test_reindex_to_month_start_pads_missing_months_with_nan():
 
 
 def test_reindex_to_month_start_already_ms_is_idempotent():
-    from nhf_spatial_targets.targets._common import reindex_to_month_start
+    from nhf_spatial_targets.targets._io import reindex_to_month_start
 
     ms = _da_with_time(["2000-01-01", "2000-02-01", "2000-03-01"])
     master = pd.date_range("2000-01-01", "2000-03-01", freq="MS")
@@ -146,7 +146,7 @@ def test_reindex_to_month_start_already_ms_is_idempotent():
 
 
 def test_multi_source_nanminmax_three_finite_sources():
-    from nhf_spatial_targets.targets._common import multi_source_nanminmax
+    from nhf_spatial_targets.targets._combine import multi_source_nanminmax
 
     a = _da_with_time(["2000-01-01"], values=np.array([[10, 20, 30]], dtype=np.float32))
     b = _da_with_time(["2000-01-01"], values=np.array([[15, 25, 35]], dtype=np.float32))
@@ -158,7 +158,7 @@ def test_multi_source_nanminmax_three_finite_sources():
 
 
 def test_multi_source_nanminmax_partial_nan_uses_finite_only():
-    from nhf_spatial_targets.targets._common import multi_source_nanminmax
+    from nhf_spatial_targets.targets._combine import multi_source_nanminmax
 
     a = _da_with_time(
         ["2000-01-01"], values=np.array([[10.0, np.nan, 30.0]], dtype=np.float32)
@@ -173,7 +173,7 @@ def test_multi_source_nanminmax_partial_nan_uses_finite_only():
 
 
 def test_multi_source_nanminmax_all_nan_returns_nan_and_zero():
-    from nhf_spatial_targets.targets._common import multi_source_nanminmax
+    from nhf_spatial_targets.targets._combine import multi_source_nanminmax
 
     a = _da_with_time(
         ["2000-01-01"], hrus=(1,), values=np.array([[np.nan]], dtype=np.float32)
@@ -188,7 +188,7 @@ def test_multi_source_nanminmax_all_nan_returns_nan_and_zero():
 
 
 def test_multi_source_nanminmax_n_sources_is_int8():
-    from nhf_spatial_targets.targets._common import multi_source_nanminmax
+    from nhf_spatial_targets.targets._combine import multi_source_nanminmax
 
     a = _da_with_time(["2000-01-01"], values=np.array([[10.0, 20.0, 30.0]], np.float32))
     _, _, n = multi_source_nanminmax({"a": a})
@@ -196,7 +196,7 @@ def test_multi_source_nanminmax_n_sources_is_int8():
 
 
 def test_multi_source_nanminmax_raises_on_hru_mismatch():
-    from nhf_spatial_targets.targets._common import multi_source_nanminmax
+    from nhf_spatial_targets.targets._combine import multi_source_nanminmax
 
     a = _da_with_time(["2000-01-01"], hrus=(1, 2, 3))
     b = _da_with_time(["2000-01-01"], hrus=(1, 2, 4))
@@ -240,7 +240,7 @@ def _make_project_with_fabric(tmp_path: Path) -> Path:
 
 
 def test_compute_hru_area_and_centroids_returns_expected_columns(tmp_path: Path):
-    from nhf_spatial_targets.targets._common import compute_hru_area_and_centroids
+    from nhf_spatial_targets.targets._io import compute_hru_area_and_centroids
 
     workdir = _make_project_with_fabric(tmp_path)
     project = load(workdir)
@@ -258,7 +258,7 @@ def test_compute_hru_area_and_centroids_returns_expected_columns(tmp_path: Path)
 
 def test_compute_hru_area_and_centroids_areas_within_1pct(tmp_path: Path):
     """Each polygon is ~0.1 deg square at lat 40 N ≈ ~85 km² (varies by lat)."""
-    from nhf_spatial_targets.targets._common import compute_hru_area_and_centroids
+    from nhf_spatial_targets.targets._io import compute_hru_area_and_centroids
 
     workdir = _make_project_with_fabric(tmp_path)
     project = load(workdir)
@@ -271,7 +271,7 @@ def test_compute_hru_area_and_centroids_areas_within_1pct(tmp_path: Path):
 
 
 def test_compute_hru_area_and_centroids_lat_lon_in_range(tmp_path: Path):
-    from nhf_spatial_targets.targets._common import compute_hru_area_and_centroids
+    from nhf_spatial_targets.targets._io import compute_hru_area_and_centroids
 
     workdir = _make_project_with_fabric(tmp_path)
     project = load(workdir)
@@ -285,7 +285,7 @@ def test_compute_hru_area_and_centroids_lat_lon_in_range(tmp_path: Path):
 
 def test_compute_hru_centroids_returns_centroids_only(tmp_path: Path):
     """centroids-only helper omits area_m2."""
-    from nhf_spatial_targets.targets._common import compute_hru_centroids
+    from nhf_spatial_targets.targets._io import compute_hru_centroids
 
     workdir = _make_project_with_fabric(tmp_path)
     project = load(workdir)
@@ -303,7 +303,7 @@ def test_compute_hru_centroids_returns_centroids_only(tmp_path: Path):
 
 def test_compute_hru_centroids_matches_combined_helper(tmp_path: Path):
     """Centroid columns from the lighter helper match the combined helper."""
-    from nhf_spatial_targets.targets._common import (
+    from nhf_spatial_targets.targets._io import (
         compute_hru_area_and_centroids,
         compute_hru_centroids,
     )
@@ -319,7 +319,7 @@ def test_compute_hru_centroids_matches_combined_helper(tmp_path: Path):
 
 def test_compute_hru_areas_returns_area_only(tmp_path: Path):
     """area-only helper omits centroid columns."""
-    from nhf_spatial_targets.targets._common import compute_hru_areas
+    from nhf_spatial_targets.targets._io import compute_hru_areas
 
     workdir = _make_project_with_fabric(tmp_path)
     project = load(workdir)
@@ -332,7 +332,7 @@ def test_compute_hru_areas_returns_area_only(tmp_path: Path):
 
 def test_compute_hru_areas_matches_combined_helper(tmp_path: Path):
     """area_m2 from the lighter helper matches the combined helper exactly."""
-    from nhf_spatial_targets.targets._common import (
+    from nhf_spatial_targets.targets._io import (
         compute_hru_area_and_centroids,
         compute_hru_areas,
     )
@@ -378,7 +378,7 @@ def _toy_target_dataset(
 
 
 def test_write_target_nc_round_trips_via_xarray(tmp_path: Path):
-    from nhf_spatial_targets.targets._common import write_target_nc
+    from nhf_spatial_targets.targets._writers import write_target_nc
 
     ds = _toy_target_dataset()
     # Set units on lower_bound so the round-trip can verify it survives.
@@ -423,7 +423,7 @@ def test_write_target_nc_round_trips_via_xarray(tmp_path: Path):
 
 def test_write_target_nc_sort_dim_canonicalizes_hru_order(tmp_path: Path):
     """sort_dim sorts the HRU dim ascending at emission (issue #93)."""
-    from nhf_spatial_targets.targets._common import write_target_nc
+    from nhf_spatial_targets.targets._writers import write_target_nc
 
     ds = _toy_target_dataset().isel(nhm_id=[2, 0, 1])  # shuffle to [3, 1, 2]
     out = tmp_path / "shuffled.nc"
@@ -438,7 +438,7 @@ def test_write_target_nc_sort_dim_canonicalizes_hru_order(tmp_path: Path):
 
 def test_write_target_nc_no_sort_dim_preserves_caller_order(tmp_path: Path):
     """Without sort_dim, the writer leaves caller order untouched (#93 opt-in)."""
-    from nhf_spatial_targets.targets._common import write_target_nc
+    from nhf_spatial_targets.targets._writers import write_target_nc
 
     ds = _toy_target_dataset().isel(nhm_id=[2, 0, 1])  # [3, 1, 2]
     out = tmp_path / "no_sort.nc"
@@ -449,7 +449,7 @@ def test_write_target_nc_no_sort_dim_preserves_caller_order(tmp_path: Path):
 
 def test_write_target_nc_atomic_no_partial_on_failure(tmp_path: Path, monkeypatch):
     """If to_netcdf raises, the final path must not exist (tempfile cleanup)."""
-    from nhf_spatial_targets.targets._common import write_target_nc
+    from nhf_spatial_targets.targets._writers import write_target_nc
 
     out = tmp_path / "runoff_targets.nc"
 
@@ -464,7 +464,7 @@ def test_write_target_nc_atomic_no_partial_on_failure(tmp_path: Path, monkeypatc
 
 def test_read_chunk_hru_sizes_to_byte_budget():
     """HRU read-chunk shrinks as the time axis grows, capped at >=1 (#165 ST3)."""
-    from nhf_spatial_targets.targets._common import _read_chunk_hru
+    from nhf_spatial_targets.targets._io import _read_chunk_hru
 
     # 256 MiB budget, float64: daily multi-year -> a few thousand HRUs/chunk.
     assert _read_chunk_hru(14_600, 8) == (256 * 1024 * 1024) // (14_600 * 8)
@@ -476,7 +476,7 @@ def test_read_chunk_hru_sizes_to_byte_budget():
 
 def test_read_aggregated_source_uses_full_time_chunks(tmp_path: Path):
     """Default read chunking is full-time columnar, not the old time-slab (#165 ST3)."""
-    from nhf_spatial_targets.targets._common import read_aggregated_source
+    from nhf_spatial_targets.targets._io import read_aggregated_source
     from nhf_spatial_targets.workspace import load
     from tests.conftest import make_minimal_project, write_year_nc
 
@@ -505,7 +505,7 @@ def test_write_target_nc_applies_target_layer_chunking(tmp_path: Path):
 
     import netCDF4
 
-    from nhf_spatial_targets.targets._common import write_target_nc
+    from nhf_spatial_targets.targets._writers import write_target_nc
 
     n_time, n_hru = 12, 50_000
     times = pd.date_range("2000-01-01", periods=n_time, freq="MS")
@@ -541,7 +541,7 @@ def test_write_target_nc_applies_target_layer_chunking(tmp_path: Path):
 
 def test_reindex_to_month_start_rejects_non_ms_freq():
     """A freq='ME' master_index must raise, not silently produce all-NaN."""
-    from nhf_spatial_targets.targets._common import reindex_to_month_start
+    from nhf_spatial_targets.targets._io import reindex_to_month_start
 
     da = _da_with_time(["2000-01-01", "2000-02-01"])
     bad = pd.date_range("2000-01-31", "2000-02-29", freq="ME")
@@ -551,7 +551,7 @@ def test_reindex_to_month_start_rejects_non_ms_freq():
 
 def test_reindex_to_day_start_floors_noon_timestamps():
     """Daymet-style noon timestamps land on the same day as midnight on master."""
-    from nhf_spatial_targets.targets._common import reindex_to_day_start
+    from nhf_spatial_targets.targets._io import reindex_to_day_start
 
     noon = _da_with_time(["2003-12-15 12:00:00", "2003-12-16 12:00:00"])
     master = pd.date_range("2003-12-15", "2003-12-16", freq="D")
@@ -561,7 +561,7 @@ def test_reindex_to_day_start_floors_noon_timestamps():
 
 
 def test_reindex_to_day_start_already_midnight_is_idempotent():
-    from nhf_spatial_targets.targets._common import reindex_to_day_start
+    from nhf_spatial_targets.targets._io import reindex_to_day_start
 
     midnight = _da_with_time(["2003-12-15", "2003-12-16", "2003-12-17"])
     master = pd.date_range("2003-12-15", "2003-12-17", freq="D")
@@ -577,7 +577,7 @@ def test_reindex_to_day_start_pads_missing_days_with_nan():
     larger master index, but the bound is still defined wherever
     another source is finite.
     """
-    from nhf_spatial_targets.targets._common import reindex_to_day_start
+    from nhf_spatial_targets.targets._io import reindex_to_day_start
 
     partial = _da_with_time(["2003-12-15", "2003-12-16"])
     master = pd.date_range("2003-12-15", "2003-12-18", freq="D")
@@ -589,7 +589,7 @@ def test_reindex_to_day_start_pads_missing_days_with_nan():
 
 def test_reindex_to_day_start_rejects_non_d_freq():
     """A freq='MS' master_index must raise, not silently produce all-NaN."""
-    from nhf_spatial_targets.targets._common import reindex_to_day_start
+    from nhf_spatial_targets.targets._io import reindex_to_day_start
 
     da = _da_with_time(["2003-12-15", "2003-12-16"])
     bad = pd.date_range("2003-12-01", "2003-12-31", freq="MS")
@@ -603,7 +603,7 @@ def test_reindex_to_day_start_rejects_cftime_decoded_time():
     """
     import cftime
 
-    from nhf_spatial_targets.targets._common import reindex_to_day_start
+    from nhf_spatial_targets.targets._io import reindex_to_day_start
 
     times = np.array(
         [cftime.DatetimeNoLeap(2003, 12, 15), cftime.DatetimeNoLeap(2003, 12, 16)],
@@ -646,7 +646,7 @@ def test_read_aggregated_source_sorts_hru_ascending(tmp_path: Path):
     grouped (non-monotonic) order; downstream alignment against a sorted
     fabric requires the reader to canonicalise the order.
     """
-    from nhf_spatial_targets.targets._common import read_aggregated_source
+    from nhf_spatial_targets.targets._io import read_aggregated_source
 
     workdir = make_minimal_project(tmp_path)
     src = "era5_land"
@@ -674,7 +674,7 @@ def test_compute_hru_area_and_centroids_returns_sorted_index(tmp_path: Path):
     import geopandas as gpd
     from shapely.geometry import box
 
-    from nhf_spatial_targets.targets._common import compute_hru_area_and_centroids
+    from nhf_spatial_targets.targets._io import compute_hru_area_and_centroids
 
     fabric_path = tmp_path / "fabric.gpkg"
     gdf = gpd.GeoDataFrame(
@@ -717,7 +717,7 @@ def test_compute_hru_area_and_centroids_raises_on_duplicate_id_col(tmp_path: Pat
     import geopandas as gpd
     from shapely.geometry import box
 
-    from nhf_spatial_targets.targets._common import compute_hru_area_and_centroids
+    from nhf_spatial_targets.targets._io import compute_hru_area_and_centroids
 
     fabric_path = tmp_path / "fabric.gpkg"
     gdf = gpd.GeoDataFrame(
@@ -762,7 +762,7 @@ def test_source_shim_is_frozen_dataclass():
     """SourceShim instances are immutable so SHIMS tuples can be module-level."""
     from dataclasses import FrozenInstanceError
 
-    from nhf_spatial_targets.targets._common import SourceShim
+    from nhf_spatial_targets.targets._shims import SourceShim
 
     shim = SourceShim(
         source_key="foo",
@@ -776,7 +776,7 @@ def test_source_shim_is_frozen_dataclass():
 
 def test_shims_by_key_returns_keyed_lookup():
     """shims_by_key indexes a SHIMS tuple by source_key."""
-    from nhf_spatial_targets.targets._common import SourceShim, shims_by_key
+    from nhf_spatial_targets.targets._shims import SourceShim, shims_by_key
 
     a = SourceShim("a", "va", "A", _identity_shim)
     b = SourceShim("b", "vb", "B", _identity_shim)
@@ -786,7 +786,7 @@ def test_shims_by_key_returns_keyed_lookup():
 
 def test_shims_by_key_raises_on_duplicate_source_key():
     """Two shims with the same key would silently shadow; must raise."""
-    from nhf_spatial_targets.targets._common import SourceShim, shims_by_key
+    from nhf_spatial_targets.targets._shims import SourceShim, shims_by_key
 
     a = SourceShim("dup", "va", "A", _identity_shim)
     b = SourceShim("dup", "vb", "B", _identity_shim)
@@ -796,7 +796,7 @@ def test_shims_by_key_raises_on_duplicate_source_key():
 
 def test_shims_by_key_empty_tuple_returns_empty_dict():
     """Empty SHIMS tuple is a degenerate but valid input."""
-    from nhf_spatial_targets.targets._common import shims_by_key
+    from nhf_spatial_targets.targets._shims import shims_by_key
 
     assert shims_by_key(()) == {}
 
@@ -808,7 +808,7 @@ def test_shims_by_key_empty_tuple_returns_empty_dict():
 
 def test_source_shim_accepts_expected_cf_units_field():
     """SourceShim grew an optional `expected_cf_units` field (issue #130)."""
-    from nhf_spatial_targets.targets._common import SourceShim
+    from nhf_spatial_targets.targets._shims import SourceShim
 
     shim = SourceShim(
         source_key="era5_land",
@@ -822,7 +822,7 @@ def test_source_shim_accepts_expected_cf_units_field():
 
 def test_source_shim_expected_cf_units_defaults_to_none():
     """Defaulting to None preserves opt-out semantics for legacy shims."""
-    from nhf_spatial_targets.targets._common import SourceShim
+    from nhf_spatial_targets.targets._shims import SourceShim
 
     shim = SourceShim(
         source_key="x",
@@ -835,7 +835,7 @@ def test_source_shim_expected_cf_units_defaults_to_none():
 
 def test_validate_source_units_passes_when_catalog_matches_shim():
     """Happy path: real SHIMS registries pass against the real catalog."""
-    from nhf_spatial_targets.targets._common import validate_source_units
+    from nhf_spatial_targets.targets._shims import validate_source_units
     from nhf_spatial_targets.targets.run import SHIMS as RUN_SHIMS
 
     # Should not raise.
@@ -846,7 +846,7 @@ def test_validate_source_units_passes_when_catalog_matches_shim():
 
 def test_validate_source_units_raises_on_catalog_drift():
     """A shim declaring different expected_cf_units from catalog raises."""
-    from nhf_spatial_targets.targets._common import SourceShim, validate_source_units
+    from nhf_spatial_targets.targets._shims import SourceShim, validate_source_units
 
     drifted = (
         SourceShim(
@@ -863,7 +863,7 @@ def test_validate_source_units_raises_on_catalog_drift():
 
 def test_validate_source_units_message_includes_both_units():
     """The error message must surface both strings so the operator can decide."""
-    from nhf_spatial_targets.targets._common import SourceShim, validate_source_units
+    from nhf_spatial_targets.targets._shims import SourceShim, validate_source_units
 
     drifted = (
         SourceShim(
@@ -883,7 +883,7 @@ def test_validate_source_units_message_includes_both_units():
 
 def test_validate_source_units_skips_when_expected_is_none():
     """expected_cf_units=None opts out of the check entirely."""
-    from nhf_spatial_targets.targets._common import SourceShim, validate_source_units
+    from nhf_spatial_targets.targets._shims import SourceShim, validate_source_units
 
     # If validation ran, this would raise (catalog says "m", not "wrong").
     # expected_cf_units=None means the check is skipped.
@@ -901,7 +901,7 @@ def test_validate_source_units_skips_when_expected_is_none():
 
 def test_validate_source_units_raises_on_unknown_source_label():
     """An unknown config label (typo) surfaces as a startup error."""
-    from nhf_spatial_targets.targets._common import SourceShim, validate_source_units
+    from nhf_spatial_targets.targets._shims import SourceShim, validate_source_units
 
     shims = (
         SourceShim(
@@ -923,7 +923,7 @@ def test_validate_source_units_uses_config_label_for_catalog_lookup():
     catalog key is the canonical "era5_land"; validate_source_units must
     look up against the catalog under config_label, not source_key.
     """
-    from nhf_spatial_targets.targets._common import validate_source_units
+    from nhf_spatial_targets.targets._shims import validate_source_units
     from nhf_spatial_targets.targets.swe import SHIMS as SWE_SHIMS
 
     # The label "era5_land" resolves to the era5_land_sd shim; catalog
@@ -934,7 +934,7 @@ def test_validate_source_units_uses_config_label_for_catalog_lookup():
 def test_source_shim_catalog_source_key_defaults_to_none():
     """`catalog_source_key` defaults to None; existing shims keep the
     config_label-or-source_key fallback (issue #142)."""
-    from nhf_spatial_targets.targets._common import SourceShim
+    from nhf_spatial_targets.targets._shims import SourceShim
 
     shim = SourceShim(
         source_key="x",
@@ -950,7 +950,7 @@ def test_validate_source_units_routes_through_catalog_source_key(monkeypatch):
     differ; the validator must route the catalog lookup through
     catalog_source_key, not the user-facing alias (issue #142)."""
     from nhf_spatial_targets import catalog as cat
-    from nhf_spatial_targets.targets._common import SourceShim, validate_source_units
+    from nhf_spatial_targets.targets._shims import SourceShim, validate_source_units
 
     # Track what catalog key the validator passes to source_var_cf_units.
     seen: list[tuple[str, str]] = []
@@ -983,7 +983,7 @@ def test_validate_source_units_catalog_key_falls_back_to_config_label():
     """When `catalog_source_key` is None, the lookup precedence still
     falls back to `config_label`, then `source_key` — preserving
     behaviour for every existing shim (issue #142)."""
-    from nhf_spatial_targets.targets._common import SourceShim, validate_source_units
+    from nhf_spatial_targets.targets._shims import SourceShim, validate_source_units
 
     # No catalog_source_key set; config_label="era5_land" carries the
     # catalog key for a synthetic on-disk storage layout.
@@ -1002,7 +1002,7 @@ def test_validate_source_units_catalog_key_falls_back_to_config_label():
 
 def test_validate_source_units_raises_when_catalog_lacks_cf_units():
     """A shim pointing at a flat-string catalog entry raises with guidance."""
-    from nhf_spatial_targets.targets._common import SourceShim, validate_source_units
+    from nhf_spatial_targets.targets._shims import SourceShim, validate_source_units
 
     # merra_land is superseded and uses flat-list `variables: [SFMC]` (no
     # cf_units). A target that pointed at it must either gain catalog
@@ -1099,14 +1099,14 @@ def test_swe_target_shims_declare_expected_cf_units():
 
 
 def test_parse_period_splits_endpoints():
-    from nhf_spatial_targets.targets._common import parse_period
+    from nhf_spatial_targets.targets._io import parse_period
 
     assert parse_period("2000-01-01/2009-12-31") == ("2000-01-01", "2009-12-31")
     assert parse_period("2000/2009") == ("2000", "2009")
 
 
 def test_parse_period_strips_whitespace():
-    from nhf_spatial_targets.targets._common import parse_period
+    from nhf_spatial_targets.targets._io import parse_period
 
     assert parse_period("  2000-01-01 / 2009-12-31  ") == (
         "2000-01-01",
@@ -1115,7 +1115,7 @@ def test_parse_period_strips_whitespace():
 
 
 def test_parse_period_raises_on_missing_slash():
-    from nhf_spatial_targets.targets._common import parse_period
+    from nhf_spatial_targets.targets._io import parse_period
 
     with pytest.raises(ValueError, match="Expected 'YYYY-MM-DD"):
         parse_period("2000-01-01")
@@ -1128,7 +1128,7 @@ def test_parse_period_raises_on_missing_slash():
 
 def test_check_hru_coords_returns_none_when_coords_match():
     """Exact-match returns None (no raise)."""
-    from nhf_spatial_targets.targets._common import check_hru_coords
+    from nhf_spatial_targets.targets._io import check_hru_coords
 
     fabric_ids = np.array([1, 2, 3], dtype=np.int32)
     da = xr.DataArray(
@@ -1142,7 +1142,7 @@ def test_check_hru_coords_returns_none_when_coords_match():
 
 def test_check_hru_coords_raises_on_same_set_different_order():
     """Permuted-but-same-set raises a 'canonical-sort regression' message."""
-    from nhf_spatial_targets.targets._common import check_hru_coords
+    from nhf_spatial_targets.targets._io import check_hru_coords
 
     fabric_ids = np.array([1, 2, 3], dtype=np.int32)
     da = xr.DataArray(
@@ -1156,7 +1156,7 @@ def test_check_hru_coords_raises_on_same_set_different_order():
 
 def test_check_hru_coords_raises_on_different_sets():
     """Different sets raise a 'Re-aggregate' message."""
-    from nhf_spatial_targets.targets._common import check_hru_coords
+    from nhf_spatial_targets.targets._io import check_hru_coords
 
     fabric_ids = np.array([1, 2, 3], dtype=np.int32)
     da = xr.DataArray(
@@ -1170,7 +1170,7 @@ def test_check_hru_coords_raises_on_different_sets():
 
 def test_check_hru_coords_raises_on_different_length():
     """Different-length coords go through the 'different sets' branch."""
-    from nhf_spatial_targets.targets._common import check_hru_coords
+    from nhf_spatial_targets.targets._io import check_hru_coords
 
     fabric_ids = np.array([1, 2, 3], dtype=np.int32)
     da = xr.DataArray(
@@ -1189,7 +1189,7 @@ def test_check_hru_coords_raises_on_different_length():
 
 def test_build_n_sources_attrs_three_sources():
     """3-source target → flag_values=[0,1,2,3] and meanings 'none one two three'."""
-    from nhf_spatial_targets.targets._common import build_n_sources_attrs
+    from nhf_spatial_targets.targets._combine import build_n_sources_attrs
 
     attrs = build_n_sources_attrs(3)
     assert attrs["units"] == "1"
@@ -1203,7 +1203,7 @@ def test_build_n_sources_attrs_three_sources():
 
 def test_build_n_sources_attrs_one_source():
     """Single-source target → flag_values=[0,1], meanings 'none one'."""
-    from nhf_spatial_targets.targets._common import build_n_sources_attrs
+    from nhf_spatial_targets.targets._combine import build_n_sources_attrs
 
     attrs = build_n_sources_attrs(1)
     assert attrs["flag_values"].dtype == np.dtype("int8")
@@ -1212,7 +1212,7 @@ def test_build_n_sources_attrs_one_source():
 
 
 def test_build_n_sources_attrs_custom_coords():
-    from nhf_spatial_targets.targets._common import build_n_sources_attrs
+    from nhf_spatial_targets.targets._combine import build_n_sources_attrs
 
     attrs = build_n_sources_attrs(2, ancillary_coords="lat lon")
     assert attrs["coordinates"] == "lat lon"
@@ -1220,7 +1220,7 @@ def test_build_n_sources_attrs_custom_coords():
 
 def test_build_n_sources_attrs_raises_when_count_exceeds_label_vocab():
     """6+ sources outpace the 'none..five' vocabulary and must raise."""
-    from nhf_spatial_targets.targets._common import build_n_sources_attrs
+    from nhf_spatial_targets.targets._combine import build_n_sources_attrs
 
     with pytest.raises(ValueError, match="5-source label vocabulary"):
         build_n_sources_attrs(6)
@@ -1281,7 +1281,7 @@ def _write_year_chunk_nc(
 
 def test_stitch_year_chunks_combines_contiguous_time(tmp_path: Path):
     """Two adjacent year-chunks stitch into a single contiguous time axis."""
-    from nhf_spatial_targets.targets._common import stitch_year_chunks_to_target
+    from nhf_spatial_targets.targets._intermediates import stitch_year_chunks_to_target
 
     inter = tmp_path / "intermediates"
     _write_year_chunk_nc(inter / "swe_targets_2003.nc", 2003)
@@ -1310,7 +1310,7 @@ def test_stitch_strips_year_chunk_attr(tmp_path: Path):
     combine_attrs='override' would otherwise carry over the first
     year's value and silently mislead about the file's actual scope.
     """
-    from nhf_spatial_targets.targets._common import stitch_year_chunks_to_target
+    from nhf_spatial_targets.targets._intermediates import stitch_year_chunks_to_target
 
     inter = tmp_path / "intermediates"
     _write_year_chunk_nc(inter / "swe_targets_2003.nc", 2003)
@@ -1336,7 +1336,7 @@ def test_stitch_strips_year_chunk_attr(tmp_path: Path):
 def test_stitch_applies_canonical_attrs_and_history(tmp_path: Path):
     """The stitched file gets CF-1.6, title, history, institution,
     and extra_global_attrs overlay."""
-    from nhf_spatial_targets.targets._common import stitch_year_chunks_to_target
+    from nhf_spatial_targets.targets._intermediates import stitch_year_chunks_to_target
 
     inter = tmp_path / "intermediates"
     _write_year_chunk_nc(inter / "swe_targets_2003.nc", 2003)
@@ -1364,7 +1364,7 @@ def test_stitch_writes_columnar_chunks_and_preserves_values(tmp_path: Path):
 
     import netCDF4
 
-    from nhf_spatial_targets.targets._common import stitch_year_chunks_to_target
+    from nhf_spatial_targets.targets._intermediates import stitch_year_chunks_to_target
 
     inter = tmp_path / "intermediates"
     _write_year_chunk_nc(inter / "swe_targets_2003.nc", 2003, bound_value=2.0)
@@ -1403,7 +1403,7 @@ def test_stitch_columnar_preserves_distinct_values_and_nn_filled(tmp_path: Path)
 
     import netCDF4
 
-    from nhf_spatial_targets.targets._common import stitch_year_chunks_to_target
+    from nhf_spatial_targets.targets._intermediates import stitch_year_chunks_to_target
 
     inter = tmp_path / "intermediates"
     inter.mkdir(parents=True, exist_ok=True)
@@ -1467,7 +1467,7 @@ def test_stitch_fails_loud_on_hru_coord_mismatch(tmp_path: Path):
     coords — this catches per-year-build corruption (fabric drift,
     weight-cache poisoning) rather than silently broadcasting NaN.
     """
-    from nhf_spatial_targets.targets._common import stitch_year_chunks_to_target
+    from nhf_spatial_targets.targets._intermediates import stitch_year_chunks_to_target
 
     inter = tmp_path / "intermediates"
     _write_year_chunk_nc(inter / "swe_targets_2003.nc", 2003, hrus=[1, 2, 3])
@@ -1487,7 +1487,7 @@ def test_stitch_fails_loud_on_hru_coord_mismatch(tmp_path: Path):
 
 
 def test_stitch_raises_on_empty_input(tmp_path: Path):
-    from nhf_spatial_targets.targets._common import stitch_year_chunks_to_target
+    from nhf_spatial_targets.targets._intermediates import stitch_year_chunks_to_target
 
     out = tmp_path / "swe_targets.nc"
     with pytest.raises(ValueError, match="intermediate_files is empty"):
@@ -1501,7 +1501,7 @@ def test_stitch_atomic_write_no_partial_on_failure(tmp_path: Path, monkeypatch):
     the final path doesn't exist — same atomic-write contract as
     write_target_nc.
     """
-    from nhf_spatial_targets.targets import _common as _c
+    from nhf_spatial_targets.targets import _intermediates as _c
 
     inter = tmp_path / "intermediates"
     _write_year_chunk_nc(inter / "swe_targets_2003.nc", 2003)
@@ -1542,7 +1542,7 @@ def test_read_aggregated_source_masks_netcdf_default_fill_cells(tmp_path: Path):
     """
     from netCDF4 import default_fillvals
 
-    from nhf_spatial_targets.targets._common import read_aggregated_source
+    from nhf_spatial_targets.targets._io import read_aggregated_source
 
     sentinel = default_fillvals["f8"]  # NC_FILL_DOUBLE == 9.969209968386869e+36
 
@@ -1621,7 +1621,7 @@ def _project_with_target(tmp_path: Path, target_block: dict, fabric_sha: str = "
 
 def test_target_config_fingerprint_is_stable(tmp_path: Path):
     """Same project → same fingerprint across calls."""
-    from nhf_spatial_targets.targets._common import target_config_fingerprint
+    from nhf_spatial_targets.targets._intermediates import target_config_fingerprint
 
     block = {"period": "2005/2010", "ci_threshold": 0.7, "nn_fill": True}
     project = _project_with_target(tmp_path, block)
@@ -1635,7 +1635,7 @@ def test_target_config_fingerprint_is_stable(tmp_path: Path):
 
 def test_target_config_fingerprint_changes_on_target_edit(tmp_path: Path):
     """Editing any knob in the target block produces a different fingerprint."""
-    from nhf_spatial_targets.targets._common import target_config_fingerprint
+    from nhf_spatial_targets.targets._intermediates import target_config_fingerprint
 
     block_a = {"period": "2005/2010", "ci_threshold": 0.70}
     block_b = {"period": "2005/2010", "ci_threshold": 0.80}  # threshold bump
@@ -1650,7 +1650,7 @@ def test_target_config_fingerprint_changes_on_target_edit(tmp_path: Path):
 
 def test_target_config_fingerprint_changes_on_fabric_swap(tmp_path: Path):
     """Different fabric.sha256 → different fingerprint (catches fabric swap)."""
-    from nhf_spatial_targets.targets._common import target_config_fingerprint
+    from nhf_spatial_targets.targets._intermediates import target_config_fingerprint
 
     block = {"period": "2005/2010", "ci_threshold": 0.70}
     fp_a = target_config_fingerprint(
@@ -1666,14 +1666,14 @@ def test_target_config_fingerprint_changes_on_fabric_swap(tmp_path: Path):
 
 def test_code_version_fingerprint_returns_package_version():
     from nhf_spatial_targets import __version__
-    from nhf_spatial_targets.targets._common import code_version_fingerprint
+    from nhf_spatial_targets.targets._intermediates import code_version_fingerprint
 
     assert code_version_fingerprint() == __version__
 
 
 def _write_fingerprinted_nc(path: Path, *, config_fp: str, code_ver: str) -> None:
     """Helper for should_skip_year_build tests: write a 1-var NC with fingerprint attrs."""
-    from nhf_spatial_targets.targets._common import (
+    from nhf_spatial_targets.targets._intermediates import (
         INTERMEDIATE_CODE_VERSION_ATTR,
         INTERMEDIATE_CONFIG_FINGERPRINT_ATTR,
     )
@@ -1694,7 +1694,7 @@ def test_should_skip_year_build_returns_false_when_path_missing(tmp_path: Path):
     """No cached intermediate → (False, None); caller proceeds to build."""
     import logging
 
-    from nhf_spatial_targets.targets._common import should_skip_year_build
+    from nhf_spatial_targets.targets._intermediates import should_skip_year_build
 
     logger = logging.getLogger("test")
     skip, attrs = should_skip_year_build(
@@ -1713,7 +1713,7 @@ def test_should_skip_year_build_returns_true_when_fingerprints_match(tmp_path: P
     """Cached fingerprints match → (True, attrs); caller may skip rebuild."""
     import logging
 
-    from nhf_spatial_targets.targets._common import should_skip_year_build
+    from nhf_spatial_targets.targets._intermediates import should_skip_year_build
 
     nc_path = tmp_path / "y2005.nc"
     _write_fingerprinted_nc(nc_path, config_fp="abc123", code_ver="0.1.0")
@@ -1736,7 +1736,7 @@ def test_should_skip_year_build_rebuilds_on_config_mismatch(tmp_path: Path, capl
     """Cached config_fingerprint differs → WARN + unlink + (False, attrs)."""
     import logging
 
-    from nhf_spatial_targets.targets._common import should_skip_year_build
+    from nhf_spatial_targets.targets._intermediates import should_skip_year_build
 
     nc_path = tmp_path / "y2005.nc"
     _write_fingerprinted_nc(nc_path, config_fp="OLDcfg", code_ver="0.1.0")
@@ -1767,7 +1767,7 @@ def test_should_skip_year_build_rebuilds_on_code_version_mismatch(
     """Cached code_version differs → WARN + unlink + (False, attrs)."""
     import logging
 
-    from nhf_spatial_targets.targets._common import should_skip_year_build
+    from nhf_spatial_targets.targets._intermediates import should_skip_year_build
 
     nc_path = tmp_path / "y2005.nc"
     _write_fingerprinted_nc(nc_path, config_fp="abc123", code_ver="0.0.9")
@@ -1797,7 +1797,7 @@ def test_should_skip_year_build_rebuilds_on_missing_fingerprint_attrs(
     """
     import logging
 
-    from nhf_spatial_targets.targets._common import should_skip_year_build
+    from nhf_spatial_targets.targets._intermediates import should_skip_year_build
 
     nc_path = tmp_path / "y2005.nc"
     # NC with no fingerprint attrs (mimics pre-#213 write).
@@ -1826,7 +1826,7 @@ def test_should_skip_year_build_unlinks_companion_paths(tmp_path: Path):
     """Mismatch deletes ALL expected paths (e.g. nn_filled companion), not just the primary."""
     import logging
 
-    from nhf_spatial_targets.targets._common import should_skip_year_build
+    from nhf_spatial_targets.targets._intermediates import should_skip_year_build
 
     primary = tmp_path / "y2005.nc"
     companion = tmp_path / "y2005_nn_filled.nc"
@@ -1855,7 +1855,7 @@ def test_should_skip_year_build_handles_partial_intermediate_set(tmp_path: Path)
     """
     import logging
 
-    from nhf_spatial_targets.targets._common import should_skip_year_build
+    from nhf_spatial_targets.targets._intermediates import should_skip_year_build
 
     primary = tmp_path / "y2005.nc"
     _write_fingerprinted_nc(primary, config_fp="abc123", code_ver="0.1.0")
@@ -1886,7 +1886,7 @@ def test_should_skip_year_build_recovers_from_corrupt_cache(tmp_path: Path, capl
     """
     import logging
 
-    from nhf_spatial_targets.targets._common import should_skip_year_build
+    from nhf_spatial_targets.targets._intermediates import should_skip_year_build
 
     nc_path = tmp_path / "y2005.nc"
     # 16 bytes of garbage — not a valid HDF5/NetCDF header.
@@ -1921,7 +1921,7 @@ def test_should_skip_year_build_empty_string_fingerprint_treated_as_missing(
     """
     import logging
 
-    from nhf_spatial_targets.targets._common import should_skip_year_build
+    from nhf_spatial_targets.targets._intermediates import should_skip_year_build
 
     nc_path = tmp_path / "y2005.nc"
     # Empty-string fingerprint attrs — pathological but possible.
@@ -1962,7 +1962,9 @@ def test_prune_orphan_year_intermediates_keeps_in_period_files(tmp_path: Path):
     """Files whose year is in ``expected_years`` are preserved."""
     import logging
 
-    from nhf_spatial_targets.targets._common import prune_orphan_year_intermediates
+    from nhf_spatial_targets.targets._intermediates import (
+        prune_orphan_year_intermediates,
+    )
 
     for year in (2003, 2004, 2005):
         _touch_nc(tmp_path / f"swe_targets_{year}.nc")
@@ -1994,7 +1996,9 @@ def test_prune_orphan_year_intermediates_unlinks_out_of_period_files(
     pruned years."""
     import logging
 
-    from nhf_spatial_targets.targets._common import prune_orphan_year_intermediates
+    from nhf_spatial_targets.targets._intermediates import (
+        prune_orphan_year_intermediates,
+    )
 
     # 2003-2005 in period; 2002 + 2006 are orphans from a wider previous build.
     for year in (2002, 2003, 2004, 2005, 2006):
@@ -2030,7 +2034,9 @@ def test_prune_orphan_year_intermediates_ignores_unrelated_files(tmp_path: Path)
     """Files that don't match the canonical year pattern are not pruned."""
     import logging
 
-    from nhf_spatial_targets.targets._common import prune_orphan_year_intermediates
+    from nhf_spatial_targets.targets._intermediates import (
+        prune_orphan_year_intermediates,
+    )
 
     _touch_nc(tmp_path / "swe_targets_2005.nc")
     # Unrelated files that shouldn't be touched:
@@ -2060,7 +2066,9 @@ def test_prune_orphan_year_intermediates_empty_dir(tmp_path: Path):
     """Empty intermediates dir returns [] without raising."""
     import logging
 
-    from nhf_spatial_targets.targets._common import prune_orphan_year_intermediates
+    from nhf_spatial_targets.targets._intermediates import (
+        prune_orphan_year_intermediates,
+    )
 
     pruned = prune_orphan_year_intermediates(
         tmp_path,
@@ -2085,7 +2093,9 @@ def test_prune_orphan_handles_nn_filled_only_companion(tmp_path: Path):
     """
     import logging
 
-    from nhf_spatial_targets.targets._common import prune_orphan_year_intermediates
+    from nhf_spatial_targets.targets._intermediates import (
+        prune_orphan_year_intermediates,
+    )
 
     # Only the companion file for 2006 — no unfilled.
     _touch_nc(tmp_path / "swe_targets_2006_nn_filled.nc")

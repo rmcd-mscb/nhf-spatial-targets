@@ -37,7 +37,7 @@ def _make_target_ds() -> xr.Dataset:
     Bound vars carry ``grid_mapping="crs"`` inherited from the aggregated
     sources (the dangling reference, defect A) but no ``crs`` container.
     """
-    from nhf_spatial_targets.targets._common import build_n_sources_attrs
+    from nhf_spatial_targets.targets._combine import build_n_sources_attrs
 
     ids = np.array([10, 20, 30], dtype="int64")
     time = pd.date_range("2000-01-01", periods=3, freq="MS")
@@ -212,7 +212,7 @@ def test_build_encoding_pins_time_bnds_fill_value_none():
 
 
 def test_target_writer_anchors_grid_mapping_with_scalar_crs(tmp_path: Path):
-    from nhf_spatial_targets.targets._common import write_target_nc
+    from nhf_spatial_targets.targets._writers import write_target_nc
 
     out = tmp_path / "recharge_targets.nc"
     write_target_nc(_make_target_ds(), out, title="t", sort_dim=ID_COL)
@@ -225,10 +225,8 @@ def test_target_writer_anchors_grid_mapping_with_scalar_crs(tmp_path: Path):
 
 
 def test_target_n_sources_flag_values_are_int8(tmp_path: Path):
-    from nhf_spatial_targets.targets._common import (
-        build_n_sources_attrs,
-        write_target_nc,
-    )
+    from nhf_spatial_targets.targets._combine import build_n_sources_attrs
+    from nhf_spatial_targets.targets._writers import write_target_nc
 
     assert build_n_sources_attrs(3)["flag_values"].dtype == np.dtype("int8")
     out = tmp_path / "recharge_targets.nc"
@@ -239,7 +237,7 @@ def test_target_n_sources_flag_values_are_int8(tmp_path: Path):
 
 
 def test_target_time_bnds_has_no_fill_value(tmp_path: Path):
-    from nhf_spatial_targets.targets._common import write_target_nc
+    from nhf_spatial_targets.targets._writers import write_target_nc
 
     out = tmp_path / "recharge_targets.nc"
     write_target_nc(_make_target_ds(), out, title="t", sort_dim=ID_COL)
@@ -248,7 +246,7 @@ def test_target_time_bnds_has_no_fill_value(tmp_path: Path):
 
 
 def test_target_hru_index_labeled_without_units(tmp_path: Path):
-    from nhf_spatial_targets.targets._common import write_target_nc
+    from nhf_spatial_targets.targets._writers import write_target_nc
 
     out = tmp_path / "recharge_targets.nc"
     write_target_nc(_make_target_ds(), out, title="t", sort_dim=ID_COL)

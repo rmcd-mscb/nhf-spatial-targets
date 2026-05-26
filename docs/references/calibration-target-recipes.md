@@ -435,7 +435,7 @@ TM 6-B7 Markstrom et al. 2015).
 
 **Time conventions**
 
-Daily, day-start (00:00:00). `targets/_common.py:reindex_to_day_start`
+Daily, day-start (00:00:00). `targets/_io.py:reindex_to_day_start`
 floors source timestamps to midnight before aligning onto the master
 daily index; the resulting `time_bnds` covers `[t, t+1day)` per CF.
 `cell_methods="time: point"` matches the instantaneous-snapshot

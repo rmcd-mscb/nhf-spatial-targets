@@ -320,7 +320,7 @@ def check_hru_coords(
             f"fabric ({len(fabric_hru_ids)} HRUs) but a different order. "
             f"Both sides are expected to be sorted ascending by id_col="
             f"'{id_col}' — this indicates a regression in the canonical-"
-            f"sort invariant in targets/_common.py."
+            f"sort invariant in targets/_io.py."
         )
     raise ValueError(
         f"HRU coords differ between fabric and source '{source_key}' as "

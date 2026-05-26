@@ -16,7 +16,7 @@ import yaml
 # Derived from targets/swe.py:SHIMS so there is no parallel dict to drift
 # from the real registry (PR #135 review consider 4).
 def _source_dirs_and_vars() -> dict[str, tuple[str, str]]:
-    from nhf_spatial_targets.targets._common import shims_by_config_label
+    from nhf_spatial_targets.targets._shims import shims_by_config_label
     from nhf_spatial_targets.targets.swe import SHIMS
 
     return {
@@ -247,7 +247,7 @@ def test_availability_filter_drops_unaggregated_source(tmp_path: Path, caplog):
     WARNING; aggregated sources pass through unchanged."""
     import logging
 
-    from nhf_spatial_targets.targets._common import shims_by_config_label
+    from nhf_spatial_targets.targets._shims import shims_by_config_label
     from nhf_spatial_targets.targets.swe import (
         SHIMS,
         _filter_sources_by_availability,
@@ -604,7 +604,7 @@ def test_build_year_chunked_idempotent_skips_existing_intermediates(
 
 def test_iter_period_years_clips_to_period_bounds():
     """First and last year ranges are clipped to mid-year period bounds."""
-    from nhf_spatial_targets.targets._common import iter_period_years
+    from nhf_spatial_targets.targets._intermediates import iter_period_years
 
     out = iter_period_years("1980-06-15", "1982-03-20")
     assert out == [
@@ -615,7 +615,7 @@ def test_iter_period_years_clips_to_period_bounds():
 
 
 def test_iter_period_years_single_year():
-    from nhf_spatial_targets.targets._common import iter_period_years
+    from nhf_spatial_targets.targets._intermediates import iter_period_years
 
     assert iter_period_years("2020-03-01", "2020-04-30") == [
         (2020, "2020-03-01", "2020-04-30"),
@@ -623,7 +623,7 @@ def test_iter_period_years_single_year():
 
 
 def test_iter_period_years_rejects_reversed_period():
-    from nhf_spatial_targets.targets._common import iter_period_years
+    from nhf_spatial_targets.targets._intermediates import iter_period_years
 
     with pytest.raises(ValueError, match="precedes start"):
         iter_period_years("2025-01-01", "2024-12-31")
@@ -767,10 +767,12 @@ def test_fingerprint_mismatch_rebuilds_year(tmp_path: Path, caplog):
 
     project = load(workdir)
     caplog.clear()
-    with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.targets._common"):
+    with caplog.at_level(
+        logging.WARNING, logger="nhf_spatial_targets.targets._intermediates"
+    ):
         build(project)
     # Skip predicate logged a fingerprint-mismatch warning under the
-    # shared _common logger.
+    # shared _intermediates logger.
     assert any("mismatch" in r.message for r in caplog.records), (
         "fingerprint mismatch on cached intermediate must log a WARNING"
     )
@@ -808,7 +810,9 @@ def test_pre_213_intermediate_triggers_rebuild(tmp_path: Path, caplog):
     legacy.to_netcdf(legacy_path)
     project = load(workdir)
     caplog.clear()
-    with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.targets._common"):
+    with caplog.at_level(
+        logging.WARNING, logger="nhf_spatial_targets.targets._intermediates"
+    ):
         build(project)
     assert any(
         ("predates" in r.message or "missing" in r.message) for r in caplog.records
@@ -870,9 +874,9 @@ def test_period_shrink_prunes_orphan_intermediates(tmp_path: Path, caplog):
     project = load(workdir)
     caplog.clear()
     # The prune WARNING is emitted under the caller's logger
-    # (the swe module logger), not under _common — the helper takes
-    # the caller's logger as a parameter precisely so the message
-    # appears under the right name in operator logs.
+    # (the swe module logger): the helper takes the caller's logger
+    # as a parameter so the message appears under the right name in
+    # operator logs.
     with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.targets.swe"):
         build(project)
 
