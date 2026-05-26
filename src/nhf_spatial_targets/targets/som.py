@@ -324,7 +324,7 @@ def build(project: Project) -> None:
     of scope for the driver — declaring two adapters keeps the driver's
     "one adapter, one file" contract intact.
     """
-    from nhf_spatial_targets.targets._driver import _build_single_shot
+    from nhf_spatial_targets.targets._driver import build_single_shot
     from nhf_spatial_targets.targets._io import (
         compute_hru_centroids,
         parse_period as _parse,
@@ -345,7 +345,7 @@ def build(project: Project) -> None:
     ):
         variant_cfg = dict(som_cfg)
         variant_cfg["output_file"] = _derive_variant_path(base_output, variant).name
-        _build_single_shot(
+        build_single_shot(
             adapter=adapter,
             project=project,
             target_cfg=variant_cfg,

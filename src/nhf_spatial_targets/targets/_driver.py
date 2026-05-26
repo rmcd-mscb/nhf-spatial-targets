@@ -140,7 +140,7 @@ def _adapter_logger(adapter: TargetAdapter) -> logging.Logger:
 def build(adapter: TargetAdapter, project: Project) -> None:
     """Build a target's canonical NC according to the adapter.
 
-    Dispatches to :func:`_build_single_shot` for unchunked targets and
+    Dispatches to :func:`build_single_shot` for unchunked targets and
     :func:`_build_year_chunked` otherwise.
     """
     target_cfg = project.target(adapter.config_key)
@@ -164,7 +164,7 @@ def build(adapter: TargetAdapter, project: Project) -> None:
             id_col=id_col,
         )
     else:
-        _build_single_shot(
+        build_single_shot(
             adapter=adapter,
             project=project,
             target_cfg=target_cfg,
@@ -175,7 +175,7 @@ def build(adapter: TargetAdapter, project: Project) -> None:
         )
 
 
-def _build_single_shot(
+def build_single_shot(
     *,
     adapter: TargetAdapter,
     project: Project,
@@ -185,7 +185,19 @@ def _build_single_shot(
     hru_meta,
     id_col: str,
 ) -> None:
-    """Single-shot path: load the period, combine, write."""
+    """Single-shot driver path: load the period, combine, write one NC.
+
+    Public seam for **multi-variant targets** — targets that emit more than
+    one NC under a single ``config_key`` and therefore can't be driven by
+    :func:`build` (whose contract is one adapter, one output file). Such
+    targets declare one :class:`TargetAdapter` per variant and call this
+    function directly in a loop, overriding ``target_cfg["output_file"]``
+    per variant. See :func:`nhf_spatial_targets.targets.som.build` for the
+    canonical example (monthly + annual soil-moisture targets).
+
+    Single-variant targets should call :func:`build` instead and let it
+    dispatch here on the adapter's ``year_chunked`` flag.
+    """
     fabric_hru_ids = hru_meta.index.values
 
     result = adapter.source_loader(
