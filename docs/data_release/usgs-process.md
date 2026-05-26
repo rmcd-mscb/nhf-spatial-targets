@@ -159,10 +159,14 @@ canonical policy text for the FGDC abstract.
 
 USGS data releases are public-domain by default, but **derived products may
 inherit restrictions from upstream sources**. The catalog flags this per
-source:
+source.
+
+> **Forward reference.** The `release:` block on `catalog/sources.yml`
+> entries does not exist on `main` yet — it is added by PR-A in the #241
+> phasing. The excerpt below shows the post-PR-A shape.
 
 ```yaml
-# catalog/sources.yml (excerpt)
+# catalog/sources.yml (excerpt, post-PR-A)
 era5_land:
   license: "Copernicus license (free, attribution)"
   release: { publishable: true, notes: "Acknowledge Copernicus in FGDC useconst" }

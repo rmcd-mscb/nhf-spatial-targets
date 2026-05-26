@@ -5,6 +5,24 @@ sources, organized by item type (umbrella / consolidated-source child /
 fabric child). The implementation reference for `release/mcf.py` and the
 Jinja2 FGDC templates under `release/templates/fgdc/`.
 
+> **Forward references in this document.** Several sources referenced below
+> are landed by upcoming PRs in the #241 phasing and do not exist on `main`
+> yet:
+>
+> - The `release:` block on each entry in `catalog/sources.yml`
+>   (`release.publishable`, `release.distribution_kind`, `release.notes`) —
+>   added by PR-A.
+> - `catalog/release_defaults.yml` and `catalog/release_registry.yml` —
+>   added by PR-A.
+> - The `release:` block in `<project>/config.yml`
+>   (`release.authors`, `release.fabric_label`, `release.abstract_notes`) —
+>   added by PR-A.
+> - The `<project>/manifest.json.steps[]` content — instrumented by PR-B.
+> - The `release/` Python module — built across PR-C through PR-F.
+>
+> Field paths below describe the post-PR-A/PR-B shape. Cross-check against
+> the catalog when implementing each downstream PR.
+
 ## Intermediate representation: MCF dict
 
 Rather than build FGDC XML directly from catalog + manifest, we build a
@@ -134,12 +152,16 @@ In FGDC, each step renders to:
 ```xml
 <procstep>
   <procdesc>{kind} via {tool} {software_version}, command: {command}; params: {params (formatted)}</procdesc>
+  <srcused>{srcabbr-for-inputs[i]}</srcused>
+  <!-- one <srcused> per input; element is repeatable -->
   <procdate>{YYYYMMDD from timestamp_utc}</procdate>
   <proctime>{HHMMSS from timestamp_utc}</proctime>
-  <srcused>{inputs[*].path joined}</srcused>
-  <srcprod>{outputs[*].path joined}</srcprod>
+  <srcprod>{srcabbr-for-outputs[i]}</srcprod>
+  <!-- one <srcprod> per output; element is repeatable -->
 </procstep>
 ```
+
+**CSDGM 2.0 element order is fixed** as `procdesc → srcused → procdate → proctime → srcprod`; `mp` rejects out-of-order steps. Both `<srcused>` and `<srcprod>` carry a **Source Citation Abbreviation** (a short token resolving to a separate `<srcinfo>` block elsewhere in the document), not a raw file path. They are repeatable, so a step with N inputs renders N `<srcused>` elements, not one comma-joined element. `release/mcf.py` is responsible for emitting the corresponding `<srcinfo>` entries — design that mapping when implementing PR-D.
 
 Filtering rule:
 

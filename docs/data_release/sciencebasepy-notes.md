@@ -50,7 +50,7 @@ default browser; document the manual token-paste fallback in the runbook.
 | `get_item(itemid, params={'fields': '...'})` | Field filtering supported via the `fields` param. |
 | `update_item(item_json)` | Pass dict with `id` + modified fields. Returns updated item. |
 | `delete_item(item_json)` | Returns boolean. |
-| `move_item(item, new_parent_id)` | Re-parent an item. |
+| `move_item(itemid, parentid)` | Re-parent an item (both args are ID strings). |
 | `create_items()` / `update_items()` / `delete_items()` | Batch variants for efficiency. |
 
 Item body is a free-form dict; SB doesn't validate FGDC at this layer.
@@ -63,9 +63,9 @@ top-level keys in the item JSON — there are no typed setters for them.
 |---|---|
 | `upload_file_to_item(item, filename, scrape_file=True)` | Single file. `scrape_file=True` attempts metadata extraction (variable results). |
 | `upload_files_and_upsert_item(item_json, files=[...])` | Upserts the item and uploads files in one call. Matches existing item by `id`. |
-| `upload_cloud_file_to_item(item, s3_url)` | S3 path; multipart upload happens internally. |
+| `upload_cloud_file_to_item(itemid, filename)` | `filename` is a local path; cloud-side multipart happens internally. |
 | `replace_file()` | In-place replace; updates checksum + dateUploaded + uploadedBy fields. |
-| `publish_array_to_public_bucket(items, urls)` | Batch S3 publish. |
+| `publish_array_to_public_bucket(item_id, filenames)` | Batch S3 publish. |
 
 Sharp edges:
 
@@ -108,20 +108,10 @@ registry-says-missing path (see the idempotency strategy in the design plan).
 
 ## DOI
 
-Not supported by the library at all. DOI minting is a ScienceBase-staff
-operation. After mint, the DOI appears in `item["identifiers"][0]["key"]`
-(format: `doi:10.5066/<id>`).
-
-The pipeline workflow:
-
-1. Operator runs `nhf-targets release publish --scope umbrella --confirm` —
-   creates the parent item without DOI.
-2. IPDS approval happens externally.
-3. Operator emails `sciencebase@usgs.gov` requesting DOI mint.
-4. After mint, operator copies the DOI into
-   `catalog/release_registry.yml.umbrella.doi` and reruns the umbrella
-   publish — this re-emits FGDC + ISO XMLs with the DOI populated and patches
-   the item body.
+Not supported by the library at all. After mint, the DOI appears in
+`item["identifiers"][0]["key"]` (format: `doi:10.5066/<id>`). The full
+out-of-band mint workflow lives in
+[usgs-process.md](usgs-process.md#doi-workflow).
 
 ## Versioning
 
@@ -137,8 +127,8 @@ flagged in `release status` and triggers full re-upload.
 ## Bulk operations and rate limiting
 
 - `create_items()`, `update_items()`, `delete_items()` for batch CRUD.
-- `download_cloud_files(urls, tokens)` for multi-file download via tokenized
-  S3 links.
+- `download_cloud_files(filenames, download_links, destination='.')` for
+  multi-file download via tokenized S3 links.
 - `generate_S3_download_links()` to create download tokens.
 - `publish_array_to_public_bucket()` for bulk S3 publish.
 
@@ -146,25 +136,20 @@ Rate limiting is not explicitly documented in the README or recent issues.
 Our `sb_client.upload_file` wrapper retries 429 + 5xx with exponential
 backoff (3 tries; 2s / 4s / 8s) to be defensive.
 
-## Known sharp edges (from sciencebasepy GitHub issues at capture time)
+## Known sharp edges
+
+Issue numbers below were all open against [`DOI-USGS/sciencebasepy`](https://github.com/DOI-USGS/sciencebasepy/issues) as of 2026-05-26. Click through to check current state before relying on the symptom description.
 
 | Issue | Behavior |
 |---|---|
-| #52 | `get_token()` may fail to open the browser on Windows 11; manual paste fallback needed. |
-| #51 | SSL errors on S3 cloud uploads; sometimes mitigated by retry. |
-| #17 | Uploading metadata XML with `scrape_file=True` creates duplicate extension entries. |
-| #9 | Web-link items (no file payload, just a URL) aren't well-supported. |
+| [#52](https://github.com/DOI-USGS/sciencebasepy/issues/52) | `get_token()` may fail to open the browser on Windows 11; manual paste fallback needed. |
+| [#51](https://github.com/DOI-USGS/sciencebasepy/issues/51) | SSL errors on S3 cloud uploads; sometimes mitigated by retry. |
+| [#17](https://github.com/DOI-USGS/sciencebasepy/issues/17) | Uploading metadata XML with `scrape_file=True` creates duplicate extension entries. |
+| [#9](https://github.com/DOI-USGS/sciencebasepy/issues/9) | Web-link items (no file payload, just a URL) aren't well-supported. |
 
 If new issues surface during PR-E (SB client) implementation, link them
 here. This file is the running log of "things to watch out for."
 
-## Library facts worth memorizing
-
-- **DOI minting**: not in the library. Manual SB-staff step.
-- **FGDC XML generation**: not in the library. Bring your own XML.
-- **Find by title**: roll your own with `find_items(q=...)`.
-- **Resumable upload**: no.
-- **Version history**: no — overwrite is silent. Track checksums.
-
-These are also captured as a project memory under
-`project_sciencebase_release_facts` so they don't get re-discovered.
+The TL;DR at the top of this file is the canonical "what to memorize" list;
+it is also captured as a project memory under
+`project_sciencebase_release_facts` so it doesn't get re-discovered.
