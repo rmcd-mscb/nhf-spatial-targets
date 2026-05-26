@@ -575,6 +575,15 @@ config drives ruff and pytest through `pixi run`, and a PreToolUse hook in
 `.claude/settings.json` enforces this for Claude sessions. See `CLAUDE.md` for
 the full pre-commit quality gate and git workflow.
 
+### Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the dev-environment setup, the
+issue-branch-PR workflow, and **"Extending the Pipeline" recipes** with
+checklisted file touch-points for adding a new source, target, or fabric.
+Project-wide conventions (transformation policy, CF-1.6 NetCDF policy,
+manifest read-merge-write, `fabric_scope`, pre-commit quality gate) live in
+[`CLAUDE.md`](CLAUDE.md) and apply equally to human contributors.
+
 ### Platform notes
 
 Pixi supports **linux-64**, **osx-arm64**, and **win-64** (see `pixi.toml`).
