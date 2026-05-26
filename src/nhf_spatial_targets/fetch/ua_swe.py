@@ -14,8 +14,8 @@ float32 days since ``1900-01-01`` without a ``units`` attribute; the
 companion ``time_str`` variable carries the same dates as
 ``dd-mmm-yyyy`` byte strings. Fill is ``NaN`` (the dataset uses no
 integer sentinel), so a ``where(>=0)`` mask is unnecessary at consolidate
-time — but the consolidator asserts non-negative values to catch a
-future format change loudly.
+time — but the consolidator asserts ``min >= -1.0`` (raising on any
+value below that) to catch a future format change to e.g. -9999 loudly.
 
 Filenames are deterministic, so granule discovery is direct URL
 construction by water year rather than CMR search. CMR may carry a
@@ -295,17 +295,21 @@ def consolidate_water_year_ua_swe(wy: int, raw_path: Path, daily_dir: Path) -> P
        the ``time:units`` attribute, so xarray cannot auto-decode).
     2. Decode the ``time`` float32 axis as days since
        :data:`_SRC_TIME_EPOCH` (= 1900-01-01) into ``pd.Timestamp``.
-    3. Drop the redundant ``time_str`` provenance variable and the
-       inline ``crs`` scalar (rioxarray writes its own grid-mapping).
+    3. Build a new :class:`xr.Dataset` containing only the reprojected
+       ``swe`` / ``snow_depth`` variables — the source's ``time_str``
+       provenance variable and inline ``crs`` scalar are left behind by
+       construction (not via ``drop_vars``); :func:`apply_cf_metadata`
+       in step 7 writes a fresh grid-mapping ancillary.
     4. Rename ``SWE`` → ``swe``, ``DEPTH`` → ``snow_depth`` to match the
        catalog ``variables`` block.
     5. Attach the source CRS (NAD83 / EPSG:4269) via rioxarray.
-    6. Reproject both 3-D variables to EPSG:5070 at 4-km resolution
-       using nearest-neighbour resampling (preserves NaN fill).
+    6. Reproject both 3-D variables to EPSG:5070 (NAD83 / CONUS Albers)
+       at 4-km resolution using nearest-neighbour resampling
+       (preserves NaN fill).
     7. Apply CF-1.6 metadata via
        :func:`fetch.consolidate.apply_cf_metadata` (sets variable
        ``units`` / ``long_name`` / ``cell_methods`` from the catalog
-       and the WGS84 / EPSG:5070 grid-mapping ancillary).
+       and emits the EPSG:5070 grid-mapping ancillary).
     8. Atomic write via ``.nc.tmp`` rename.
 
     Idempotency: if the output NC exists and is newer than the raw NC,
@@ -381,16 +385,31 @@ def consolidate_water_year_ua_swe(wy: int, raw_path: Path, daily_dir: Path) -> P
         # per-day DataArrays are accumulated into lists and concatenated
         # at the end; this trades a tiny accumulator-list footprint for
         # a much lower reproject-step peak.
+        #
+        # Lock the destination grid on the first day's reprojection and
+        # force every subsequent day onto exactly that ``(transform,
+        # shape)`` via ``shape=`` / ``transform=`` (rather than re-deriving
+        # from ``resolution=``). This mirrors the SNODAS pattern in
+        # ``_compute_dst_grid`` / ``_decode_and_reproject_day`` and
+        # eliminates any chance of floating-point drift in the destination
+        # bounds producing mismatched per-day shapes that would either
+        # break the final ``xr.concat`` or (worse) silently broadcast.
+        #
+        # ``nodata=np.float32("nan")`` is pinned explicitly so a future
+        # rioxarray default change can't quietly alter fill-handling on
+        # the projected output. The publisher's NaN-fill convention is
+        # preserved across reprojection.
         reprojected_per_var: dict[str, list[xr.DataArray]] = {
             _DEST_SWE_VAR: [],
             _DEST_DEPTH_VAR: [],
         }
-        # Tuples of (source name, destination name) so we can rename
-        # in the same pass.
         var_map = (
             (_NATIVE_SWE_VAR, _DEST_SWE_VAR),
             (_NATIVE_DEPTH_VAR, _DEST_DEPTH_VAR),
         )
+        dst_transform = None
+        dst_shape: tuple[int, int] | None = None
+        nan_f32 = np.float32("nan")
         for t in range(n_time):
             for src_name, dst_name in var_map:
                 da_day = ds_raw[src_name].isel(time=t)
@@ -398,11 +417,30 @@ def consolidate_water_year_ua_swe(wy: int, raw_path: Path, daily_dir: Path) -> P
                     x_dim="lon", y_dim="lat", inplace=False
                 )
                 da_day = da_day.rio.write_crs(_SRC_CRS, inplace=False)
-                da_day_reproj = da_day.rio.reproject(
-                    dst_crs=_DST_CRS,
-                    resolution=(_DST_RESOLUTION_M, _DST_RESOLUTION_M),
-                    resampling=Resampling.nearest,
-                )
+                if dst_transform is None:
+                    # First reprojection: derive (and capture) the
+                    # destination grid from the requested resolution.
+                    da_day_reproj = da_day.rio.reproject(
+                        dst_crs=_DST_CRS,
+                        resolution=(_DST_RESOLUTION_M, _DST_RESOLUTION_M),
+                        resampling=Resampling.nearest,
+                        nodata=nan_f32,
+                    )
+                    dst_transform = da_day_reproj.rio.transform()
+                    dst_shape = (
+                        int(da_day_reproj.sizes["y"]),
+                        int(da_day_reproj.sizes["x"]),
+                    )
+                else:
+                    # Subsequent reprojections: force onto the locked
+                    # day-0 grid so all days are guaranteed-conformable.
+                    da_day_reproj = da_day.rio.reproject(
+                        dst_crs=_DST_CRS,
+                        shape=dst_shape,
+                        transform=dst_transform,
+                        resampling=Resampling.nearest,
+                        nodata=nan_f32,
+                    )
                 # Drop any inherited time-related scalar coords that
                 # snuck through `isel(time=t)`; we re-attach the proper
                 # time vector via `expand_dims` next.
@@ -411,7 +449,6 @@ def consolidate_water_year_ua_swe(wy: int, raw_path: Path, daily_dir: Path) -> P
                     errors="ignore",
                 )
                 da_day_reproj = da_day_reproj.expand_dims(time=[times[t]])
-                # Rename to the destination variable name.
                 da_day_reproj.name = dst_name
                 reprojected_per_var[dst_name].append(da_day_reproj)
 

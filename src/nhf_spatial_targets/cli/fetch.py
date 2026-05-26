@@ -882,7 +882,7 @@ def fetch_margulis_wus_sr_cmd(
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
     ] = "1985/2021",
 ):
-    """Download Margulis Western US Snow Reanalysis (NSIDC-0719) via earthaccess.
+    """Download Margulis Western US Snow Reanalysis (WUS_UCLA_SR) via earthaccess.
 
     Fabric-scoped to Oregon only (catalog `fabric_scope`); the scope is
     recorded in manifest.json but not enforced at fetch time. Fetch-only:

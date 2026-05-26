@@ -932,6 +932,17 @@ sources:
           Same NaN-fill convention as `swe`. Used both as a standalone
           aggregated variable and as the basis for `snow_covered_fraction`
           (see below).
+      # SCAFFOLDING for the PR-B aggregate-layer slice (umbrella #237).
+      # This variable does NOT exist in the consolidated fetch output;
+      # it is emitted by a `pre_aggregate_hook` in `aggregate/ua_swe.py`
+      # (still to land) that converts per-pixel `snow_depth >
+      # depth_threshold_mm` to a 0/1 binary indicator before area-
+      # weighting via gdptools. The threshold and the consuming config
+      # key `snow_covered_area.depth_threshold_mm` will both arrive
+      # with the aggregate-layer PR. Listing it here keeps the catalog
+      # entry whole so reviewers see the full intended variable set,
+      # but treat this block as documentation, not a contract enforced
+      # by anything in PR-A.
       - name: snow_covered_fraction
         long_name: snow-covered fraction of HRU area
         cf_units: "1"
@@ -940,15 +951,17 @@ sources:
         # snow-covered fraction at that day's instant, not a daily average.
         cell_methods: "area: mean time: point"
         notes: >
-          Derived in aggregate/ua_swe.py::pre_aggregate_hook by converting
-          the per-pixel `snow_depth > depth_threshold_mm` test to a 0/1
-          binary indicator before area-weighting via gdptools. The
-          area-weighted mean of the binary then yields fractional snow
-          cover at the HRU scale. The threshold is configurable via
-          `snow_covered_area.depth_threshold_mm` in the project config
-          (default 1.0 mm). Per-pixel fill values propagate as NaN
-          through the test so the aggregator's `masked_mean` reduction
-          excludes them from the HRU mean denominator.
+          DEFERRED to the PR-B aggregate slice. Derived in
+          aggregate/ua_swe.py::pre_aggregate_hook (to be added) by
+          converting the per-pixel `snow_depth > depth_threshold_mm`
+          test to a 0/1 binary indicator before area-weighting via
+          gdptools. The area-weighted mean of the binary then yields
+          fractional snow cover at the HRU scale. The threshold is
+          configurable via `snow_covered_area.depth_threshold_mm` in
+          the project config (default 1.0 mm), to be wired in PR-B.
+          Per-pixel fill values propagate as NaN through the test so
+          the aggregator's `masked_mean` reduction excludes them from
+          the HRU mean denominator.
     time_step: daily
     # Calendar-year range for compatibility with the fetch period parser;
     # the actual archive runs water years 1982-2023 (1981-10-01 through
