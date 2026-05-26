@@ -21,7 +21,11 @@ fractional equivalent of the Fortran ``70.0`` on the native scale)::
 Cells whose HRU-mean CI is below threshold produce NaN bounds.
 
 July and August are forced to ``(lower, upper) = (0, 0)`` for every CI-
-passing HRU, again mirroring calcSCA.
+passing HRU, again mirroring calcSCA. The driver applies the forced-zero
+mask after this module's loader returns via
+:attr:`TargetAdapter.forced_zero_months` /
+:attr:`TargetAdapter.forced_zero_validity_var`, so the rule stays
+declarative on the adapter.
 
 If ``snow_covered_area.nn_fill`` is True (default), a second file
 ``<output>_nn_filled.nc`` is written with NaN bounds filled by the
@@ -36,43 +40,27 @@ compares against the active values.
 automatically by ``prune_orphan_year_intermediates`` plus a
 ``iter_period_years``-derived stitch input list (#211).
 
-Because SCA's per-year action is a single ``_build_year`` function that
-both computes and writes, the year loop is owned by ``build`` here
-rather than by the generic driver — this keeps the unit of monkeypatch
-at the function the test fixture replaces. The shared helpers
-(skip-cache, write_bounds_target, orphan-prune, stitch) are still
-imported from the driver-side modules so SCA participates in the
-adapter pattern's metadata contract.
+The year loop, skip-cache, orphan pruning, and stitch are owned by the
+generic year-chunked driver (``targets/_driver.py``). This module only
+declares the SCA adapter, the per-year source loader, and the
+on-year-skip hook that re-emits the low-valid-coverage WARNING when an
+operator re-runs against a healthy cache.
 """
 
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 
-from nhf_spatial_targets.targets._adapter import TargetAdapter
-from nhf_spatial_targets.targets._intermediates import (
-    INTERMEDIATE_CODE_VERSION_ATTR,
-    INTERMEDIATE_CONFIG_FINGERPRINT_ATTR,
-    code_version_fingerprint,
-    iter_period_years,
-    prune_orphan_year_intermediates,
-    should_skip_year_build,
-    stitch_year_chunks_to_target,
-    target_config_fingerprint,
-)
+from nhf_spatial_targets.targets._adapter import SourceLoaderResult, TargetAdapter
 from nhf_spatial_targets.targets._io import (
     check_hru_coords,
-    compute_hru_centroids,
-    parse_period,
     read_aggregated_source,
     reindex_to_day_start,
 )
-from nhf_spatial_targets.targets._writers import write_bounds_target
 from nhf_spatial_targets.workspace import Project
 
 logger = logging.getLogger(__name__)
@@ -101,26 +89,140 @@ def _warn_low_valid_coverage(year: int, frac_valid: float, ci_threshold: float) 
 
 
 # ---------------------------------------------------------------------------
-# Adapter declaration (declarative target metadata; the driver-style adapter
-# pattern means a future seventh target can mirror this block almost
-# verbatim, replacing only the loader/per-year action).
+# Per-year source loader (the driver calls this once per year)
 # ---------------------------------------------------------------------------
 
 
-def _noop_loader(**_kwargs):
-    """SCA owns its year loop directly (see ``build``); this loader is unused.
+def _load_sca_year(
+    *,
+    project: Project,
+    adapter: TargetAdapter,
+    period: tuple[str, str],
+    hru_meta: pd.DataFrame,
+    fabric_hru_ids: np.ndarray,
+    id_col: str,
+    year_context: tuple[int, str, str] | None,
+) -> SourceLoaderResult:
+    """Compute CI-bounded SCA bounds for one calendar year.
 
-    The adapter ``source_loader`` field is required by ``TargetAdapter``
-    construction; SCA's adapter sets it to this no-op so the dataclass
-    invariants are satisfied while ``build`` bypasses the generic
-    year-chunked driver path. SWE uses the generic path; SCA does not
-    because the test fixture monkeypatches ``_build_year`` and the unit
-    of patching must be a module-level function, not an adapter field.
+    Returns the result the generic year-chunked driver hands to
+    :func:`_writers.write_bounds_target`. The July/August forced-zero
+    policy is applied **after** this loader returns by the driver via
+    :func:`_driver._apply_forced_zero`, reading the ``valid`` mask from
+    ``extras`` — keeping the seasonal rule declarative on the adapter
+    rather than baked into the loader.
+
+    Per-year ``frac_valid_bound`` is surfaced via
+    ``extras["per_year_attrs"]`` so it lands on each year's intermediate
+    NC and survives the skip-branch re-read (which the
+    :func:`_on_sca_year_skip` hook uses to re-emit the WARNING).
+
+    ``adapter`` is used to re-read ``ci_threshold`` from the project
+    config so per-build threshold changes invalidate cached
+    intermediates via the config-fingerprint path. ``year_context`` is
+    always supplied by the driver for SCA (``year_chunked=True``);
+    ``None`` is treated as a programmer error and raises.
     """
-    raise NotImplementedError(
-        "targets.sca._noop_loader is a placeholder; SCA owns its year loop "
-        "directly in build() and does not invoke the generic year-chunked driver."
+    if year_context is None:
+        raise RuntimeError(
+            "targets.sca._load_sca_year requires year_context — SCA is "
+            "year_chunked=True and the driver always supplies it."
+        )
+    year, _year_start, _year_end = year_context
+
+    year_master_idx = pd.date_range(period[0], period[1], freq="D")
+    if len(year_master_idx) == 0:
+        raise ValueError(f"Year {year}: empty master index from period {period!r}.")
+
+    ci_threshold = float(project.target(adapter.config_key)["ci_threshold"])
+
+    snow_native = read_aggregated_source(
+        project,
+        _MOD10C1_KEY,
+        _SCA_VAR,
+        period,
+        chunks={"time": 366, id_col: -1},
     )
+    ci_native = read_aggregated_source(
+        project,
+        _MOD10C1_KEY,
+        _CI_VAR,
+        period,
+        chunks={"time": 366, id_col: -1},
+    )
+    check_hru_coords(snow_native, fabric_hru_ids, id_col, _MOD10C1_KEY)
+    check_hru_coords(ci_native, fabric_hru_ids, id_col, _MOD10C1_KEY)
+
+    sca_obs = reindex_to_day_start(snow_native / 100.0, year_master_idx)
+    ci = reindex_to_day_start(ci_native / 100.0, year_master_idx)
+
+    valid = ci >= ci_threshold
+    lower = xr.where(valid, ci * sca_obs, np.nan)
+    upper = xr.where(valid, lower + (1.0 - ci), np.nan)
+    # Note: July/August forced-zero is applied post-loader by the driver
+    # from the `valid` mask in `extras`; see TargetAdapter.forced_zero_*.
+
+    valid_bound = valid & sca_obs.notnull()
+    n_sources = valid_bound.astype(np.int8)
+
+    frac_valid = float(valid_bound.mean().compute())
+    _warn_low_valid_coverage(year, frac_valid, ci_threshold)
+
+    extra_attrs = {
+        "source": (
+            "MOD10C1 v061 Day_CMG_Snow_Cover + Day_CMG_Clear_Index "
+            "(CI-bounded per TM 6-B10 / PRMSobjfun.f90:calcSCA)"
+        ),
+        "ci_threshold": ci_threshold,
+        "summer_zero_months": ",".join(str(m) for m in _SUMMER_ZERO_MONTHS),
+    }
+
+    return SourceLoaderResult(
+        lower=lower,
+        upper=upper,
+        n_sources=n_sources,
+        n_sources_count=1,
+        time_index=year_master_idx,
+        time_offset_unit=pd.offsets.Day(1),
+        extra_attrs=extra_attrs,
+        extras={
+            "valid": valid,
+            "per_year_attrs": {_FRAC_VALID_BOUND_ATTR: frac_valid},
+        },
+    )
+
+
+def _on_sca_year_skip(
+    *,
+    project: Project,
+    adapter: TargetAdapter,
+    year: int,
+    cached_attrs: dict,
+) -> None:
+    """Re-emit the low-valid-coverage WARNING from the cached attr.
+
+    Fired by the driver when a per-year intermediate is healthy and the
+    build is skipped. Without this an operator re-running against a
+    healthy cache would miss the alert that fired on the original build
+    (#213).
+
+    If the cached intermediate predates the per-year
+    ``frac_valid_bound`` attr, this hook is a no-op — staleness is
+    :func:`should_skip_year_build`'s concern, not this hook's. In
+    practice that branch is unreachable for caches the current pipeline
+    wrote: any cache missing the fingerprint attrs would have been
+    unlinked by ``should_skip_year_build`` before this hook fires.
+    """
+    cached_frac = cached_attrs.get(_FRAC_VALID_BOUND_ATTR)
+    if cached_frac is None:
+        return
+    ci_threshold = float(project.target(adapter.config_key)["ci_threshold"])
+    _warn_low_valid_coverage(year, float(cached_frac), ci_threshold)
+
+
+# ---------------------------------------------------------------------------
+# Adapter declaration
+# ---------------------------------------------------------------------------
 
 
 ADAPTER = TargetAdapter(
@@ -144,143 +246,25 @@ ADAPTER = TargetAdapter(
     intermediate_base="sca_targets",
     forced_zero_months=_SUMMER_ZERO_MONTHS,
     forced_zero_validity_var="valid",
-    source_loader=_noop_loader,
+    per_year_title_template=("NHM SCA calibration target year {year} (intermediate)"),
+    per_year_nn_title_template=(
+        "NHM SCA calibration target year {year} (NN-filled intermediate)"
+    ),
+    source_loader=_load_sca_year,
+    on_year_skip=_on_sca_year_skip,
 )
-
-
-# ---------------------------------------------------------------------------
-# Per-year build (the monkeypatch target for tests)
-# ---------------------------------------------------------------------------
-
-
-def _build_year(
-    *,
-    project: Project,
-    year: int,
-    year_period: tuple[str, str],
-    ci_threshold: float,
-    hru_meta: pd.DataFrame,
-    fabric_hru_ids: np.ndarray,
-    id_col: str,
-    extra_attrs: dict,
-    intermediates_dir: Path,
-    nn_fill: bool,
-    nn_max_candidates: int,
-    config_fingerprint: str,
-    code_version: str,
-) -> None:
-    """Build SCA bounds for one calendar year and write per-year NCs.
-
-    Idempotent: if both expected per-year NCs already exist AND their
-    fingerprint global attrs match the active config + code version,
-    the build is skipped via :func:`should_skip_year_build`. On a
-    healthy skip, the cached ``frac_valid_bound`` global attr is read
-    and the low-valid-coverage WARNING is re-emitted.
-    """
-    year_unfilled = intermediates_dir / f"sca_targets_{year}.nc"
-    year_nn = intermediates_dir / f"sca_targets_{year}_nn_filled.nc"
-    expected_paths = [year_unfilled] + ([year_nn] if nn_fill else [])
-    skip, cached_attrs = should_skip_year_build(
-        expected_paths,
-        active_config_fingerprint=config_fingerprint,
-        active_code_version=code_version,
-        target_label="sca",
-        year=year,
-        logger=logger,
-    )
-    if skip:
-        logger.info(
-            "Year %d intermediates valid (config=%s code=%s); skipping.",
-            year,
-            config_fingerprint,
-            code_version,
-        )
-        cached_frac = (cached_attrs or {}).get(_FRAC_VALID_BOUND_ATTR)
-        if cached_frac is not None:
-            _warn_low_valid_coverage(year, float(cached_frac), ci_threshold)
-        return
-
-    year_master_idx = pd.date_range(year_period[0], year_period[1], freq="D")
-    if len(year_master_idx) == 0:
-        raise ValueError(
-            f"Year {year}: empty master index from period {year_period!r}."
-        )
-
-    snow_native = read_aggregated_source(
-        project,
-        _MOD10C1_KEY,
-        _SCA_VAR,
-        year_period,
-        chunks={"time": 366, id_col: -1},
-    )
-    ci_native = read_aggregated_source(
-        project,
-        _MOD10C1_KEY,
-        _CI_VAR,
-        year_period,
-        chunks={"time": 366, id_col: -1},
-    )
-    check_hru_coords(snow_native, fabric_hru_ids, id_col, _MOD10C1_KEY)
-    check_hru_coords(ci_native, fabric_hru_ids, id_col, _MOD10C1_KEY)
-
-    sca_obs = reindex_to_day_start(snow_native / 100.0, year_master_idx)
-    ci = reindex_to_day_start(ci_native / 100.0, year_master_idx)
-
-    valid = ci >= ci_threshold
-    lower = xr.where(valid, ci * sca_obs, np.nan)
-    upper = xr.where(valid, lower + (1.0 - ci), np.nan)
-
-    # July/August forced-zero only where the CI gate passed.
-    summer = lower["time"].dt.month.isin(list(_SUMMER_ZERO_MONTHS))
-    lower = xr.where(summer & valid, 0.0, lower)
-    upper = xr.where(summer & valid, 0.0, upper)
-
-    valid_bound = valid & sca_obs.notnull()
-    n_sources = valid_bound.astype(np.int8)
-
-    frac_valid = float(valid_bound.mean().compute())
-    _warn_low_valid_coverage(year, frac_valid, ci_threshold)
-
-    write_bounds_target(
-        project=project,
-        lower=lower,
-        upper=upper,
-        n_sources=n_sources,
-        n_sources_count=1,
-        time_index=year_master_idx,
-        time_offset_unit=pd.offsets.Day(1),
-        bounds_units=ADAPTER.bounds_units,
-        bounds_long_name_kind=ADAPTER.bounds_long_name_kind,
-        cell_methods=ADAPTER.cell_methods,
-        output_path=year_unfilled,
-        title=f"NHM SCA calibration target year {year} (intermediate)",
-        nn_title=(f"NHM SCA calibration target year {year} (NN-filled intermediate)"),
-        extra_global_attrs={
-            **extra_attrs,
-            "year_chunk": year,
-            _FRAC_VALID_BOUND_ATTR: frac_valid,
-        },
-        hru_meta=hru_meta,
-        nn_fill=nn_fill,
-        nn_max_candidates=nn_max_candidates,
-        id_col=id_col,
-    )
 
 
 def build(project: Project) -> None:
     """Build the SCA calibration target.
 
-    Year-chunked: each year reads its own slice of the aggregated NCs,
-    computes per-day bounds, and writes a per-year intermediate. The
-    intermediates are then stitched into the canonical
-    ``sca_targets.nc``.
-
-    Year-loop is owned directly by this module (rather than delegated
-    to the generic year-chunked driver) so that test fixtures can
-    ``monkeypatch.setattr(sca, "_build_year", no_op)`` to exercise
-    the stitch-only path. Single-shot builders (runoff/aet/rch) and
-    SWE delegate to the generic ``targets._driver.build``.
+    Validates the SCA-specific config invariants (single source =
+    mod10c1_v061; ci_threshold ∈ [0, 1]) and delegates the year loop,
+    cache management, orphan pruning, and stitching to the generic
+    year-chunked driver via :func:`_driver.build`.
     """
+    from nhf_spatial_targets.targets._driver import build as run_driver
+
     sca_cfg = project.target(ADAPTER.config_key)
     if list(sca_cfg["sources"]) != [_MOD10C1_KEY]:
         raise ValueError(
@@ -288,7 +272,6 @@ def build(project: Project) -> None:
             f"modis_ci range method requires exactly one source: "
             f"[{_MOD10C1_KEY!r}]. Adjust the project config."
         )
-    period = parse_period(sca_cfg["period"])
     ci_threshold = float(sca_cfg["ci_threshold"])
     if not (0.0 <= ci_threshold <= 1.0):
         raise ValueError(
@@ -298,108 +281,11 @@ def build(project: Project) -> None:
         )
 
     logger.info(
-        "Building SCA target: source=%s, period=%s..%s, ci_threshold=%.2f, fabric=%s",
+        "Building SCA target: source=%s, period=%s, ci_threshold=%.2f, fabric=%s",
         _MOD10C1_KEY,
-        period[0],
-        period[1],
+        sca_cfg["period"],
         ci_threshold,
         project.config["fabric"]["path"],
     )
 
-    hru_meta = compute_hru_centroids(project)
-    id_col = project.id_col
-    fabric_hru_ids = hru_meta.index.values
-
-    config_fp = target_config_fingerprint(project, ADAPTER.config_key)
-    code_ver = code_version_fingerprint()
-
-    extra_attrs = {
-        "source": (
-            "MOD10C1 v061 Day_CMG_Snow_Cover + Day_CMG_Clear_Index "
-            "(CI-bounded per TM 6-B10 / PRMSobjfun.f90:calcSCA)"
-        ),
-        "references": ADAPTER.references,
-        "fabric": project.config["fabric"]["path"],
-        "fabric_sha256": project.fabric.get("sha256", ""),
-        "period": sca_cfg["period"],
-        "area_crs": project.area_crs,
-        "ci_threshold": ci_threshold,
-        "summer_zero_months": ",".join(str(m) for m in _SUMMER_ZERO_MONTHS),
-        INTERMEDIATE_CONFIG_FINGERPRINT_ATTR: config_fp,
-        INTERMEDIATE_CODE_VERSION_ATTR: code_ver,
-    }
-
-    year_specs = iter_period_years(period[0], period[1])
-    if not year_specs:
-        raise ValueError(
-            f"snow_covered_area.period {sca_cfg['period']} produces no years to build."
-        )
-
-    intermediates_dir = project.targets_dir() / ADAPTER.intermediates_subdir
-    intermediates_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(
-        "Year-chunked build: %d years, intermediates -> %s "
-        "(retained after stitch for forensic value; rm to reclaim disk)",
-        len(year_specs),
-        intermediates_dir,
-    )
-
-    nn_fill = bool(sca_cfg["nn_fill"])
-    nn_max_candidates = int(sca_cfg["nn_max_candidates"])
-
-    for year, year_start, year_end in year_specs:
-        _build_year(
-            project=project,
-            year=year,
-            year_period=(year_start, year_end),
-            ci_threshold=ci_threshold,
-            hru_meta=hru_meta,
-            fabric_hru_ids=fabric_hru_ids,
-            id_col=id_col,
-            extra_attrs=extra_attrs,
-            intermediates_dir=intermediates_dir,
-            nn_fill=nn_fill,
-            nn_max_candidates=nn_max_candidates,
-            config_fingerprint=config_fp,
-            code_version=code_ver,
-        )
-
-    in_period_years = {year for year, _, _ in year_specs}
-    prune_orphan_year_intermediates(
-        intermediates_dir,
-        ADAPTER.intermediate_base,
-        in_period_years,
-        target_label="sca",
-        logger=logger,
-    )
-
-    output_path = project.targets_dir() / sca_cfg["output_file"]
-    unfilled_files = [
-        intermediates_dir / f"sca_targets_{year}.nc" for year, _, _ in year_specs
-    ]
-    stitch_year_chunks_to_target(
-        unfilled_files,
-        output_path,
-        title=ADAPTER.title,
-        extra_global_attrs=extra_attrs,
-        sort_dim=id_col,
-    )
-
-    if nn_fill:
-        nn_files = [
-            intermediates_dir / f"sca_targets_{year}_nn_filled.nc"
-            for year, _, _ in year_specs
-        ]
-        nn_path = output_path.with_name(
-            output_path.stem + "_nn_filled" + output_path.suffix
-        )
-        nn_attrs = dict(extra_attrs)
-        nn_attrs["nn_fill_max_candidates"] = nn_max_candidates
-        nn_attrs["nn_fill_distance_crs"] = project.area_crs
-        stitch_year_chunks_to_target(
-            nn_files,
-            nn_path,
-            title="NHM SCA calibration target (NN-filled, fractional 0-1)",
-            extra_global_attrs=nn_attrs,
-            sort_dim=id_col,
-        )
+    run_driver(ADAPTER, project)
