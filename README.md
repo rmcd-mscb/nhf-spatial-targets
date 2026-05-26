@@ -20,11 +20,14 @@ via `catalog/sources.yml` → `margulis_wus_sr.fabric_scope`. Non-Oregon project
 reduce the SWE bound to the remaining three sources at target-build time; raw
 downloads remain reusable across any project sharing the datastore.
 
-The runoff target builder is implemented (`targets/run.py`, NaN-aware across
-all three sources). AET / recharge / soil moisture / snow cover / SWE
-builders raise `NotImplementedError` until their per-variable modules land;
-the `nhf-targets run` driver logs a `WARNING ... skipping` for any target
-whose builder is still a stub.
+All six target builders are implemented. Each writes a per-HRU per-time
+`(lower_bound, upper_bound)` NetCDF to `<project>/targets/` along with an
+optional `_nn_filled.nc` companion that fills NaN HRUs from up to 10 nearest
+finite neighbours. The `nhf-targets run` driver builds all enabled targets in
+sequence; pass `--target <key>` (or `pixi run run-<x>`) to build one. SCA's
+bound formula follows `PRMSobjfun.f90:calcSCA` verbatim (PR #210); SWE uses
+NaN-aware multi-source min/max across 3 (gfv2) or 4 (OR) sources via the
+`fabric_scope` mechanism on Margulis WUS-SR (PR #101/#135).
 
 ## Quick Start
 
@@ -168,7 +171,7 @@ The fabric file must contain a polygon geometry column and a unique integer HRU 
 | 4 | `nhf-targets validate --project-dir <dir>` | Verifies config, fabric, datastore, credentials; writes `fabric.json` and merges into `manifest.json` |
 | 5 | `nhf-targets fetch <source> --project-dir <dir> [--period YYYY/YYYY]` | Downloads source granules into `<datastore>/<source_key>/` (skipped if already fetched per the manifest) |
 | 6 | `nhf-targets agg <source> --project-dir <dir>` | Aggregates source data to HRU fabric. SSEBop and Daymet take an explicit `--period` (remote STAC / multi-year zarr); others infer the period from available years on disk. |
-| 7 | `nhf-targets run --project-dir <dir>` | Builds calibration targets from aggregated data; stub builders are skipped with a warning |
+| 7 | `nhf-targets run --project-dir <dir>` | Builds all six calibration targets (runoff, AET, recharge, soil moisture, SCA, SWE) from aggregated data. Pass `--target <key>` to build a single target. |
 
 **Key paths:**
 
@@ -403,10 +406,12 @@ pixi run run -- --project-dir /data/gfv11-targets
 
 # Build one target
 pixi run run-runoff -- --project-dir /data/gfv11-targets
-pixi run run-aet    -- --project-dir /data/gfv11-targets   # stub: skipped with warning
+pixi run run-aet    -- --project-dir /data/gfv11-targets
+pixi run run-sca    -- --project-dir /data/gfv11-targets
+pixi run run-swe    -- --project-dir /data/gfv11-targets
 ```
 
-On HPC, the per-fabric [`slurm/project_gfv2/run_gfv2.slurm`](slurm/project_gfv2/run_gfv2.slurm) / [`slurm/project_or/run_or.slurm`](slurm/project_or/run_or.slurm) submit a 6-element array (runoff, aet, rch, som, sca, swe) over a shared body. SCA is still a stub: it raises `NotImplementedError`, which the CLI catches and logs as a `WARNING ... skipping`, so the array completes without failing.
+On HPC, the per-fabric [`slurm/project_gfv2/run_gfv2.slurm`](slurm/project_gfv2/run_gfv2.slurm) / [`slurm/project_or/run_or.slurm`](slurm/project_or/run_or.slurm) submit a 6-element array (runoff, aet, rch, som, sca, swe) over a shared body. All six builders are implemented; the array runs them in parallel as independent SLURM tasks.
 
 ### Inspection Notebooks
 
@@ -501,13 +506,15 @@ nhf-spatial-targets/
 │   │   └── snodas.py        # SNODAS daily SWE (CONUS)
 │   ├── normalize/
 │   │   └── methods.py       # per-HRU normalisation, NN-fill helpers (used by target builders)
-│   └── targets/             # per-variable target builders
-│       ├── _common.py       # write_target_nc, project-config defaults
-│       ├── run.py           # runoff (3-source NaN-aware) — implemented
-│       ├── aet.py           # stub
-│       ├── rch.py           # stub
-│       ├── som.py           # stub
-│       └── sca.py           # stub
+│   └── targets/             # per-variable target builders (all six implemented)
+│       ├── _common.py       # write_target_nc, year-chunk + fingerprint cache,
+│       │                    # write_bounds_target, multi_source_nanminmax
+│       ├── run.py           # runoff (3-source NaN-aware, monthly cfs)
+│       ├── aet.py           # AET (multi-source min/max, monthly inches/day)
+│       ├── rch.py           # recharge (normalized_minmax, annual [0,1])
+│       ├── som.py           # soil moisture (normalized_minmax, monthly + annual [0,1])
+│       ├── sca.py           # snow-covered area (CI-bounded, daily [0,1])
+│       └── swe.py           # SWE (4-source NaN-aware on OR, daily inches)
 ├── tests/                   # pytest suite (run via `pixi run -e dev test`)
 ├── *.slurm                  # HPC scripts: fetch / agg / run / inspect
 ├── pixi.toml
@@ -591,12 +598,12 @@ Pixi supports **linux-64**, **osx-arm64**, and **win-64** (see `pixi.toml`).
 | Visualization + inspection notebooks (gridded + HRU) | Done |
 | `fetch all` and `agg all` driver commands | Done |
 | **Runoff target builder** (3-source NaN-aware; PR #92/#95) | Done |
-| AET target builder | Not started (stub) |
-| Recharge target builder | Not started (stub) |
-| Soil moisture target builder | Not started (stub) |
-| Snow-covered-area target builder | Not started (stub) |
-| SWE target builder (4-source, OR-scoped Margulis) | Not started (umbrella #101) |
-| Margulis WUS-SR per-WY granule consolidation | Not started (umbrella #101) |
+| **AET target builder** (multi-source min/max; PR #126/#127) | Done |
+| **Recharge target builder** (`normalized_minmax`, 2-source; PR #133/#134) | Done |
+| **Soil moisture target builder** (`normalized_minmax`, monthly + annual; PR #133/#134) | Done |
+| **SCA target builder** (CI-bounded single-source MOD10C1 v061 per `PRMSobjfun.f90:calcSCA`; PR #210/#212, year-chunk fingerprinting #213/#214, finish workflow #217) | Done |
+| **SWE target builder** (4-source NaN-aware, OR-scoped Margulis via `fabric_scope`; PR #101/#135) | Done |
+| Margulis WUS-SR per-WY granule consolidation | Done (PR #101/#135) |
 
 ## Known Gaps
 
@@ -606,8 +613,9 @@ See `catalog/sources.yml` `status:` and `notes:` fields for per-source details.
 
 **Still open:**
 
-- SCA CI-bounds formula — `PRMSobjfun.f` not publicly available; exact upper/lower bound formula from a daily SCA + CI pair remains unconfirmed.
 - SNODAS archive day-gaps and rare partial-bundle days (3–5/yr in 2004–2007) — fill policy TBD; do not add interpolation to the consolidator unilaterally.
+
+The SCA CI-bounds formula gap closed 2026-05-24 when `PRMSobjfun.f90` was delivered by a collaborator (`docs/references/PRMSobjfun.f90`, `prmsobjfun-summary.md`). The `calcSCA` formula at lines 1052-1061 is implemented verbatim in `targets/sca.py` (PR #210).
 
 ## References
 
