@@ -9,7 +9,7 @@ resolution:
 | Variable | Long name | Native units | cell_methods | Target |
 | -------- | --------- | ------------ | ------------ | ------ |
 | `ro` | total runoff | m | `time: sum` (accumulated) | runoff |
-| `sro` | surface runoff | m | `time: sum` (accumulated) | reserve |
+| `sro` | surface runoff | m | `time: sum` (accumulated) | reserved (future) |
 | `ssro` | sub-surface runoff | m | `time: sum` (accumulated) | recharge (proxy) |
 | `sd` | snow depth water equivalent | m | `time: point` (instantaneous) | SWE |
 
@@ -64,7 +64,7 @@ each variable's `cell_methods` from `catalog/sources.yml`:
   is credited to the prior day, then (d) sums hourly increments per
   calendar day. The daily→monthly step is a `.sum()`.
 - **Instantaneous** (`sd`): values are point-in-time snowpack water
-  equivalent. Hourly→daily is a `.mean()`; monthly→daily is also a
+  equivalent. Hourly→daily is a `.mean()`; daily→monthly is also a
   `.mean()`. Applying the accumulated reducer here would yield
   physically meaningless values.
 

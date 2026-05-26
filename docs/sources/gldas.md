@@ -53,8 +53,10 @@ if needed.
   gldas_noah_v21_monthly.nc               # consolidated, clipped, CF-1.6
 ```
 
-The consolidator runs `derive_runoff_total → clip_to_bbox →
-apply_cf_metadata` and writes atomically via a `.nc.tmp` rename.
+The consolidator (in [`fetch/gldas.py`](../../src/nhf_spatial_targets/fetch/gldas.py))
+runs `derive_runoff_total → clip_to_bbox → apply_cf_metadata` (the
+shared CF helper from `fetch/consolidate.py`) and writes atomically
+via a `.nc.tmp` rename.
 
 ## Procedure
 

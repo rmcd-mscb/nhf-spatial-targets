@@ -42,7 +42,8 @@ Granules are global monthly NetCDF-4 files
 the project's `fabric.bbox_buffered`, but **earthaccess returns the
 full global granule regardless** — bounding_box is a server-side
 *overlap* test, not a subset operation. Spatial subsetting happens at
-target-build time, not at fetch time.
+aggregation time (gdptools reads only the pixels overlapping fabric
+HRUs), not at fetch time.
 
 ## On-disk layout
 

@@ -21,7 +21,7 @@ per-year aggregated NCs directly.
 | Zarr store | `s3://mdmf/gdp/ssebopeta_monthly.zarr/` |
 | Period | 2000-2023 (monthly) |
 | Spatial extent | CONUS, ~1 km |
-| Source variable | `et` (kg m-2 ≡ mm water-equivalent per month) |
+| Source variable | `et` (catalog `cf_units: mm` with `cell_methods: time: sum`) |
 
 No authentication. The STAC collection is resolved at aggregator
 start via `gdptools.helpers.get_stac_collection("ssebopeta_monthly")`,
