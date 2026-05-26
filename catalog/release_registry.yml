@@ -1,0 +1,44 @@
+# ============================================================================
+# release_registry.yml — running state of the ScienceBase data release
+# ============================================================================
+#
+# Source of truth for what has been published to ScienceBase under the
+# nhf-spatial-targets umbrella release. Populated by `nhf-targets release
+# publish` (PR-E) as items are created or updated. flock-protected on
+# write so concurrent publishes against different scopes don't clobber
+# each other.
+#
+# Schema (post-PR-E):
+#
+#   umbrella:
+#     sb_id:          <ScienceBase item ID>
+#     doi:            <full DOI URL once minted post-IPDS>
+#     version:        <release version, e.g. "1.0">
+#     published_utc:  <ISO 8601 timestamp of first publish>
+#     title:          <canonical title used for find_items lookups>
+#
+#   consolidated_sources:
+#     <source_key>:
+#       sb_id:                       <ScienceBase item ID>
+#       uploaded_utc:                <ISO 8601 timestamp of last upload>
+#       file_count:                  <int>
+#       total_bytes:                 <int>
+#       checksums_sha256_of_manifest: <hex digest of staged checksums.csv>
+#
+#   fabrics:
+#     <fabric_label>:
+#       sb_id:                       <ScienceBase item ID>
+#       uploaded_utc:                <ISO 8601 timestamp of last upload>
+#       file_count:                  <int>
+#       total_bytes:                 <int>
+#       checksums_sha256_of_manifest: <hex digest of staged checksums.csv>
+#       project_path_hint:           <last-known project dir, free-text>
+#
+# Initial state below. After every successful publish the registry is
+# updated and the operator is reminded to commit it (so the repo carries
+# the authoritative record of what's been released).
+# ============================================================================
+
+umbrella: null
+consolidated_sources: {}
+fabrics: {}

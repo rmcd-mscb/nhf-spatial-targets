@@ -384,3 +384,142 @@ def test_source_var_cell_methods_raises_on_unknown_variable():
 
     with pytest.raises(KeyError, match="not found"):
         source_var_cell_methods("era5_land", "no_such_var")
+
+
+# ---------------------------------------------------------------------------
+# release block (PR-A foundation for the ScienceBase release workflow, #241/#243)
+# ---------------------------------------------------------------------------
+
+
+def test_validate_release_block_none_is_ok():
+    """No block on a source means defaults apply; not an error."""
+    from nhf_spatial_targets.catalog import validate_release_block
+
+    validate_release_block("test_src", None)
+
+
+def test_validate_release_block_accepts_bare_publishable_false():
+    from nhf_spatial_targets.catalog import validate_release_block
+
+    validate_release_block("test_src", {"publishable": False})
+
+
+def test_validate_release_block_rejects_non_mapping():
+    from nhf_spatial_targets.catalog import validate_release_block
+
+    with pytest.raises(ValueError, match="must be a mapping"):
+        validate_release_block("test_src", "publishable: true")
+
+
+def test_validate_release_block_rejects_unknown_key():
+    """Typo guard — `publishible` must not silently fall through to default."""
+    from nhf_spatial_targets.catalog import validate_release_block
+
+    with pytest.raises(ValueError, match="unknown key"):
+        validate_release_block("test_src", {"publishible": True})
+
+
+def test_validate_release_block_rejects_non_bool_publishable():
+    from nhf_spatial_targets.catalog import validate_release_block
+
+    with pytest.raises(ValueError, match="must be a bool"):
+        validate_release_block("test_src", {"publishable": "yes"})
+
+
+def test_validate_release_block_rejects_unknown_distribution_kind():
+    from nhf_spatial_targets.catalog import validate_release_block
+
+    with pytest.raises(ValueError, match="distribution_kind"):
+        validate_release_block("test_src", {"distribution_kind": "metadata"})
+
+
+def test_validate_release_block_rejects_non_string_notes():
+    from nhf_spatial_targets.catalog import validate_release_block
+
+    with pytest.raises(ValueError, match="notes"):
+        validate_release_block("test_src", {"notes": ["a", "b"]})
+
+
+def test_distribution_kind_tokens():
+    from nhf_spatial_targets.catalog import DISTRIBUTION_KIND_TOKENS
+
+    assert DISTRIBUTION_KIND_TOKENS == frozenset({"data", "metadata_only"})
+
+
+def test_release_block_defaults_apply_when_unset():
+    """A source with no `release:` block reports the defaults."""
+    from nhf_spatial_targets.catalog import release_block
+
+    # era5_land carries no release block on PR-A; it should default to
+    # publishable=True, distribution_kind="data", notes=None.
+    rb = release_block("era5_land")
+    assert rb == {"publishable": True, "distribution_kind": "data", "notes": None}
+
+
+def test_release_block_watergap22d_is_not_publishable():
+    """watergap22d is CC BY-NC; held back from the release per PR-A."""
+    from nhf_spatial_targets.catalog import release_block
+
+    rb = release_block("watergap22d")
+    assert rb["publishable"] is False
+    assert "CC BY-NC" in rb["notes"]
+
+
+def test_release_block_daymet_is_metadata_only():
+    """Daymet ships metadata only (4.6 TB zarr lives on ORNL DAAC)."""
+    from nhf_spatial_targets.catalog import release_block
+
+    rb = release_block("daymet")
+    assert rb["publishable"] is True
+    assert rb["distribution_kind"] == "metadata_only"
+    assert "ORNL" in rb["notes"]
+
+
+def test_release_block_margulis_publishable_despite_fabric_scope():
+    """Margulis WUS-SR is fabric-scoped for consumption, not for publication."""
+    from nhf_spatial_targets.catalog import release_block
+
+    rb = release_block("margulis_wus_sr")
+    assert rb["publishable"] is True
+    assert rb["distribution_kind"] == "data"
+
+
+def test_every_release_block_validates():
+    """Every declared `release:` block in catalog/sources.yml passes the validator."""
+    from nhf_spatial_targets.catalog import validate_release_block
+
+    for key, src in sources().items():
+        validate_release_block(key, src.get("release"))
+
+
+def test_publishable_sources_excludes_superseded():
+    """Sources with `status: superseded` are skipped regardless of `release.publishable`."""
+    from nhf_spatial_targets.catalog import publishable_sources
+
+    pub = publishable_sources()
+    # merra_land is superseded → out.
+    assert "merra_land" not in pub
+    # mwbm (the original MWBM, before mwbm_climgrid) is superseded → out.
+    superseded_keys = {
+        k for k, s in sources().items() if s.get("status") == "superseded"
+    }
+    assert pub.keys().isdisjoint(superseded_keys)
+
+
+def test_publishable_sources_excludes_watergap22d():
+    """watergap22d is `release.publishable: false` → excluded."""
+    from nhf_spatial_targets.catalog import publishable_sources
+
+    assert "watergap22d" not in publishable_sources()
+
+
+def test_publishable_sources_includes_daymet_and_margulis():
+    """Metadata-only and fabric-scoped sources still publish."""
+    from nhf_spatial_targets.catalog import publishable_sources
+
+    pub = publishable_sources()
+    assert "daymet" in pub
+    assert "margulis_wus_sr" in pub
+    # And the default-true sources are in too.
+    assert "era5_land" in pub
+    assert "snodas" in pub

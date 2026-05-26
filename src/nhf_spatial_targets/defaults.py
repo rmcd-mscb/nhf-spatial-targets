@@ -133,6 +133,20 @@ DEFAULTS: dict = {
             "nn_max_candidates": 10,
         },
     },
+    # ScienceBase data-release metadata. Optional — all leaves carry safe
+    # defaults so existing projects continue to validate. Populated by the
+    # operator before running `nhf-targets release publish`; see
+    # docs/data_release/. authors is the only field the release CLI will
+    # treat as required when actually publishing (validated at that point,
+    # not at config-load time). doi is filled by the operator after the
+    # ScienceBase staff mints it post-IPDS approval.
+    "release": {
+        "authors": [],
+        "ipds_number": None,
+        "doi": None,
+        "abstract_notes": None,
+        "fabric_label": None,
+    },
 }
 
 

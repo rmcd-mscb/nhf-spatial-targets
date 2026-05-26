@@ -153,6 +153,25 @@ def source_var_cell_methods(source_key: str, var_name: str) -> str | None:
 # enforcement in the target builders.
 FABRIC_SCOPE_TOKENS: frozenset[str] = frozenset({"or"})
 
+# Allowed `release.distribution_kind` tokens.
+#
+# - "data": the consolidated-source child item carries the source's
+#   consolidated NetCDF files (the default; most sources).
+# - "metadata_only": the child item carries README + FGDC + an upstream
+#   pointer but no data payload. Used for sources whose primary
+#   distribution is elsewhere (e.g. daymet, hosted on ORNL DAAC as
+#   multi-TB zarr stores that we do not redistribute).
+DISTRIBUTION_KIND_TOKENS: frozenset[str] = frozenset({"data", "metadata_only"})
+
+# Release-block default values applied when a source omits one or more keys
+# from its optional ``release:`` block. Kept in one place so the FGDC
+# builder and the publishability filter agree on defaults.
+_RELEASE_DEFAULTS: dict = {
+    "publishable": True,
+    "distribution_kind": "data",
+    "notes": None,
+}
+
 
 def validate_fabric_scope(source_key: str, scope: dict | None) -> None:
     """Raise ValueError if a source's ``fabric_scope`` block is malformed.
@@ -200,3 +219,110 @@ def validate_fabric_scope(source_key: str, scope: dict | None) -> None:
             f"{sorted(FABRIC_SCOPE_TOKENS)}. If you intended to add a "
             f"new fabric, extend FABRIC_SCOPE_TOKENS in catalog.py."
         )
+
+
+def validate_release_block(source_key: str, release: dict | None) -> None:
+    """Raise ValueError if a source's ``release`` block is malformed.
+
+    The check is intentionally narrow:
+
+    - ``release`` may be ``None`` (no block, defaults apply).
+    - When present, ``release`` must be a mapping. Recognized keys are
+      ``publishable`` (bool), ``distribution_kind`` (member of
+      :data:`DISTRIBUTION_KIND_TOKENS`), and ``notes`` (string).
+    - Unknown keys raise — catches typos like ``publishible`` that would
+      otherwise silently fall through to the default.
+
+    Parameters
+    ----------
+    source_key : str
+        Catalog source key (for error messages).
+    release : dict or None
+        The value of ``sources[source_key].release``.
+
+    Raises
+    ------
+    ValueError
+        ``release`` is not a mapping; ``publishable`` is not a bool;
+        ``distribution_kind`` is not in :data:`DISTRIBUTION_KIND_TOKENS`;
+        ``notes`` is not a string; or there are unknown keys.
+    """
+    if release is None:
+        return
+    if not isinstance(release, dict):
+        raise ValueError(
+            f"sources[{source_key!r}].release must be a mapping; "
+            f"got {type(release).__name__}."
+        )
+    unknown = set(release) - set(_RELEASE_DEFAULTS)
+    if unknown:
+        raise ValueError(
+            f"sources[{source_key!r}].release contains unknown key(s) "
+            f"{sorted(unknown)}. Allowed: {sorted(_RELEASE_DEFAULTS)}."
+        )
+    pub = release.get("publishable")
+    if pub is not None and not isinstance(pub, bool):
+        raise ValueError(
+            f"sources[{source_key!r}].release.publishable must be a bool; "
+            f"got {type(pub).__name__}."
+        )
+    kind = release.get("distribution_kind")
+    if kind is not None and kind not in DISTRIBUTION_KIND_TOKENS:
+        raise ValueError(
+            f"sources[{source_key!r}].release.distribution_kind must be one of "
+            f"{sorted(DISTRIBUTION_KIND_TOKENS)}; got {kind!r}."
+        )
+    notes = release.get("notes")
+    if notes is not None and not isinstance(notes, str):
+        raise ValueError(
+            f"sources[{source_key!r}].release.notes must be a string; "
+            f"got {type(notes).__name__}."
+        )
+
+
+def release_block(source_key: str) -> dict:
+    """Return the ``release`` block for ``source_key`` with defaults applied.
+
+    Returns a fresh dict with the four canonical keys (``publishable``,
+    ``distribution_kind``, ``notes``) populated from the source's
+    optional ``release:`` block plus :data:`_RELEASE_DEFAULTS` fallbacks.
+    Validates the on-disk block on every call — catches typos at the same
+    boundary the FGDC builder reads from.
+
+    Raises
+    ------
+    ValueError
+        The source declares a malformed ``release`` block (see
+        :func:`validate_release_block`).
+    """
+    src = source(source_key)
+    raw = src.get("release")
+    validate_release_block(source_key, raw)
+    out = dict(_RELEASE_DEFAULTS)
+    if isinstance(raw, dict):
+        out.update({k: v for k, v in raw.items() if v is not None})
+    return out
+
+
+def publishable_sources() -> dict:
+    """Return the subset of sources eligible for the ScienceBase release.
+
+    A source is eligible iff:
+
+    - its ``status`` is not ``"superseded"`` — superseded sources never
+      ship (`mod16a2`, `mod10c1` v006 variants, `merra_land`,
+      `watergap22a`, etc. are catalog-archive entries only); AND
+    - its ``release.publishable`` is True (the default).
+
+    The returned dict mirrors :func:`sources` but excludes filtered keys.
+    Order is preserved from the underlying YAML to keep deterministic
+    output across release builds.
+    """
+    out: dict = {}
+    for key, src in sources().items():
+        if src.get("status") == "superseded":
+            continue
+        rb = release_block(key)
+        if rb["publishable"]:
+            out[key] = src
+    return out

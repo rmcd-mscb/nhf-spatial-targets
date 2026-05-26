@@ -168,6 +168,27 @@ targets:
 #   soil_moisture: *rep_pts
 #   snow_covered_area: *rep_pts
 #   swe: *rep_pts
+
+# ---------------------------------------------------------------------------
+# ScienceBase data release (optional)
+# ---------------------------------------------------------------------------
+# Per-project metadata for the `nhf-targets release` workflow. Most
+# defaults live in catalog/release_defaults.yml (committed repo-wide).
+# This block carries the per-project bits: authors, IPDS number, DOI
+# (filled after ScienceBase staff mints it post-IPDS approval), and an
+# optional fabric-label override. Leave commented until ready to publish.
+# See docs/data_release/ for the full workflow.
+#
+# release:
+#   authors:
+#     - given: Jane
+#       family: Doe
+#       orcid: 0000-0000-0000-0000
+#       affiliation: U.S. Geological Survey
+#   ipds_number: IP-XXXXXX
+#   doi: null               # populated after SB staff mints DOI
+#   abstract_notes: null    # optional paragraph appended to fabric abstract
+#   fabric_label: null      # human-readable name; defaults to Path(fabric.path).stem
 """
 
 _CREDENTIALS_TEMPLATE = {

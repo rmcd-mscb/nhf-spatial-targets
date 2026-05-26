@@ -110,6 +110,32 @@ OPTIONAL_CONFIG_FEATURES: list[OptionalConfigFeature] = [
         added="2026-05-23 (#193)",
         why="per-target REPRESENTATIVE_POINTS for inspect_* notebooks (#192)",
     ),
+    OptionalConfigFeature(
+        name="release",
+        # Top-level `release:` key (no other `release:` in the schema).
+        detect=r"(?m)^\s*#?\s*release\s*:",
+        block=(
+            "# Per-project metadata for the `nhf-targets release` workflow. Most\n"
+            "# defaults live in catalog/release_defaults.yml (committed repo-wide).\n"
+            "# This block carries the per-project bits: authors, IPDS number, DOI\n"
+            "# (filled after ScienceBase staff mints it post-IPDS approval), and an\n"
+            "# optional fabric-label override. Leave commented until ready to publish.\n"
+            "# See docs/data_release/ for the full workflow.\n"
+            "#\n"
+            "# release:\n"
+            "#   authors:\n"
+            "#     - given: Jane\n"
+            "#       family: Doe\n"
+            "#       orcid: 0000-0000-0000-0000\n"
+            "#       affiliation: U.S. Geological Survey\n"
+            "#   ipds_number: IP-XXXXXX\n"
+            "#   doi: null               # populated after SB staff mints DOI\n"
+            "#   abstract_notes: null    # optional paragraph appended to fabric abstract\n"
+            "#   fabric_label: null      # human-readable name; defaults to Path(fabric.path).stem\n"
+        ),
+        added="2026-05-26 (#243)",
+        why="ScienceBase data-release metadata for `nhf-targets release` (#241)",
+    ),
 ]
 
 

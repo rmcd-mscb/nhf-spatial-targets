@@ -383,6 +383,17 @@ sources:
     units: kg m-2 s-1
     license: CC BY-NC 4.0
     status: current
+    release:
+      # CC BY-NC 4.0 redistribution by a US federal agency is legally
+      # ambiguous (USGS itself is non-commercial but downstream users may
+      # not be). Excluded from the ScienceBase release until OSQI clears
+      # it or WaterGAP 2.2e (expected open-access) supersedes 2.2d. The
+      # aggregated recharge bound that depends on this source is still
+      # produced from the remaining sources at target build time.
+      publishable: false
+      notes: >
+        CC BY-NC 4.0 license; pending OSQI review or WaterGAP 2.2e
+        substitution before inclusion in a USGS data release.
 
   # ---------------------------------------------------------------------------
   # SOIL MOISTURE
@@ -740,6 +751,18 @@ sources:
     units: "kg m-2 (swe, prcp); degC (tmax, tmin); W m-2 (srad); Pa (vp)"
     license: public domain (NASA / ORNL DAAC)
     status: current
+    release:
+      # Daymet source data is ~4.6 TB of zarr stores hosted by ORNL DAAC;
+      # we do not redistribute it. The consolidated-source child in the
+      # ScienceBase release carries README + FGDC + an upstream pointer
+      # only. The fabric children still include the HRU-aggregated Daymet
+      # NCs, which ARE redistributable as a USGS-derivative product.
+      publishable: true
+      distribution_kind: metadata_only
+      notes: >
+        Source data lives on ORNL DAAC as multi-TB zarr stores; the
+        consolidated-source child carries metadata + an upstream pointer
+        rather than file payload.
 
   snodas:
     name: SNODAS Snow Data Assimilation System Data Products (NSIDC G02158)
@@ -865,6 +888,16 @@ sources:
     units: m water equivalent
     license: public domain (NASA NSIDC)
     status: current
+    release:
+      # `fabric_scope` restricts AGGREGATION consumption to the Oregon
+      # fabric, but the consolidated NSIDC source NCs themselves are
+      # public-domain redistributable. The consolidated-source child in
+      # the ScienceBase release carries the data.
+      publishable: true
+      notes: >
+        Fabric-scoped to "or" for aggregation/consumption; the
+        consolidated source data is public-domain and redistributable as
+        part of the umbrella release for any consumer.
 
   ua_swe:
     name: University of Arizona Daily 4-km Gridded SWE and Snow Depth (NSIDC-0719)

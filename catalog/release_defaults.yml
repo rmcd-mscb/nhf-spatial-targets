@@ -1,0 +1,33 @@
+# ============================================================================
+# release_defaults.yml — repo-level FGDC + ScienceBase release defaults
+# ============================================================================
+#
+# Per-project release config (authors, IPDS number, DOI) lives in each
+# project's config.yml under the `release:` block. Repo-level boilerplate
+# (publisher, distribution contact, liability text, keyword thesauri,
+# abstract templates, versioning policy) lives here and is read by the
+# upcoming `release/` module via the catalog interface.
+#
+# This file is intentionally scaffolded with empty blocks at PR-A time and
+# is populated incrementally as PRs in the #241 series land:
+#
+#   PR-A (this PR): empty scaffold so downstream PRs have a stable file to
+#                   write into and the loader has a well-known path.
+#   PR-D:           abstract templates, keyword thesauri, source_abstract_suffix,
+#                   spatial_reference block.
+#   PR-E:           contacts.distributor, contacts.point_of_contact,
+#                   distribution.* (liability, fees, use_constraints).
+#   PR-G:           operator-facing setup notes that don't fit in docs/.
+#
+# See docs/data_release/fgdc-field-map.md for the field-by-field mapping
+# from these defaults into FGDC CSDGM 2.0 + ISO 19139 metadata.
+# ============================================================================
+
+metadata: {}
+contacts: {}
+distribution: {}
+keywords: {}
+umbrella: {}
+source: {}
+fabric: {}
+spatial_reference: {}
