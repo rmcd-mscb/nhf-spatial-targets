@@ -56,6 +56,7 @@ def fetch_all_cmd(
     from nhf_spatial_targets.fetch.pangaea import fetch_watergap22d
     from nhf_spatial_targets.fetch.reitz2017 import fetch_reitz2017
     from nhf_spatial_targets.fetch.snodas import fetch_snodas
+    from nhf_spatial_targets.fetch.ua_swe import fetch_ua_swe
 
     # (display name, catalog source key, fetch function)
     sources = [
@@ -75,6 +76,7 @@ def fetch_all_cmd(
         ("daymet", "daymet", fetch_daymet),
         ("snodas", "snodas", fetch_snodas),
         ("margulis-wus-sr", "margulis_wus_sr", fetch_margulis_wus_sr),
+        ("ua-swe", "ua_swe", fetch_ua_swe),
     ]
 
     results = {}
@@ -880,7 +882,7 @@ def fetch_margulis_wus_sr_cmd(
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
     ] = "1985/2021",
 ):
-    """Download Margulis Western US Snow Reanalysis (NSIDC-0719) via earthaccess.
+    """Download Margulis Western US Snow Reanalysis (WUS_UCLA_SR) via earthaccess.
 
     Fabric-scoped to Oregon only (catalog `fabric_scope`); the scope is
     recorded in manifest.json but not enforced at fetch time. Fetch-only:
@@ -913,4 +915,81 @@ def fetch_margulis_wus_sr_cmd(
         sys.exit(1)
 
     console.print("[green]Margulis WUS-SR: downloaded to datastore[/green]")
+    console.print(json_mod.dumps(result, indent=2))
+
+
+@fetch_app.command(name="ua-swe")
+def fetch_ua_swe_cmd(
+    workdir: Annotated[
+        Path,
+        Parameter(
+            name=["--project-dir"],
+            help="Project created by 'nhf-targets init'.",
+        ),
+    ],
+    period: Annotated[
+        str,
+        Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
+    ] = "1981/2023",
+    worker_index: Annotated[
+        int,
+        Parameter(
+            name=["--worker-index"],
+            help="0-based index of this worker within the pool (default 0).",
+        ),
+    ] = 0,
+    n_workers: Annotated[
+        int,
+        Parameter(
+            name=["--n-workers"],
+            help="Total number of parallel workers (default 1 = serial).",
+        ),
+    ] = 1,
+):
+    """Download UA daily 4-km SWE + snow depth (NSIDC-0719) from NSIDC.
+
+    One NetCDF per water year is fetched from the NSIDC HTTPS archive
+    via the earthaccess auth session, then consolidated into a CF-1.6
+    daily NC pre-projected to EPSG:5070 at
+    ``<datastore>/ua_swe/daily/ua_swe_daily_WY<YYYY>.nc``. Raw downloads
+    are preserved under ``<datastore>/ua_swe/raw/``.
+    """
+    import json as json_mod
+
+    from rich.console import Console
+
+    from nhf_spatial_targets.fetch.ua_swe import fetch_ua_swe
+
+    if not workdir.exists():
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
+        sys.exit(2)
+
+    console = Console()
+    if n_workers > 1:
+        console.print(
+            f"[bold]Fetching UA SWE for period {period} "
+            f"(worker {worker_index}/{n_workers})...[/bold]"
+        )
+    else:
+        console.print(f"[bold]Fetching UA SWE for period {period}...[/bold]")
+
+    try:
+        result = fetch_ua_swe(
+            workdir=workdir,
+            period=period,
+            worker_index=worker_index,
+            n_workers=n_workers,
+        )
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        _logger.exception("Unexpected error during UA SWE fetch")
+        print(
+            f"Unexpected error ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    console.print("[green]UA SWE: downloaded to datastore[/green]")
     console.print(json_mod.dumps(result, indent=2))
