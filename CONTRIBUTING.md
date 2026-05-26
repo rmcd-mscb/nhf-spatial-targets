@@ -45,3 +45,14 @@ pixi run -e dev test          # run full test suite
 
 - All source metadata lives in `catalog/sources.yml` — do not hardcode URLs or product names
 - When adding a new source, add it to `catalog/sources.yml` first, then write the fetch module
+
+## Keeping documentation current
+
+When implementing a new target builder or source, update these documentation surfaces in the same PR:
+
+- **`README.md` §Implementation Status** — flip the matching row to **Done** with the PR reference
+- **`README.md` §Calibration Targets** — refresh the per-target row if sources, period, or method changes
+- **`README.md` §Fetch & Consolidation Pipeline** — refresh the per-source row if a new source lands
+- **`docs/sources/<source_key>.md`** — operator notes for new sources (see #220)
+
+A stale README is the highest-impact trust signal for new operators. CI does not catch documentation drift; reviewers should.
