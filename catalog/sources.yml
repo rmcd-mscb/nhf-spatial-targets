@@ -913,7 +913,9 @@ sources:
       - name: swe
         long_name: snow water equivalent
         cf_units: "kg m-2"
-        cell_methods: "time: mean"
+        # Daily assimilated snapshot (instantaneous state at end of day),
+        # not a within-day mean. Matches the SNODAS `time: point` semantics.
+        cell_methods: "time: point"
         notes: >
           Native units mm water-equivalent (= kg m-2 at density 1000).
           Publisher fill is NaN — no integer sentinel — so no fill mask
@@ -924,7 +926,7 @@ sources:
       - name: snow_depth
         long_name: snow depth
         cf_units: "mm"
-        cell_methods: "time: mean"
+        cell_methods: "time: point"
         notes: >
           Native units mm of snow thickness (NOT water equivalent).
           Same NaN-fill convention as `swe`. Used both as a standalone
@@ -933,7 +935,10 @@ sources:
       - name: snow_covered_fraction
         long_name: snow-covered fraction of HRU area
         cf_units: "1"
-        cell_methods: "area: mean time: mean"
+        # area: mean — the per-HRU fraction is an area-weighted mean over
+        # the HRU's source pixels. time: point — the value represents the
+        # snow-covered fraction at that day's instant, not a daily average.
+        cell_methods: "area: mean time: point"
         notes: >
           Derived in aggregate/ua_swe.py::pre_aggregate_hook by converting
           the per-pixel `snow_depth > depth_threshold_mm` test to a 0/1

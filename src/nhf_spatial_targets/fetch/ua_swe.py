@@ -468,7 +468,14 @@ def _build_consolidated_encoding(ds: xr.Dataset) -> dict:
         "units": "days since 1970-01-01",
         "calendar": "proleptic_gregorian",
         "dtype": "float64",
+        # CF §9.6 strongly discourages _FillValue on coordinate variables
+        # (coordinates should be exhaustive). xarray auto-attaches one
+        # otherwise; setting None suppresses it.
+        "_FillValue": None,
     }
+    for coord in ("x", "y"):
+        if coord in ds.coords:
+            encoding[coord] = {"_FillValue": None}
     return encoding
 
 
