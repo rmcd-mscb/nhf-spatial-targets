@@ -107,14 +107,21 @@ def _load_sca_year(
 
     Returns the result the generic year-chunked driver hands to
     :func:`_writers.write_bounds_target`. The July/August forced-zero
-    policy is applied by the driver via :func:`_apply_forced_zero` from
-    the ``valid`` mask returned in ``extras`` — keeping the seasonal
-    rule declarative on the adapter rather than baked into the loader.
+    policy is applied **after** this loader returns by the driver via
+    :func:`_driver._apply_forced_zero`, reading the ``valid`` mask from
+    ``extras`` — keeping the seasonal rule declarative on the adapter
+    rather than baked into the loader.
 
     Per-year ``frac_valid_bound`` is surfaced via
     ``extras["per_year_attrs"]`` so it lands on each year's intermediate
     NC and survives the skip-branch re-read (which the
     :func:`_on_sca_year_skip` hook uses to re-emit the WARNING).
+
+    ``adapter`` is used to re-read ``ci_threshold`` from the project
+    config so per-build threshold changes invalidate cached
+    intermediates via the config-fingerprint path. ``year_context`` is
+    always supplied by the driver for SCA (``year_chunked=True``);
+    ``None`` is treated as a programmer error and raises.
     """
     if year_context is None:
         raise RuntimeError(
@@ -198,6 +205,13 @@ def _on_sca_year_skip(
     build is skipped. Without this an operator re-running against a
     healthy cache would miss the alert that fired on the original build
     (#213).
+
+    If the cached intermediate predates the per-year
+    ``frac_valid_bound`` attr, this hook is a no-op — staleness is
+    :func:`should_skip_year_build`'s concern, not this hook's. In
+    practice that branch is unreachable for caches the current pipeline
+    wrote: any cache missing the fingerprint attrs would have been
+    unlinked by ``should_skip_year_build`` before this hook fires.
     """
     cached_frac = cached_attrs.get(_FRAC_VALID_BOUND_ATTR)
     if cached_frac is None:
