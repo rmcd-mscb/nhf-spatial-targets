@@ -444,7 +444,7 @@ def _atomic_write_netcdf(
     # in `io_nc._fill_value_for`. Without this, xarray decode leaves the
     # ~1e36 cells as legitimate data and they poison multi-source `np.fmax`
     # downstream. Mirrored at the read boundary in
-    # `targets/_common.py:read_aggregated_source` so existing on-disk NCs
+    # `targets/_io.py:read_aggregated_source` so existing on-disk NCs
     # written before this fix decode correctly without a rewrite. Issue #204.
     ds = mask_netcdf_default_fills(ds)
 

@@ -14,7 +14,7 @@ If you are new to the repo and have Python experience but limited software-engin
 | `@dataclass(frozen=True)` plugin adapters | [`aggregate/_adapter.py:SourceAdapter`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/aggregate/_adapter.py) | Declarative source plugins; immutable singletons safe to share |
 | Atomic file writes (tempfile + `os.replace`) | [`io_nc.py:atomic_to_netcdf`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/io_nc.py) | Crashed jobs never leave partial NetCDFs that look valid |
 | Manifest read-merge-write under `flock` | [`reconcile.py:_apply_records`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/reconcile.py) | Concurrent SLURM array jobs can't clobber each other's manifest writes |
-| Fingerprint-based cache invalidation | [`targets/_common.py:should_skip_year_build`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/targets/_common.py) | Year-chunked intermediates auto-rebuild when config or code changes |
+| Fingerprint-based cache invalidation | [`targets/_intermediates.py:should_skip_year_build`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/targets/_intermediates.py) | Year-chunked intermediates auto-rebuild when config or code changes |
 
 ## 1. `from __future__ import annotations`
 
@@ -112,7 +112,7 @@ with open(lock_path, "a") as lock_f:
 
 ## 7. Fingerprint-based cache invalidation
 
-**What:** Year-chunked target builders (SCA, SWE) write per-year intermediate NetCDFs to `<project>/targets/.sca_intermediates/<year>.nc` and stitch them on the next run. To know when a per-year intermediate is stale, each intermediate carries two global attrs: `config_fingerprint` (a hash of the active target config) and `code_version` (the package `__version__`). The skip-or-rebuild decision is in [`targets/_common.py:should_skip_year_build`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/targets/_common.py).
+**What:** Year-chunked target builders (SCA, SWE) write per-year intermediate NetCDFs to `<project>/targets/.sca_intermediates/<year>.nc` and stitch them on the next run. To know when a per-year intermediate is stale, each intermediate carries two global attrs: `config_fingerprint` (a hash of the active target config) and `code_version` (the package `__version__`). The skip-or-rebuild decision is in [`targets/_intermediates.py:should_skip_year_build`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/targets/_intermediates.py).
 
 ```python
 # In targets/sca.py: build() iterates years; for each year,
@@ -122,7 +122,7 @@ with open(lock_path, "a") as lock_f:
 # file, rebuild the year.
 ```
 
-**Why:** a 25-year daily target rebuild is expensive (hours of HRU-aggregation reads), and most edits only change one or two years' worth of computation. Fingerprinting lets the operator change `ci_threshold` in `config.yml`, rerun `pixi run run-sca`, and have just the affected years rebuild — without having to manually `rm` the intermediates dir. The same mechanism handles downward period changes (the orphan-pruning helper deletes per-year files outside the new period; see [`prune_orphan_year_intermediates`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/targets/_common.py) and PR #216).
+**Why:** a 25-year daily target rebuild is expensive (hours of HRU-aggregation reads), and most edits only change one or two years' worth of computation. Fingerprinting lets the operator change `ci_threshold` in `config.yml`, rerun `pixi run run-sca`, and have just the affected years rebuild — without having to manually `rm` the intermediates dir. The same mechanism handles downward period changes (the orphan-pruning helper deletes per-year files outside the new period; see [`prune_orphan_year_intermediates`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/targets/_intermediates.py) and PR #216).
 
 **The geoscientist gotcha:** the `code_version` tag is tied to the package `__version__` string in [`src/nhf_spatial_targets/__init__.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/__init__.py). If you edit a target builder's logic **without** bumping `__version__`, the fingerprint won't change and your edit will not take effect on cached intermediates. You must `rm -rf <project>/targets/.<target>_intermediates/` to force a rebuild. The SCA and SWE module docstrings document this; the operator-visible WARNING does not fire in this case because the fingerprint sees no change. Treat mid-version builder edits as a manual-cache-clear operation until a smarter fingerprint scheme lands.
 

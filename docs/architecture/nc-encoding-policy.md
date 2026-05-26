@@ -52,7 +52,7 @@ is the dominant, repeated pattern; the snapshot read is occasional.
 |---|---|---|---|
 | **Consolidated** (`<datastore>/<src>/`) | `fetch/consolidate.py` | `"consolidated"` — **seam owned by issue #158** (per-source spatial tiling of `(time, y, x)` grids). `build_encoding` raises `NotImplementedError` until #158 lands. | Different shape (gridded, not HRU), different policy (tile `y`/`x`). |
 | **Aggregated** (`<project>/data/aggregated/<src>/`) | `aggregate/_driver.py::_atomic_write_netcdf` | `"aggregated"`, `hru_dim=id_col`, `timesteps_per_file=ds.sizes["time"]`. Native dtype preserved. | daymet (zarr) + ssebop (STAC) are **left as-is** — already chunked, remote-sourced. The `crs` grid-mapping container is skipped (never compressed/filled). |
-| **Target** (`<project>/targets/`) | `targets/_common.py::write_target_nc` | `"target"`, `hru_dim=sort_dim`. float32 bounds, int8 diagnostics. | The streaming `stitch_year_chunks_to_target` (daily SWE) is a separate concern — see ST3b. |
+| **Target** (`<project>/targets/`) | `targets/_writers.py::write_target_nc` | `"target"`, `hru_dim=sort_dim`. float32 bounds, int8 diagnostics. | The streaming `stitch_year_chunks_to_target` (daily SWE) is a separate concern — see ST3b. |
 
 ### `_FillValue` policy (dtype-driven, in `io_nc._fill_value_for`)
 
@@ -60,12 +60,12 @@ is the dominant, repeated pattern; the snapshot read is occasional.
 - `int16` (packed) → `-9999` (the SNODAS/aggregate sentinel)
 - all other integers (notably the `int8` diagnostics) → no fill value
 
-This matches the pre-#165 `targets/_common.py` writer for the float and int8
+This matches the pre-#165 `targets/_writers.py` writer for the float and int8
 cases; the int16 path is the aggregate-layer convention.
 
 ## Reading aggregated NCs
 
-`targets/_common.py::read_aggregated_source` reads per-year aggregated files
+`targets/_io.py::read_aggregated_source` reads per-year aggregated files
 via `open_mfdataset`. Its default dask chunks are `{"time": -1, id_col:
 chunk_hru}` — **full time per file, HRU dim chunked to ~256 MiB**. This is
 deliberately *not* the on-disk 1 MiB chunk size: it trades chunk granularity

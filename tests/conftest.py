@@ -48,7 +48,7 @@ def write_year_nc(
 ):
     """Write a synthetic per-year aggregated NC at the given path.
 
-    Used by tests for ``targets/_common.py`` helpers and ``targets/run.py``.
+    Used by tests for the ``targets/`` helper modules and ``targets/run.py``.
     The file matches the per-year aggregated layout established in PR #51:
     ``<source_key>/<source_key>_<YYYY>_agg.nc`` with ``time`` and ``id_col``
     dims.

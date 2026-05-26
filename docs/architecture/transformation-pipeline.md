@@ -328,7 +328,7 @@ gap by enforcing canonical sort at every emission point.
   through the shared driver (10 of 11).
 - `aggregate/ssebop.py:aggregate_ssebop` — same sort before its
   custom write site; ssebop bypasses the shared driver.
-- `targets/_common.py:write_target_nc` — accepts an optional
+- `targets/_writers.py:write_target_nc` — accepts an optional
   `sort_dim: str | None = None`. Target builders pass
   `project.id_col` (see `targets/run.py`). Future target modules
   (`aet.py`, `rch.py`, `som.py`, `sca.py`) inherit the invariant by
@@ -342,7 +342,7 @@ gap by enforcing canonical sort at every emission point.
   naming the count of out-of-order transitions but does **not**
   fail — the aggregator canonicalizes downstream regardless.
 
-**Legacy on-disk artifacts:** `targets/_common.py:read_aggregated_source`
+**Legacy on-disk artifacts:** `targets/_io.py:read_aggregated_source`
 retains a defensive `ds.sortby(project.id_col)` so per-year NCs
 aggregated before #93 (in VPU-grouped order) continue to work
 without re-aggregation. For #93-and-later NCs this is a no-op.

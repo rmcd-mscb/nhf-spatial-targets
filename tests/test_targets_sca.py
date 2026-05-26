@@ -916,11 +916,13 @@ def test_fingerprint_mismatch_rebuilds_year(tmp_path: Path, caplog):
 
     project = load(workdir)
     caplog.clear()
-    with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.targets._common"):
+    with caplog.at_level(
+        logging.WARNING, logger="nhf_spatial_targets.targets._intermediates"
+    ):
         build(project)
 
     # The fingerprint mismatch surfaced as a WARNING from the shared
-    # skip predicate (logged under the _common logger).
+    # skip predicate (logged under the _intermediates logger).
     assert any("mismatch" in r.message for r in caplog.records), (
         "fingerprint mismatch on cached intermediate must log a WARNING"
     )
@@ -963,7 +965,9 @@ def test_pre_213_intermediate_triggers_rebuild(tmp_path: Path, caplog):
     legacy.to_netcdf(legacy_path)
     project = load(workdir)
     caplog.clear()
-    with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.targets._common"):
+    with caplog.at_level(
+        logging.WARNING, logger="nhf_spatial_targets.targets._intermediates"
+    ):
         build(project)
     # WARN + rebuild: the legacy file was deleted and a fresh
     # fingerprinted intermediate written in its place.
@@ -1109,9 +1113,9 @@ def test_period_shrink_prunes_orphan_intermediates(tmp_path: Path, caplog):
     project = load(workdir)
     caplog.clear()
     # The prune WARNING is emitted under the caller's logger
-    # (the sca module logger), not under _common — the helper takes
-    # the caller's logger as a parameter precisely so the message
-    # appears under the right name in operator logs.
+    # (the sca module logger): the helper takes the caller's logger
+    # as a parameter so the message appears under the right name in
+    # operator logs.
     with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.targets.sca"):
         build(project)
 

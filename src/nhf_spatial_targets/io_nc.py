@@ -70,7 +70,7 @@ def mask_netcdf_default_fills(ds: xr.Dataset) -> xr.Dataset:
     This helper is the single-source policy that both the **write boundary**
     (aggregate/_driver.py:_atomic_write_netcdf — substitutes the sentinel
     before write, so future NCs have ``data=NaN`` matching the declared
-    ``_FillValue=NaN``) and the **read boundary** (targets/_common.py:
+    ``_FillValue=NaN``) and the **read boundary** (targets/_io.py:
     read_aggregated_source — substitutes after load, so existing on-disk NCs
     with the encoding mismatch decode correctly without rewrite) call.
 
@@ -104,7 +104,7 @@ def _fill_value_for(dtype: np.dtype) -> Any:
 
     Floats use NaN and non-``int16`` integers (notably the ``int8``
     diagnostics) carry no fill value — matching the pre-#165
-    ``targets/_common.py`` writer, which only ever wrote float32 and int8
+    ``targets/_writers.py`` writer, which only ever wrote float32 and int8
     encodings. Packed ``int16`` uses the project's ``-9999`` sentinel (the
     SNODAS/aggregate-layer convention); the targets writer had no int16 path.
     """
