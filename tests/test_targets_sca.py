@@ -429,6 +429,56 @@ def test_intermediates_written_per_year(tmp_path: Path):
     ]
 
 
+def test_stitched_attrs_survive_all_skip_rerun(tmp_path: Path):
+    """A rerun where every year hits the healthy-cache skip branch must
+    still produce a stitched ``sca_targets.nc`` carrying the loader-
+    contributed global attrs (``source``, ``ci_threshold``,
+    ``summer_zero_months``).
+
+    Regression guard from PR #239 review. After SCA started delegating to
+    the generic year-chunked driver, a reviewer flagged a *suspected*
+    provenance loss on the all-skip path: the driver builds
+    ``stitch_attrs = base + last_loader_attrs`` where ``last_loader_attrs``
+    is only populated by non-skip year iterations. The concern was that
+    on a fully-cached rerun, ``last_loader_attrs`` stays empty and the
+    loader's attrs vanish from the canonical output.
+
+    Verification showed the concern is unfounded — ``xr.open_mfdataset``
+    inside :func:`stitch_year_chunks_to_target` defaults to
+    ``combine_attrs="override"`` which keeps the first per-year file's
+    attrs (including the loader's contribution), and the
+    ``extra_global_attrs`` overlay is a ``dict.update`` that only
+    adds/replaces, never strips. This test locks in that behavior so a
+    future change to either default would surface as a regression here.
+    """
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_sca_project(tmp_path, period="2005-01-01/2006-12-31")
+
+    project = load(workdir)
+    build(project)
+    with xr.open_dataset(project.targets_dir() / "sca_targets.nc") as ds:
+        first_source = ds.attrs["source"]
+        first_ci = ds.attrs["ci_threshold"]
+        first_szm = ds.attrs["summer_zero_months"]
+
+    # Delete only the stitched file so the second build hits the
+    # healthy-cache skip branch for every year and re-runs the stitch
+    # from the existing per-year intermediates.
+    (project.targets_dir() / "sca_targets.nc").unlink()
+
+    project = load(workdir)
+    build(project)
+    with xr.open_dataset(project.targets_dir() / "sca_targets.nc") as ds:
+        assert ds.attrs.get("source") == first_source, (
+            f"loader-contributed source attr lost on all-skip rerun: "
+            f"got {ds.attrs.get('source')!r}"
+        )
+        assert ds.attrs.get("ci_threshold") == first_ci
+        assert ds.attrs.get("summer_zero_months") == first_szm
+
+
 def test_idempotent_skip_existing_year(tmp_path: Path, caplog):
     """Re-running with intermediates already on disk skips the per-year work."""
     import logging
@@ -1181,10 +1231,11 @@ def test_stitch_fails_loud_on_missing_in_period_file(
 
     Before #211 the stitcher globbed the directory, so a missing
     in-period file silently produced a year-gapped output. With the
-    computed-from-year_specs input list, the missing file surfaces
-    as an error naming the path.
+    computed-from-year_specs input list (the driver's
+    ``_build_year_chunked`` stitch pass after #230), the missing file
+    surfaces as an error naming the path.
     """
-    import nhf_spatial_targets.targets.sca as sca_mod
+    import nhf_spatial_targets.targets._driver as driver_mod
     from nhf_spatial_targets.targets.sca import build
     from nhf_spatial_targets.workspace import load
 
@@ -1193,14 +1244,14 @@ def test_stitch_fails_loud_on_missing_in_period_file(
     project = load(workdir)
     build(project)
     intermediates_dir = project.targets_dir() / ".sca_intermediates"
-    # Delete the 2006 intermediate + the stitched output. Then patch
-    # _build_year to a no-op so the missing 2006 intermediate stays
-    # missing through the second build's stitch call (otherwise the
-    # build loop's should_skip_year_build would see the missing file
-    # and rebuild it).
+    # Delete the 2006 intermediate + the stitched output. Then patch the
+    # driver's per-year write to a no-op so the missing 2006 intermediate
+    # stays missing through the second build's stitch call (2005 + 2007
+    # hit should_skip_year_build's healthy-cache branch and don't write;
+    # 2006 would otherwise be rebuilt, but the no-op write swallows it).
     (intermediates_dir / "sca_targets_2006.nc").unlink()
     (project.targets_dir() / "sca_targets.nc").unlink()
-    monkeypatch.setattr(sca_mod, "_build_year", lambda **_kw: None)
+    monkeypatch.setattr(driver_mod, "write_bounds_target", lambda **_kw: None)
 
     project = load(workdir)
     with pytest.raises((FileNotFoundError, OSError), match="2006"):
