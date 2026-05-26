@@ -6,7 +6,7 @@ size: 16:9
 header: '**nhf-spatial-targets** · aggregated + target results · `or-spatial-targets`'
 footer: '2026 · NHM calibration targets'
 style: |
-  section { font-size: 22px; padding-bottom: 60px; }
+  section { font-size: 22px; padding-bottom: 90px; }
   section h1 { font-size: 38px; }
   section h2 { font-size: 32px; }
   table { font-size: 18px; }
@@ -82,9 +82,11 @@ USGS National Hydrologic Model · TM 6-B10 (Hay et al. 2022) · sibling deck has
 </span>
 
 <!--
-Session goal: walk the five implemented OR targets (runoff/aet/rch/som/swe) plus
-the SCA stub, using the per-source aggregated NCs and the combined target NCs.
-Margulis WUS-SR makes SWE a 4-source bound on OR — the flagship delta from gfv2.
+Session goal: walk the six implemented OR targets (runoff/aet/rch/som/sca/swe),
+using the per-source aggregated NCs and the combined target NCs. SCA went live
+2026-05-24 in #210 immediately after PRMSobjfun.f90 delivery; gfv2 still ships
+5 (sca build pending). Margulis WUS-SR makes SWE a 4-source bound on OR — the
+other flagship delta from gfv2.
 -->
 
 ---
@@ -99,9 +101,9 @@ Margulis WUS-SR makes SWE a 4-source bound on OR — the flagship delta from gfv
 | **Fabric extent** | Pacific Northwest | CONUS |
 | **Fabric file** | `model_layers_9_nhru.parquet` | `gfv2_fabric.gpkg` |
 | **Equal-area CRS** | EPSG:5070 (CONUS Albers) | EPSG:5070 |
-| **Targets built** | 5 (runoff / aet / rch / som / swe) | 5 (same) |
+| **Targets built** | **6** (runoff / aet / rch / som / **sca** / swe) | 5 (sca not built) |
 | **SWE bound** | **4 sources** (Margulis WUS-SR active via `fabric_scope: [or]`) | 3 sources (Margulis filtered out) |
-| **SCA** | Builder stub — not built | Builder stub — not built |
+| **SCA** | **Built** — 25-yr daily, 2000-2024, single-source CI-bounded (#210) | Builder live (#210), build pending for gfv2 fabric |
 
 | Target | Sources (active in OR build) | Period | Step |
 |---|---|---|---|
@@ -109,10 +111,11 @@ Margulis WUS-SR makes SWE a 4-source bound on OR — the flagship delta from gfv
 | AET | MOD16A2 v061 · SSEBop · MWBM ClimGrid | 2000-01 .. 2024-12² | Monthly |
 | Recharge | Reitz 2017 · ERA5-Land³ | 2000 .. 2013 | Annual |
 | Soil moisture | MERRA-2 · NLDAS-MOSAIC · NLDAS-NOAH⁴ | 1980-01 .. 2024-12 | Monthly + annual |
+| **SCA** | MOD10C1 v061 (single-source, CI-bounded) | 2000-01 .. 2024-12⁵ | Daily |
 | **SWE** | Daymet · SNODAS · ERA5-Land · **Margulis WUS-SR** | 1980-01 .. 2024-12 | Daily |
 
 <span class="footnote">
-¹ Runoff bound width varies across the 1979-2024 window — 2 sources 1979-1999 (ERA5+MWBM), 3 sources 2000-2020 (all), 2 sources 2021-2024 (ERA5+GLDAS; MWBM ends 2020). ² AET likewise — 3 sources 2000-2020, 2 sources 2021-2023 (MOD16A2+SSEBop), 1 source 2024 (MOD16A2 only; SSEBop ends 2023, bound collapses to a point estimate that year). ³ WaterGAP 2.2d excluded on OR — see slide 3.3A. ⁴ NCEP/NCAR excluded on OR — see slide 3.4A. Both exclusions inherit the gfv2 coarse-grid rationale (PNW shares the intermountain-west terrain).
+¹ Runoff bound width varies across the 1979-2024 window — 2 sources 1979-1999 (ERA5+MWBM), 3 sources 2000-2020 (all), 2 sources 2021-2024 (ERA5+GLDAS; MWBM ends 2020). ² AET likewise — 3 sources 2000-2020, 2 sources 2021-2023 (MOD16A2+SSEBop), 1 source 2024 (MOD16A2 only; SSEBop ends 2023, bound collapses to a point estimate that year). ³ WaterGAP 2.2d excluded on OR — see slide 3.3A. ⁴ NCEP/NCAR excluded on OR — see slide 3.4A. Both exclusions inherit the gfv2 coarse-grid rationale (PNW shares the intermountain-west terrain). ⁵ SCA period extends 15 yr past TM 6-B10's 2000-2010 default — MOD10C1 v061 now extends through 2025; capped at 2024-12 to match AET/SOM/SWE.
 </span>
 
 <!--
@@ -721,7 +724,7 @@ modeller-side decision — we emit both NCs.
 <div>
 
 <div class="callout">
-<strong>Gap recently closed.</strong> Target builder (<code>targets/sca.py</code>) is still a <span class="status-todo">STUB</span> — but the bound formula is no longer missing. <code>PRMSobjfun.f90</code> landed in the repo 2026-05-24 (<code>docs/references/PRMSobjfun.f90</code>); <code>calcSCA</code> lines 1052-1061 build the bound from <code>(CI, SCA_obs)</code> when CI > 70%: <code>lower = (CI/100)·SCA_obs</code>, <code>upper = lower + (1 − CI/100)</code>, with July/August forced to (0, 0). Implementation tracked in <strong>#210</strong>.
+<strong>Built.</strong> <code>targets/sca.py</code> is live as of <strong>#210</strong> (merged 2026-05-24) with year-chunked intermediates fingerprinted by <strong>#213</strong>. Single-source CI-bounded formula from <code>PRMSobjfun.f90:calcSCA</code> (lines 1052-1061): when HRU-mean CI ≥ 0.70, <code>lower = CI · SCA<sub>obs</sub></code>, <code>upper = lower + (1 − CI)</code>; July/August forced to (0, 0); CI-failing HRU-days NaN.
 </div>
 
 </div>
@@ -777,31 +780,44 @@ coverage filter.
 
 ---
 
-## 3.5 Snow-covered area — target output *(placeholder — builder pending implementation in #210)*
+<!-- _class: two-col -->
 
-<div class="callout">
-<strong>Final target NC not yet produced — but the formula is in hand.</strong> <code>targets/sca.py</code> is still a stub; <strong>#210</strong> tracks promotion to a real implementation now that <code>PRMSobjfun.f90:calcSCA</code> (<code>docs/references/PRMSobjfun.f90</code>, lines 1052-1061) makes the bound formula explicit. Expected outputs once implemented: <code>sca_targets.nc</code> (per-HRU per-day lower / upper bound, fraction 0-1) plus optional <code>sca_targets_nn_filled.nc</code>.
+## 3.5 Snow-covered area — target output
+
+<div class="grid">
+<div class="figs tall-second">
+
+![](../figures/targets/or-spatial-targets/sca_target_bounds_map.png)
+![](../figures/targets/or-spatial-targets/sca_target_representative_series.png)
+
+<span class="caption">Top: lower / upper / range maps (fraction 0–1) on 2010-02-15. Bottom: daily envelope at 4 OR headwater HRUs (Willamette / Deschutes / Umpqua / Rogue), 2008-2011 — Jul/Aug zero floor visible.</span>
+
+</div>
+<div class="notes">
+
+<div class="figs">
+
+![](../figures/targets/or-spatial-targets/sca_target_jul_aug_floor.png)
+
+<span class="caption">Jul/Aug `upper.max()` across all HRUs, per year — exactly 0 every year (calcSCA forced-zero rule verified).</span>
+
 </div>
 
-**The reconstructed bound** (per HRU per day, MOD10C1 `CI > 70`):
+- **25 yr daily build, 2000-2024** — deliberate extension beyond TM 6-B10's v005-era 2000-2010 window (see meta-table footnote ⁵).
+- Single-source `n_sources ∈ {0, 1}` — `lower`/`upper` NaN exactly where the HRU-mean CI gate (≥ 0.70) failed.
+- CI-gate is the binding coverage constraint: **44.5%** of all (HRU, day) cells produce a finite bound; the rest are NaN (cloud cover). `sca_targets_nn_filled.nc` companion is doing heavy lifting compared to SWE's 2-source-min bound.
+- Bound width = `1 − CI_hru` ∈ [0, 0.3] (algebraic identity from calcSCA); narrow bounds = high-confidence days.
 
-- `lower = (CI/100) · SCA_obs` — confidence-weighted "definitely snow" floor.
-- `upper = lower + (1 − CI/100)` — adds the maximum amount that *could* be obscured snow.
-- **July & August → forced to `(0, 0)`** regardless of `obs`. Hardcoded as no-snow.
-- `CI ≤ 70`: no entry (drops out of the OF denominator).
-
-**Open question for the calibration team** (now framed by the formula, not the gap):
-
-The July/August zero-snow assumption was appropriate for the original TM 6-B10 fabrics. For OR's **Cascades high-elevation HRUs that hold late-summer snowpack**, it forces the optimiser to predict zero where real snow exists. Is this a configurable knob we add (per-HRU summer-zero override) or do we just ship the TM-6-B10-faithful default?
-
-Crib sheet: `docs/references/prmsobjfun-summary.md`. Aggregated MOD10C1 NCs already on disk → SCA target rebuild is feasible without re-aggregation.
+</div>
+</div>
 
 <!--
-The formula is no longer the gap; the gap now is the calibration-team-side
-decision about the July/August hardcode. The #210 implementation gives us
-SCA target NCs in days, but whether they're shipped with the literal TM-6-B10
-hardcode is the room's call. See docs/references/prmsobjfun-summary.md for
-the watch-outs section that flags this.
+SCA went from "stub + bound-formula gap" to "built + ready for calibration" in
+~24 hours after PRMSobjfun.f90 landed on 2026-05-24. The bound is mechanically
+honest (calcSCA verbatim); the Jul/Aug forced-zero hardcode is the open
+calibration-team question — the representative HRU panel shows it firing at
+all four OR snow-bearing headwaters, which is correct for low/mid-elevation
+HRUs and questionable for Cascades-crest HRUs that hold late-summer snowpack.
 -->
 
 ---
@@ -923,82 +939,7 @@ elsewhere if known; otherwise air the trade-off.
 
 ---
 
-# Part 4 — What this unlocks · open questions
-
----
-
-## How calibration consumes a target NC
-
-Each target NC is a **soft constraint** for PRMS calibration via PEST++:
-
-- Per-HRU per-timestep `(lower_bound, upper_bound)` in the variable's PRMS units.
-- Simulated values inside the envelope incur zero cost; outside the envelope incur a penalty (typically squared distance to the nearest bound edge).
-- `_nn_filled` companion is the consumer-default for builders that produce one — it closes the residual all-NaN HRUs so the optimiser sees no missing data; the honest-NaN `.nc` is the audit-trail record.
-- **When `upper == lower` the bound collapses to a point estimate** — a stricter constraint, not a wider one. Surfaces naturally in `normalized_minmax` targets (recharge / SOM) at HRU-years where every contributing source hits its in-window min or max, and in any year falling inside a single-source tail (e.g. AET 2024 with only MOD16A2 active).
-
-**Reusable across fabrics, not across projects** — the target NC is fabric-specific, but the same builder + same datastore on a different fabric reproduces the equivalent targets without re-fetching any raw data.
-
-<!--
-The "soft constraint" framing matters for the calibration audience: targets aren't
-ground truth, they're the bound the optimiser is allowed to live inside. The
-bound-collapse callout is new on OR because OR's regional fabric + variable-source-
-count extensions surface several places where upper == lower; PEST++ will treat
-those as point-estimate observations.
--->
-
----
-
-<!-- _class: compact -->
-
-## What this pipeline emits vs. what calibration consumes
-
-| | This pipeline (`nhf-spatial-targets`) | Calibration consumer (PEST++) |
-|---|---|---|
-| **Unit of work** | Per-HRU per-time `(lower_bound, upper_bound)` NetCDFs under `<project>/targets/` | PEST++ observation file(s) — one row per `(HRU, time, target)` with weights |
-| **Targets emitted vs. consumed** | 6: runoff, AET, recharge, soil moisture, **SCA**¹, **SWE**² | Choice of subset per calibration round; PRMSobjfun.f90 historically wired the 5 TM 6-B10 targets — SWE was never part of that loop. |
-| **Bound mechanic** | NaN-aware multi-source min/max (or 0-1 normalised min/max); fill-value-clean per #205 | `(val - nearest_bound)²` inside PEST++ observation residuals; collapsed bound = point estimate |
-| **NN-fill policy** | Both `<tgt>.nc` (honest NaN) + `<tgt>_nn_filled.nc` shipped | Calibration team picks one per target as the consumer default |
-| **Format adapter** | Native NetCDF (CF-1.6) | NetCDF → PEST++ instruction/observation files (separate step, not in this repo) |
-
-<span class="footnote">
-¹ <strong>SCA</strong> target builder is currently a stub. The CI-weighted bound formula was previously "not publicly available" — a collaborator delivered <code>PRMSobjfun.f90</code> 2026-05-24 (see <code>docs/references/PRMSobjfun.f90</code> + the crib sheet in <code>prmsobjfun-summary.md</code>). The formula is reconstructed; implementation tracked in #210. ² <strong>SWE</strong> is an extension beyond the TM 6-B10 5-target set; <code>PRMSobjfun.f90</code> has no <code>calcSWE</code>. If the calibration team wants SWE in the OF, a PEST++ observation group for SWE bounds needs to be added (separately from this pipeline).
-</span>
-
-<div class="callout">
-<strong>Historical reference, not active consumer.</strong> The TM 6-B10 Fortran objective function <code>PRMSobjfun.f90</code> is the canonical record of how bounds were originally meant to be consumed (zero cost inside / squared cost outside / point-estimate when collapsed). It is checked into this repo for documentation; <strong>PEST++ is the active calibration driver</strong> and inherits or modifies those semantics as the calibration team configures.
-</div>
-
-<!--
-Establishing slide for the gap between what we produce (NetCDFs over 6 targets
-including SWE) and what the calibration loop actually consumes (PEST++ over
-some subset). The two interesting structural points: (a) SCA can be built now
-that the bound formula is no longer missing — see #210; (b) SWE is a pipeline
-extension that doesn't yet feed PEST++ unless someone adds a SWE observation
-group on the calibration side. Both are calibration-team-side decisions, not
-pipeline decisions.
--->
-
----
-
-## Open questions to bring to the room
-
-1. **SWE in calibration** — pipeline emits 6 targets; PEST++ historically (via PRMSobjfun.f90) consumed 5. Do we add a SWE observation group to PEST++ so the OR-only 4-source SWE bound actually drives parameter selection, or hold it as inspection-only?
-2. **SCA implementation priority** — #210 reconstructs the bound formula from `PRMSobjfun.f90:calcSCA`; the July/August zero-snow hardcode may or may not be appropriate for OR's Cascades high-elevation HRUs. Is this a calibration-team-pending decision (configurable) or a pipeline-side default we ship?
-3. **Period-of-record locks** per category — OR currently ships runoff 1979-2024, AET 2000-2024, recharge 2000-2013 (capped at Reitz 2017 end-date), SOM 1980-2024, SWE 1980-2024. Each window-extension creates variable-source-count bands and (for `normalized_minmax`) potential bound collapse — calibration team's call on whether the trade-off is worth it per category, and whether recharge is worth extending past 2013 with a 1-source ERA5-only tail.
-4. **NN-fill default** — which targets ship `_nn_filled` as the consumer default vs the honest-NaN file? Currently we emit both for runoff / AET / recharge / soil moisture; choice belongs to PEST++ observation-file generation.
-5. **Fabric-coarse-grid exclusions** scale beyond OR + gfv2 — both projects drop WaterGAP (recharge) and NCEP/NCAR (soil moisture) for the same intermountain-west terrain reason. Worth codifying as a catalog-level "coarse-grid for fine HRUs" tag so a future regional fabric (CO, UT, ID, …) inherits the right defaults?
-6. **Margulis WUS-SR on OR** — the only multi-source SWE bound in the system that actually includes Margulis. Worth a tighter look at how it shapes the bound vs the 3-source gfv2 case (e.g. swap Margulis out and re-render to quantify the bound-width delta).
-
-<!--
-These five are the discussion seeds. Order them by where the room has the most
-energy — usually #1 (SCA) and #2 (SWE) draw the most response because they're
-the visible "this is not done yet" items. #3-5 are the implicit decisions
-that have been quietly accumulating; airing them is the point of this slide.
--->
-
----
-
-# Part 5 — References & next steps
+# Part 4 — References & next steps
 
 ---
 
