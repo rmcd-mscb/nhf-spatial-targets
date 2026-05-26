@@ -99,10 +99,12 @@ from the same NCs) bypass the adapter and call the driver directly.
    `CLAUDE.md` §Aggregation Transformation Policy for the `mean` vs
    `masked_mean` rule.
 4. **CLI dispatch** — add imports and `fetch_app` / `agg_app` subcommand
-   functions in [`src/nhf_spatial_targets/cli.py`](src/nhf_spatial_targets/cli.py).
-   Follow the existing pattern (one `@fetch_app.command` and one
-   `@agg_app.command` per source); the `fetch all` and `agg all` drivers
-   pick the new source up automatically once the function is registered.
+   functions in [`src/nhf_spatial_targets/cli/`](src/nhf_spatial_targets/cli/)
+   (`fetch.py` and `agg.py` after the #221 split). Follow the existing
+   pattern (one `@fetch_app.command` and one `@agg_app.command` per source);
+   the `fetch all` and `agg all` Python drivers pick the new source up
+   automatically once the function is registered. **Note:** SLURM array
+   indices still need to be added manually (next step).
 5. **Pixi tasks** — add `fetch-<source>` and `agg-<source>` rows to the
    `[tasks]` block in [`pixi.toml`](pixi.toml), mirroring the existing
    entries.
@@ -114,7 +116,7 @@ from the same NCs) bypass the adapter and call the driver directly.
    running jobs.
 7. **Operator notes** — add `docs/sources/<source_key>.md` with access
    prerequisites, known gaps, and any quirks (see existing files in
-   [`docs/sources/`](docs/sources/) for the format; tracked in #220).
+   [`docs/sources/`](docs/sources/) for the format).
 8. **Tests** — `tests/test_fetch_<source>.py` plus
    `tests/test_aggregate_<source>.py`. At minimum: CF-1.6 attrs on the
    consolidated NC and a synthetic-fabric end-to-end aggregation against
@@ -128,48 +130,55 @@ from the same NCs) bypass the adapter and call the driver directly.
 ### Adding a new target
 
 A "target" is a calibration variable (runoff, AET, recharge, SOM, SCA, SWE).
-A target builder reads one or more aggregated source NCs, applies per-HRU
-transforms (unit conversion, multi-source min/max, optional NN-fill), and
-emits one canonical NC under `<project>/targets/`.
+As of PR #219, targets are **declarative**: each `targets/<target>.py` module
+declares a `TargetAdapter` instance and a thin `build(project)` that
+delegates to the generic driver. The pattern mirrors
+`aggregate/_adapter.py:SourceAdapter` on the aggregator side.
 
-> **Forward reference.** Issue #219 will introduce a `TargetAdapter`
-> dataclass analogous to `SourceAdapter`, which should collapse most of the
-> mechanical wiring below (per-target import, dict dispatch entry, pixi
-> task, SLURM index) into a single registration. **Document and follow
-> today's imperative pattern** until #219 lands; this section will simplify
-> once it does.
-
-Today's pattern is a free-form `def build(project: Project) -> None` per
-target, leaning on shared helpers in
-[`src/nhf_spatial_targets/targets/_common.py`](src/nhf_spatial_targets/targets/_common.py)
-(`SourceShim`, `read_aggregated_source`, `multi_source_nanminmax`,
-`write_bounds_target`, `parse_period`, `compute_hru_area_and_centroids`).
-[`targets/run.py`](src/nhf_spatial_targets/targets/run.py) is the cleanest
-multi-source example; [`targets/sca.py`](src/nhf_spatial_targets/targets/sca.py)
-is the canonical single-source CI-bounded example.
+The six existing adapters live in `targets/{run,aet,rch,som,sca,swe}.py`:
+[`run.py`](src/nhf_spatial_targets/targets/run.py) is the canonical
+multi-source single-shot example; [`sca.py`](src/nhf_spatial_targets/targets/sca.py)
+is the canonical year-chunked example; [`som.py`](src/nhf_spatial_targets/targets/som.py)
+shows the multi-variant pattern (monthly + annual emit).
 
 1. **Variable definition** — add the target's variable entry (units,
    `range_method`, normalization parameters) to
    [`catalog/variables.yml`](catalog/variables.yml).
-2. **Target module** — write `src/nhf_spatial_targets/targets/<target_key>.py`
-   with a `def build(project: Project) -> None` entry point. Reuse helpers
-   from `targets/_common.py`; route the final NC through
-   `write_target_nc(..., sort_dim=project.id_col)` so canonical row order
-   is preserved (see `CLAUDE.md` §Data & Catalog Conventions).
-   Multi-source combination must be NaN-aware (`np.fmin`/`np.fmax` along a
-   stacked source dim) so a bound is defined whenever ≥1 source is finite.
-   Linear unit conversions belong here, not in the aggregator (see
-   `CLAUDE.md` §Aggregation Transformation Policy). If NN-fill is desired,
-   emit a parallel `<target>_nn_filled.nc` as `targets/run.py` does.
-3. **CLI dispatch** — wire the new builder into the `_dispatch` table in
-   [`src/nhf_spatial_targets/cli.py`](src/nhf_spatial_targets/cli.py)
+2. **Declare per-source shims** — a tuple of `SourceShim` instances in
+   your new module (see [`targets/_shims.py`](src/nhf_spatial_targets/targets/_shims.py)).
+   Each shim names the on-disk source key, the aggregated variable to read,
+   a human label for the output NC's `source` attr, the unit-shim callable,
+   and (optionally) the `expected_cf_units` string so `validate_source_units`
+   catches catalog drift.
+3. **Write the source loader** — a callable that returns a
+   `SourceLoaderResult` (bounds + `n_sources` + time index + offset +
+   per-target `extra_attrs`). The loader signature receives the project,
+   adapter, period, fabric metadata, and (for year-chunked targets) a
+   `year_context` tuple. Unit shims, per-source normalization, and
+   multi-source combination live in the loader.
+4. **Declare the adapter** as a module-level `ADAPTER = TargetAdapter(...)`
+   (see [`targets/_adapter.py`](src/nhf_spatial_targets/targets/_adapter.py)
+   for the full field list). Set `cadence`, `bounds_units`,
+   `bounds_long_name_kind`, `cell_methods`, `title`, `nn_title`, and the
+   loader callable. For year-chunked daily targets (SCA, SWE) set
+   `year_chunked=True` plus `intermediates_subdir` / `intermediate_base`.
+   For targets that need per-HRU area (mm/month → cfs), set
+   `needs_hru_area=True`.
+5. **Wire `build(project)`** as a one-line delegate:
+   ```python
+   def build(project):
+       from nhf_spatial_targets.targets._driver import build as run_driver
+       run_driver(ADAPTER, project)
+   ```
+6. **CLI dispatch** — wire the new builder into the `_dispatch` table in
+   [`src/nhf_spatial_targets/cli/run.py`](src/nhf_spatial_targets/cli/run.py)
    (import the module, add a `"<target_name>": <module>.build` entry).
-4. **Pixi task** — add `run-<target> = { cmd = "nhf-targets run --target <target>" }`
+7. **Pixi task** — add `run-<target> = { cmd = "nhf-targets run --target <target>" }`
    to [`pixi.toml`](pixi.toml).
-5. **SLURM array index** — append the new task to the `RUN_TASKS` array in
+8. **SLURM array index** — append the new task to the `RUN_TASKS` array in
    [`slurm/shared/run_all.body.sh`](slurm/shared/run_all.body.sh). Add at
    the end so existing array indexes remain stable.
-6. **Default config** — if the target needs new config keys (sources list,
+9. **Default config** — if the target needs new config keys (sources list,
    period, normalization params, `nn_fill` flag), update
    [`src/nhf_spatial_targets/defaults.py`](src/nhf_spatial_targets/defaults.py),
    [`config/pipeline.yml`](config/pipeline.yml),
@@ -178,15 +187,16 @@ is the canonical single-source CI-bounded example.
    [`src/nhf_spatial_targets/upgrade_config.py`](src/nhf_spatial_targets/upgrade_config.py)
    so existing-project operators find the new keys via
    `nhf-targets upgrade-config` (see `CLAUDE.md` §Config schema additions).
-7. **Inspect notebook** — copy
-   [`notebooks/targets/inspect_target_swe.ipynb`](notebooks/targets/inspect_target_swe.ipynb)
-   to `notebooks/targets/inspect_target_<target>.ipynb` and retarget the
-   load + plotting cells. Visual inspection has caught real unit / variable
-   bugs that tests missed.
-8. **Tests** — `tests/test_targets_<target>.py` with synthetic-fabric
-   fixtures (see existing `tests/test_targets_*.py` for the pattern).
-9. **README updates** — flip the matching row to **Done** in §Implementation
-   Status and add or refresh the §Calibration Targets row.
+10. **Inspect notebook** — copy
+    [`notebooks/targets/inspect_target_swe.ipynb`](notebooks/targets/inspect_target_swe.ipynb)
+    to `notebooks/targets/inspect_target_<target>.ipynb` and retarget the
+    load + plotting cells. Visual inspection has caught real unit / variable
+    bugs that tests missed.
+11. **Tests** — `tests/test_targets_<target>.py` with synthetic-fabric
+    fixtures. See `tests/test_targets_run.py` (single-shot) and
+    `tests/test_targets_sca.py` (year-chunked) for shape templates.
+12. **README updates** — flip the matching row to **Done** in §Implementation
+    Status and refresh the §Calibration Targets row.
 
 ### Adding a new fabric
 

@@ -36,15 +36,19 @@ import pandas as pd
 import xarray as xr
 
 from nhf_spatial_targets.normalize.methods import normalize_0_1_over_window
-from nhf_spatial_targets.targets._common import (
-    SourceShim,
+from nhf_spatial_targets.targets._adapter import (
+    SourceLoaderResult,
+    TargetAdapter,
+)
+from nhf_spatial_targets.targets._combine import multi_source_nanminmax
+from nhf_spatial_targets.targets._io import (
     check_hru_coords,
-    compute_hru_centroids,
-    multi_source_nanminmax,
     parse_period,
     read_aggregated_source,
+)
+from nhf_spatial_targets.targets._shims import (
+    SourceShim,
     shims_by_key,
-    write_bounds_target,
 )
 from nhf_spatial_targets.workspace import Project
 
@@ -125,22 +129,21 @@ SHIMS: tuple[SourceShim, ...] = (
 
 
 # ---------------------------------------------------------------------------
-# Orchestration
+# Source loader
 # ---------------------------------------------------------------------------
 
 
-def build(project: Project) -> None:
-    """Build the recharge calibration target.
-
-    Reads each enabled source's per-year aggregated NCs, harmonizes onto
-    a master year-start index over ``recharge.period``, normalizes each
-    independently to [0, 1] using its min/max over
-    ``recharge.normalize_period``, combines via NaN-aware min/max, and
-    writes a CF-1.6 NetCDF. If ``recharge.nn_fill`` is True, also writes
-    ``recharge_targets_nn_filled.nc``.
-    """
-    rch_cfg = project.target("recharge")
-    period = parse_period(rch_cfg["period"])
+def _load(
+    *,
+    project: Project,
+    adapter: TargetAdapter,
+    period: tuple[str, str],
+    hru_meta,
+    fabric_hru_ids,
+    id_col: str,
+    year_context=None,
+) -> SourceLoaderResult:
+    rch_cfg = project.target(adapter.config_key)
     normalize_period = parse_period(rch_cfg["normalize_period"])
     sources = list(rch_cfg["sources"])
 
@@ -156,11 +159,6 @@ def build(project: Project) -> None:
         project.config["fabric"]["path"],
     )
 
-    # 1. Per-HRU centroids for NN-fill (no area conversion needed).
-    hru_meta = compute_hru_centroids(project)
-    id_col = project.id_col
-
-    # 2. Master year-start index over the requested period.
     master_idx = pd.date_range(period[0], period[1], freq="YS")
     if len(master_idx) == 0:
         raise ValueError(
@@ -168,9 +166,7 @@ def build(project: Project) -> None:
             "freq='YS'. Check the date range."
         )
 
-    # 3. Read, harmonize, normalize each source.
     shims = shims_by_key(SHIMS)
-    fabric_hru_ids = hru_meta.index.values
     sources_normalized: dict[str, xr.DataArray] = {}
     for src in sources:
         if src not in shims:
@@ -191,10 +187,8 @@ def build(project: Project) -> None:
             (read_start, read_end),
             chunks={"time": 12, id_col: -1},
         )
-        # HRU coord check (canonical-sort invariant, same as runoff/aet).
         check_hru_coords(da_native, fabric_hru_ids, id_col, src)
         da_annual_mm = shim.to_common_units(da_native)
-        # Normalize using normalize_period's min/max; project onto master_idx.
         window = da_annual_mm.sel(time=slice(normalize_period[0], normalize_period[1]))
         if window.sizes.get("time", 0) == 0:
             raise ValueError(
@@ -204,43 +198,54 @@ def build(project: Project) -> None:
                 f"{da_annual_mm.time.values[-1]}."
             )
         da_normalized = normalize_0_1_over_window(da_annual_mm, window)
-        # Reindex to master year-start index (NaN-pads years the source
-        # doesn't cover; the multi-source min/max handles partial coverage).
         sources_normalized[src] = da_normalized.reindex(time=master_idx)
 
-    # 4. NaN-aware combination across normalized sources.
     lower, upper, n_sources = multi_source_nanminmax(sources_normalized)
 
-    # 5. Assemble + write (with optional NN-fill companion).
     extra_attrs = {
         "source": "; ".join(shims[s].description for s in sources),
-        "references": "Hay et al. 2022, doi:10.3133/tm6B10",
-        "fabric": project.config["fabric"]["path"],
-        "fabric_sha256": project.fabric.get("sha256", ""),
-        "period": rch_cfg["period"],
         "normalize_period": rch_cfg["normalize_period"],
-        "area_crs": project.area_crs,
     }
-    output_path = project.targets_dir() / rch_cfg["output_file"]
-    write_bounds_target(
-        project=project,
+
+    return SourceLoaderResult(
         lower=lower,
         upper=upper,
         n_sources=n_sources,
         n_sources_count=len(sources),
         time_index=master_idx,
         time_offset_unit=pd.offsets.YearBegin(1),
-        bounds_units="1",
-        bounds_long_name_kind="annual recharge",
-        cell_methods="time: sum",
-        output_path=output_path,
-        title=(
-            "NHM recharge calibration target (lower/upper bounds, dimensionless 0-1)"
-        ),
-        nn_title="NHM recharge calibration target (NN-filled, dimensionless 0-1)",
-        extra_global_attrs=extra_attrs,
-        hru_meta=hru_meta,
-        nn_fill=rch_cfg["nn_fill"],
-        nn_max_candidates=int(rch_cfg["nn_max_candidates"]),
-        id_col=id_col,
+        extra_attrs=extra_attrs,
     )
+
+
+# ---------------------------------------------------------------------------
+# Adapter declaration
+# ---------------------------------------------------------------------------
+
+
+ADAPTER = TargetAdapter(
+    target_key="recharge",
+    config_key="recharge",
+    cadence="annual",
+    bounds_units="1",
+    bounds_long_name_kind="annual recharge",
+    cell_methods="time: sum",
+    title=("NHM recharge calibration target (lower/upper bounds, dimensionless 0-1)"),
+    nn_title="NHM recharge calibration target (NN-filled, dimensionless 0-1)",
+    source_loader=_load,
+)
+
+
+def build(project: Project) -> None:
+    """Build the recharge calibration target.
+
+    Thin wrapper around :func:`targets._driver.build` for the recharge
+    :data:`ADAPTER`. The driver runs the read → unit-convert → normalize →
+    NaN-aware min/max → write pipeline; this module owns the per-source
+    unit shims (each ending at mm/year at year-start) and the
+    per-source normalization step (each source independently normalized
+    to [0, 1] over the configured ``recharge.normalize_period``).
+    """
+    from nhf_spatial_targets.targets._driver import build as run_driver
+
+    run_driver(ADAPTER, project)

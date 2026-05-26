@@ -32,6 +32,7 @@ files are written for both the monthly and annual outputs.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import pandas as pd
 import xarray as xr
@@ -40,16 +41,20 @@ from nhf_spatial_targets.normalize.methods import (
     normalize_0_1_by_calendar_month_over_window,
     normalize_0_1_over_window,
 )
-from nhf_spatial_targets.targets._common import (
-    SourceShim,
+from nhf_spatial_targets.targets._adapter import (
+    SourceLoaderResult,
+    TargetAdapter,
+)
+from nhf_spatial_targets.targets._combine import multi_source_nanminmax
+from nhf_spatial_targets.targets._io import (
     check_hru_coords,
-    compute_hru_centroids,
-    multi_source_nanminmax,
     parse_period,
     read_aggregated_source,
     reindex_to_month_start,
+)
+from nhf_spatial_targets.targets._shims import (
+    SourceShim,
     shims_by_key,
-    write_bounds_target,
 )
 from nhf_spatial_targets.workspace import Project
 
@@ -97,12 +102,7 @@ SHIMS: tuple[SourceShim, ...] = (
 )
 
 
-# ---------------------------------------------------------------------------
-# Orchestration
-# ---------------------------------------------------------------------------
-
-
-def _derive_variant_path(base_path, variant: str):
+def _derive_variant_path(base_path: Path, variant: str) -> Path:
     """Insert '_<variant>' before the suffix of ``base_path``.
 
     Example: ``soil_moisture_targets.nc`` + ``monthly`` →
@@ -111,56 +111,16 @@ def _derive_variant_path(base_path, variant: str):
     return base_path.with_name(base_path.stem + f"_{variant}" + base_path.suffix)
 
 
-def build(project: Project) -> None:
-    """Build the soil moisture calibration target (monthly + annual variants).
-
-    Reads each enabled source's per-year aggregated NCs, harmonizes onto
-    a monthly master index over ``soil_moisture.period``, then emits
-    two CF-1.6 NetCDFs:
-
-      - ``<output>_monthly.nc`` — per-calendar-month 0-1 normalization,
-        multi-source min/max bound, monthly cadence.
-      - ``<output>_annual.nc`` — monthly → annual mean per source,
-        whole-period 0-1 normalization, year-start cadence.
-
-    NN-filled companions are written for both when
-    ``soil_moisture.nn_fill`` is True.
-    """
-    som_cfg = project.target("soil_moisture")
-    period = parse_period(som_cfg["period"])
-    # normalize_period defaults to the output period (whole-period
-    # normalization). Set independently to extend the output past the
-    # calibration-period climatology; values outside the window may then
-    # produce normalized values < 0 or > 1, by design.
-    raw_norm_period = som_cfg.get("normalize_period") or som_cfg["period"]
-    normalize_period = parse_period(raw_norm_period)
-    sources = list(som_cfg["sources"])
-
-    logger.info(
-        "Building SOM target: %d sources (%s), period %s..%s, "
-        "normalize_period %s..%s, fabric=%s",
-        len(sources),
-        ",".join(sources),
-        period[0],
-        period[1],
-        normalize_period[0],
-        normalize_period[1],
-        project.config["fabric"]["path"],
-    )
-
-    hru_meta = compute_hru_centroids(project)
-    id_col = project.id_col
-
-    master_monthly = pd.date_range(period[0], period[1], freq="MS")
-    if len(master_monthly) == 0:
-        raise ValueError(
-            f"soil_moisture.period {som_cfg['period']} produces no months at "
-            "freq='MS'. Check the date range."
-        )
-
-    # Read + canonicalize each source to monthly cadence at month-start.
+def _read_monthly_sources(
+    *,
+    project: Project,
+    period: tuple[str, str],
+    sources: list[str],
+    fabric_hru_ids,
+    id_col: str,
+    master_monthly: pd.DatetimeIndex,
+) -> dict[str, xr.DataArray]:
     shims = shims_by_key(SHIMS)
-    fabric_hru_ids = hru_meta.index.values
     sources_monthly: dict[str, xr.DataArray] = {}
     for src in sources:
         if src not in shims:
@@ -179,10 +139,53 @@ def build(project: Project) -> None:
         check_hru_coords(da_native, fabric_hru_ids, id_col, src)
         da_monthly_native = shim.to_common_units(da_native)
         sources_monthly[src] = reindex_to_month_start(da_monthly_native, master_monthly)
+    return sources_monthly
 
-    # --- Monthly variant: per-calendar-month normalize over the window,
-    # then combine. Window equals the full output period when
-    # normalize_period == period (default).
+
+def _load_monthly(
+    *,
+    project: Project,
+    adapter: TargetAdapter,
+    period: tuple[str, str],
+    hru_meta,
+    fabric_hru_ids,
+    id_col: str,
+    year_context=None,
+) -> SourceLoaderResult:
+    """Monthly-variant loader: per-calendar-month normalize over window."""
+    som_cfg = project.target(adapter.config_key)
+    raw_norm_period = som_cfg.get("normalize_period") or som_cfg["period"]
+    normalize_period = parse_period(raw_norm_period)
+    sources = list(som_cfg["sources"])
+
+    logger.info(
+        "Building SOM monthly target: %d sources (%s), period %s..%s, "
+        "normalize_period %s..%s, fabric=%s",
+        len(sources),
+        ",".join(sources),
+        period[0],
+        period[1],
+        normalize_period[0],
+        normalize_period[1],
+        project.config["fabric"]["path"],
+    )
+
+    master_monthly = pd.date_range(period[0], period[1], freq="MS")
+    if len(master_monthly) == 0:
+        raise ValueError(
+            f"soil_moisture.period {som_cfg['period']} produces no months at "
+            "freq='MS'. Check the date range."
+        )
+
+    sources_monthly = _read_monthly_sources(
+        project=project,
+        period=period,
+        sources=sources,
+        fabric_hru_ids=fabric_hru_ids,
+        id_col=id_col,
+        master_monthly=master_monthly,
+    )
+
     sources_monthly_norm: dict[str, xr.DataArray] = {}
     for src, da in sources_monthly.items():
         window = da.sel(time=slice(normalize_period[0], normalize_period[1]))
@@ -197,43 +200,49 @@ def build(project: Project) -> None:
         )
     lo_m, up_m, ns_m = multi_source_nanminmax(sources_monthly_norm)
 
-    base_output = project.targets_dir() / som_cfg["output_file"]
-    extra_attrs_monthly = {
+    shims = shims_by_key(SHIMS)
+    extra_attrs = {
         "source": "; ".join(shims[s].description for s in sources),
-        "references": "Hay et al. 2022, doi:10.3133/tm6B10",
-        "fabric": project.config["fabric"]["path"],
-        "fabric_sha256": project.fabric.get("sha256", ""),
-        "period": som_cfg["period"],
         "normalize_period": raw_norm_period,
         "normalize_method": "per_calendar_month",
-        "area_crs": project.area_crs,
     }
-    write_bounds_target(
-        project=project,
+    return SourceLoaderResult(
         lower=lo_m,
         upper=up_m,
         n_sources=ns_m,
         n_sources_count=len(sources),
         time_index=master_monthly,
         time_offset_unit=pd.offsets.MonthBegin(1),
-        bounds_units="1",
-        bounds_long_name_kind="monthly soil moisture",
-        cell_methods="time: mean",
-        output_path=_derive_variant_path(base_output, "monthly"),
-        title="NHM soil moisture monthly calibration target (dimensionless 0-1)",
-        nn_title=(
-            "NHM soil moisture monthly calibration target (NN-filled, "
-            "dimensionless 0-1)"
-        ),
-        extra_global_attrs=extra_attrs_monthly,
-        hru_meta=hru_meta,
-        nn_fill=som_cfg["nn_fill"],
-        nn_max_candidates=int(som_cfg["nn_max_candidates"]),
-        id_col=id_col,
+        extra_attrs=extra_attrs,
     )
 
-    # --- Annual variant: monthly → annual mean per source, then normalize
-    # over the annual slice of the normalize window.
+
+def _load_annual(
+    *,
+    project: Project,
+    adapter: TargetAdapter,
+    period: tuple[str, str],
+    hru_meta,
+    fabric_hru_ids,
+    id_col: str,
+    year_context=None,
+) -> SourceLoaderResult:
+    """Annual-variant loader: monthly → annual mean, then whole-period normalize."""
+    som_cfg = project.target(adapter.config_key)
+    raw_norm_period = som_cfg.get("normalize_period") or som_cfg["period"]
+    normalize_period = parse_period(raw_norm_period)
+    sources = list(som_cfg["sources"])
+
+    master_monthly = pd.date_range(period[0], period[1], freq="MS")
+    sources_monthly = _read_monthly_sources(
+        project=project,
+        period=period,
+        sources=sources,
+        fabric_hru_ids=fabric_hru_ids,
+        id_col=id_col,
+        master_monthly=master_monthly,
+    )
+
     sources_annual = {
         src: da.resample(time="YS").mean(skipna=True)
         for src, da in sources_monthly.items()
@@ -249,36 +258,99 @@ def build(project: Project) -> None:
         sources_annual_norm[src] = normalize_0_1_over_window(da, window)
     lo_a, up_a, ns_a = multi_source_nanminmax(sources_annual_norm)
     master_annual = pd.date_range(period[0], period[1], freq="YS")
-    extra_attrs_annual = {
+
+    shims = shims_by_key(SHIMS)
+    extra_attrs = {
         "source": "; ".join(shims[s].description for s in sources),
-        "references": "Hay et al. 2022, doi:10.3133/tm6B10",
-        "fabric": project.config["fabric"]["path"],
-        "fabric_sha256": project.fabric.get("sha256", ""),
-        "period": som_cfg["period"],
         "normalize_period": raw_norm_period,
         "normalize_method": "whole_period",
         "annual_aggregation": "mean",
-        "area_crs": project.area_crs,
     }
-    write_bounds_target(
-        project=project,
+    return SourceLoaderResult(
         lower=lo_a,
         upper=up_a,
         n_sources=ns_a,
         n_sources_count=len(sources),
         time_index=master_annual,
         time_offset_unit=pd.offsets.YearBegin(1),
-        bounds_units="1",
-        bounds_long_name_kind="annual soil moisture",
-        cell_methods="time: mean",
-        output_path=_derive_variant_path(base_output, "annual"),
-        title="NHM soil moisture annual calibration target (dimensionless 0-1)",
-        nn_title=(
-            "NHM soil moisture annual calibration target (NN-filled, dimensionless 0-1)"
-        ),
-        extra_global_attrs=extra_attrs_annual,
-        hru_meta=hru_meta,
-        nn_fill=som_cfg["nn_fill"],
-        nn_max_candidates=int(som_cfg["nn_max_candidates"]),
-        id_col=id_col,
+        extra_attrs=extra_attrs,
     )
+
+
+# ---------------------------------------------------------------------------
+# Two adapters (monthly + annual variants)
+# ---------------------------------------------------------------------------
+
+
+ADAPTER_MONTHLY = TargetAdapter(
+    target_key="soil_moisture_monthly",
+    config_key="soil_moisture",
+    cadence="monthly",
+    bounds_units="1",
+    bounds_long_name_kind="monthly soil moisture",
+    cell_methods="time: mean",
+    title="NHM soil moisture monthly calibration target (dimensionless 0-1)",
+    nn_title=(
+        "NHM soil moisture monthly calibration target (NN-filled, dimensionless 0-1)"
+    ),
+    source_loader=_load_monthly,
+)
+
+
+ADAPTER_ANNUAL = TargetAdapter(
+    target_key="soil_moisture_annual",
+    config_key="soil_moisture",
+    cadence="annual",
+    bounds_units="1",
+    bounds_long_name_kind="annual soil moisture",
+    cell_methods="time: mean",
+    title="NHM soil moisture annual calibration target (dimensionless 0-1)",
+    nn_title=(
+        "NHM soil moisture annual calibration target (NN-filled, dimensionless 0-1)"
+    ),
+    source_loader=_load_annual,
+)
+
+
+def build(project: Project) -> None:
+    """Build the soil moisture calibration target (monthly + annual variants).
+
+    Two outputs are written by running the generic driver twice — once
+    per variant adapter (:data:`ADAPTER_MONTHLY`, :data:`ADAPTER_ANNUAL`).
+    Each driver call materialises one ``soil_moisture_targets_<variant>.nc``
+    file under the project targets dir; the variant suffix is inserted
+    by overriding the driver's resolved output path via
+    :func:`_derive_variant_path`. Multi-variant outputs are otherwise out
+    of scope for the driver — declaring two adapters keeps the driver's
+    "one adapter, one file" contract intact.
+    """
+    from nhf_spatial_targets.targets._driver import _build_single_shot
+    from nhf_spatial_targets.targets._io import (
+        compute_hru_centroids,
+        parse_period as _parse,
+    )
+
+    som_cfg = project.target("soil_moisture")
+    period = _parse(som_cfg["period"])
+    period_str = som_cfg["period"]
+    hru_meta = compute_hru_centroids(project)
+    id_col = project.id_col
+    base_output = project.targets_dir() / som_cfg["output_file"]
+
+    # Drive each variant manually so we can rewrite the output_file via
+    # _derive_variant_path. The driver itself owns no notion of variants.
+    for adapter, variant in (
+        (ADAPTER_MONTHLY, "monthly"),
+        (ADAPTER_ANNUAL, "annual"),
+    ):
+        variant_cfg = dict(som_cfg)
+        variant_cfg["output_file"] = _derive_variant_path(base_output, variant).name
+        _build_single_shot(
+            adapter=adapter,
+            project=project,
+            target_cfg=variant_cfg,
+            period=period,
+            period_str=period_str,
+            hru_meta=hru_meta,
+            id_col=id_col,
+        )
