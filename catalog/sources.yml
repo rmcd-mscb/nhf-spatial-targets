@@ -803,8 +803,13 @@ sources:
     status: current
 
   margulis_wus_sr:
-    name: Margulis Western US Snow Reanalysis (NSIDC-0719)
+    name: Margulis Western US Snow Reanalysis (WUS_UCLA_SR)
     description: >
+      NOTE: Distinct from NSIDC-0719 — that catalog ID is the UA
+      Broxton/Zeng/Dawson 4-km CONUS SWE+snow-depth product (see
+      `ua_swe`). The earlier title here claimed NSIDC-0719 in error;
+      Margulis WUS-SR has its own NSIDC ID (operator to confirm via
+      earthaccess at implementation time; the DOI below is correct).
       UCLA/Margulis Western US Snow Reanalysis, daily 90 m posterior
       snow water equivalent over the Sierra Nevada, Cascades, Rockies
       and adjacent ranges for water years 1985-2021. Used as a SWE
@@ -821,15 +826,17 @@ sources:
       type: nsidc
       short_name: WUS_UCLA_SR
       version: "1"
-      url: https://nsidc.org/data/nsidc-0719
+      url: https://nsidc.org/data/wus_ucla_sr
       notes: >
         Access via earthaccess (NASA Earthdata login required).
         Granules are per-water-year per-tile NetCDFs covering the
         Western US domain; the fetch module subsets to the fabric
         bounding box at search time. Confirm short_name via an
-        earthaccess CMR query at implementation time — historically
-        the NSIDC-0719 short_name has been WUS_UCLA_SR but the value
-        is subject to NSIDC bookkeeping.
+        earthaccess CMR query at implementation time — the historical
+        WUS_UCLA_SR value is subject to NSIDC bookkeeping changes.
+        The earlier `url:` here pointed at https://nsidc.org/data/nsidc-0719
+        which is the UA Broxton product (see `ua_swe`), not this one;
+        the corrected slug is /wus_ucla_sr.
     fabric_scope:
       # `fabrics:` is the list of fabric tokens for which this source
       # should be aggregated. Allowed tokens (kept in sync with the
@@ -856,5 +863,97 @@ sources:
     spatial_extent: Western US (Sierra Nevada, Cascades, Rockies and adjacent ranges)
     spatial_resolution: 90 m
     units: m water equivalent
+    license: public domain (NASA NSIDC)
+    status: current
+
+  ua_swe:
+    name: University of Arizona Daily 4-km Gridded SWE and Snow Depth (NSIDC-0719)
+    description: >
+      Daily 4-km CONUS SWE and snow depth from assimilation of SNOTEL/COOP
+      in-situ measurements with PRISM modeled data (Broxton, Zeng & Dawson,
+      University of Arizona). Water years 1982-2023 (1981-10-01 through
+      2023-09-30). Used as a third SWE source — alongside Daymet, SNODAS,
+      and ERA5-Land `sd` — and as a second snow-covered-area source via a
+      depth-derived binary snow-cover indicator, area-weighted to HRU in
+      aggregate/ua_swe.py.
+    citations:
+      - "Broxton, P., Zeng, X., and Dawson, N., 2019, doi:10.5067/0GGPB220EX6A"
+    doi: "10.5067/0GGPB220EX6A"
+    access:
+      # `nsidc_https` = filenames are deterministic at the archive root, so
+      # the fetch module constructs URLs directly per water year rather
+      # than via `earthaccess.search_data`. Same pattern as SNODAS
+      # (CMR may carry the collection record but historically NSIDC's
+      # HTTPS-only archives have been granule-less stubs, per #107).
+      # `short_name` is recorded for provenance and future CMR queries
+      # but is not used by the fetch path.
+      type: nsidc_https
+      short_name: NSIDC-0719
+      version: "1"
+      url: https://nsidc.org/data/nsidc-0719/versions/1
+      archive_url: https://daacdata.apps.nsidc.org/pub/DATASETS/nsidc0719_SWE_Snow_Depth_v1/
+      notes: >
+        Access via the earthaccess HTTPS auth session (NASA Earthdata
+        Login required). File layout at the archive (confirmed
+        empirically against one WY): one NetCDF per water year named
+        `4km_SWE_Depth_WY<YYYY>_v01.nc` for WYs 1982 through 2023 (42
+        files, ~90 MB each), plus one CONUS land/water/ice mask
+        `SWE_Mask_v01.nc` at the archive root. Native variables are
+        `SWE` (float32, mm water-eq) and `DEPTH` (float32, mm snow
+        thickness) on a 621x1405 NAD83 EPSG:4269 lat-lon grid; fill is
+        NaN, with no integer sentinel. Time is float32 days since
+        1900-01-01 with no `units` attribute; the consolidator decodes
+        explicitly. Pre-projection to EPSG:5070 NAD83/CONUS Albers at
+        4 km happens at consolidate time (mirrors the SNODAS pattern
+        from issue #121) so the aggregator's WEIGHT_GEN_CRS matches
+        and gdptools skips reprojection during weight generation
+        (~5-8x weight-gen speedup measured for SNODAS). Nearest-
+        neighbour resampling preserves NaN fill without bleed.
+    variables:
+      - name: swe
+        long_name: snow water equivalent
+        cf_units: "kg m-2"
+        cell_methods: "time: mean"
+        notes: >
+          Native units mm water-equivalent (= kg m-2 at density 1000).
+          Publisher fill is NaN — no integer sentinel — so no fill mask
+          is required at consolidate time. The consolidator does enforce
+          `min >= -1.0` as a guard against a future format change that
+          might introduce a -9999 sentinel; values below that abort with
+          a clear ValueError.
+      - name: snow_depth
+        long_name: snow depth
+        cf_units: "mm"
+        cell_methods: "time: mean"
+        notes: >
+          Native units mm of snow thickness (NOT water equivalent).
+          Same NaN-fill convention as `swe`. Used both as a standalone
+          aggregated variable and as the basis for `snow_covered_fraction`
+          (see below).
+      - name: snow_covered_fraction
+        long_name: snow-covered fraction of HRU area
+        cf_units: "1"
+        cell_methods: "area: mean time: mean"
+        notes: >
+          Derived in aggregate/ua_swe.py::pre_aggregate_hook by converting
+          the per-pixel `snow_depth > depth_threshold_mm` test to a 0/1
+          binary indicator before area-weighting via gdptools. The
+          area-weighted mean of the binary then yields fractional snow
+          cover at the HRU scale. The threshold is configurable via
+          `snow_covered_area.depth_threshold_mm` in the project config
+          (default 1.0 mm). Per-pixel fill values propagate as NaN
+          through the test so the aggregator's `masked_mean` reduction
+          excludes them from the HRU mean denominator.
+    time_step: daily
+    # Calendar-year range for compatibility with the fetch period parser;
+    # the actual archive runs water years 1982-2023 (1981-10-01 through
+    # 2023-09-30). The fetch module converts requested calendar years to
+    # the touching water-year files (e.g. CY 1990 touches WY 1990 and WY
+    # 1991, since Oct-Dec 1990 lives in WY 1991).
+    period: "1981/2023"
+    spatial_extent: CONUS
+    spatial_resolution: 4000 m (EPSG:5070, pre-projected at consolidate
+      time; native NAD83 ~4 km lat-lon)
+    units: kg m-2 (mm water equivalent), mm
     license: public domain (NASA NSIDC)
     status: current
