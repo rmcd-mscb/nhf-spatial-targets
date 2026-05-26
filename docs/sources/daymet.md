@@ -14,7 +14,7 @@ shared filesystem and `nhf-targets fetch daymet` fingerprints each
 region (sha256 over `.zgroup` / `.zarray` / `.zattrs` / `.zmetadata`
 files plus the directory's total byte count) and writes a per-region
 manifest entry. The fingerprint design and its residual gaps are
-documented in [`src/nhf_spatial_targets/fetch/daymet.py`](../../src/nhf_spatial_targets/fetch/daymet.py).
+documented in [`src/nhf_spatial_targets/fetch/daymet.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/fetch/daymet.py).
 
 ## Procedure
 

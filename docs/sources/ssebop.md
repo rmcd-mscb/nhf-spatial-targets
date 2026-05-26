@@ -60,7 +60,7 @@ aggregator infers years from the consolidated NC). Months outside the
 publisher window (2000-2023) raise on STAC read.
 
 Or via the dedicated SLURM script
-([`slurm/shared/agg_ssebop.slurm`](../../slurm/shared/agg_ssebop.slurm),
+([`slurm/shared/agg_ssebop.slurm`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/slurm/shared/agg_ssebop.slurm),
 not slotted into the `agg_all_<fabric>.slurm` array because the array
 doesn't forward periods):
 
@@ -117,5 +117,5 @@ the driver's helpers (`_atomic_write_netcdf`, `_batch_fingerprint`,
 - Weight cache "stale batch fingerprint" warning followed by a
   recompute — fabric or batch size changed since the cache was
   written. This is normal; the recomputed cache is then re-used.
-- Catalog reference: see [`catalog/sources.yml`](../../catalog/sources.yml)
+- Catalog reference: see [`catalog/sources.yml`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/catalog/sources.yml)
   `ssebop:` block for the STAC collection ID and DOI.

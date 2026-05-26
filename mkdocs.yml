@@ -1,0 +1,149 @@
+site_name: nhf-spatial-targets
+site_description: Curated calibration target datasets for the USGS National Hydrologic Model (NHM)
+site_url: https://github.com/rmcd-mscb/nhf-spatial-targets
+repo_url: https://github.com/rmcd-mscb/nhf-spatial-targets
+repo_name: rmcd-mscb/nhf-spatial-targets
+edit_uri: edit/main/docs/
+
+# Local-only browsing for now (issue #233). Publishing to GH Pages deferred.
+# `pixi run docs-serve` for hot-reload local preview;
+# `pixi run docs-build` for a --strict CI-style build (catches broken links).
+
+docs_dir: docs
+site_dir: _site
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - toc.follow
+  palette:
+    # Dark mode toggle. Defaults to "light"; user can flip via the header icon.
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition          # callout blocks (!!! note / !!! warning / etc.)
+  - attr_list           # markdown attribute syntax for IDs / classes
+  - def_list            # definition lists
+  - footnotes
+  - md_in_html          # markdown inside <div> blocks (existing docs use this)
+  - tables
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.details    # collapsible details blocks
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets:
+      check_paths: true
+  - pymdownx.superfences   # fenced code blocks with annotations
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]   # mkdocstrings imports from src/ — package lives at src/nhf_spatial_targets/
+          options:
+            docstring_style: numpy
+            docstring_section_style: table
+            heading_level: 2
+            show_source: true
+            show_root_heading: true
+            show_root_full_path: false
+            show_signature_annotations: true
+            separate_signature: true
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            members_order: source
+            filters:
+              - "!^_"          # exclude private members (single leading underscore)
+              - "!^__"         # exclude dunders
+
+# Exclude content not meant for the docs site:
+# - docs/plans/         internal design specs (this PR's spec lives there)
+# - docs/superpowers/   superpowers-skill design notes (parallel to plans/)
+# - docs/presentations/ Marp .slides.md target a separate PDF pipeline
+# - docs/references/*.f90    Fortran source code (linked from references but not a doc)
+# - docs/references/*.pdf    large source PDFs (linked but not rendered inline)
+# - docs/references/*.md     literal markdown extracts of the above PDFs
+#                            (e.g. tm6b10.md from pymupdf4llm; not curated)
+exclude_docs: |
+  plans/
+  superpowers/
+  presentations/
+  references/*.f90
+  references/*.pdf
+  references/tm6b10.md
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Quick start: getting-started.md
+  - Architecture:
+      - Transformation pipeline: architecture/transformation-pipeline.md
+      - NetCDF encoding policy: architecture/nc-encoding-policy.md
+      - Python patterns: architecture/python-patterns.md
+      - Reconcile manifest: architecture/reconcile-manifest.md
+  - Sources:
+      - Overview: sources/index.md
+      - ERA5-Land: sources/era5_land.md
+      - GLDAS: sources/gldas.md
+      - MERRA-2: sources/merra2.md
+      - NLDAS-MOSAIC: sources/nldas_mosaic.md
+      - NLDAS-NOAH: sources/nldas_noah.md
+      - NCEP/NCAR: sources/ncep_ncar.md
+      - WaterGAP 2.2d: sources/watergap22d.md
+      - Reitz 2017: sources/reitz2017.md
+      - MOD16A2 v061: sources/mod16a2_v061.md
+      - MOD10C1 v061: sources/mod10c1_v061.md
+      - MWBM ClimGrid: sources/mwbm_climgrid.md
+      - Daymet: sources/daymet.md
+      - SNODAS: sources/snodas.md
+      - Margulis WUS-SR: sources/margulis_wus_sr.md
+      - SSEBop: sources/ssebop.md
+  - References:
+      - TM 6-B10 crib sheet: references/tm6b10-summary.md
+      - PRMSobjfun summary: references/prmsobjfun-summary.md
+      - Calibration target recipes: references/calibration-target-recipes.md
+      - Pipeline architecture reference: references/pipeline-architecture-reference.md
+      - Processing steps reference: references/processing-steps-reference.md
+      - Known gaps resolved: references/known-gaps-resolved.md
+      - Target period coverage: references/target-period-coverage.md
+      - Lessons learned: references/lessons-learned.md
+  - API reference:
+      - Overview: api/index.md
+      - Catalog: api/catalog.md
+      - Workspace: api/workspace.md
+      - NetCDF I/O: api/io-nc.md
+      - Source adapter: api/aggregate-adapter.md
+      - Target adapter: api/targets-adapter.md
+      - Target driver: api/targets-driver.md
+  - Contributing:
+      - Contributing guide: contributing.md
+      - Conventions: conventions.md

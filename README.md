@@ -570,6 +570,18 @@ pixi run -e dev fmt           # ruff format src/ tests/
 pixi run -e dev fmt-check     # ruff format --check (used by pre-commit)
 ```
 
+### Building docs locally
+
+The repo's documentation lives under `docs/` and renders as a [MkDocs + Material](https://squidfunk.github.io/mkdocs-material/) site. The `docs` pixi feature is separate from `dev` so operators who don't browse the docs don't pay the install cost.
+
+```bash
+pixi install -e docs           # ~30 MB of pure-python wheels (one-time)
+pixi run docs-serve            # http://127.0.0.1:8000 with hot reload on docs/ and src/
+pixi run docs-build            # one-shot build to ./_site/ (--strict; fails on broken links)
+```
+
+`docs-serve` watches `src/` so docstring edits live-refresh the auto-generated API reference pages (rendered via [mkdocstrings](https://mkdocstrings.github.io/)). Publishing to GitHub Pages is not enabled — local browsing only for now (issue #233).
+
 Always commit via `pixi run git commit` (not bare `git commit`) — the pre-commit
 config drives ruff and pytest through `pixi run`, and a PreToolUse hook in
 `.claude/settings.json` enforces this for Claude sessions. See `CLAUDE.md` for

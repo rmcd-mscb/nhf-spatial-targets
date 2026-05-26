@@ -36,7 +36,7 @@ value is a smoking gun for a missed conversion factor.
 ## Access path — sciencebasepy
 
 No NASA/CDS credentials needed. The fetch module
-[`fetch/reitz2017.py`](../../src/nhf_spatial_targets/fetch/reitz2017.py)
+[`fetch/reitz2017.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/fetch/reitz2017.py)
 uses [`sciencebasepy`](https://github.com/DOI-USGS/sciencebasepy) to:
 
 1. Connect to ScienceBase item
@@ -77,7 +77,7 @@ nhf-targets fetch reitz2017 --project-dir <project> --period 2000/2013
 ```
 
 Or via the general SLURM fetch array, index 7
-([`slurm/shared/fetch_all.slurm`](../../slurm/shared/fetch_all.slurm)).
+([`slurm/shared/fetch_all.slurm`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/slurm/shared/fetch_all.slurm)).
 
 The fetcher is **incremental at the year-variable pair level**:
 existing GeoTIFFs on disk are skipped. The consolidator regenerates the
@@ -95,7 +95,7 @@ that uses NAD83 rather than WGS84 natively.
 ## HPC memory/time notes
 
 - 14 years × 2 variables = 28 small GeoTIFFs at ~tens of MB each.
-  Total raw ~2-4 GB (see [README.md](../../README.md) §Datastore
+  Total raw ~2-4 GB (see [README.md](../getting-started.md) §Datastore
   Storage Estimates).
 - The general 128 GB / 24 h fetch SLURM allocation is overkill;
   full-period runs finish in 5-10 minutes.
@@ -122,6 +122,6 @@ combines with WaterGAP 2.2d.
   magnitude — the `units` field in the catalog drifted from `m yr-1`
   back to `in/yr` or similar. Re-confirm against `catalog.source("reitz2017")`
   and re-fetch + re-aggregate.
-- Catalog reference: see [`catalog/sources.yml`](../../catalog/sources.yml)
+- Catalog reference: see [`catalog/sources.yml`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/catalog/sources.yml)
   `reitz2017:` block for the units-correction notes and ScienceBase
   links.

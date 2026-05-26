@@ -53,3 +53,7 @@ htmlcov/
 # the inspect_*.slurm scripts (HPC). Cache files from notebook execution
 # are still ignored.
 docs/figures/.cache/
+
+# MkDocs build output (issue #233). `pixi run docs-build` writes here;
+# `pixi run docs-serve` does not need this dir (it serves from memory).
+_site/

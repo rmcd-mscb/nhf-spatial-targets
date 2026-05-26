@@ -43,7 +43,7 @@ file as
 **preserved on disk** so re-runs are idempotent at the chunk level.
 
 The monthly chunk validator (`_validate_chunk_time_coord` in
-[`fetch/era5_land.py`](../../src/nhf_spatial_targets/fetch/era5_land.py))
+[`fetch/era5_land.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/fetch/era5_land.py))
 guards against an observed-in-production rare CDS quirk: a chunk file
 on disk whose `time` coord covers a different month than the chunk
 filename implies. When detected, the bad chunk is deleted and
@@ -137,6 +137,6 @@ upstream; CDS-delivered NaN pixels propagate honestly to NaN HRUs).
   chunks are present — almost always a hand-corrupted chunk. Inspect
   `era5_land_<var>_<year>_<MM>.nc` files for non-NetCDF magic bytes,
   delete the offender, and re-run.
-- Catalog reference: see [`catalog/sources.yml`](../../catalog/sources.yml)
+- Catalog reference: see [`catalog/sources.yml`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/catalog/sources.yml)
   `era5_land:` block for variable units, the bbox (53°/-125° → 24.7°/-66°),
   and CF metadata that flows through `apply_cf_metadata`.

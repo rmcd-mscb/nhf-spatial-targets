@@ -33,7 +33,7 @@ downloaded files do not require post-hoc spatial subsetting.
 
 Granule filenames embed `AYYYYMM` (e.g.
 `NLDAS_MOS0125_M.A200101.020.grb.SUB.nc4`). The shared NLDAS fetch
-module ([`fetch/nldas.py`](../../src/nhf_spatial_targets/fetch/nldas.py))
+module ([`fetch/nldas.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/fetch/nldas.py))
 handles both MOSAIC and NOAH variants behind the per-source key.
 
 ## On-disk layout
@@ -51,7 +51,7 @@ nhf-targets fetch nldas-mosaic --project-dir <project> --period 1979/2025
 ```
 
 Or via the general SLURM fetch array, index 3
-([`slurm/shared/fetch_all.slurm`](../../slurm/shared/fetch_all.slurm)).
+([`slurm/shared/fetch_all.slurm`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/slurm/shared/fetch_all.slurm)).
 
 **Incremental**: months already recorded in `manifest.json` are skipped
 at search-result filter time, so re-running after adding a new period
@@ -60,7 +60,7 @@ fetches only the new months. Manifest writes are read-merge-write.
 ## HPC memory/time notes
 
 - 1979-2025 ≈ 564 monthly CONUS granules, ~2-4 GB raw total (see
-  [README.md](../../README.md) §Datastore Storage Estimates).
+  [README.md](../getting-started.md) §Datastore Storage Estimates).
 - The general 128 GB / 24 h fetch SLURM allocation is far more than
   needed; full-period runs finish in 1-2 hours on a warm network.
 
@@ -79,5 +79,5 @@ one per year, in native `kg m-2`.
   <https://urs.earthdata.nasa.gov/profile> → Applications.
 - Same `Partial download` warning as MERRA-2; re-run picks up missing
   months by filename.
-- Catalog reference: see [`catalog/sources.yml`](../../catalog/sources.yml)
+- Catalog reference: see [`catalog/sources.yml`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/catalog/sources.yml)
   `nldas_mosaic:` block for variable definitions and GES DISC links.

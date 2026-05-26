@@ -7,7 +7,7 @@ doi:10.5067/PP7T2GBI52I2). NSIDC distributes it as collection
 NSIDC-0719 (short_name `WUS_UCLA_SR`).
 
 This source is **fabric-scoped to Oregon only** in this pipeline (see
-[`catalog/sources.yml`](../../catalog/sources.yml)
+[`catalog/sources.yml`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/catalog/sources.yml)
 `margulis_wus_sr.fabric_scope`). Raw downloads are reusable by any
 project pointing at the same datastore, but the SWE target builder
 excludes this source for non-Oregon fabrics — a Mississippi-fabric
