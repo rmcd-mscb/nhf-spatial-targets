@@ -10,7 +10,10 @@ end-to-end without touching the network.
 from __future__ import annotations
 
 import json
+import re
+import tempfile
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -21,6 +24,8 @@ import yaml
 from nhf_spatial_targets.fetch.ua_swe import (
     _assign_worker_water_years,
     _calendar_years_to_water_years,
+    _download_file,
+    _earthaccess_session,
     _mask_url,
     _wy_url,
     consolidate_water_year_ua_swe,
@@ -149,6 +154,126 @@ def _make_synthetic_raw_nc(
     ds.to_netcdf(path)
 
 
+def _make_synthetic_raw_nc_bytes(wy: int, **kwargs) -> bytes:
+    """Build a synthetic raw NC and return its bytes (for fake-session bodies)."""
+    with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        _make_synthetic_raw_nc(tmp_path, wy, **kwargs)
+        return tmp_path.read_bytes()
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+# Padding body for the CONUS mask download. The real mask is ~1.7 MB; for
+# tests we just need enough bytes to clear the hard-coded 128 KiB floor
+# that `fetch_ua_swe` passes as `min_bytes` for the mask call.
+_MASK_PAD_BODY = b"\x00" * 200_000
+
+
+def _synthetic_responder() -> Callable[[str], "_FakeResponse"]:
+    """Responder that serves valid synthetic NCs for every WY URL + mask URL.
+
+    Unrecognised URLs return 404. The same pattern as
+    `tests/test_fetch_snodas.py::_synthetic_tar_responder` for the SNODAS
+    tar URLs, adapted for ua_swe's per-WY NetCDF naming.
+    """
+
+    def responder(url: str) -> "_FakeResponse":
+        m = re.search(r"4km_SWE_Depth_WY(\d{4})_v01\.nc$", url)
+        if m:
+            wy = int(m.group(1))
+            body = _make_synthetic_raw_nc_bytes(wy)
+            return _FakeResponse(200, body=body)
+        if url.endswith("/SWE_Mask_v01.nc"):
+            return _FakeResponse(200, body=_MASK_PAD_BODY)
+        return _FakeResponse(404)
+
+    return responder
+
+
+class _FakeResponse:
+    """Tiny stand-in for ``requests.Response`` covering what _download_file uses.
+
+    `Content-Length` is auto-derived from the body length unless an
+    explicit value is passed via ``content_length``. Pass
+    ``content_length=None`` to simulate a server that omits the header.
+    Pass an integer that *disagrees* with the body length to exercise
+    the short-read integrity path. Ports `tests/test_fetch_snodas.py`'s
+    `_FakeResponse`.
+    """
+
+    _UNSET = object()
+
+    def __init__(
+        self,
+        status_code: int,
+        body: bytes = b"",
+        chunks: list[bytes] | None = None,
+        content_length: object = _UNSET,
+    ):
+        self.status_code = status_code
+        self._body = body
+        self._chunks = chunks if chunks is not None else [body]
+        self.headers: dict[str, str] = {}
+        if content_length is _FakeResponse._UNSET:
+            # Default: server sets Content-Length matching the body
+            # (NSIDC's archive does this on per-WY NetCDF responses).
+            self.headers["Content-Length"] = str(len(body))
+        elif content_length is not None:
+            self.headers["Content-Length"] = str(content_length)
+        # else: caller asked for no Content-Length header at all.
+
+    def iter_content(self, chunk_size: int = 8192):
+        for c in self._chunks:
+            yield c
+
+    def close(self):
+        pass
+
+
+def _stub_session(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    responder: Callable[[str], _FakeResponse] | None = None,
+) -> dict[str, list]:
+    """Patch ``_earthaccess_session`` with a session whose ``.get`` is stubbed.
+
+    ``responder`` overrides the per-URL response. Otherwise the default
+    `_synthetic_responder()` is used. Returns a call-log dict for
+    assertions (`{"urls": [...], "session_built": N}`).
+    """
+    calls: dict[str, list] = {"urls": [], "session_built": 0}
+
+    if responder is None:
+        responder = _synthetic_responder()
+
+    class _Session:
+        def get(self, url, timeout=None, stream=None, allow_redirects=None):
+            calls["urls"].append(url)
+            return responder(url)
+
+    def _fake_session():
+        calls["session_built"] += 1
+        return _Session()
+
+    monkeypatch.setattr(
+        "nhf_spatial_targets.fetch.ua_swe._earthaccess_session", _fake_session
+    )
+    return calls
+
+
+@pytest.fixture
+def small_min_bytes(monkeypatch):
+    """Lower `_MIN_VALID_NC_BYTES` so small synthetic test NCs pass.
+
+    Production threshold is 10 MiB (~90 MB per real WY file); synthetic
+    NCs are a few KiB. The mask's per-call `min_bytes=128*1024` is left
+    alone — `_MASK_PAD_BODY` is sized to clear that floor.
+    """
+    monkeypatch.setattr("nhf_spatial_targets.fetch.ua_swe._MIN_VALID_NC_BYTES", 1024)
+
+
 # ---------------------------------------------------------------------------
 # Pure helper functions
 # ---------------------------------------------------------------------------
@@ -251,10 +376,36 @@ class TestConsolidateWaterYear:
             assert "lat" not in ds.dims
             assert "lon" not in ds.dims
 
-            # CRS grid_mapping_name reflects Albers
-            assert (
-                ds["crs"].attrs.get("grid_mapping_name") == "albers_conical_equal_area"
+            # CRS ancillary carries the full Albers projection metadata
+            # (CLAUDE.md requires the CF-1.6 attribute set on every
+            # pipeline-written NC; assert the projection-specific bits
+            # not covered by the generic `Conventions` check).
+            crs = ds["crs"]
+            assert crs.attrs.get("grid_mapping_name") == "albers_conical_equal_area"
+            assert "crs_wkt" in crs.attrs
+            assert crs.attrs.get("longitude_of_central_meridian") == pytest.approx(
+                -96.0
             )
+            assert crs.attrs.get("latitude_of_projection_origin") == pytest.approx(23.0)
+            # standard_parallel for Albers is a 2-element array
+            sp = np.asarray(crs.attrs.get("standard_parallel"))
+            assert sp.shape == (2,)
+            assert sp[0] == pytest.approx(29.5)
+            assert sp[1] == pytest.approx(45.5)
+
+            # Projected coordinate variables carry the CF-required attrs
+            for coord_name, axis in (("x", "X"), ("y", "Y")):
+                ca = ds[coord_name]
+                assert (
+                    ca.attrs.get("standard_name")
+                    == f"projection_{coord_name}_coordinate"
+                )
+                assert ca.attrs.get("units") == "m"
+                assert ca.attrs.get("axis") == axis
+
+            # Time coord carries the CF-required attrs
+            assert ds["time"].attrs.get("standard_name") == "time"
+            assert ds["time"].attrs.get("axis") == "T"
 
     def test_mtime_idempotent_skip(self, tmp_path: Path):
         raw_dir = tmp_path / "raw"
@@ -330,6 +481,304 @@ class TestFetchPeriodGate:
         workdir = _make_project(tmp_path)
         with pytest.raises(ValueError, match="period"):
             fetch_ua_swe(workdir=workdir, period="not-a-period")
+
+
+# ---------------------------------------------------------------------------
+# _download_file — status code branches
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadFile:
+    """Exercise each status-code path in `_download_file`.
+
+    Uses a stub session that returns a synthetic `_FakeResponse` per
+    URL, so we can drive each branch (200, 404, short-read,
+    no-Content-Length-too-small, session exception, already-present)
+    without touching the network.
+    """
+
+    def _stub(self, monkeypatch, responder):
+        """Return a callable session.get equivalent for direct testing."""
+
+        class _Session:
+            def get(self, url, timeout=None, stream=None, allow_redirects=None):
+                return responder(url)
+
+        return _Session()
+
+    def test_200_downloaded(self, tmp_path: Path, monkeypatch):
+        session = self._stub(
+            monkeypatch, lambda url: _FakeResponse(200, body=b"X" * 4096)
+        )
+        out = tmp_path / "wy.nc"
+        status = _download_file(
+            session, "https://example.org/wy.nc", out, min_bytes=1024
+        )
+        assert status == "downloaded"
+        assert out.exists()
+        assert out.read_bytes() == b"X" * 4096
+        # No .tmp left behind
+        assert not (tmp_path / "wy.nc.tmp").exists()
+
+    def test_404_returns_missing_404(self, tmp_path: Path, monkeypatch):
+        session = self._stub(monkeypatch, lambda url: _FakeResponse(404))
+        out = tmp_path / "wy.nc"
+        status = _download_file(
+            session, "https://example.org/missing.nc", out, min_bytes=1024
+        )
+        assert status == "missing_404"
+        assert not out.exists()
+        assert not (tmp_path / "wy.nc.tmp").exists()
+
+    def test_already_present(self, tmp_path: Path, monkeypatch):
+        out = tmp_path / "wy.nc"
+        out.write_bytes(b"X" * 4096)
+        # Session shouldn't even be called; we still hand one in.
+        session = self._stub(
+            monkeypatch,
+            lambda url: pytest.fail(
+                "session.get should not be called when file is present"
+            ),
+        )
+        status = _download_file(
+            session, "https://example.org/wy.nc", out, min_bytes=1024
+        )
+        assert status == "already_present"
+
+    def test_short_read_content_length_mismatch(self, tmp_path: Path, monkeypatch):
+        # Server claims 8192 bytes but only delivers 1024 — integrity check
+        # should fail, .tmp should be cleaned up, status should be "error".
+        def responder(url):
+            return _FakeResponse(200, body=b"X" * 1024, content_length=8192)
+
+        session = self._stub(monkeypatch, responder)
+        out = tmp_path / "wy.nc"
+        status = _download_file(
+            session, "https://example.org/wy.nc", out, min_bytes=512
+        )
+        assert status == "error"
+        assert not out.exists()
+        assert not (tmp_path / "wy.nc.tmp").exists()
+
+    def test_no_content_length_below_min_returns_error(
+        self, tmp_path: Path, monkeypatch
+    ):
+        # Server omits Content-Length and the body is below min_bytes —
+        # the fallback size check should reject and return "error".
+        def responder(url):
+            return _FakeResponse(200, body=b"X" * 128, content_length=None)
+
+        session = self._stub(monkeypatch, responder)
+        out = tmp_path / "wy.nc"
+        status = _download_file(
+            session, "https://example.org/wy.nc", out, min_bytes=1024
+        )
+        assert status == "error"
+        assert not out.exists()
+        assert not (tmp_path / "wy.nc.tmp").exists()
+
+    def test_session_exception_returns_error(self, tmp_path: Path, monkeypatch):
+        class _ExplodingSession:
+            def get(self, *a, **kw):
+                raise ConnectionError("simulated transport failure")
+
+        out = tmp_path / "wy.nc"
+        status = _download_file(
+            _ExplodingSession(), "https://example.org/wy.nc", out, min_bytes=1024
+        )
+        assert status == "error"
+        assert not out.exists()
+        assert not (tmp_path / "wy.nc.tmp").exists()
+
+    def test_non_200_non_404_returns_error(self, tmp_path: Path, monkeypatch):
+        # E.g. 503 on transient outage. Without retries inside
+        # _download_file (those live one layer up), the call returns
+        # "error" and the caller decides whether to retry.
+        session = self._stub(monkeypatch, lambda url: _FakeResponse(503))
+        out = tmp_path / "wy.nc"
+        status = _download_file(
+            session, "https://example.org/wy.nc", out, min_bytes=1024
+        )
+        assert status == "error"
+        assert not out.exists()
+
+
+# ---------------------------------------------------------------------------
+# _earthaccess_session — auth failure surface
+# ---------------------------------------------------------------------------
+
+
+class TestEarthaccessSession:
+    def test_auth_failure_raises(self, monkeypatch):
+        """`_earthaccess_session` must raise with an actionable message
+        when earthaccess returns an unauthenticated Auth object."""
+
+        class _UnauthAuth:
+            authenticated = False
+
+            def get_session(self):  # pragma: no cover - shouldn't be reached
+                raise AssertionError("unauthenticated session should not be used")
+
+        monkeypatch.setattr("earthaccess.login", lambda strategy="netrc": _UnauthAuth())
+        with pytest.raises(RuntimeError, match="Earthdata login failed"):
+            _earthaccess_session()
+
+
+# ---------------------------------------------------------------------------
+# fetch_ua_swe — mocked-session happy path
+# ---------------------------------------------------------------------------
+
+
+class TestFetchUaSweDriver:
+    """End-to-end fetcher tests with a stubbed Earthdata session.
+
+    These cover the integration of: catalog→WY mapping (CY→WY+1),
+    publisher-window clamping, worker-0 mask gate, per-WY download +
+    consolidate loop, and the manifest read-merge-write contract.
+    """
+
+    def test_period_2010_fetches_wy_2010_and_2011(
+        self, tmp_path: Path, monkeypatch, small_min_bytes
+    ):
+        workdir = _make_project(tmp_path)
+        calls = _stub_session(monkeypatch)
+
+        result = fetch_ua_swe(
+            workdir=workdir, period="2010/2010", worker_index=0, n_workers=1
+        )
+
+        # CY 2010 touches WY 2010 (Jan-Sep) and WY 2011 (Oct-Dec).
+        wy_urls = [u for u in calls["urls"] if "4km_SWE_Depth_WY" in u]
+        assert any("WY2010_v01.nc" in u for u in wy_urls)
+        assert any("WY2011_v01.nc" in u for u in wy_urls)
+        assert len(wy_urls) == 2
+
+        # Worker 0 always fetches the mask.
+        assert any("SWE_Mask_v01.nc" in u for u in calls["urls"])
+
+        # Each WY downloaded successfully and was consolidated.
+        assert len(result["water_years"]) == 2
+        for rec in result["water_years"]:
+            assert rec["status"] == "downloaded"
+            assert "daily_path" in rec, f"WY {rec['water_year']} missing daily_path"
+
+    def test_consolidated_ncs_land_on_disk(
+        self, tmp_path: Path, monkeypatch, small_min_bytes
+    ):
+        workdir = _make_project(tmp_path)
+        _stub_session(monkeypatch)
+
+        fetch_ua_swe(workdir=workdir, period="2010/2010")
+
+        daily_dir = workdir / "datastore" / "ua_swe" / "daily"
+        assert (daily_dir / "ua_swe_daily_WY2010.nc").exists()
+        assert (daily_dir / "ua_swe_daily_WY2011.nc").exists()
+
+
+# ---------------------------------------------------------------------------
+# Manifest read-merge-write + corrupt-JSON recovery
+# ---------------------------------------------------------------------------
+
+
+class TestFetchUaSweManifest:
+    """Memory `feedback_manifest_writers_must_merge.md` documents an
+    incident where a non-merging manifest writer wiped 13 sources of
+    provenance. These tests pin the read-merge-write contract on the
+    `_update_manifest` path."""
+
+    def test_read_merge_write_preserves_unrelated_sources(
+        self, tmp_path: Path, monkeypatch, small_min_bytes
+    ):
+        workdir = _make_project(tmp_path)
+        # Pre-seed manifest with an unrelated source and an older ua_swe WY.
+        (workdir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "sources": {
+                        "snodas": {
+                            "source_key": "snodas",
+                            "period": "2003/2010",
+                            "years": [{"year": 2010, "n_granules": 365}],
+                        },
+                        "ua_swe": {
+                            "source_key": "ua_swe",
+                            "water_years": [
+                                {"water_year": 1982, "status": "pre-existing"}
+                            ],
+                        },
+                    },
+                    "steps": [],
+                }
+            )
+        )
+
+        _stub_session(monkeypatch)
+        fetch_ua_swe(workdir=workdir, period="2010/2010")
+
+        manifest = json.loads((workdir / "manifest.json").read_text())
+
+        # snodas entry must be untouched.
+        assert "snodas" in manifest["sources"]
+        assert manifest["sources"]["snodas"]["period"] == "2003/2010"
+        assert manifest["sources"]["snodas"]["years"] == [
+            {"year": 2010, "n_granules": 365}
+        ]
+
+        # ua_swe: WY 1982 preserved + new WY 2010 + WY 2011 added, sorted.
+        ua_swe_wys = manifest["sources"]["ua_swe"]["water_years"]
+        years_in_manifest = [r["water_year"] for r in ua_swe_wys]
+        assert years_in_manifest == [1982, 2010, 2011]
+        # The pre-existing 1982 entry retains its `status` field
+        # (only WYs touched by this run get overwritten).
+        wy1982 = next(r for r in ua_swe_wys if r["water_year"] == 1982)
+        assert wy1982["status"] == "pre-existing"
+
+    def test_corrupt_manifest_raises_valuerror(
+        self, tmp_path: Path, monkeypatch, small_min_bytes
+    ):
+        workdir = _make_project(tmp_path)
+        (workdir / "manifest.json").write_text("{not valid json")
+
+        _stub_session(monkeypatch)
+        with pytest.raises(ValueError, match="corrupt"):
+            fetch_ua_swe(workdir=workdir, period="2010/2010")
+
+
+# ---------------------------------------------------------------------------
+# Worker-0 mask gate
+# ---------------------------------------------------------------------------
+
+
+class TestFetchUaSweWorkerGate:
+    """The mask file is downloaded by worker 0 only. A future refactor
+    that inverts the gate would silently break parallel runs."""
+
+    def test_worker_zero_fetches_mask(
+        self, tmp_path: Path, monkeypatch, small_min_bytes
+    ):
+        workdir = _make_project(tmp_path)
+        calls = _stub_session(monkeypatch)
+
+        result = fetch_ua_swe(
+            workdir=workdir, period="2010/2010", worker_index=0, n_workers=2
+        )
+
+        assert any("SWE_Mask_v01.nc" in u for u in calls["urls"])
+        assert result["mask"] is not None
+        assert result["mask"]["status"] == "downloaded"
+
+    def test_nonzero_worker_skips_mask(
+        self, tmp_path: Path, monkeypatch, small_min_bytes
+    ):
+        workdir = _make_project(tmp_path)
+        calls = _stub_session(monkeypatch)
+
+        result = fetch_ua_swe(
+            workdir=workdir, period="2010/2010", worker_index=1, n_workers=2
+        )
+
+        assert not any("SWE_Mask_v01.nc" in u for u in calls["urls"])
+        assert result["mask"] is None
 
 
 # ---------------------------------------------------------------------------
