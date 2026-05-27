@@ -17,6 +17,7 @@ from nhf_spatial_targets.release.lineage import (
     output_file_entry,
     sha256_file,
 )
+from nhf_spatial_targets.release.rebuild import rebuild_lineage
 
 __all__ = [
     "append_step",
@@ -24,5 +25,6 @@ __all__ = [
     "input_file_entry",
     "merge_source_and_append_step",
     "output_file_entry",
+    "rebuild_lineage",
     "sha256_file",
 ]
