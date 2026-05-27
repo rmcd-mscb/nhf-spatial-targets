@@ -32,8 +32,8 @@ def test_check_drift_reports_all_features_when_none_present(tmp_path):
     _write_minimal_config(tmp_path)
     missing = check_drift(tmp_path)
     names = {f.name for f in missing}
-    # Both shipped features (PR #193) should be reported on a bare config.
-    assert {"fabric.token", "representative_points"} <= names
+    # All shipped features should be reported on a bare config.
+    assert {"fabric.token", "representative_points", "release"} <= names
 
 
 def test_check_drift_clean_when_live_value_present(tmp_path):
@@ -74,6 +74,27 @@ def test_check_drift_raises_when_config_missing(tmp_path):
         check_drift(tmp_path / "does-not-exist")
 
 
+def test_check_drift_release_detects_commented_stub(tmp_path):
+    """The release: stub (commented or live) counts as in-sync."""
+    _write_minimal_config(tmp_path, body="# release:\n#   ipds_number: IP-XXXXXX\n")
+    assert "release" not in {f.name for f in check_drift(tmp_path)}
+
+
+def test_check_drift_release_detects_live_block(tmp_path):
+    """An uncommented `release:` block also counts as in-sync."""
+    _write_minimal_config(
+        tmp_path,
+        body=(
+            "release:\n"
+            "  authors:\n"
+            "    - given: Jane\n"
+            "      family: Doe\n"
+            "  ipds_number: IP-XXXXXX\n"
+        ),
+    )
+    assert "release" not in {f.name for f in check_drift(tmp_path)}
+
+
 # --- registry shape ---------------------------------------------------------
 
 
@@ -111,7 +132,7 @@ def test_cli_exits_one_on_drift(tmp_path, capsys):
 def test_cli_exits_zero_when_in_sync(tmp_path, capsys):
     from nhf_spatial_targets.cli import app
 
-    # Operator pasted both commented stubs from the latest template.
+    # Operator pasted all commented stubs from the latest template.
     (tmp_path / "config.yml").write_text(
         "fabric:\n"
         "  path: /x.gpkg\n"
@@ -119,6 +140,7 @@ def test_cli_exits_zero_when_in_sync(tmp_path, capsys):
         "  # token: or\n"
         "datastore: /x\n"
         "# representative_points:\n"
+        "# release:\n"
     )
     # Cyclopts wraps even successful returns in SystemExit(0).
     with pytest.raises(SystemExit) as exc:

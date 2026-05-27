@@ -1,0 +1,14 @@
+# Running publish-state for the ScienceBase data release. Updated by
+# `nhf-targets release publish` (post-PR-E) as items are created or
+# refreshed; flock-protected on write so concurrent publishes don't
+# clobber each other.
+#
+# Initial state below: `umbrella: null` signals "no first-publish yet";
+# loaders must handle that case explicitly rather than indexing into a
+# missing dict. Once published, the umbrella block carries sb_id, doi,
+# version, published_utc, and title — see docs/data_release/fgdc-field-map.md
+# for the post-PR-E schema and PR-E's writer for the authoritative shape.
+
+umbrella: null
+consolidated_sources: {}
+fabrics: {}

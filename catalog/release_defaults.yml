@@ -1,0 +1,17 @@
+# Repo-level FGDC + ScienceBase release defaults consumed by the
+# release/ module via the catalog interface. Per-project bits (authors,
+# IPDS number, DOI) live in each project's config.yml under `release:`.
+# See docs/data_release/fgdc-field-map.md for the field-by-field map
+# from these defaults into FGDC CSDGM 2.0 + ISO 19139 output.
+#
+# Scaffold only at PR-A time; blocks are populated by later PRs in the
+# #241 series.
+
+metadata: {}
+contacts: {}
+distribution: {}
+keywords: {}
+umbrella: {}
+source: {}
+fabric: {}
+spatial_reference: {}

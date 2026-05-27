@@ -384,3 +384,233 @@ def test_source_var_cell_methods_raises_on_unknown_variable():
 
     with pytest.raises(KeyError, match="not found"):
         source_var_cell_methods("era5_land", "no_such_var")
+
+
+# ---------------------------------------------------------------------------
+# release block (PR-A foundation for the ScienceBase release workflow, #241/#243)
+# ---------------------------------------------------------------------------
+
+
+def test_validate_release_block_none_is_ok():
+    """No block on a source means defaults apply; not an error."""
+    from nhf_spatial_targets.catalog import validate_release_block
+
+    validate_release_block("test_src", None)
+
+
+def test_validate_release_block_accepts_bare_publishable_false():
+    from nhf_spatial_targets.catalog import validate_release_block
+
+    validate_release_block("test_src", {"publishable": False})
+
+
+def test_validate_release_block_rejects_non_mapping():
+    from nhf_spatial_targets.catalog import validate_release_block
+
+    with pytest.raises(ValueError, match="must be a mapping"):
+        validate_release_block("test_src", "publishable: true")
+
+
+def test_validate_release_block_rejects_unknown_key():
+    """Typo guard — `publishible` must not silently fall through to default."""
+    from nhf_spatial_targets.catalog import validate_release_block
+
+    with pytest.raises(ValueError, match="unknown key"):
+        validate_release_block("test_src", {"publishible": True})
+
+
+def test_validate_release_block_rejects_non_bool_publishable():
+    from nhf_spatial_targets.catalog import validate_release_block
+
+    with pytest.raises(ValueError, match="must be a bool"):
+        validate_release_block("test_src", {"publishable": "yes"})
+
+
+def test_validate_release_block_rejects_unknown_distribution_kind():
+    from nhf_spatial_targets.catalog import validate_release_block
+
+    with pytest.raises(ValueError, match="distribution_kind"):
+        validate_release_block("test_src", {"distribution_kind": "metadata"})
+
+
+def test_validate_release_block_rejects_non_string_notes():
+    from nhf_spatial_targets.catalog import validate_release_block
+
+    with pytest.raises(ValueError, match="notes"):
+        validate_release_block("test_src", {"notes": ["a", "b"]})
+
+
+def test_distribution_kind_tokens():
+    from nhf_spatial_targets.catalog import DISTRIBUTION_KIND_TOKENS
+
+    assert DISTRIBUTION_KIND_TOKENS == frozenset({"data", "metadata_only"})
+
+
+def test_release_block_defaults_apply_when_unset():
+    """A source with no `release:` block reports the defaults."""
+    from nhf_spatial_targets.catalog import release_block
+
+    # era5_land carries no release block on PR-A; it should default to
+    # publishable=True, distribution_kind="data", notes=None.
+    rb = release_block("era5_land")
+    assert rb == {"publishable": True, "distribution_kind": "data", "notes": None}
+
+
+def test_release_block_watergap22d_is_not_publishable():
+    """watergap22d is CC BY-NC; held back from the release per PR-A."""
+    from nhf_spatial_targets.catalog import release_block
+
+    rb = release_block("watergap22d")
+    assert rb["publishable"] is False
+    assert "CC BY-NC" in rb["notes"]
+
+
+def test_release_block_daymet_is_metadata_only():
+    """Daymet ships metadata only (4.6 TB zarr lives on ORNL DAAC)."""
+    from nhf_spatial_targets.catalog import release_block
+
+    rb = release_block("daymet")
+    assert rb["publishable"] is True
+    assert rb["distribution_kind"] == "metadata_only"
+    assert "ORNL" in rb["notes"]
+
+
+def test_release_block_margulis_publishable_despite_fabric_scope():
+    """Margulis WUS-SR is fabric-scoped for consumption, not for publication."""
+    from nhf_spatial_targets.catalog import release_block
+
+    rb = release_block("margulis_wus_sr")
+    assert rb["publishable"] is True
+    assert rb["distribution_kind"] == "data"
+
+
+def test_release_block_watergap22d_preserves_distribution_kind_default():
+    """Partial-override: setting `publishable` alone must leave the
+    `distribution_kind` default in place. Locks the per-key merge contract
+    against a future refactor that does wholesale replacement instead.
+    """
+    from nhf_spatial_targets.catalog import release_block
+
+    rb = release_block("watergap22d")
+    # watergap22d sets publishable + notes, but NOT distribution_kind.
+    # The default must propagate through.
+    assert rb["distribution_kind"] == "data"
+
+
+def test_release_block_explicit_null_falls_back_to_default(monkeypatch):
+    """Locks current behavior: an explicit `null` on a release-block field
+    is filtered out and the default applies. If we ever want explicit-null to
+    mean something different (e.g. "force unset"), update this test.
+    """
+    from nhf_spatial_targets import catalog
+
+    monkeypatch.setattr(
+        catalog,
+        "source",
+        lambda key: {"release": {"publishable": None, "distribution_kind": None}},
+    )
+    rb = catalog.release_block("synthetic")
+    assert rb == {"publishable": True, "distribution_kind": "data", "notes": None}
+
+
+def test_every_release_block_validates():
+    """Every declared `release:` block in catalog/sources.yml passes the validator."""
+    from nhf_spatial_targets.catalog import validate_release_block
+
+    for key, src in sources().items():
+        validate_release_block(key, src.get("release"))
+
+
+def test_publishable_sources_excludes_superseded():
+    """Sources with `superseded_by` set are skipped regardless of `release.publishable`.
+
+    Pinned to a hard-coded expected set so the test stays independent of the
+    predicate the code under test uses — catches the kind of bug that would
+    leak `watergap22a` (status `"superseded_registration_required"`) through
+    a string-equality filter.
+    """
+    from nhf_spatial_targets.catalog import publishable_sources
+
+    pub = publishable_sources()
+    # Every source whose `superseded_by` field is populated must be excluded.
+    # As of #243 this set is: mod16a2 (v006), mod10c1 (v006), merra_land, watergap22a.
+    expected_excluded = {"mod16a2", "mod10c1", "merra_land", "watergap22a"}
+    for key in expected_excluded:
+        assert key not in pub, (
+            f"superseded source {key!r} leaked into publishable_sources()"
+        )
+
+
+def test_publishable_sources_excludes_watergap22a():
+    """Regression: watergap22a's `status: superseded_registration_required` must
+    not slip through. Pre-fix, the filter used `status == "superseded"` which
+    silently included watergap22a (#244 review)."""
+    from nhf_spatial_targets.catalog import publishable_sources, source
+
+    src = source("watergap22a")
+    # Sanity-check the catalog state the regression depends on.
+    assert src.get("superseded_by") == "watergap22d"
+    assert "superseded" in src.get("status", "")
+    assert "watergap22a" not in publishable_sources()
+
+
+def test_publishable_sources_excludes_watergap22d():
+    """watergap22d is `release.publishable: false` → excluded."""
+    from nhf_spatial_targets.catalog import publishable_sources
+
+    assert "watergap22d" not in publishable_sources()
+
+
+def test_publishable_sources_includes_daymet_and_margulis():
+    """Metadata-only and fabric-scoped sources still publish."""
+    from nhf_spatial_targets.catalog import publishable_sources
+
+    pub = publishable_sources()
+    assert "daymet" in pub
+    assert "margulis_wus_sr" in pub
+    # And the default-true sources are in too.
+    assert "era5_land" in pub
+    assert "snodas" in pub
+
+
+def test_release_defaults_yml_loads_as_valid_yaml():
+    """Scaffold for repo-level FGDC defaults. Populated by PR-D/PR-E; we
+    just verify YAML parses cleanly so an accidental corruption is caught
+    before downstream code starts reading it.
+    """
+    import yaml
+    from pathlib import Path
+
+    catalog_dir = Path(__file__).resolve().parent.parent / "catalog"
+    data = yaml.safe_load((catalog_dir / "release_defaults.yml").read_text())
+    assert isinstance(data, dict)
+    # Every top-level block is a dict (empty on scaffold, populated later).
+    for key in (
+        "metadata",
+        "contacts",
+        "distribution",
+        "keywords",
+        "umbrella",
+        "source",
+        "fabric",
+        "spatial_reference",
+    ):
+        assert key in data
+        assert isinstance(data[key], dict)
+
+
+def test_release_registry_yml_loads_as_valid_yaml():
+    """Scaffold for the running publish-state registry. Populated by PR-E
+    as items are created on ScienceBase; we verify YAML parses cleanly and
+    the initial-state shape is what PR-E will expect.
+    """
+    import yaml
+    from pathlib import Path
+
+    catalog_dir = Path(__file__).resolve().parent.parent / "catalog"
+    data = yaml.safe_load((catalog_dir / "release_registry.yml").read_text())
+    assert isinstance(data, dict)
+    # Initial state: no umbrella published yet; empty per-source/per-fabric maps.
+    assert data["umbrella"] is None
+    assert data["consolidated_sources"] == {}
+    assert data["fabrics"] == {}

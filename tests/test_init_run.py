@@ -106,3 +106,19 @@ def test_init_config_template_carries_representative_points_stub(tmp_path):
         "swe",
     ):
         assert tgt in text
+
+
+def test_init_config_template_carries_release_stub(tmp_path):
+    """The release: stub teaches operators about the ScienceBase data-release
+    workflow before they need it (#241/#243)."""
+    workdir = tmp_path / "ws"
+    init_project(workdir)
+    text = (workdir / "config.yml").read_text()
+    assert "# release:" in text
+    # Nested keys live under `#   ipds_number:` / `#   doi:` with extra
+    # indentation. Check by-key with re-style anchoring.
+    assert "ipds_number" in text
+    assert "docs/data_release/" in text
+    # Commented-out by default (operator opts in by uncommenting).
+    cfg = yaml.safe_load(text)
+    assert "release" not in cfg
