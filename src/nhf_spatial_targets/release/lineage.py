@@ -423,12 +423,15 @@ def merge_source_and_append_step(
         # between two locations and the consumer would only read one.
         legacy_steps = existing.pop("steps", None)
         if legacy_steps:
+            # Log the dropped records in full so an operator can recover
+            # them from the log file -- the pop is destructive on disk.
             logger.warning(
                 "lineage: dropped %d legacy step(s) nested under "
                 "sources[%r]; canonical location is the top-level "
-                "manifest.steps[] array.",
+                "manifest.steps[] array. Dropped payload: %r",
                 len(legacy_steps),
                 source_key,
+                legacy_steps,
             )
         existing.update(source_updates)
         manifest["sources"][source_key] = existing
