@@ -590,7 +590,6 @@ def _update_manifest(
             entry["mask"] = mask_record
         manifest["sources"][_SOURCE_KEY] = entry
 
-        # Release PR-B: lineage step inside the same flock.
         from nhf_spatial_targets.release.lineage import (
             build_step_record,
             output_file_entry,

@@ -34,6 +34,7 @@ from pathlib import Path
 
 import xarray as xr
 
+from nhf_spatial_targets.release.lineage import StepKind
 from nhf_spatial_targets.workspace import Project
 
 logger = logging.getLogger(__name__)
@@ -369,8 +370,8 @@ def stitch_year_chunks_to_target(
     title: str,
     extra_global_attrs: dict | None,
     sort_dim: str,
-    project: Project | None = None,
-    lineage_kind: str = "target",
+    project: Project,
+    lineage_kind: StepKind = "target",
 ) -> None:
     """Lazily open per-year target NCs and stream them into one canonical NC.
 
@@ -407,11 +408,10 @@ def stitch_year_chunks_to_target(
         Dimension to sort ascending on before write (typically
         ``project.id_col``); also the HRU chunk dimension.
     project
-        Optional :class:`~nhf_spatial_targets.workspace.Project` used to
+        :class:`~nhf_spatial_targets.workspace.Project` used to
         append a lineage step to ``project.manifest_path`` after the
-        stitch completes (release PR-B). When ``None`` no step is
-        appended -- the pre-PR-B call shape is preserved so tests and
-        external callers that don't have a project remain functional.
+        stitch completes. Required so every stitched target NC emits
+        provenance as a hard invariant.
     lineage_kind
         Step ``kind`` for the appended record; the year-chunked driver
         passes ``"nn_fill"`` for the nn-filled stitch and ``"target"``
@@ -516,29 +516,24 @@ def stitch_year_chunks_to_target(
         output_path.stat().st_size / 1e6,
     )
 
-    if project is not None:
-        # Release PR-B: the stitched NC is the canonical target file that
-        # gets published. Record one lineage step per stitch with the per-
-        # year intermediates as inputs (path+size+mtime, no sha256 -- they
-        # are the year-chunked builder's own outputs and were fingerprinted
-        # in their own ``kind=target`` steps already) and the stitched NC
-        # as the output (with sha256, since this is what FGDC consumers
-        # will hash-check).
-        from nhf_spatial_targets.release.lineage import (
-            append_step,
-            input_file_entry,
-            output_file_entry,
-        )
+    # The stitched NC is the canonical target file that gets published.
+    # Inputs (the per-year intermediates) carry no sha256 -- they were
+    # fingerprinted in their own ``kind=target`` steps already.
+    from nhf_spatial_targets.release.lineage import (
+        append_step,
+        input_file_entry,
+        output_file_entry,
+    )
 
-        append_step(
-            project.manifest_path,
-            kind=lineage_kind,
-            source_key=None,
-            inputs=[input_file_entry(p) for p in intermediate_files if p.exists()],
-            outputs=[output_file_entry(output_path)],
-            params={
-                "stitched_from": len(intermediate_files),
-                "sort_dim": sort_dim,
-            },
-            command=f"stitch-{lineage_kind}",
-        )
+    append_step(
+        project.manifest_path,
+        kind=lineage_kind,
+        source_key=None,
+        inputs=[input_file_entry(p) for p in intermediate_files if p.exists()],
+        outputs=[output_file_entry(output_path)],
+        params={
+            "stitched_from": len(intermediate_files),
+            "sort_dim": sort_dim,
+        },
+        command=f"stitch-{lineage_kind}",
+    )

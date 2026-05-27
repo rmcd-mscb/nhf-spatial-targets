@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from nhf_spatial_targets.release.lineage import StepKind
 from nhf_spatial_targets.targets._combine import build_n_sources_attrs
 from nhf_spatial_targets.workspace import Project
 
@@ -407,7 +408,7 @@ def _append_target_step(
     *,
     project: Project,
     output_path: Path,
-    kind: str,
+    kind: StepKind,
     params: dict,
     extra_global_attrs: dict,
     target_key: str | None,

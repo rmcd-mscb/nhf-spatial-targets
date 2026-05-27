@@ -1,18 +1,18 @@
 """Tests for ``nhf_spatial_targets.release.lineage``.
 
-The lineage module is the foundation under every later release-stage
-PR (FGDC, ISO, README), so the invariants we lock here are:
+The lineage module is the foundation under FGDC / ISO / README
+rendering, so the invariants we lock here are:
 
-- ``append_step`` records the exact step record shape PR-D will
-  consume (no field renames downstream),
+- ``append_step`` records the canonical step-record shape (no field
+  renames downstream),
 - output file entries carry sha256 + size + mtime + path, input
-  entries carry the same minus sha256 (the cost asymmetry from the
-  plan's lineage section),
+  entries carry the same minus sha256 (cost asymmetry: aggregate
+  reads dozens of multi-GB inputs and rehashing dominates),
 - concurrent appenders never lose a step (the SLURM array hazard
   the existing aggregator's ``update_manifest`` already addresses),
 - ``merge_source_and_append_step`` is the single canonical
   read-modify-write that fetch modules can adopt without recreating
-  their bespoke flock code (#180).
+  their bespoke flock code.
 """
 
 from __future__ import annotations
@@ -53,8 +53,8 @@ def sample_output(tmp_path: Path) -> Path:
 
 
 def test_output_file_entry_includes_sha256_and_metadata(sample_output: Path) -> None:
-    """Outputs include sha256, size, mtime, path -- the exact shape PR-D
-    will read into FGDC ``processstep`` records.
+    """Outputs include sha256, size, mtime, path -- the canonical shape
+    the FGDC ``processstep`` consumer reads.
     """
     entry = output_file_entry(sample_output)
     assert set(entry) == {"path", "sha256", "size_bytes", "mtime_utc"}
@@ -179,7 +179,7 @@ def test_append_step_records_inputs_and_outputs(
 
 
 def test_append_step_rejects_unknown_kind(manifest_path: Path) -> None:
-    """Unknown kinds fail loud so PR-D's FGDC pattern-match stays closed."""
+    """Unknown kinds fail loud so the FGDC pattern-match stays closed."""
     with pytest.raises(ValueError, match="Unknown step kind"):
         append_step(manifest_path, kind="not-a-real-kind", source_key=None)
 
@@ -313,6 +313,50 @@ def test_merge_source_rejects_top_level_steps_collision(manifest_path: Path) -> 
             source_updates={"steps": []},
             kind="consolidate",
         )
+
+
+def test_merge_source_strips_legacy_nested_steps(manifest_path: Path, caplog) -> None:
+    """A legacy manifest that nested ``steps`` under a source entry has
+    those records popped (with the dropped payload logged) and the new
+    step lands at the top-level ``manifest["steps"]`` array.
+    """
+    legacy = [{"step": "legacy-1", "utc": "2020-01-01"}]
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "sources": {
+                    "merra2": {"source_key": "merra2", "steps": legacy},
+                },
+                "steps": [],
+            }
+        )
+    )
+
+    with caplog.at_level("WARNING"):
+        merge_source_and_append_step(
+            manifest_path,
+            "merra2",
+            source_updates={"period": "2010/2020"},
+            kind="consolidate",
+        )
+
+    after = json.loads(manifest_path.read_text())
+    # Nested array is gone, top-level got the new record only.
+    assert "steps" not in after["sources"]["merra2"]
+    assert len(after["steps"]) == 1
+    assert after["steps"][0]["kind"] == "consolidate"
+    assert after["sources"]["merra2"]["period"] == "2010/2020"
+
+    # Exactly one WARNING fired and the dropped payload is in the log line
+    # so an operator can recover it.
+    drop_records = [
+        r
+        for r in caplog.records
+        if "dropped" in r.getMessage() and "legacy" in r.getMessage()
+    ]
+    assert len(drop_records) == 1
+    assert drop_records[0].levelname == "WARNING"
+    assert "legacy-1" in drop_records[0].getMessage()
 
 
 def test_merge_source_returns_appended_record(manifest_path: Path) -> None:

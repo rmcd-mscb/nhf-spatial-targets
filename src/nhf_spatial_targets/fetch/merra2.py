@@ -231,13 +231,7 @@ def _update_manifest(
     files: list[dict],
     consolidation: dict,
 ) -> None:
-    """Merge MERRA-2 provenance into manifest.json and record a lineage step.
-
-    Delegates to :func:`release.lineage.merge_source_and_append_step` so
-    the read-merge-write happens under a single advisory ``flock`` and
-    the ``kind=consolidate`` lineage step is appended atomically with
-    the source-entry update (release PR-B; closes #180 for this module).
-    """
+    """Merge MERRA-2 provenance + lineage step into manifest.json."""
     from nhf_spatial_targets.release.lineage import (
         merge_source_and_append_step,
         output_file_entry,

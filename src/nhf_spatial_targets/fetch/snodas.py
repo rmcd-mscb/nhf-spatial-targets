@@ -1267,10 +1267,6 @@ def _update_manifest(
         )
         manifest["sources"][_SOURCE_KEY] = entry
 
-        # Release PR-B: lineage step inside the same flock as the year-
-        # records merge. Each year's consolidated NC path comes from the
-        # year_records this call just produced; fingerprint each so PR-D's
-        # FGDC consumer can verify integrity per-year.
         from nhf_spatial_targets.release.lineage import (
             build_step_record,
             output_file_entry,

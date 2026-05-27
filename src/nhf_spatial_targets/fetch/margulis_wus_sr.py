@@ -771,9 +771,6 @@ def _update_manifest(
         )
         manifest["sources"][_SOURCE_KEY] = entry
 
-        # Release PR-B: lineage step inside the same flock as the year
-        # merge. Fabric scope is reflected in step params so PR-D's FGDC
-        # generator can flag the fabric-restricted consumption rule.
         from nhf_spatial_targets.release.lineage import (
             build_step_record,
             output_file_entry,

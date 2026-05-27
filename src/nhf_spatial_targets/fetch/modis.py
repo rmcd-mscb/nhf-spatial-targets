@@ -317,12 +317,7 @@ def _update_manifest(
     files: list[dict],
     consolidated_ncs: dict[str, str],
 ) -> None:
-    """Merge MODIS provenance + lineage step via the shared helper.
-
-    Closes the #180 flock hazard (release PR-B). MODIS year-chunked
-    consolidation produces multiple per-year NCs; each one is fingerprinted
-    in ``outputs`` so FGDC consumers can verify integrity.
-    """
+    """Merge MODIS provenance + lineage step into manifest.json."""
     from nhf_spatial_targets.release.lineage import (
         merge_source_and_append_step,
         output_file_entry,

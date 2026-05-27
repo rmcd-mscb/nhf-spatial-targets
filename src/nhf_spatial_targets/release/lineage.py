@@ -2,11 +2,7 @@
 
 Every pipeline write-site (validate, consolidate, aggregate, target,
 nn_fill) appends one step record describing what ran, with which inputs
-and outputs. ``release.fgdc`` (PR-D) consumes
-``manifest.json.steps[]`` to populate FGDC CSDGM
-``dataquality.lineage.processstep[]`` -- so this module is the single
-seam by which provenance flows from the live pipeline to the published
-data release.
+and outputs.
 
 The flock pattern mirrors
 :func:`nhf_spatial_targets.aggregate._driver.update_manifest`: an
@@ -19,8 +15,6 @@ Public surface:
 - :func:`append_step` -- append a single step to ``manifest.json.steps``.
 - :func:`merge_source_and_append_step` -- atomic read-merge-write that
   both updates ``manifest["sources"][source_key]`` and appends a step.
-  Replaces the bespoke ``_update_manifest`` patterns scattered across
-  fetch modules (see #180) with a single canonical implementation.
 - :func:`output_file_entry` / :func:`input_file_entry` -- shape helpers.
   Outputs carry ``sha256`` (cheap to compute on a file we just wrote);
   inputs carry only path + size + mtime, by design, so ``aggregate``
@@ -37,6 +31,7 @@ import os
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal, NotRequired, TypedDict, get_args
 
 from nhf_spatial_targets import __version__ as _SOFTWARE_VERSION
 
@@ -56,14 +51,38 @@ except ImportError:  # Windows fallback.
     )
 
 
-# Kinds of pipeline steps we capture. Mirrors the table in
-# ``~/.claude/plans/a-requirement-is-pushlishing-vast-crayon.md``
-# (``Lineage capture`` section). The set is closed: PR-D's FGDC
-# generator pattern-matches on these strings to choose the right
-# CSDGM ``procdesc`` phrasing.
-STEP_KINDS = frozenset(
-    {"fetch", "consolidate", "aggregate", "target", "nn_fill", "validate"}
-)
+# Closed set of pipeline step kinds. STEP_KINDS is derived from the Literal
+# so the runtime set can never drift from the type definition.
+StepKind = Literal["fetch", "consolidate", "aggregate", "target", "nn_fill", "validate"]
+STEP_KINDS: frozenset[StepKind] = frozenset(get_args(StepKind))
+
+
+class InputFileEntry(TypedDict):
+    """Shape for ``step["inputs"][i]``. Path + size + mtime only."""
+
+    path: str
+    size_bytes: int
+    mtime_utc: str
+
+
+class OutputFileEntry(InputFileEntry):
+    """Shape for ``step["outputs"][i]``. Adds optional ``sha256``."""
+
+    sha256: NotRequired[str]
+
+
+class StepRecord(TypedDict):
+    """Shape for a single entry in ``manifest.json.steps[]``."""
+
+    kind: StepKind
+    source_key: str | None
+    timestamp_utc: str
+    software_version: str
+    tool: str
+    command: str | None
+    inputs: list[InputFileEntry]
+    outputs: list[OutputFileEntry]
+    params: dict
 
 
 _SHA256_CHUNK_BYTES = 1024 * 1024
@@ -86,7 +105,7 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _file_basics(path: Path) -> dict:
+def _file_basics(path: Path) -> InputFileEntry:
     """Return ``{"path", "size_bytes", "mtime_utc"}`` for *path*."""
     st = path.stat()
     return {
@@ -96,7 +115,7 @@ def _file_basics(path: Path) -> dict:
     }
 
 
-def output_file_entry(path: Path, *, compute_sha256: bool = True) -> dict:
+def output_file_entry(path: Path, *, compute_sha256: bool = True) -> OutputFileEntry:
     """File-entry shape for ``step["outputs"]``.
 
     Includes ``sha256`` by default -- the file was just written, so
@@ -113,16 +132,21 @@ def output_file_entry(path: Path, *, compute_sha256: bool = True) -> dict:
 
     Returns
     -------
-    dict with keys ``path``, ``size_bytes``, ``mtime_utc`` and, when
-    ``compute_sha256`` is True, ``sha256``.
+    :class:`OutputFileEntry` with keys ``path``, ``size_bytes``,
+    ``mtime_utc`` and, when ``compute_sha256`` is True, ``sha256``.
     """
-    entry = _file_basics(path)
+    basics = _file_basics(path)
+    entry: OutputFileEntry = {
+        "path": basics["path"],
+        "size_bytes": basics["size_bytes"],
+        "mtime_utc": basics["mtime_utc"],
+    }
     if compute_sha256:
         entry["sha256"] = sha256_file(path)
     return entry
 
 
-def input_file_entry(path: Path) -> dict:
+def input_file_entry(path: Path) -> InputFileEntry:
     """File-entry shape for ``step["inputs"]``.
 
     No SHA-256 by design: an ``aggregate`` step over a 30-source fabric
@@ -134,7 +158,14 @@ def input_file_entry(path: Path) -> dict:
     return _file_basics(path)
 
 
-def _new_manifest_skeleton() -> dict:
+class _Manifest(TypedDict):
+    """In-memory shape of ``manifest.json``."""
+
+    sources: dict[str, dict]
+    steps: list[StepRecord]
+
+
+def _new_manifest_skeleton() -> _Manifest:
     """Return a fresh ``manifest.json`` skeleton.
 
     Single source of truth: ``{"sources": {}, "steps": []}``. Used both
@@ -144,7 +175,7 @@ def _new_manifest_skeleton() -> dict:
     return {"sources": {}, "steps": []}
 
 
-def read_manifest(manifest_path: Path) -> dict:
+def read_manifest(manifest_path: Path) -> _Manifest:
     """Read ``manifest.json`` or return a fresh skeleton.
 
     Raises ``ValueError`` on parse failure -- a corrupt manifest is a
@@ -166,7 +197,7 @@ def read_manifest(manifest_path: Path) -> dict:
     return manifest
 
 
-def atomic_write_manifest(manifest_path: Path, manifest: dict) -> None:
+def atomic_write_manifest(manifest_path: Path, manifest: _Manifest) -> None:
     """Write *manifest* to *manifest_path* via tempfile + rename.
 
     Indented JSON keeps diffs auditable; ``Path.replace`` is atomic on
@@ -186,16 +217,16 @@ def atomic_write_manifest(manifest_path: Path, manifest: dict) -> None:
 
 def build_step_record(
     *,
-    kind: str,
+    kind: StepKind,
     source_key: str | None,
-    inputs: list[dict] | None = None,
-    outputs: list[dict] | None = None,
+    inputs: list[InputFileEntry] | None = None,
+    outputs: list[OutputFileEntry] | None = None,
     params: dict | None = None,
     tool: str = "nhf-targets",
     command: str | None = None,
     software_version: str | None = None,
     timestamp_utc: str | None = None,
-) -> dict:
+) -> StepRecord:
     """Assemble a normalized step record. Pure function; no I/O.
 
     Exposed for the rare in-process call site (the aggregator) that
@@ -212,7 +243,7 @@ def build_step_record(
         timestamp_utc = datetime.now(timezone.utc).isoformat()
     if software_version is None:
         software_version = _SOFTWARE_VERSION
-    record: dict = {
+    record: StepRecord = {
         "kind": kind,
         "source_key": source_key,
         "timestamp_utc": timestamp_utc,
@@ -246,16 +277,16 @@ def with_flock(lock_path: Path, body):
 def append_step(
     manifest_path: Path,
     *,
-    kind: str,
+    kind: StepKind,
     source_key: str | None,
-    inputs: list[dict] | None = None,
-    outputs: list[dict] | None = None,
+    inputs: list[InputFileEntry] | None = None,
+    outputs: list[OutputFileEntry] | None = None,
     params: dict | None = None,
     tool: str = "nhf-targets",
     command: str | None = None,
     software_version: str | None = None,
     timestamp_utc: str | None = None,
-) -> dict:
+) -> StepRecord:
     """Append a single step to ``manifest.json.steps[]`` under flock.
 
     Reads (or initializes) the manifest, appends one normalized step
@@ -324,15 +355,15 @@ def merge_source_and_append_step(
     source_key: str,
     *,
     source_updates: dict,
-    kind: str,
-    inputs: list[dict] | None = None,
-    outputs: list[dict] | None = None,
+    kind: StepKind,
+    inputs: list[InputFileEntry] | None = None,
+    outputs: list[OutputFileEntry] | None = None,
     params: dict | None = None,
     tool: str = "nhf-targets",
     command: str | None = None,
     software_version: str | None = None,
     timestamp_utc: str | None = None,
-) -> dict:
+) -> StepRecord:
     """Atomic source-merge + step-append.
 
     Replaces the bespoke ``_update_manifest`` helpers each fetch module
@@ -385,6 +416,23 @@ def merge_source_and_append_step(
     def _do() -> None:
         manifest = read_manifest(manifest_path)
         existing = manifest["sources"].get(source_key, {})
+        # Some legacy manifests stored steps nested inside the source
+        # entry (e.g. ``sources["era5_land"]["steps"]``). The canonical
+        # home is the top-level ``manifest["steps"]`` array; leaving the
+        # nested arrays in place would silently split FGDC lineage
+        # between two locations and the consumer would only read one.
+        legacy_steps = existing.pop("steps", None)
+        if legacy_steps:
+            # Log the dropped records in full so an operator can recover
+            # them from the log file -- the pop is destructive on disk.
+            logger.warning(
+                "lineage: dropped %d legacy step(s) nested under "
+                "sources[%r]; canonical location is the top-level "
+                "manifest.steps[] array. Dropped payload: %r",
+                len(legacy_steps),
+                source_key,
+                legacy_steps,
+            )
         existing.update(source_updates)
         manifest["sources"][source_key] = existing
         manifest["steps"].append(record)

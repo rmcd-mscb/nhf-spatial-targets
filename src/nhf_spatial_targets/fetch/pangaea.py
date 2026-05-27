@@ -213,10 +213,7 @@ def _update_manifest(
     license_str: str,
     file_info: dict,
 ) -> None:
-    """Merge WaterGAP 2.2d provenance + lineage step via the shared helper.
-
-    Closes the #180 flock hazard for this module (release PR-B).
-    """
+    """Merge WaterGAP 2.2d provenance + lineage step into manifest.json."""
     from nhf_spatial_targets.release.lineage import (
         merge_source_and_append_step,
         output_file_entry,

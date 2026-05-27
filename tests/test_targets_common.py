@@ -1231,6 +1231,15 @@ def test_build_n_sources_attrs_raises_when_count_exceeds_label_vocab():
 # ---------------------------------------------------------------------------
 
 
+def _stub_project(workdir: Path):
+    """Return a minimal :class:`Project` for stitch unit tests."""
+    from nhf_spatial_targets.workspace import Project
+
+    return Project(
+        workdir=workdir, datastore=workdir, config={}, fabric={}, dir_mode=None
+    )
+
+
 def _write_year_chunk_nc(
     path: Path,
     year: int,
@@ -1294,6 +1303,7 @@ def test_stitch_year_chunks_combines_contiguous_time(tmp_path: Path):
         title="test stitched",
         extra_global_attrs={"period": "2003-01-01/2004-12-31"},
         sort_dim="nhm_id",
+        project=_stub_project(tmp_path),
     )
 
     with xr.open_dataset(out) as ds:
@@ -1302,6 +1312,46 @@ def test_stitch_year_chunks_combines_contiguous_time(tmp_path: Path):
         assert len(times) == 731
         assert times[0] == pd.Timestamp("2003-01-01")
         assert times[-1] == pd.Timestamp("2004-12-31")
+
+
+def test_stitch_emits_lineage_step(tmp_path: Path):
+    """Every successful stitch appends one ``kind=<lineage_kind>`` step to
+    ``project.manifest_path``. The required ``project`` arg makes this a
+    hard invariant; the test guards against a future refactor that
+    accidentally drops the ``append_step`` call.
+    """
+    import json as _json
+
+    from nhf_spatial_targets.targets._intermediates import stitch_year_chunks_to_target
+
+    inter = tmp_path / "intermediates"
+    _write_year_chunk_nc(inter / "swe_targets_2003.nc", 2003)
+    _write_year_chunk_nc(inter / "swe_targets_2004.nc", 2004)
+
+    out = tmp_path / "swe_targets.nc"
+    project = _stub_project(tmp_path)
+    stitch_year_chunks_to_target(
+        sorted(inter.glob("swe_targets_*.nc")),
+        out,
+        title="test stitched",
+        extra_global_attrs={"period": "2003/2004"},
+        sort_dim="nhm_id",
+        project=project,
+        lineage_kind="nn_fill",
+    )
+
+    manifest = _json.loads(project.manifest_path.read_text())
+    assert len(manifest["steps"]) == 1
+    step = manifest["steps"][0]
+    assert step["kind"] == "nn_fill"
+    assert step["command"] == "stitch-nn_fill"
+    assert step["outputs"][0]["path"] == str(out)
+    assert step["params"]["stitched_from"] == 2
+    assert step["params"]["sort_dim"] == "nhm_id"
+    # Per-year intermediates are recorded as inputs without sha256 (they
+    # carry their own ``kind=target`` fingerprints upstream).
+    assert len(step["inputs"]) == 2
+    assert all("sha256" not in inp for inp in step["inputs"])
 
 
 def test_stitch_strips_year_chunk_attr(tmp_path: Path):
@@ -1323,6 +1373,7 @@ def test_stitch_strips_year_chunk_attr(tmp_path: Path):
         title="t",
         extra_global_attrs={"period": "2003/2004"},
         sort_dim="nhm_id",
+        project=_stub_project(tmp_path),
     )
     with xr.open_dataset(out) as ds:
         assert "year_chunk" not in ds.attrs
@@ -1348,6 +1399,7 @@ def test_stitch_applies_canonical_attrs_and_history(tmp_path: Path):
         title="canonical SWE target",
         extra_global_attrs={"period": "2003/2003", "source": "x; y"},
         sort_dim="nhm_id",
+        project=_stub_project(tmp_path),
     )
     with xr.open_dataset(out) as ds:
         assert ds.attrs["title"] == "canonical SWE target"
@@ -1377,6 +1429,7 @@ def test_stitch_writes_columnar_chunks_and_preserves_values(tmp_path: Path):
         title="t",
         extra_global_attrs=None,
         sort_dim="nhm_id",
+        project=_stub_project(tmp_path),
     )
 
     n_time = 731  # 365 + 366
@@ -1441,6 +1494,7 @@ def test_stitch_columnar_preserves_distinct_values_and_nn_filled(tmp_path: Path)
         title="t",
         extra_global_attrs=None,
         sort_dim="nhm_id",
+        project=_stub_project(tmp_path),
     )
 
     n_time = 731
@@ -1483,6 +1537,7 @@ def test_stitch_fails_loud_on_hru_coord_mismatch(tmp_path: Path):
             title="t",
             extra_global_attrs=None,
             sort_dim="nhm_id",
+            project=_stub_project(tmp_path),
         )
 
 
@@ -1492,7 +1547,12 @@ def test_stitch_raises_on_empty_input(tmp_path: Path):
     out = tmp_path / "swe_targets.nc"
     with pytest.raises(ValueError, match="intermediate_files is empty"):
         stitch_year_chunks_to_target(
-            [], out, title="t", extra_global_attrs=None, sort_dim="nhm_id"
+            [],
+            out,
+            title="t",
+            extra_global_attrs=None,
+            sort_dim="nhm_id",
+            project=_stub_project(tmp_path),
         )
 
 
@@ -1522,6 +1582,7 @@ def test_stitch_atomic_write_no_partial_on_failure(tmp_path: Path, monkeypatch):
             title="t",
             extra_global_attrs=None,
             sort_dim="nhm_id",
+            project=_stub_project(tmp_path),
         )
     assert not out.exists(), "final output should not exist after failure"
     leftover = list(tmp_path.glob("*.tmp"))

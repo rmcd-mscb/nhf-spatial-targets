@@ -139,13 +139,8 @@ def update_manifest(
         manifest["sources"][source_key] = existing
 
         # Append a lineage step inside the SAME flock-protected critical
-        # section. This is the only place across the codebase where we
-        # update both ``sources[source_key]`` and ``steps`` in one write
-        # under one lock -- preserving the property that an interrupted
-        # SLURM array worker cannot leave the manifest with one but not
-        # the other. We import locally to keep release/lineage.py off the
-        # aggregate import path until it's needed (the release stack is
-        # PR-B-introduced; the aggregator predates it).
+        # section so an interrupted SLURM array worker cannot leave the
+        # manifest with the source-entry updated but no step appended.
         from nhf_spatial_targets.release.lineage import (
             build_step_record,
             output_file_entry,
