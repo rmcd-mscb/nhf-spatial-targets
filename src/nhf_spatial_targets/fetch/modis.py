@@ -319,13 +319,14 @@ def _update_manifest(
 ) -> None:
     """Merge MODIS provenance + lineage step into manifest.json."""
     from nhf_spatial_targets.release.lineage import (
+        OutputFileEntry,
         merge_source_and_append_step,
         output_file_entry,
     )
 
     ws = _load_project(workdir)
     now_utc = datetime.now(timezone.utc).isoformat()
-    outputs: list[dict] = []
+    outputs: list[OutputFileEntry] = []
     for nc_path in consolidated_ncs.values():
         p = Path(nc_path)
         if p.exists():

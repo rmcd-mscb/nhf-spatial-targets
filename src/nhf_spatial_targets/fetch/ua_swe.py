@@ -591,11 +591,12 @@ def _update_manifest(
         manifest["sources"][_SOURCE_KEY] = entry
 
         from nhf_spatial_targets.release.lineage import (
+            OutputFileEntry,
             build_step_record,
             output_file_entry,
         )
 
-        step_outputs: list[dict] = []
+        step_outputs: list[OutputFileEntry] = []
         for rec in wy_records:
             for key in ("consolidated_nc", "consolidated_path", "path"):
                 nc = rec.get(key)

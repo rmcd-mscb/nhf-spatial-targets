@@ -319,9 +319,10 @@ def publishable_sources() -> dict:
     Order is preserved from the underlying YAML to keep deterministic
     output across release builds.
 
-    Note: this function is informational on PR-A. Downstream enforcement
-    (refusing to build a release for a non-publishable source) lands with
-    PR-D/PR-E. Callers that need a hard gate should not assume this
+    Note: this filter is *informational* -- it does not raise on a
+    non-publishable source. Downstream release stages (payload staging,
+    FGDC emission, publish) own the hard gates; callers that need a
+    hard gate should compose with those rather than assume this
     function's return value is acted on yet.
     """
     out: dict = {}
