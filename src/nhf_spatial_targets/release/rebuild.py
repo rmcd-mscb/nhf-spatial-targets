@@ -1,11 +1,10 @@
-"""Synthesize lineage steps from on-disk evidence (release PR-B2).
+"""Synthesize lineage steps from on-disk evidence for legacy projects.
 
-PR-B (#246) made every new validate / fetch / aggregate / target run
-append a lineage step to ``manifest.json.steps[]``. Projects that
-predate PR-B have populated ``sources[]`` entries but empty
-``steps[]`` arrays -- their FGDC ``dataquality.lineage.processstep[]``
-section (PR-D) would render empty until every source re-runs (days of
-compute on caldera).
+Pipeline writers append a lineage step to ``manifest.json.steps[]``
+on every run. Older projects can still have populated ``sources[]``
+entries with empty ``steps[]`` arrays -- their FGDC
+``dataquality.lineage.processstep[]`` section would render empty
+until every source re-runs (days of compute on caldera).
 
 :func:`rebuild_lineage` walks the on-disk evidence and synthesizes
 the missing steps:
@@ -24,9 +23,8 @@ the missing steps:
 Idempotent: synthesized steps carry ``params.synthesized=True`` and
 are deduped against existing ``steps[]`` by ``(kind, source_key,
 output_paths)``. Re-running ``rebuild_lineage`` against a project
-that already has live steps from the post-PR-B pipeline is safe --
-the live steps win the dedupe and the synthesized variants are
-skipped.
+that already has live steps from the pipeline is safe -- the live
+steps win the dedupe and the synthesized variants are skipped.
 
 Concurrency: the read-modify-write delegates to
 :func:`lineage.with_flock` + :func:`lineage.read_manifest` +
@@ -38,7 +36,7 @@ appended while synthesis was running.
 SHA256 is opt-in: ``compute_sha256=False`` (default) skips full-file
 hashing because the outputs already exist on disk and may be multi-GB
 each. Operators who want full integrity for the published release
-must pass ``compute_sha256=True`` -- PR-F's release-publish stage
+must pass ``compute_sha256=True`` -- the ``release publish`` stage
 will refuse to stage steps stamped with ``params.sha256_skipped=True``.
 """
 
@@ -49,6 +47,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from nhf_spatial_targets.release.lineage import (
+    OutputFileEntry,
+    StepKind,
+    StepRecord,
     atomic_write_manifest,
     build_step_record,
     output_file_entry,
@@ -65,7 +66,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _step_signature(step: dict) -> tuple:
+def _step_signature(step: StepRecord) -> tuple:
     """Stable dedup key for a step.
 
     Two steps match when they produce the same outputs for the same
@@ -103,7 +104,7 @@ def _extract_path_from_record(rec: object, keys: tuple[str, ...]) -> Path | None
 def _consolidate_outputs(source_entry: dict) -> list[Path]:
     """Extract consolidated-NC paths from a manifest source entry.
 
-    Handles the source-entry shapes the post-PR-B fetch modules emit:
+    Handles the source-entry shapes the fetch modules emit:
 
     - ``consolidated_nc`` (string) -- single-NC consolidators (merra2,
       gldas, nldas, ncep_ncar, reitz2017, pangaea, mwbm_climgrid).
@@ -119,9 +120,9 @@ def _consolidate_outputs(source_entry: dict) -> list[Path]:
       registrations that don't use the ``consolidated_nc`` key.
 
     Directories (e.g. daymet zarr stores) are skipped so the synthesized
-    ``outputs`` only contains file artifacts that PR-D's FGDC consumer
-    can fingerprint. Each path is appended at most once even when a
-    source entry duplicates it across multiple keys.
+    ``outputs`` only contains file artifacts the FGDC consumer can
+    fingerprint. Each path is appended at most once even when a source
+    entry duplicates it across multiple keys.
     """
     paths: list[Path] = []
     seen: set[Path] = set()
@@ -162,17 +163,17 @@ def _consolidate_outputs(source_entry: dict) -> list[Path]:
 
 def _build_outputs(
     paths: list[Path], *, compute_sha256: bool
-) -> tuple[list[dict], list[str]]:
+) -> tuple[list[OutputFileEntry], list[str]]:
     """Map on-disk paths to output-entry dicts; return missing-paths separately.
 
     A path that doesn't exist is logged at WARNING (matching the
-    aggregator's instrumentation in PR-B's fixup) and recorded in the
+    aggregator's missing-output instrumentation) and recorded in the
     returned ``missing`` list. A path whose ``stat()`` or ``open()``
     raises ``OSError`` (TOCTOU race with operator cleanup, NFS stale
     handle, Lustre I/O hiccup) is treated identically: log + record,
     don't abort the whole rebuild.
     """
-    entries: list[dict] = []
+    entries: list[OutputFileEntry] = []
     missing: list[str] = []
     for path in paths:
         if not path.exists():
@@ -202,8 +203,8 @@ def _build_outputs(
 def _maybe_stamp_sha256_skipped(params: dict, compute_sha256: bool) -> None:
     """Add ``params['sha256_skipped'] = True`` when hashing was opted out.
 
-    Lets PR-F's ``release publish`` precondition check refuse to stage
-    a release whose lineage has unfingerprinted outputs, without
+    Lets the ``release publish`` precondition check refuse to stage a
+    release whose lineage has unfingerprinted outputs, without
     re-walking the on-disk evidence.
     """
     if not compute_sha256:
@@ -215,7 +216,7 @@ def _synthesize_consolidate_step(
     source_entry: dict,
     *,
     compute_sha256: bool,
-) -> dict | None:
+) -> StepRecord | None:
     """Build a ``kind=consolidate`` step from an existing source entry."""
     candidate_paths = _consolidate_outputs(source_entry)
     outputs, missing = _build_outputs(candidate_paths, compute_sha256=compute_sha256)
@@ -271,7 +272,7 @@ def _synthesize_aggregate_step(
     source_entry: dict,
     *,
     compute_sha256: bool,
-) -> dict | None:
+) -> StepRecord | None:
     """Build a ``kind=aggregate`` step from output_files in a source entry."""
     if "output_files" not in source_entry:
         return None
@@ -325,14 +326,16 @@ def _synthesize_aggregate_step(
 # ---------------------------------------------------------------------------
 
 
-def _synthesize_target_steps(project: Project, *, compute_sha256: bool) -> list[dict]:
+def _synthesize_target_steps(
+    project: Project, *, compute_sha256: bool
+) -> list[StepRecord]:
     """Build one step per ``*_targets.nc`` in ``<project>/targets/``.
 
     Each NN-filled companion (``*_targets_nn_filled.nc``) becomes a
     ``kind=nn_fill`` step; the unfilled siblings are ``kind=target``.
     Per-year intermediate NCs under ``targets/.<target>_intermediates/``
     are intentionally skipped -- they're not the canonical published
-    artifact, and PR-D's FGDC processstep should not enumerate every
+    artifact, and the FGDC processstep should not enumerate every
     per-year forensic chunk. (The one-level glob in ``targets_dir.glob``
     does not descend into the intermediates dir, so this exclusion is
     structural -- not dependent on the dir being hidden.)
@@ -340,11 +343,11 @@ def _synthesize_target_steps(project: Project, *, compute_sha256: bool) -> list[
     targets_dir = project.targets_dir()
     if not targets_dir.exists():
         return []
-    steps: list[dict] = []
+    steps: list[StepRecord] = []
     for nc in sorted(targets_dir.glob("*.nc")):
         if not nc.is_file():
             continue
-        kind = "nn_fill" if nc.name.endswith("_nn_filled.nc") else "target"
+        kind: StepKind = "nn_fill" if nc.name.endswith("_nn_filled.nc") else "target"
         mtime = datetime.fromtimestamp(nc.stat().st_mtime, tz=timezone.utc).isoformat()
         outputs, missing = _build_outputs([nc], compute_sha256=compute_sha256)
         params: dict = {
@@ -372,7 +375,7 @@ def _synthesize_target_steps(project: Project, *, compute_sha256: bool) -> list[
 # ---------------------------------------------------------------------------
 
 
-def _synthesize_validate_step(project: Project, *, compute_sha256: bool) -> dict:
+def _synthesize_validate_step(project: Project, *, compute_sha256: bool) -> StepRecord:
     """Build a single ``kind=validate`` step from on-disk fabric.json.
 
     Only one validate step is synthesized regardless of how many times
@@ -380,7 +383,7 @@ def _synthesize_validate_step(project: Project, *, compute_sha256: bool) -> dict
     trace of historical runs, only the current fabric.json. The step
     records the fabric's current sha256, hru_count, and id_col_sorted
     flag so the FGDC fabric metadata is anchored to a real fabric
-    state when PR-D renders it.
+    state.
 
     ``manifest.json`` is deliberately NOT a validate output -- the
     step lives inside it, so its recorded sha256 would describe the
@@ -391,7 +394,7 @@ def _synthesize_validate_step(project: Project, *, compute_sha256: bool) -> dict
     ------
     FileNotFoundError
         If ``fabric.json`` is missing. A validate step that doesn't
-        anchor to a real fabric carries no information PR-D's FGDC
+        anchor to a real fabric carries no information the FGDC
         consumer can use; surface the missing file loudly so the
         operator runs ``nhf-targets validate`` first.
     """
@@ -459,8 +462,7 @@ def rebuild_lineage(
 
     Idempotent: synthesized steps are deduped against existing
     ``steps[]`` by ``(kind, source_key, output_paths)``. Existing
-    live steps (from the post-PR-B pipeline) always win -- the
-    synthesized variant is skipped.
+    live steps always win -- the synthesized variant is skipped.
 
     Parameters
     ----------
@@ -473,9 +475,8 @@ def rebuild_lineage(
         ``False`` -- the outputs may be multi-GB and the operator
         may not want to pay the rehash cost just to bootstrap.
         Synthesized steps stamped with ``params.sha256_skipped=True``
-        when this is False; PR-F's ``release publish`` rejects
-        sha256-skipped steps so the operator must explicitly opt in
-        before publishing.
+        when this is False; ``release publish`` rejects sha256-skipped
+        steps so the operator must explicitly opt in before publishing.
     dry_run
         Build the synthesis without writing to ``manifest.json``.
         Returns the same summary so an operator can inspect what
@@ -507,7 +508,7 @@ def rebuild_lineage(
     # walk (potentially minutes if compute_sha256=True) doesn't block
     # in-flight aggregate / fetch workers. The flock only covers the
     # read-merge-write below.
-    new_steps_synth: list[dict] = []
+    new_steps_synth: list[StepRecord] = []
     for source_key, source_entry in sorted(
         read_manifest(manifest_path)["sources"].items()
     ):
@@ -564,7 +565,7 @@ def rebuild_lineage(
     def _do_merge() -> None:
         manifest = read_manifest(manifest_path)
         existing_sigs = {_step_signature(s) for s in manifest["steps"]}
-        landed: list[dict] = []
+        landed: list[StepRecord] = []
         for step in new_steps_synth:
             sig = _step_signature(step)
             if sig in existing_sigs:
@@ -598,7 +599,7 @@ def rebuild_lineage(
             "rebuild_lineage: compute_sha256=False (default). Synthesized "
             "step outputs lack 'sha256' integrity fields and are stamped "
             "with params.sha256_skipped=True. Re-run with "
-            "compute_sha256=True before 'release publish', or PR-F's "
+            "compute_sha256=True before 'release publish', or the "
             "stage gate will refuse to publish them."
         )
     return summary

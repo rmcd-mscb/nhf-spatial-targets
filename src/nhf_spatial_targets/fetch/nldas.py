@@ -282,10 +282,7 @@ def _update_manifest(
     files: list[dict],
     consolidation: dict,
 ) -> None:
-    """Merge NLDAS provenance + lineage step via the shared helper.
-
-    Closes the #180 flock hazard for this module (release PR-B).
-    """
+    """Merge NLDAS provenance + lineage step into manifest.json."""
     from nhf_spatial_targets.release.lineage import (
         merge_source_and_append_step,
         output_file_entry,

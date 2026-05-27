@@ -825,10 +825,9 @@ def _update_manifest(
     manifest_path = ws.manifest_path
     # Lock filename must match every other call site (aggregate/_driver.py,
     # release/lineage.py, snodas/margulis/ua_swe/daymet) so concurrent
-    # writers across modules serialize on the same lock. The pre-PR-B
-    # ``with_suffix(".lock")`` produced ``manifest.lock`` instead of
-    # ``manifest.json.lock`` and was a silent race with every other
-    # manifest writer.
+    # writers across modules serialize on the same lock. Using
+    # ``with_suffix(".lock")`` here would produce ``manifest.lock`` -- a
+    # silent race with every other manifest writer.
     lock_path = manifest_path.with_suffix(manifest_path.suffix + ".lock")
 
     # Open the lock file in append mode (creates it if absent, never truncates).
@@ -902,9 +901,8 @@ def _update_manifest(
         )
         manifest["sources"][_SOURCE_KEY] = entry
 
-        # Release PR-B: lineage step inside the same flock as the year
-        # merge. Only the daily NCs THIS worker just wrote contribute to
-        # ``outputs`` -- merged_files contains the union across workers
+        # Only the daily NCs THIS worker just wrote contribute to
+        # ``outputs`` -- ``merged_files`` is the union across workers
         # and would over-attribute output_files to a single step.
         from nhf_spatial_targets.release.lineage import (
             build_step_record,

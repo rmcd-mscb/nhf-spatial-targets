@@ -300,9 +300,8 @@ def test_validate_writes_manifest_json(tmp_path, minimal_fabric, no_system_cred_
 
     manifest = json.loads((tmp_path / "manifest.json").read_text())
     assert manifest["sources"] == {}
-    # validate now appends a lineage step (release PR-B): exactly one
-    # ``kind=validate`` record per call, sha256-fingerprinting the
-    # on-disk artifacts it produced.
+    # validate appends exactly one ``kind=validate`` lineage record per
+    # call, sha256-fingerprinting the on-disk artifacts it produced.
     assert len(manifest["steps"]) == 1
     step = manifest["steps"][0]
     assert step["kind"] == "validate"
@@ -383,7 +382,7 @@ def test_validate_rerun_preserves_sources_and_steps(
     assert "gldas_noah_v21_monthly" in after["sources"]
     assert after["sources"]["era5_land"]["files"][0]["year"] == 2020
     # Prior synthetic step survives; the re-validate appends its own
-    # ``kind=validate`` step on top (release PR-B lineage capture).
+    # ``kind=validate`` step on top.
     assert after["steps"][0] == {
         "step": "agg",
         "source": "era5_land",
@@ -407,8 +406,8 @@ def test_validate_first_run_writes_fresh_skeleton(
 
     manifest = json.loads((tmp_path / "manifest.json").read_text())
     assert manifest["sources"] == {}
-    # release PR-B: validate now appends one kind=validate step on every
-    # call. On a first-run manifest that is the only step present.
+    # validate appends one kind=validate step on every call. On a
+    # first-run manifest that is the only step present.
     assert [s["kind"] for s in manifest["steps"]] == ["validate"]
     # On first run, created_utc and last_validated_utc are both fresh
     # and equal (no prior manifest to seed created_utc from).
@@ -433,8 +432,8 @@ def test_validate_recovers_from_corrupt_manifest(
 
     after = json.loads((tmp_path / "manifest.json").read_text())
     assert after["sources"] == {}
-    # release PR-B: corrupt-manifest recovery seeds a fresh skeleton then
-    # validate appends its own kind=validate step.
+    # Corrupt-manifest recovery seeds a fresh skeleton then validate
+    # appends its own kind=validate step.
     assert [s["kind"] for s in after["steps"]] == ["validate"]
 
 

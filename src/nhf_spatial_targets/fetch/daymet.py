@@ -483,11 +483,9 @@ def _update_manifest(
         )
         manifest["sources"][_SOURCE_KEY] = entry
 
-        # Release PR-B: append a lineage step inside the same flock,
-        # so the region merge and the step record land atomically.
         # Daymet is metadata-only (4.6 TB on ORNL DAAC, not republished),
-        # so ``outputs`` only carries the per-region zarr-fingerprint
-        # metadata that was already computed by the fetch step.
+        # so ``outputs`` is empty -- the per-region zarr fingerprints live
+        # in the source entry, not in the step record.
         from nhf_spatial_targets.release.lineage import build_step_record
 
         manifest["steps"].append(

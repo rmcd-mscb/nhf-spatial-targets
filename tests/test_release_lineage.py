@@ -12,7 +12,7 @@ PR (FGDC, ISO, README), so the invariants we lock here are:
   the existing aggregator's ``update_manifest`` already addresses),
 - ``merge_source_and_append_step`` is the single canonical
   read-modify-write that fetch modules can adopt without recreating
-  their bespoke flock code (#180).
+  their bespoke flock code.
 """
 
 from __future__ import annotations

@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 from nhf_spatial_targets.release.lineage import (
+    STEP_KINDS,
+    InputFileEntry,
+    OutputFileEntry,
+    StepKind,
+    StepRecord,
     append_step,
     build_step_record,
     input_file_entry,
@@ -13,6 +18,11 @@ from nhf_spatial_targets.release.lineage import (
 from nhf_spatial_targets.release.rebuild import rebuild_lineage
 
 __all__ = [
+    "STEP_KINDS",
+    "InputFileEntry",
+    "OutputFileEntry",
+    "StepKind",
+    "StepRecord",
     "append_step",
     "build_step_record",
     "input_file_entry",

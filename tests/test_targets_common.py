@@ -1231,6 +1231,15 @@ def test_build_n_sources_attrs_raises_when_count_exceeds_label_vocab():
 # ---------------------------------------------------------------------------
 
 
+def _stub_project(workdir: Path):
+    """Return a minimal :class:`Project` for stitch unit tests."""
+    from nhf_spatial_targets.workspace import Project
+
+    return Project(
+        workdir=workdir, datastore=workdir, config={}, fabric={}, dir_mode=None
+    )
+
+
 def _write_year_chunk_nc(
     path: Path,
     year: int,
@@ -1294,6 +1303,7 @@ def test_stitch_year_chunks_combines_contiguous_time(tmp_path: Path):
         title="test stitched",
         extra_global_attrs={"period": "2003-01-01/2004-12-31"},
         sort_dim="nhm_id",
+        project=_stub_project(tmp_path),
     )
 
     with xr.open_dataset(out) as ds:
@@ -1323,6 +1333,7 @@ def test_stitch_strips_year_chunk_attr(tmp_path: Path):
         title="t",
         extra_global_attrs={"period": "2003/2004"},
         sort_dim="nhm_id",
+        project=_stub_project(tmp_path),
     )
     with xr.open_dataset(out) as ds:
         assert "year_chunk" not in ds.attrs
@@ -1348,6 +1359,7 @@ def test_stitch_applies_canonical_attrs_and_history(tmp_path: Path):
         title="canonical SWE target",
         extra_global_attrs={"period": "2003/2003", "source": "x; y"},
         sort_dim="nhm_id",
+        project=_stub_project(tmp_path),
     )
     with xr.open_dataset(out) as ds:
         assert ds.attrs["title"] == "canonical SWE target"
@@ -1377,6 +1389,7 @@ def test_stitch_writes_columnar_chunks_and_preserves_values(tmp_path: Path):
         title="t",
         extra_global_attrs=None,
         sort_dim="nhm_id",
+        project=_stub_project(tmp_path),
     )
 
     n_time = 731  # 365 + 366
@@ -1441,6 +1454,7 @@ def test_stitch_columnar_preserves_distinct_values_and_nn_filled(tmp_path: Path)
         title="t",
         extra_global_attrs=None,
         sort_dim="nhm_id",
+        project=_stub_project(tmp_path),
     )
 
     n_time = 731
@@ -1483,6 +1497,7 @@ def test_stitch_fails_loud_on_hru_coord_mismatch(tmp_path: Path):
             title="t",
             extra_global_attrs=None,
             sort_dim="nhm_id",
+            project=_stub_project(tmp_path),
         )
 
 
@@ -1492,7 +1507,12 @@ def test_stitch_raises_on_empty_input(tmp_path: Path):
     out = tmp_path / "swe_targets.nc"
     with pytest.raises(ValueError, match="intermediate_files is empty"):
         stitch_year_chunks_to_target(
-            [], out, title="t", extra_global_attrs=None, sort_dim="nhm_id"
+            [],
+            out,
+            title="t",
+            extra_global_attrs=None,
+            sort_dim="nhm_id",
+            project=_stub_project(tmp_path),
         )
 
 
@@ -1522,6 +1542,7 @@ def test_stitch_atomic_write_no_partial_on_failure(tmp_path: Path, monkeypatch):
             title="t",
             extra_global_attrs=None,
             sort_dim="nhm_id",
+            project=_stub_project(tmp_path),
         )
     assert not out.exists(), "final output should not exist after failure"
     leftover = list(tmp_path.glob("*.tmp"))

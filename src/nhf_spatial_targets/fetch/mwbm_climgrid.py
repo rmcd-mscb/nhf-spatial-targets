@@ -309,11 +309,11 @@ def _update_manifest(
     license_str: str,
     file_record: dict,
 ) -> None:
-    """Merge mwbm_climgrid provenance + lineage step via the shared helper.
+    """Merge mwbm_climgrid provenance + lineage step into manifest.json.
 
-    Closes the #180 flock hazard (release PR-B). The catalog already
-    carries a sha256 in ``file_record`` so this reuses it rather than
-    re-hashing the (multi-GB) consolidated NC a second time.
+    The catalog already carries a sha256 in ``file_record`` so this
+    reuses it rather than re-hashing the (multi-GB) consolidated NC a
+    second time.
     """
     from nhf_spatial_targets.release.lineage import merge_source_and_append_step
 

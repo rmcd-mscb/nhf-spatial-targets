@@ -71,8 +71,8 @@ def test_update_manifest_writes_source_entry(project):
     ]
     assert entry["weight_files"] == ["weights/foo_batch0.csv"]
     assert "timestamp" in entry
-    # release PR-B: same flock atomically appends a kind=aggregate step
-    # with sha256-fingerprinted outputs.
+    # The same flock atomically appends a kind=aggregate step with
+    # sha256-fingerprinted outputs.
     assert len(manifest["steps"]) == 1
     step = manifest["steps"][0]
     assert step["kind"] == "aggregate"

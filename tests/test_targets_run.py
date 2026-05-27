@@ -102,8 +102,8 @@ def test_build_writes_unfilled_and_filled_files(tmp_path: Path):
     assert (project.targets_dir() / "runoff_targets.nc").exists()
     assert (project.targets_dir() / "runoff_targets_nn_filled.nc").exists()
 
-    # release PR-B: build emits one target + one nn_fill lineage step.
-    # Command must be ``run-runoff`` -- not derived from string-mangling
+    # build emits one target + one nn_fill lineage step. Command must be
+    # ``run-runoff`` -- not derived from string-mangling
     # bounds_long_name_kind, which would yield ``run-runoff`` only by
     # coincidence and produce wrong names for other targets.
     manifest = _json.loads(project.manifest_path.read_text())
