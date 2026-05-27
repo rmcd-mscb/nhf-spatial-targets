@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
-import tempfile
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
@@ -233,25 +231,25 @@ def _update_manifest(
     files: list[dict],
     consolidation: dict,
 ) -> None:
-    """Merge MERRA-2 provenance into manifest.json."""
+    """Merge MERRA-2 provenance into manifest.json and record a lineage step.
+
+    Delegates to :func:`release.lineage.merge_source_and_append_step` so
+    the read-merge-write happens under a single advisory ``flock`` and
+    the ``kind=consolidate`` lineage step is appended atomically with
+    the source-entry update (release PR-B; closes #180 for this module).
+    """
+    from nhf_spatial_targets.release.lineage import (
+        merge_source_and_append_step,
+        output_file_entry,
+    )
+
     ws = _load_project(workdir)
-    manifest_path = ws.manifest_path
-    if manifest_path.exists():
-        try:
-            manifest = json.loads(manifest_path.read_text())
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"manifest.json in {workdir} is corrupted. Detail: {exc}"
-            ) from exc
-    else:
-        manifest = {"sources": {}, "steps": []}
-
-    if "sources" not in manifest:
-        manifest["sources"] = {}
-
-    merra2 = manifest["sources"].get(_SOURCE_KEY, {})
-    merra2.update(
-        {
+    consolidated_nc = Path(consolidation["consolidated_nc"])
+    outputs = [output_file_entry(consolidated_nc)] if consolidated_nc.exists() else []
+    merge_source_and_append_step(
+        ws.manifest_path,
+        _SOURCE_KEY,
+        source_updates={
             "source_key": _SOURCE_KEY,
             "access_url": meta["access"]["url"],
             "license": resolve_license(meta, _SOURCE_KEY),
@@ -261,16 +259,15 @@ def _update_manifest(
             "files": files,
             "consolidated_nc": consolidation["consolidated_nc"],
             "last_consolidated_utc": consolidation["last_consolidated_utc"],
-        }
+        },
+        kind="consolidate",
+        outputs=outputs,
+        params={
+            "period": period,
+            "bbox": bbox,
+            "n_files": len(files),
+        },
+        command=f"fetch {_SOURCE_KEY}",
+        timestamp_utc=consolidation["last_consolidated_utc"],
     )
-    manifest["sources"][_SOURCE_KEY] = merra2
-
-    tmp_fd, tmp_path = tempfile.mkstemp(dir=manifest_path.parent, suffix=".json.tmp")
-    try:
-        with os.fdopen(tmp_fd, "w") as f:
-            json.dump(manifest, f, indent=2)
-        Path(tmp_path).replace(manifest_path)
-    except BaseException:
-        Path(tmp_path).unlink(missing_ok=True)
-        raise
     logger.info("Updated manifest.json with MERRA-2 provenance")

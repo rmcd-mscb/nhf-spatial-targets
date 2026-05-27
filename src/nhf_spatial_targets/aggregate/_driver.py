@@ -138,6 +138,56 @@ def update_manifest(
         existing.update(entry)
         manifest["sources"][source_key] = existing
 
+        # Append a lineage step inside the SAME flock-protected critical
+        # section. This is the only place across the codebase where we
+        # update both ``sources[source_key]`` and ``steps`` in one write
+        # under one lock -- preserving the property that an interrupted
+        # SLURM array worker cannot leave the manifest with one but not
+        # the other. We import locally to keep release/lineage.py off the
+        # aggregate import path until it's needed (the release stack is
+        # PR-B-introduced; the aggregator predates it).
+        from nhf_spatial_targets.release.lineage import (
+            build_step_record,
+            output_file_entry,
+        )
+
+        # output_files is project-workdir-relative; resolve before stat.
+        # Workers only hash the slice they just wrote -- total hash cost
+        # scales with output size, not workspace size.
+        output_entries: list[dict] = []
+        missing_outputs: list[str] = []
+        for rel in output_files:
+            abs_path = (project.workdir / rel).resolve()
+            if abs_path.exists():
+                output_entries.append(output_file_entry(abs_path))
+            else:
+                missing_outputs.append(rel)
+                logger.warning(
+                    "lineage: aggregate output %s listed in source-entry "
+                    "but not on disk; step record will omit its sha256",
+                    abs_path,
+                )
+        step_params: dict = {"period": period, "fabric_sha256": fabric_sha}
+        if batch_size is not None:
+            step_params["batch_size"] = int(batch_size)
+        if n_workers != 1:
+            step_params["n_workers"] = int(n_workers)
+        if missing_outputs:
+            step_params["missing_outputs"] = missing_outputs
+        manifest["steps"].append(
+            build_step_record(
+                kind="aggregate",
+                source_key=source_key,
+                inputs=[],
+                outputs=output_entries,
+                params=step_params,
+                tool="nhf-targets",
+                command=f"agg {source_key.replace('_', '-')}",
+                software_version=None,
+                timestamp_utc=entry["timestamp"],
+            )
+        )
+
         tmp_fd, tmp_path = tempfile.mkstemp(
             dir=manifest_path.parent, suffix=".json.tmp"
         )

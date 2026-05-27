@@ -911,6 +911,15 @@ def test_update_manifest_accumulates_years(tmp_path):
     years = [f["year"] for f in entry2["files"]]
     assert years == [1979, 1980]
 
+    # release PR-B: each _update_manifest call appends exactly one
+    # ``kind=consolidate`` lineage step, scoped to era5_land, with the
+    # years this call just wrote in params. Two calls -> two steps.
+    consolidate_steps = [s for s in m2["steps"] if s["kind"] == "consolidate"]
+    assert len(consolidate_steps) == 2
+    assert all(s["source_key"] == "era5_land" for s in consolidate_steps)
+    assert consolidate_steps[0]["params"]["years"] == [1979]
+    assert consolidate_steps[1]["params"]["years"] == [1980]
+
 
 def test_update_manifest_updates_existing_year(tmp_path):
     """Re-running for the same year replaces that year's file record."""

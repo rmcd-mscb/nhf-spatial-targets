@@ -1246,6 +1246,7 @@ def _update_manifest(
             manifest = {"sources": {}, "steps": []}
 
         manifest.setdefault("sources", {})
+        manifest.setdefault("steps", [])
         entry = manifest["sources"].get(_SOURCE_KEY, {})
         existing_by_year = {int(y["year"]): y for y in entry.get("years", [])}
         for rec in year_records:
@@ -1265,6 +1266,36 @@ def _update_manifest(
             }
         )
         manifest["sources"][_SOURCE_KEY] = entry
+
+        # Release PR-B: lineage step inside the same flock as the year-
+        # records merge. Each year's consolidated NC path comes from the
+        # year_records this call just produced; fingerprint each so PR-D's
+        # FGDC consumer can verify integrity per-year.
+        from nhf_spatial_targets.release.lineage import (
+            build_step_record,
+            output_file_entry,
+        )
+
+        step_outputs: list[dict] = []
+        for rec in year_records:
+            for key in ("consolidated_nc", "consolidated_path"):
+                nc = rec.get(key)
+                if nc and Path(nc).exists():
+                    step_outputs.append(output_file_entry(Path(nc)))
+                    break
+        manifest["steps"].append(
+            build_step_record(
+                kind="consolidate",
+                source_key=_SOURCE_KEY,
+                outputs=step_outputs,
+                params={
+                    "period": period,
+                    "years": [int(rec["year"]) for rec in year_records],
+                    "archive_url": archive_url,
+                },
+                command=f"fetch {_SOURCE_KEY}",
+            )
+        )
 
         tmp_fd, tmp_path = tempfile.mkstemp(
             dir=manifest_path.parent, suffix=".json.tmp"

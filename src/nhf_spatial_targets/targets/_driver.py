@@ -234,6 +234,7 @@ def build_single_shot(
         nn_fill=bool(target_cfg["nn_fill"]),
         nn_max_candidates=int(target_cfg["nn_max_candidates"]),
         id_col=id_col,
+        target_key=adapter.target_key,
     )
 
 
@@ -360,6 +361,7 @@ def _build_year_chunked(
             nn_fill=nn_fill,
             nn_max_candidates=nn_max_candidates,
             id_col=id_col,
+            target_key=adapter.target_key,
         )
 
     # Prune orphans + compute stitch input from year_specs (#211).
@@ -392,6 +394,8 @@ def _build_year_chunked(
         title=adapter.title,
         extra_global_attrs=stitch_attrs,
         sort_dim=id_col,
+        project=project,
+        lineage_kind="target",
     )
 
     if nn_fill:
@@ -411,6 +415,8 @@ def _build_year_chunked(
             title=adapter.nn_title,
             extra_global_attrs=nn_attrs,
             sort_dim=id_col,
+            project=project,
+            lineage_kind="nn_fill",
         )
 
 

@@ -5,9 +5,7 @@ from __future__ import annotations
 import gc
 import json
 import logging
-import os
 import re
-import tempfile
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
@@ -319,27 +317,28 @@ def _update_manifest(
     files: list[dict],
     consolidated_ncs: dict[str, str],
 ) -> None:
-    """Merge MODIS provenance into ``manifest.json`` with atomic write."""
+    """Merge MODIS provenance + lineage step via the shared helper.
+
+    Closes the #180 flock hazard (release PR-B). MODIS year-chunked
+    consolidation produces multiple per-year NCs; each one is fingerprinted
+    in ``outputs`` so FGDC consumers can verify integrity.
+    """
+    from nhf_spatial_targets.release.lineage import (
+        merge_source_and_append_step,
+        output_file_entry,
+    )
+
     ws = _load_project(workdir)
-    manifest_path = ws.manifest_path
-    if manifest_path.exists():
-        try:
-            manifest = json.loads(manifest_path.read_text())
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"manifest.json in {workdir} is corrupted and cannot be parsed. "
-                f"Inspect the file manually or restore from backup. Detail: {exc}"
-            ) from exc
-    else:
-        manifest = {"sources": {}, "steps": []}
-
-    if "sources" not in manifest:
-        manifest["sources"] = {}
-
     now_utc = datetime.now(timezone.utc).isoformat()
-    entry = manifest["sources"].get(source_key, {})
-    entry.update(
-        {
+    outputs: list[dict] = []
+    for nc_path in consolidated_ncs.values():
+        p = Path(nc_path)
+        if p.exists():
+            outputs.append(output_file_entry(p))
+    merge_source_and_append_step(
+        ws.manifest_path,
+        source_key,
+        source_updates={
             "source_key": source_key,
             "access_url": meta["access"]["url"],
             "license": resolve_license(meta, source_key),
@@ -349,18 +348,18 @@ def _update_manifest(
             "files": files,
             "consolidated_ncs": consolidated_ncs,
             "last_consolidated_utc": now_utc if consolidated_ncs else None,
-        }
+        },
+        kind="consolidate",
+        outputs=outputs,
+        params={
+            "period": period,
+            "bbox": bbox,
+            "n_files": len(files),
+            "n_year_chunks": len(consolidated_ncs),
+        },
+        command=f"fetch {source_key.replace('_', '-')}",
+        timestamp_utc=now_utc,
     )
-    manifest["sources"][source_key] = entry
-
-    tmp_fd, tmp_path = tempfile.mkstemp(dir=manifest_path.parent, suffix=".json.tmp")
-    try:
-        with os.fdopen(tmp_fd, "w") as f:
-            json.dump(manifest, f, indent=2)
-        Path(tmp_path).replace(manifest_path)
-    except BaseException:
-        Path(tmp_path).unlink(missing_ok=True)
-        raise
     logger.info("Updated manifest.json with %s provenance", source_key)
 
 

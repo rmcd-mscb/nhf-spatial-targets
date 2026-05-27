@@ -91,6 +91,8 @@ def _make_runoff_project(
 
 
 def test_build_writes_unfilled_and_filled_files(tmp_path: Path):
+    import json as _json
+
     from nhf_spatial_targets.targets.run import build
     from nhf_spatial_targets.workspace import load
 
@@ -99,6 +101,25 @@ def test_build_writes_unfilled_and_filled_files(tmp_path: Path):
     build(project)
     assert (project.targets_dir() / "runoff_targets.nc").exists()
     assert (project.targets_dir() / "runoff_targets_nn_filled.nc").exists()
+
+    # release PR-B: build emits one target + one nn_fill lineage step.
+    # Command must be ``run-runoff`` -- not derived from string-mangling
+    # bounds_long_name_kind, which would yield ``run-runoff`` only by
+    # coincidence and produce wrong names for other targets.
+    manifest = _json.loads(project.manifest_path.read_text())
+    steps_by_kind: dict[str, list] = {}
+    for s in manifest["steps"]:
+        steps_by_kind.setdefault(s["kind"], []).append(s)
+    assert len(steps_by_kind.get("target", [])) == 1
+    assert len(steps_by_kind.get("nn_fill", [])) == 1
+    target_step = steps_by_kind["target"][0]
+    nn_step = steps_by_kind["nn_fill"][0]
+    assert target_step["command"] == "run-runoff"
+    assert nn_step["command"] == "run-runoff"
+    assert target_step["outputs"][0]["path"].endswith("runoff_targets.nc")
+    assert nn_step["outputs"][0]["path"].endswith("runoff_targets_nn_filled.nc")
+    assert "sha256" in target_step["outputs"][0]
+    assert "source" in target_step["params"]
 
 
 def test_build_emits_id_col_sorted_target_ncs(tmp_path: Path):

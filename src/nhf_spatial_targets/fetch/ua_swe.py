@@ -565,6 +565,7 @@ def _update_manifest(
             manifest = {"sources": {}, "steps": []}
 
         manifest.setdefault("sources", {})
+        manifest.setdefault("steps", [])
         entry = manifest["sources"].get(_SOURCE_KEY, {})
         existing_by_wy = {int(y["water_year"]): y for y in entry.get("water_years", [])}
         for rec in wy_records:
@@ -588,6 +589,33 @@ def _update_manifest(
             # Preserve any prior mask record if this run didn't touch it.
             entry["mask"] = mask_record
         manifest["sources"][_SOURCE_KEY] = entry
+
+        # Release PR-B: lineage step inside the same flock.
+        from nhf_spatial_targets.release.lineage import (
+            build_step_record,
+            output_file_entry,
+        )
+
+        step_outputs: list[dict] = []
+        for rec in wy_records:
+            for key in ("consolidated_nc", "consolidated_path", "path"):
+                nc = rec.get(key)
+                if nc and Path(nc).exists():
+                    step_outputs.append(output_file_entry(Path(nc)))
+                    break
+        manifest["steps"].append(
+            build_step_record(
+                kind="consolidate",
+                source_key=_SOURCE_KEY,
+                outputs=step_outputs,
+                params={
+                    "period": period,
+                    "water_years": [int(rec["water_year"]) for rec in wy_records],
+                    "archive_url": archive_url,
+                },
+                command=f"fetch {_SOURCE_KEY.replace('_', '-')}",
+            )
+        )
 
         tmp_fd, tmp_path = tempfile.mkstemp(
             dir=manifest_path.parent, suffix=".json.tmp"

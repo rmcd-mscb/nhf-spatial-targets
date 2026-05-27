@@ -282,25 +282,22 @@ def _update_manifest(
     files: list[dict],
     consolidation: dict,
 ) -> None:
-    """Merge NLDAS provenance into manifest.json."""
+    """Merge NLDAS provenance + lineage step via the shared helper.
+
+    Closes the #180 flock hazard for this module (release PR-B).
+    """
+    from nhf_spatial_targets.release.lineage import (
+        merge_source_and_append_step,
+        output_file_entry,
+    )
+
     ws = _load_project(workdir)
-    manifest_path = ws.manifest_path
-    if manifest_path.exists():
-        try:
-            manifest = json.loads(manifest_path.read_text())
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"manifest.json in {workdir} is corrupted. Detail: {exc}"
-            ) from exc
-    else:
-        manifest = {"sources": {}, "steps": []}
-
-    if "sources" not in manifest:
-        manifest["sources"] = {}
-
-    entry = manifest["sources"].get(source_key, {})
-    entry.update(
-        {
+    consolidated_nc = Path(consolidation["consolidated_nc"])
+    outputs = [output_file_entry(consolidated_nc)] if consolidated_nc.exists() else []
+    merge_source_and_append_step(
+        ws.manifest_path,
+        source_key,
+        source_updates={
             "source_key": source_key,
             "access_url": meta["access"]["url"],
             "license": resolve_license(meta, source_key),
@@ -310,20 +307,11 @@ def _update_manifest(
             "files": files,
             "consolidated_nc": consolidation["consolidated_nc"],
             "last_consolidated_utc": consolidation["last_consolidated_utc"],
-        }
+        },
+        kind="consolidate",
+        outputs=outputs,
+        params={"period": period, "bbox": bbox, "n_files": len(files)},
+        command=f"fetch {source_key.replace('_', '-')}",
+        timestamp_utc=consolidation["last_consolidated_utc"],
     )
-    manifest["sources"][source_key] = entry
-
-    import tempfile
-
-    tmp_fd, tmp_path = tempfile.mkstemp(dir=manifest_path.parent, suffix=".json.tmp")
-    try:
-        import os
-
-        with os.fdopen(tmp_fd, "w") as f:
-            json.dump(manifest, f, indent=2)
-        Path(tmp_path).replace(manifest_path)
-    except BaseException:
-        Path(tmp_path).unlink(missing_ok=True)
-        raise
     logger.info("Updated manifest.json with %s provenance", source_key)

@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -369,28 +366,23 @@ def _update_manifest(
     license_str: str,
     file_info: dict,
 ) -> None:
-    """Merge Reitz 2017 provenance into manifest.json."""
+    """Merge Reitz 2017 provenance + lineage step via the shared helper.
+
+    Closes the #180 flock hazard for this module (release PR-B).
+    """
+    from nhf_spatial_targets.release.lineage import (
+        merge_source_and_append_step,
+        output_file_entry,
+    )
+
     ws = _load_project(workdir)
-    manifest_path = ws.manifest_path
-    if manifest_path.exists():
-        try:
-            manifest = json.loads(manifest_path.read_text())
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"manifest.json in {workdir} is corrupt and cannot be "
-                f"parsed. You may need to delete it and re-run the fetch "
-                f"step. Original error: {exc}"
-            ) from exc
-    else:
-        manifest = {"sources": {}, "steps": []}
-
-    if "sources" not in manifest:
-        manifest["sources"] = {}
-
     access = meta["access"]
-    entry = manifest["sources"].get(_SOURCE_KEY, {})
-    entry.update(
-        {
+    nc_path = Path(file_info["path"])
+    outputs = [output_file_entry(nc_path)] if nc_path.exists() else []
+    merge_source_and_append_step(
+        ws.manifest_path,
+        _SOURCE_KEY,
+        source_updates={
             "source_key": _SOURCE_KEY,
             "access_url": access["url"],
             "doi": access["doi"],
@@ -399,16 +391,15 @@ def _update_manifest(
             "spatial_extent": "CONUS",
             "variables": [v["name"] for v in meta["variables"]],
             "file": file_info,
-        }
+        },
+        kind="consolidate",
+        outputs=outputs,
+        params={
+            "period": period,
+            "years": file_info.get("years", []),
+            "spatial_extent": "CONUS",
+        },
+        command=f"fetch {_SOURCE_KEY.replace('_', '-')}",
+        timestamp_utc=file_info.get("downloaded_utc"),
     )
-    manifest["sources"][_SOURCE_KEY] = entry
-
-    tmp_fd, tmp_path = tempfile.mkstemp(dir=manifest_path.parent, suffix=".json.tmp")
-    try:
-        with os.fdopen(tmp_fd, "w") as f:
-            json.dump(manifest, f, indent=2)
-        Path(tmp_path).replace(manifest_path)
-    except BaseException:
-        Path(tmp_path).unlink(missing_ok=True)
-        raise
     logger.info("Updated manifest.json with Reitz 2017 provenance")

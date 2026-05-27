@@ -219,6 +219,41 @@ def validate_workspace(workdir: Path) -> None:
         workdir, config
     )  # config is the merged dict from _check_required_keys
 
+    # Append AFTER _write_manifest so the step lands in the freshly
+    # initialized skeleton, not a carried-over prior-run steps array.
+    # ``manifest.json`` is intentionally NOT listed as an output: a step
+    # recording the sha256 of the file it is being written into is
+    # paradoxical -- the recorded hash would describe the pre-append
+    # file, not the file as it now exists on disk.
+    from nhf_spatial_targets.release.lineage import (
+        append_step,
+        input_file_entry,
+        output_file_entry,
+    )
+
+    manifest_out = workdir / "manifest.json"
+    fabric_json_out = workdir / "fabric.json"
+    effective_config_out = workdir / "config.effective.yml"
+    append_step(
+        manifest_out,
+        kind="validate",
+        source_key=None,
+        inputs=[input_file_entry(fabric_path)],
+        outputs=[
+            output_file_entry(p)
+            for p in (fabric_json_out, effective_config_out)
+            if p.exists()
+        ],
+        params={
+            "fabric_sha256": fabric_meta["sha256"],
+            "hru_count": fabric_meta["hru_count"],
+            "id_col": id_col,
+            "id_col_sorted": fabric_meta["id_col_sorted"],
+            "buffer_deg": buffer_deg,
+        },
+        command="validate",
+    )
+
 
 # ---------------------------------------------------------------------------
 # Step helpers

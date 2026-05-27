@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -230,27 +227,22 @@ def _update_manifest(
     meta: dict,
     file_info: dict,
 ) -> None:
-    """Merge GLDAS-2.1 provenance into manifest.json."""
+    """Merge GLDAS-2.1 provenance + lineage step via the shared helper.
+
+    Closes the #180 flock hazard for this module (release PR-B).
+    """
+    from nhf_spatial_targets.release.lineage import (
+        merge_source_and_append_step,
+        output_file_entry,
+    )
+
     ws = _load_project(workdir)
-    manifest_path = ws.manifest_path
-    if manifest_path.exists():
-        try:
-            manifest = json.loads(manifest_path.read_text())
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"manifest.json in {workdir} is corrupted and cannot be "
-                f"parsed. Inspect the file manually or restore from backup. "
-                f"Detail: {exc}"
-            ) from exc
-    else:
-        manifest = {"sources": {}, "steps": []}
-
-    if "sources" not in manifest:
-        manifest["sources"] = {}
-
-    entry = manifest["sources"].get(_SOURCE_KEY, {})
-    entry.update(
-        {
+    consolidated = Path(file_info["path"])
+    outputs = [output_file_entry(consolidated)] if consolidated.exists() else []
+    merge_source_and_append_step(
+        ws.manifest_path,
+        _SOURCE_KEY,
+        source_updates={
             "source_key": _SOURCE_KEY,
             "access_url": meta["access"]["url"],
             "license": meta.get("license", "public domain (NASA)"),
@@ -258,16 +250,15 @@ def _update_manifest(
             "bbox": bbox,
             "variables": [v["name"] for v in meta["variables"]],
             "file": file_info,
-        }
+        },
+        kind="consolidate",
+        outputs=outputs,
+        params={
+            "period": period,
+            "bbox": bbox,
+            "n_granules": file_info.get("n_granules", 0),
+        },
+        command=f"fetch {_SOURCE_KEY.replace('_', '-')}",
+        timestamp_utc=file_info.get("downloaded_utc"),
     )
-    manifest["sources"][_SOURCE_KEY] = entry
-
-    fd, tmp = tempfile.mkstemp(dir=manifest_path.parent, suffix=".json.tmp")
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(manifest, f, indent=2)
-        Path(tmp).replace(manifest_path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
     logger.info("Updated manifest.json with GLDAS-2.1 provenance")

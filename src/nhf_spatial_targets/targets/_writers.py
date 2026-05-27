@@ -181,6 +181,7 @@ def write_bounds_target(
     nn_fill: bool,
     nn_max_candidates: int,
     id_col: str,
+    target_key: str | None = None,
 ) -> None:
     """Assemble + write a bounds-target Dataset, with optional NN-fill companion.
 
@@ -240,6 +241,12 @@ def write_bounds_target(
         HRU id column name (e.g. ``"nhm_id"``); the dataset is sorted
         ascending on this dim at emission per the #93 canonical-row-order
         invariant.
+    target_key
+        Canonical target identifier from the adapter (``"runoff"``,
+        ``"aet"``, ``"rch"``, ``"som"``, ``"sca"``, ``"swe"``); used to
+        build the lineage step ``command`` field as ``run-<target_key>``.
+        Falls back to ``"target"`` when ``None`` so out-of-pipeline callers
+        without an adapter still work.
     """
     # Avoid a circular-import by deferring this helper-internal import.
     from nhf_spatial_targets.normalize.methods import nn_fill_bounds
@@ -326,6 +333,18 @@ def write_bounds_target(
         extra_global_attrs=extra_global_attrs,
         sort_dim=id_col,
     )
+    _append_target_step(
+        project=project,
+        output_path=output_path,
+        kind="target",
+        target_key=target_key,
+        params={
+            "bounds_long_name_kind": bounds_long_name_kind,
+            "n_sources_count": int(n_sources_count),
+            "id_col": id_col,
+        },
+        extra_global_attrs=extra_global_attrs,
+    )
 
     n = ds_loaded["n_sources"].values
     total = n.size
@@ -368,4 +387,50 @@ def write_bounds_target(
         title=nn_title,
         extra_global_attrs=filled_attrs,
         sort_dim=id_col,
+    )
+    _append_target_step(
+        project=project,
+        output_path=nn_path,
+        kind="nn_fill",
+        target_key=target_key,
+        params={
+            "bounds_long_name_kind": bounds_long_name_kind,
+            "nn_fill_max_candidates": int(nn_max_candidates),
+            "nn_fill_distance_crs": project.area_crs,
+            "id_col": id_col,
+        },
+        extra_global_attrs=filled_attrs,
+    )
+
+
+def _append_target_step(
+    *,
+    project: Project,
+    output_path: Path,
+    kind: str,
+    params: dict,
+    extra_global_attrs: dict,
+    target_key: str | None,
+) -> None:
+    """Append one target-stage lineage step for *output_path*.
+
+    Forwards the comma-separated upstream-source list from
+    ``extra_global_attrs["source"]`` onto the step so consumers don't
+    need to re-open the NC to recover provenance.
+    """
+    from nhf_spatial_targets.release.lineage import append_step, output_file_entry
+
+    step_params = dict(params)
+    if "source" in extra_global_attrs:
+        step_params["source"] = extra_global_attrs["source"]
+    if "period" in extra_global_attrs:
+        step_params["period"] = extra_global_attrs["period"]
+    command = f"run-{target_key}" if target_key else "run-target"
+    append_step(
+        project.manifest_path,
+        kind=kind,
+        source_key=None,
+        outputs=[output_file_entry(output_path)],
+        params=step_params,
+        command=command,
     )
