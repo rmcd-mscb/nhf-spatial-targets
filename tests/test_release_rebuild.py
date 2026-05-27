@@ -624,9 +624,9 @@ def test_rebuild_default_stamps_sha256_skipped(project) -> None:
 
 
 def test_rebuild_with_sha256_does_not_stamp_skipped(project) -> None:
-    """``compute_sha256=True`` must NOT stamp ``sha256_skipped=True``
-    -- the precondition flip is what releases the ``release publish``
-    gate.
+    """``compute_sha256=True`` must NOT stamp ``sha256_skipped=True`` --
+    that flag is the gate the downstream ``release publish`` stage
+    reads to refuse unhashed outputs.
     """
     nc = _write_consolidated_nc(project.datastore, "merra2", "merra2_consolidated.nc")
     manifest = json.loads(project.manifest_path.read_text())
