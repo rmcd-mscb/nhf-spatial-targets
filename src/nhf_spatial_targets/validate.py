@@ -219,11 +219,12 @@ def validate_workspace(workdir: Path) -> None:
         workdir, config
     )  # config is the merged dict from _check_required_keys
 
-    # Record the validation event in the lineage trail (release PR-B).
-    # Inputs: the fabric file we validated. Outputs: the on-disk artifacts
-    # validate just produced. The append happens AFTER _write_manifest so
-    # the lineage helper sees the skeleton's ``steps`` array, not the
-    # carried-over-from-prior-run one.
+    # Append AFTER _write_manifest so the step lands in the freshly
+    # initialized skeleton, not a carried-over prior-run steps array.
+    # ``manifest.json`` is intentionally NOT listed as an output: a step
+    # recording the sha256 of the file it is being written into is
+    # paradoxical -- the recorded hash would describe the pre-append
+    # file, not the file as it now exists on disk.
     from nhf_spatial_targets.release.lineage import (
         append_step,
         input_file_entry,
@@ -240,7 +241,7 @@ def validate_workspace(workdir: Path) -> None:
         inputs=[input_file_entry(fabric_path)],
         outputs=[
             output_file_entry(p)
-            for p in (fabric_json_out, manifest_out, effective_config_out)
+            for p in (fabric_json_out, effective_config_out)
             if p.exists()
         ],
         params={

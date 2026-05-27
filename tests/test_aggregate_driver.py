@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import geopandas as gpd
@@ -36,6 +37,16 @@ def project(tmp_path):
 
 
 def test_update_manifest_writes_source_entry(project):
+    # Materialize the output NCs on disk so the lineage append has real
+    # files to fingerprint -- otherwise output_file_entry would skip them
+    # and the step's outputs list would be empty.
+    for rel in (
+        "data/aggregated/foo/foo_2000_agg.nc",
+        "data/aggregated/foo/foo_2001_agg.nc",
+    ):
+        abs_path = project.workdir / rel
+        abs_path.parent.mkdir(parents=True, exist_ok=True)
+        abs_path.write_bytes(b"placeholder-agg-nc")
     update_manifest(
         project=project,
         source_key="foo",
@@ -60,6 +71,18 @@ def test_update_manifest_writes_source_entry(project):
     ]
     assert entry["weight_files"] == ["weights/foo_batch0.csv"]
     assert "timestamp" in entry
+    # release PR-B: same flock atomically appends a kind=aggregate step
+    # with sha256-fingerprinted outputs.
+    assert len(manifest["steps"]) == 1
+    step = manifest["steps"][0]
+    assert step["kind"] == "aggregate"
+    assert step["source_key"] == "foo"
+    assert step["command"] == "agg foo"
+    assert {Path(o["path"]).name for o in step["outputs"]} == {
+        "foo_2000_agg.nc",
+        "foo_2001_agg.nc",
+    }
+    assert all("sha256" in o for o in step["outputs"])
 
 
 def test_update_manifest_preserves_existing_sources(project):

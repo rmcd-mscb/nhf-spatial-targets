@@ -310,7 +310,10 @@ def test_validate_writes_manifest_json(tmp_path, minimal_fabric, no_system_cred_
     assert step["command"] == "validate"
     out_paths = {entry["path"] for entry in step["outputs"]}
     assert str(tmp_path / "fabric.json") in out_paths
-    assert str(tmp_path / "manifest.json") in out_paths
+    # manifest.json is intentionally NOT a step output: the step lives
+    # inside manifest.json, so its recorded sha256 would describe the
+    # pre-append state.
+    assert str(tmp_path / "manifest.json") not in out_paths
     assert "fabric" in manifest
     assert manifest["fabric"]["id_col"] == "nhm_id"
     assert manifest["fabric"]["hru_count"] == 3
