@@ -144,26 +144,29 @@ def _new_manifest_skeleton() -> dict:
     return {"sources": {}, "steps": []}
 
 
-def _read_manifest(manifest_path: Path) -> dict:
+def read_manifest(manifest_path: Path) -> dict:
     """Read ``manifest.json`` or return a fresh skeleton.
 
     Raises ``ValueError`` on parse failure -- a corrupt manifest is a
-    loud failure mode, not something to silently overwrite. The
-    aggregator and the per-fetch ``_update_manifest`` helpers all share
-    this contract.
+    loud failure mode, not something to silently overwrite.
     """
     if not manifest_path.exists():
         return _new_manifest_skeleton()
     try:
         manifest = json.loads(manifest_path.read_text())
     except json.JSONDecodeError as exc:
-        raise ValueError(f"manifest.json at {manifest_path} is corrupt: {exc}") from exc
+        raise ValueError(
+            f"manifest.json at {manifest_path} is corrupt: {exc}. "
+            f"Inspect the file manually, restore from backup, or delete "
+            f"it to force a fresh skeleton (you will lose prior "
+            f"provenance)."
+        ) from exc
     manifest.setdefault("sources", {})
     manifest.setdefault("steps", [])
     return manifest
 
 
-def _atomic_write_manifest(manifest_path: Path, manifest: dict) -> None:
+def atomic_write_manifest(manifest_path: Path, manifest: dict) -> None:
     """Write *manifest* to *manifest_path* via tempfile + rename.
 
     Indented JSON keeps diffs auditable; ``Path.replace`` is atomic on
@@ -223,12 +226,11 @@ def build_step_record(
     return record
 
 
-def _with_flock(lock_path: Path, body):
+def with_flock(lock_path: Path, body):
     """Run *body* under an advisory ``LOCK_EX`` on *lock_path*.
 
     Falls back to a bare invocation when ``fcntl`` is unavailable
-    (Windows; not used in production on this HPC pipeline, but keeps
-    the tests portable).
+    (Windows; a warning is emitted at module import).
     """
     if not _HAVE_FLOCK:
         return body()
@@ -303,11 +305,11 @@ def append_step(
     lock_path = manifest_path.with_suffix(manifest_path.suffix + ".lock")
 
     def _do() -> None:
-        manifest = _read_manifest(manifest_path)
+        manifest = read_manifest(manifest_path)
         manifest["steps"].append(record)
-        _atomic_write_manifest(manifest_path, manifest)
+        atomic_write_manifest(manifest_path, manifest)
 
-    _with_flock(lock_path, _do)
+    with_flock(lock_path, _do)
     logger.info(
         "lineage: appended step kind=%s source_key=%s outputs=%d",
         record["kind"],
@@ -381,14 +383,14 @@ def merge_source_and_append_step(
     lock_path = manifest_path.with_suffix(manifest_path.suffix + ".lock")
 
     def _do() -> None:
-        manifest = _read_manifest(manifest_path)
+        manifest = read_manifest(manifest_path)
         existing = manifest["sources"].get(source_key, {})
         existing.update(source_updates)
         manifest["sources"][source_key] = existing
         manifest["steps"].append(record)
-        _atomic_write_manifest(manifest_path, manifest)
+        atomic_write_manifest(manifest_path, manifest)
 
-    _with_flock(lock_path, _do)
+    with_flock(lock_path, _do)
     logger.info(
         "lineage: merged source=%s + appended step kind=%s outputs=%d",
         source_key,
