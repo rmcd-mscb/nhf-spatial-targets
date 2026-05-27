@@ -138,6 +138,48 @@ def update_manifest(
         existing.update(entry)
         manifest["sources"][source_key] = existing
 
+        # Append a lineage step inside the SAME flock-protected critical
+        # section. This is the only place across the codebase where we
+        # update both ``sources[source_key]`` and ``steps`` in one write
+        # under one lock -- preserving the property that an interrupted
+        # SLURM array worker cannot leave the manifest with one but not
+        # the other. We import locally to keep release/lineage.py off the
+        # aggregate import path until it's needed (the release stack is
+        # PR-B-introduced; the aggregator predates it).
+        from nhf_spatial_targets.release.lineage import (
+            build_step_record,
+            output_file_entry,
+        )
+
+        # output_files is project-workdir-relative; resolve before stat.
+        output_entries: list[dict] = []
+        for rel in output_files:
+            abs_path = (project.workdir / rel).resolve()
+            if abs_path.exists():
+                # output_file_entry computes sha256 -- per the plan,
+                # output integrity is what downstream FGDC consumers
+                # need; per-worker call sha256s only the slice this
+                # worker just wrote, so total cost is bounded.
+                output_entries.append(output_file_entry(abs_path))
+        step_params: dict = {"period": period, "fabric_sha256": fabric_sha}
+        if batch_size is not None:
+            step_params["batch_size"] = int(batch_size)
+        if n_workers != 1:
+            step_params["n_workers"] = int(n_workers)
+        manifest["steps"].append(
+            build_step_record(
+                kind="aggregate",
+                source_key=source_key,
+                inputs=[],
+                outputs=output_entries,
+                params=step_params,
+                tool="nhf-targets",
+                command=f"agg {source_key.replace('_', '-')}",
+                software_version=None,
+                timestamp_utc=entry["timestamp"],
+            )
+        )
+
         tmp_fd, tmp_path = tempfile.mkstemp(
             dir=manifest_path.parent, suffix=".json.tmp"
         )

@@ -219,6 +219,40 @@ def validate_workspace(workdir: Path) -> None:
         workdir, config
     )  # config is the merged dict from _check_required_keys
 
+    # Record the validation event in the lineage trail (release PR-B).
+    # Inputs: the fabric file we validated. Outputs: the on-disk artifacts
+    # validate just produced. The append happens AFTER _write_manifest so
+    # the lineage helper sees the skeleton's ``steps`` array, not the
+    # carried-over-from-prior-run one.
+    from nhf_spatial_targets.release.lineage import (
+        append_step,
+        input_file_entry,
+        output_file_entry,
+    )
+
+    manifest_out = workdir / "manifest.json"
+    fabric_json_out = workdir / "fabric.json"
+    effective_config_out = workdir / "config.effective.yml"
+    append_step(
+        manifest_out,
+        kind="validate",
+        source_key=None,
+        inputs=[input_file_entry(fabric_path)],
+        outputs=[
+            output_file_entry(p)
+            for p in (fabric_json_out, manifest_out, effective_config_out)
+            if p.exists()
+        ],
+        params={
+            "fabric_sha256": fabric_meta["sha256"],
+            "hru_count": fabric_meta["hru_count"],
+            "id_col": id_col,
+            "id_col_sorted": fabric_meta["id_col_sorted"],
+            "buffer_deg": buffer_deg,
+        },
+        command="validate",
+    )
+
 
 # ---------------------------------------------------------------------------
 # Step helpers

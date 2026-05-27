@@ -17,8 +17,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
-import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -311,26 +309,27 @@ def _update_manifest(
     license_str: str,
     file_record: dict,
 ) -> None:
-    """Merge mwbm_climgrid provenance into manifest.json."""
-    ws = _load_project(workdir)
-    manifest_path = ws.manifest_path
-    if manifest_path.exists():
-        try:
-            manifest = json.loads(manifest_path.read_text())
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"manifest.json in {workdir} is corrupt and cannot be "
-                f"parsed. Delete it and re-run the fetch step. "
-                f"Original error: {exc}"
-            ) from exc
-    else:
-        manifest = {"sources": {}, "steps": []}
+    """Merge mwbm_climgrid provenance + lineage step via the shared helper.
 
-    manifest.setdefault("sources", {})
+    Closes the #180 flock hazard (release PR-B). The catalog already
+    carries a sha256 in ``file_record`` so this reuses it rather than
+    re-hashing the (multi-GB) consolidated NC a second time.
+    """
+    from nhf_spatial_targets.release.lineage import merge_source_and_append_step
+
+    ws = _load_project(workdir)
     access = meta["access"]
-    entry = manifest["sources"].get(_SOURCE_KEY, {})
-    entry.update(
-        {
+    output_entry = {
+        "path": file_record["path"],
+        "size_bytes": file_record["size_bytes"],
+        "mtime_utc": file_record.get("registered_utc"),
+    }
+    if "sha256" in file_record:
+        output_entry["sha256"] = file_record["sha256"]
+    merge_source_and_append_step(
+        ws.manifest_path,
+        _SOURCE_KEY,
+        source_updates={
             "source_key": _SOURCE_KEY,
             "access_url": access["url"],
             "doi": meta["doi"],
@@ -339,16 +338,14 @@ def _update_manifest(
             "spatial_extent": meta.get("spatial_extent", "CONUS"),
             "variables": [v["name"] for v in meta["variables"]],
             "file": file_record,
-        }
+        },
+        kind="consolidate",
+        outputs=[output_entry],
+        params={
+            "period": period,
+            "spatial_extent": meta.get("spatial_extent", "CONUS"),
+        },
+        command=f"fetch {_SOURCE_KEY.replace('_', '-')}",
+        timestamp_utc=file_record.get("registered_utc"),
     )
-    manifest["sources"][_SOURCE_KEY] = entry
-
-    tmp_fd, tmp_path = tempfile.mkstemp(dir=manifest_path.parent, suffix=".json.tmp")
-    try:
-        with os.fdopen(tmp_fd, "w") as f:
-            json.dump(manifest, f, indent=2)
-        Path(tmp_path).replace(manifest_path)
-    except BaseException:
-        Path(tmp_path).unlink(missing_ok=True)
-        raise
     logger.info("Updated manifest.json with mwbm_climgrid provenance")

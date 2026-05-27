@@ -300,7 +300,17 @@ def test_validate_writes_manifest_json(tmp_path, minimal_fabric, no_system_cred_
 
     manifest = json.loads((tmp_path / "manifest.json").read_text())
     assert manifest["sources"] == {}
-    assert manifest["steps"] == []
+    # validate now appends a lineage step (release PR-B): exactly one
+    # ``kind=validate`` record per call, sha256-fingerprinting the
+    # on-disk artifacts it produced.
+    assert len(manifest["steps"]) == 1
+    step = manifest["steps"][0]
+    assert step["kind"] == "validate"
+    assert step["source_key"] is None
+    assert step["command"] == "validate"
+    out_paths = {entry["path"] for entry in step["outputs"]}
+    assert str(tmp_path / "fabric.json") in out_paths
+    assert str(tmp_path / "manifest.json") in out_paths
     assert "fabric" in manifest
     assert manifest["fabric"]["id_col"] == "nhm_id"
     assert manifest["fabric"]["hru_count"] == 3
@@ -369,9 +379,15 @@ def test_validate_rerun_preserves_sources_and_steps(
     assert "era5_land" in after["sources"]
     assert "gldas_noah_v21_monthly" in after["sources"]
     assert after["sources"]["era5_land"]["files"][0]["year"] == 2020
-    assert after["steps"] == [
-        {"step": "agg", "source": "era5_land", "utc": "2026-01-01"}
-    ]
+    # Prior synthetic step survives; the re-validate appends its own
+    # ``kind=validate`` step on top (release PR-B lineage capture).
+    assert after["steps"][0] == {
+        "step": "agg",
+        "source": "era5_land",
+        "utc": "2026-01-01",
+    }
+    assert after["steps"][-1]["kind"] == "validate"
+    assert sum(s.get("kind") == "validate" for s in after["steps"]) >= 1
     # created_utc is the original; last_validated_utc is refreshed.
     assert after["created_utc"] == original_created_utc
     assert after["last_validated_utc"] >= original_created_utc
@@ -388,7 +404,9 @@ def test_validate_first_run_writes_fresh_skeleton(
 
     manifest = json.loads((tmp_path / "manifest.json").read_text())
     assert manifest["sources"] == {}
-    assert manifest["steps"] == []
+    # release PR-B: validate now appends one kind=validate step on every
+    # call. On a first-run manifest that is the only step present.
+    assert [s["kind"] for s in manifest["steps"]] == ["validate"]
     # On first run, created_utc and last_validated_utc are both fresh
     # and equal (no prior manifest to seed created_utc from).
     assert manifest["created_utc"] == manifest["last_validated_utc"]
@@ -412,7 +430,9 @@ def test_validate_recovers_from_corrupt_manifest(
 
     after = json.loads((tmp_path / "manifest.json").read_text())
     assert after["sources"] == {}
-    assert after["steps"] == []
+    # release PR-B: corrupt-manifest recovery seeds a fresh skeleton then
+    # validate appends its own kind=validate step.
+    assert [s["kind"] for s in after["steps"]] == ["validate"]
 
 
 def test_validate_preserves_unknown_keys(

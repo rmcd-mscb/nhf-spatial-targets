@@ -392,6 +392,8 @@ def _build_year_chunked(
         title=adapter.title,
         extra_global_attrs=stitch_attrs,
         sort_dim=id_col,
+        project=project,
+        lineage_kind="target",
     )
 
     if nn_fill:
@@ -411,6 +413,8 @@ def _build_year_chunked(
             title=adapter.nn_title,
             extra_global_attrs=nn_attrs,
             sort_dim=id_col,
+            project=project,
+            lineage_kind="nn_fill",
         )
 
 

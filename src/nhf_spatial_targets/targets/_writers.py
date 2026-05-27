@@ -326,6 +326,17 @@ def write_bounds_target(
         extra_global_attrs=extra_global_attrs,
         sort_dim=id_col,
     )
+    _append_target_step(
+        project=project,
+        output_path=output_path,
+        kind="target",
+        params={
+            "bounds_long_name_kind": bounds_long_name_kind,
+            "n_sources_count": int(n_sources_count),
+            "id_col": id_col,
+        },
+        extra_global_attrs=extra_global_attrs,
+    )
 
     n = ds_loaded["n_sources"].values
     total = n.size
@@ -368,4 +379,55 @@ def write_bounds_target(
         title=nn_title,
         extra_global_attrs=filled_attrs,
         sort_dim=id_col,
+    )
+    _append_target_step(
+        project=project,
+        output_path=nn_path,
+        kind="nn_fill",
+        params={
+            "bounds_long_name_kind": bounds_long_name_kind,
+            "nn_fill_max_candidates": int(nn_max_candidates),
+            "nn_fill_distance_crs": project.area_crs,
+            "id_col": id_col,
+        },
+        extra_global_attrs=filled_attrs,
+    )
+
+
+def _append_target_step(
+    *,
+    project: Project,
+    output_path: Path,
+    kind: str,
+    params: dict,
+    extra_global_attrs: dict,
+) -> None:
+    """Append one target-stage lineage step for *output_path*.
+
+    Helper for :func:`write_bounds_target` (release PR-B). Lifts the
+    sha256 + size + mtime fingerprint of the just-written NC onto
+    ``manifest.json.steps[]`` so PR-D's FGDC generator can populate
+    ``dataquality.lineage.processstep[]`` without re-walking the
+    targets dir. The catalog ``source`` (multi-source-derived target's
+    upstream key list) is forwarded into ``params["source"]`` so the
+    step record stays linkable to the parent aggregate steps.
+    """
+    from nhf_spatial_targets.release.lineage import append_step, output_file_entry
+
+    step_params = dict(params)
+    # ``extra_global_attrs["source"]`` carries the comma-separated upstream
+    # source list (e.g. ``"era5_land, gldas_noah_v21_monthly, mwbm_climgrid"``)
+    # built by ``_common_global_attrs``. Forwarding it onto the step record
+    # makes the multi-source provenance explicit without re-reading the NC.
+    if "source" in extra_global_attrs:
+        step_params["source"] = extra_global_attrs["source"]
+    if "period" in extra_global_attrs:
+        step_params["period"] = extra_global_attrs["period"]
+    append_step(
+        project.manifest_path,
+        kind=kind,
+        source_key=None,
+        outputs=[output_file_entry(output_path)],
+        params=step_params,
+        command=f"run-{step_params.get('bounds_long_name_kind', 'target').split()[-1]}",
     )

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import tempfile
 import urllib.error
 import urllib.request
 import warnings
@@ -233,25 +231,24 @@ def _update_manifest(
     files: list[dict],
     consolidation: dict,
 ) -> None:
-    """Merge NCEP/NCAR provenance into manifest.json."""
+    """Merge NCEP/NCAR provenance + lineage step via the shared helper.
+
+    Closes the #180 flock hazard for this module (release PR-B).
+    """
+    from nhf_spatial_targets.release.lineage import (
+        merge_source_and_append_step,
+        output_file_entry,
+    )
+
     ws = _load_project(workdir)
-    manifest_path = ws.manifest_path
-    if manifest_path.exists():
-        try:
-            manifest = json.loads(manifest_path.read_text())
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"manifest.json in {workdir} is corrupted. Detail: {exc}"
-            ) from exc
-    else:
-        manifest = {"sources": {}, "steps": []}
-
-    if "sources" not in manifest:
-        manifest["sources"] = {}
-
-    entry = manifest["sources"].get(_SOURCE_KEY, {})
-    entry.update(
-        {
+    consolidated_nc = consolidation.get("consolidated_nc")
+    outputs: list[dict] = []
+    if consolidated_nc and Path(consolidated_nc).exists():
+        outputs = [output_file_entry(Path(consolidated_nc))]
+    merge_source_and_append_step(
+        ws.manifest_path,
+        _SOURCE_KEY,
+        source_updates={
             "source_key": _SOURCE_KEY,
             "access_url": meta["access"]["url"],
             "license": resolve_license(meta, _SOURCE_KEY),
@@ -259,18 +256,13 @@ def _update_manifest(
             "bbox": bbox,
             "variables": [v["name"] for v in meta["variables"]],
             "files": files,
-            "consolidated_nc": consolidation.get("consolidated_nc"),
+            "consolidated_nc": consolidated_nc,
             "last_consolidated_utc": consolidation.get("last_consolidated_utc"),
-        }
+        },
+        kind="consolidate",
+        outputs=outputs,
+        params={"period": period, "bbox": bbox, "n_files": len(files)},
+        command=f"fetch {_SOURCE_KEY.replace('_', '-')}",
+        timestamp_utc=consolidation.get("last_consolidated_utc"),
     )
-    manifest["sources"][_SOURCE_KEY] = entry
-
-    tmp_fd, tmp_path = tempfile.mkstemp(dir=manifest_path.parent, suffix=".json.tmp")
-    try:
-        with os.fdopen(tmp_fd, "w") as f:
-            json.dump(manifest, f, indent=2)
-        Path(tmp_path).replace(manifest_path)
-    except BaseException:
-        Path(tmp_path).unlink(missing_ok=True)
-        raise
     logger.info("Updated manifest.json with NCEP/NCAR provenance")

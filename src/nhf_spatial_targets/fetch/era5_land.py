@@ -846,6 +846,7 @@ def _update_manifest(
             manifest = {"sources": {}, "steps": []}
 
         manifest.setdefault("sources", {})
+        manifest.setdefault("steps", [])
         entry = manifest["sources"].get(_SOURCE_KEY, {})
 
         # Merge files by year so incremental runs accumulate records.
@@ -894,6 +895,35 @@ def _update_manifest(
             }
         )
         manifest["sources"][_SOURCE_KEY] = entry
+
+        # Release PR-B: lineage step inside the same flock as the year
+        # merge. Only the daily NCs THIS worker just wrote contribute to
+        # ``outputs`` -- merged_files contains the union across workers
+        # and would over-attribute output_files to a single step.
+        from nhf_spatial_targets.release.lineage import (
+            build_step_record,
+            output_file_entry,
+        )
+
+        step_outputs: list[dict] = []
+        for f_rec in files:
+            for key in ("daily_path", "monthly_path", "path"):
+                nc = f_rec.get(key)
+                if nc and Path(nc).exists():
+                    step_outputs.append(output_file_entry(Path(nc)))
+        manifest["steps"].append(
+            build_step_record(
+                kind="consolidate",
+                source_key=_SOURCE_KEY,
+                outputs=step_outputs,
+                params={
+                    "period": effective_period,
+                    "bbox": bbox,
+                    "years": sorted({int(f["year"]) for f in files}),
+                },
+                command=f"fetch {_SOURCE_KEY.replace('_', '-')}",
+            )
+        )
 
         fd, tmp = tempfile.mkstemp(dir=manifest_path.parent, suffix=".json.tmp")
         try:

@@ -463,6 +463,7 @@ def _update_manifest(
             manifest = {"sources": {}, "steps": []}
 
         manifest.setdefault("sources", {})
+        manifest.setdefault("steps", [])
         entry = manifest["sources"].get(_SOURCE_KEY, {})
         existing_regions = entry.get("regions", {}) or {}
         # Merge: keep regions we didn't touch this run, overwrite the ones we did.
@@ -481,6 +482,27 @@ def _update_manifest(
             }
         )
         manifest["sources"][_SOURCE_KEY] = entry
+
+        # Release PR-B: append a lineage step inside the same flock,
+        # so the region merge and the step record land atomically.
+        # Daymet is metadata-only (4.6 TB on ORNL DAAC, not republished),
+        # so ``outputs`` only carries the per-region zarr-fingerprint
+        # metadata that was already computed by the fetch step.
+        from nhf_spatial_targets.release.lineage import build_step_record
+
+        manifest["steps"].append(
+            build_step_record(
+                kind="consolidate",
+                source_key=_SOURCE_KEY,
+                outputs=[],  # zarr stores are not republished; see catalog
+                params={
+                    "period": period,
+                    "regions": sorted(region_records.keys()),
+                    "n_regions": len(region_records),
+                },
+                command=f"fetch {_SOURCE_KEY}",
+            )
+        )
 
         tmp_fd, tmp_path = tempfile.mkstemp(
             dir=manifest_path.parent, suffix=".json.tmp"
