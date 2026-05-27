@@ -142,6 +142,7 @@ def update_manifest(
         # section so an interrupted SLURM array worker cannot leave the
         # manifest with the source-entry updated but no step appended.
         from nhf_spatial_targets.release.lineage import (
+            OutputFileEntry,
             build_step_record,
             output_file_entry,
         )
@@ -149,7 +150,7 @@ def update_manifest(
         # output_files is project-workdir-relative; resolve before stat.
         # Workers only hash the slice they just wrote -- total hash cost
         # scales with output size, not workspace size.
-        output_entries: list[dict] = []
+        output_entries: list[OutputFileEntry] = []
         missing_outputs: list[str] = []
         for rel in output_files:
             abs_path = (project.workdir / rel).resolve()

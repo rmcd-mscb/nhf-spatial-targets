@@ -387,7 +387,7 @@ def test_source_var_cell_methods_raises_on_unknown_variable():
 
 
 # ---------------------------------------------------------------------------
-# release block (PR-A foundation for the ScienceBase release workflow, #241/#243)
+# release block (ScienceBase release workflow)
 # ---------------------------------------------------------------------------
 
 
@@ -450,14 +450,14 @@ def test_release_block_defaults_apply_when_unset():
     """A source with no `release:` block reports the defaults."""
     from nhf_spatial_targets.catalog import release_block
 
-    # era5_land carries no release block on PR-A; it should default to
+    # era5_land carries no `release:` block; it should default to
     # publishable=True, distribution_kind="data", notes=None.
     rb = release_block("era5_land")
     assert rb == {"publishable": True, "distribution_kind": "data", "notes": None}
 
 
 def test_release_block_watergap22d_is_not_publishable():
-    """watergap22d is CC BY-NC; held back from the release per PR-A."""
+    """watergap22d is CC BY-NC; held back from the release."""
     from nhf_spatial_targets.catalog import release_block
 
     rb = release_block("watergap22d")
@@ -574,9 +574,9 @@ def test_publishable_sources_includes_daymet_and_margulis():
 
 
 def test_release_defaults_yml_loads_as_valid_yaml():
-    """Scaffold for repo-level FGDC defaults. Populated by PR-D/PR-E; we
-    just verify YAML parses cleanly so an accidental corruption is caught
-    before downstream code starts reading it.
+    """Scaffold for repo-level FGDC defaults. We verify YAML parses cleanly
+    so an accidental corruption is caught before downstream code starts
+    reading it.
     """
     import yaml
     from pathlib import Path
@@ -600,9 +600,9 @@ def test_release_defaults_yml_loads_as_valid_yaml():
 
 
 def test_release_registry_yml_loads_as_valid_yaml():
-    """Scaffold for the running publish-state registry. Populated by PR-E
-    as items are created on ScienceBase; we verify YAML parses cleanly and
-    the initial-state shape is what PR-E will expect.
+    """Scaffold for the running publish-state registry. Populated as items
+    are created on ScienceBase; we verify YAML parses cleanly and the
+    initial-state shape is what downstream publishing code expects.
     """
     import yaml
     from pathlib import Path

@@ -233,13 +233,14 @@ def _update_manifest(
 ) -> None:
     """Merge NCEP/NCAR provenance + lineage step into manifest.json."""
     from nhf_spatial_targets.release.lineage import (
+        OutputFileEntry,
         merge_source_and_append_step,
         output_file_entry,
     )
 
     ws = _load_project(workdir)
     consolidated_nc = consolidation.get("consolidated_nc")
-    outputs: list[dict] = []
+    outputs: list[OutputFileEntry] = []
     if consolidated_nc and Path(consolidated_nc).exists():
         outputs = [output_file_entry(Path(consolidated_nc))]
     merge_source_and_append_step(

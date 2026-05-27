@@ -1,14 +1,14 @@
 """Tests for ``nhf_spatial_targets.release.rebuild``.
 
-Bootstraps lineage steps for projects that predate PR-B (#246). The
-invariants we lock here:
+Bootstraps lineage steps for legacy projects with empty ``steps[]``.
+The invariants we lock here:
 
 - Each manifest source entry produces the right kind+source_key step
   shapes from on-disk evidence (consolidate, aggregate).
 - Target NCs in ``<project>/targets/`` produce target / nn_fill steps.
 - Idempotent: re-running rebuild_lineage doesn't duplicate steps even
-  when synthesized variants would conflict with live ones from the
-  post-PR-B pipeline.
+  when synthesized variants would conflict with live steps from the
+  live pipeline.
 - SHA256 is opt-in.
 - ``dry_run=True`` returns the same summary without mutating the file.
 """
@@ -255,12 +255,12 @@ def test_rebuild_is_idempotent(project) -> None:
     assert second["skipped_existing"] >= first["steps_added"]
 
 
-def test_rebuild_skips_live_steps_from_post_prb_pipeline(project) -> None:
-    """A live step from the post-PR-B pipeline wins the dedupe.
+def test_rebuild_skips_live_steps_from_live_pipeline(project) -> None:
+    """A live step from the live pipeline wins the dedupe.
 
-    Operators who ran agg AFTER PR-B will have one live aggregate step
-    per source. Re-running rebuild_lineage must not synthesize a
-    duplicate.
+    Operators who ran agg under the live (step-emitting) pipeline have
+    one live aggregate step per source. Re-running rebuild_lineage must
+    not synthesize a duplicate.
     """
     nc = _write_aggregated_nc(project.workdir, "era5_land", "era5_2010.nc")
     rel = str(nc.relative_to(project.workdir))
@@ -271,7 +271,7 @@ def test_rebuild_skips_live_steps_from_post_prb_pipeline(project) -> None:
         "period": "2010/2020",
         "timestamp": "2026-05-27T11:00:00+00:00",
     }
-    # Pre-existing live step from the post-PR-B aggregate run.
+    # Pre-existing live step from a prior aggregate run.
     manifest["steps"].append(
         {
             "kind": "aggregate",
@@ -370,7 +370,8 @@ def test_rebuild_missing_output_files_are_skipped(project, caplog) -> None:
     Stale on-disk evidence (a fetched NC the operator deleted to
     reclaim disk) yields a consolidate step with no outputs, a WARNING
     log line, and the vanished path recorded in
-    ``params["missing_outputs"]`` so PR-D can surface the gap.
+    ``params["missing_outputs"]`` so downstream consumers can surface
+    the gap.
     """
     import logging
 
@@ -398,7 +399,7 @@ def test_rebuild_missing_output_files_are_skipped(project, caplog) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Additional source-entry shapes (PR-B2 review fixup)
+# Additional source-entry shapes
 # ---------------------------------------------------------------------------
 
 
@@ -524,7 +525,7 @@ def test_rebuild_daymet_zarr_dir_skipped(project) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Failure-mode contracts (PR-B2 review fixup)
+# Failure-mode contracts
 # ---------------------------------------------------------------------------
 
 
@@ -541,7 +542,7 @@ def test_rebuild_missing_fabric_json_raises(project) -> None:
 
 
 def test_rebuild_skips_live_validate_step(project) -> None:
-    """A live ``kind=validate`` step from the post-PR-B pipeline must dedup.
+    """A live ``kind=validate`` step from the live pipeline must dedup.
 
     The synthesizer's outputs must exactly match the live writer's
     outputs (fabric.json + config.effective.yml; manifest.json is
@@ -587,8 +588,9 @@ def test_rebuild_validate_step_excludes_manifest_json(project) -> None:
     """The synthesized validate step must NOT list ``manifest.json`` in outputs.
 
     Recording the sha256 of the file the step lives in is the
-    self-hash paradox PR-B's review caught -- PR-B2 must not
-    reintroduce it.
+    self-hash paradox: the recorded hash would describe the pre-append
+    state, not the on-disk file as it now exists. The synthesizer must
+    match the live ``validate`` writer's behavior here.
     """
     rebuild_lineage(project, compute_sha256=True)
     manifest = json.loads(project.manifest_path.read_text())
@@ -601,8 +603,8 @@ def test_rebuild_default_stamps_sha256_skipped(project) -> None:
     """With ``compute_sha256=False`` (default), every output-bearing
     synthesized step is stamped with ``params.sha256_skipped=True``.
 
-    PR-F's release-publish stage gate reads this flag to refuse to
-    publish a release whose outputs lack integrity hashes.
+    The downstream ``release publish`` stage gate reads this flag to
+    refuse to publish a release whose outputs lack integrity hashes.
     """
     nc = _write_consolidated_nc(project.datastore, "merra2", "merra2_consolidated.nc")
     manifest = json.loads(project.manifest_path.read_text())
@@ -622,8 +624,9 @@ def test_rebuild_default_stamps_sha256_skipped(project) -> None:
 
 
 def test_rebuild_with_sha256_does_not_stamp_skipped(project) -> None:
-    """``compute_sha256=True`` must NOT stamp ``sha256_skipped=True``
-    -- the precondition flip is what releases PR-F's gate.
+    """``compute_sha256=True`` must NOT stamp ``sha256_skipped=True`` --
+    that flag is the gate the downstream ``release publish`` stage
+    reads to refuse unhashed outputs.
     """
     nc = _write_consolidated_nc(project.datastore, "merra2", "merra2_consolidated.nc")
     manifest = json.loads(project.manifest_path.read_text())

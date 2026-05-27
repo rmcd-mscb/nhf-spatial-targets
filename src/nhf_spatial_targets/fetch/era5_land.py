@@ -905,11 +905,12 @@ def _update_manifest(
         # ``outputs`` -- ``merged_files`` is the union across workers
         # and would over-attribute output_files to a single step.
         from nhf_spatial_targets.release.lineage import (
+            OutputFileEntry,
             build_step_record,
             output_file_entry,
         )
 
-        step_outputs: list[dict] = []
+        step_outputs: list[OutputFileEntry] = []
         for f_rec in files:
             for key in ("daily_path", "monthly_path", "path"):
                 nc = f_rec.get(key)
