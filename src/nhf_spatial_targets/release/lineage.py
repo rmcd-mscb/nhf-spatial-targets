@@ -47,8 +47,13 @@ try:
     import fcntl as _fcntl
 
     _HAVE_FLOCK = True
-except ImportError:  # Windows fallback (not used on HPC).
+except ImportError:  # Windows fallback.
     _HAVE_FLOCK = False
+    logger.warning(
+        "lineage: fcntl unavailable on this platform; concurrent manifest "
+        "writes WILL lose lineage records under contention. Use a POSIX "
+        "system for production runs."
+    )
 
 
 # Kinds of pipeline steps we capture. Mirrors the table in

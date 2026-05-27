@@ -1,11 +1,4 @@
-"""Release tooling for the ScienceBase data-release feature.
-
-Public surface is added incrementally per the PR phasing in
-``~/.claude/plans/a-requirement-is-pushlishing-vast-crayon.md``. PR-B
-introduces :mod:`nhf_spatial_targets.release.lineage`; later PRs add
-``payload``, ``checksums``, ``mcf``, ``fgdc``, ``iso``, ``readme``,
-``sb_client``, ``registry``, ``build``, ``publish``, and ``cli``.
-"""
+"""Release tooling for the ScienceBase data-release feature."""
 
 from __future__ import annotations
 

@@ -181,6 +181,7 @@ def write_bounds_target(
     nn_fill: bool,
     nn_max_candidates: int,
     id_col: str,
+    target_key: str | None = None,
 ) -> None:
     """Assemble + write a bounds-target Dataset, with optional NN-fill companion.
 
@@ -240,6 +241,12 @@ def write_bounds_target(
         HRU id column name (e.g. ``"nhm_id"``); the dataset is sorted
         ascending on this dim at emission per the #93 canonical-row-order
         invariant.
+    target_key
+        Canonical target identifier from the adapter (``"runoff"``,
+        ``"aet"``, ``"rch"``, ``"som"``, ``"sca"``, ``"swe"``); used to
+        build the lineage step ``command`` field as ``run-<target_key>``.
+        Falls back to ``"target"`` when ``None`` so out-of-pipeline callers
+        without an adapter still work.
     """
     # Avoid a circular-import by deferring this helper-internal import.
     from nhf_spatial_targets.normalize.methods import nn_fill_bounds
@@ -330,6 +337,7 @@ def write_bounds_target(
         project=project,
         output_path=output_path,
         kind="target",
+        target_key=target_key,
         params={
             "bounds_long_name_kind": bounds_long_name_kind,
             "n_sources_count": int(n_sources_count),
@@ -384,6 +392,7 @@ def write_bounds_target(
         project=project,
         output_path=nn_path,
         kind="nn_fill",
+        target_key=target_key,
         params={
             "bounds_long_name_kind": bounds_long_name_kind,
             "nn_fill_max_candidates": int(nn_max_candidates),
@@ -401,33 +410,27 @@ def _append_target_step(
     kind: str,
     params: dict,
     extra_global_attrs: dict,
+    target_key: str | None,
 ) -> None:
     """Append one target-stage lineage step for *output_path*.
 
-    Helper for :func:`write_bounds_target` (release PR-B). Lifts the
-    sha256 + size + mtime fingerprint of the just-written NC onto
-    ``manifest.json.steps[]`` so PR-D's FGDC generator can populate
-    ``dataquality.lineage.processstep[]`` without re-walking the
-    targets dir. The catalog ``source`` (multi-source-derived target's
-    upstream key list) is forwarded into ``params["source"]`` so the
-    step record stays linkable to the parent aggregate steps.
+    Forwards the comma-separated upstream-source list from
+    ``extra_global_attrs["source"]`` onto the step so consumers don't
+    need to re-open the NC to recover provenance.
     """
     from nhf_spatial_targets.release.lineage import append_step, output_file_entry
 
     step_params = dict(params)
-    # ``extra_global_attrs["source"]`` carries the comma-separated upstream
-    # source list (e.g. ``"era5_land, gldas_noah_v21_monthly, mwbm_climgrid"``)
-    # built by ``_common_global_attrs``. Forwarding it onto the step record
-    # makes the multi-source provenance explicit without re-reading the NC.
     if "source" in extra_global_attrs:
         step_params["source"] = extra_global_attrs["source"]
     if "period" in extra_global_attrs:
         step_params["period"] = extra_global_attrs["period"]
+    command = f"run-{target_key}" if target_key else "run-target"
     append_step(
         project.manifest_path,
         kind=kind,
         source_key=None,
         outputs=[output_file_entry(output_path)],
         params=step_params,
-        command=f"run-{step_params.get('bounds_long_name_kind', 'target').split()[-1]}",
+        command=command,
     )

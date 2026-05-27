@@ -152,20 +152,28 @@ def update_manifest(
         )
 
         # output_files is project-workdir-relative; resolve before stat.
+        # Workers only hash the slice they just wrote -- total hash cost
+        # scales with output size, not workspace size.
         output_entries: list[dict] = []
+        missing_outputs: list[str] = []
         for rel in output_files:
             abs_path = (project.workdir / rel).resolve()
             if abs_path.exists():
-                # output_file_entry computes sha256 -- per the plan,
-                # output integrity is what downstream FGDC consumers
-                # need; per-worker call sha256s only the slice this
-                # worker just wrote, so total cost is bounded.
                 output_entries.append(output_file_entry(abs_path))
+            else:
+                missing_outputs.append(rel)
+                logger.warning(
+                    "lineage: aggregate output %s listed in source-entry "
+                    "but not on disk; step record will omit its sha256",
+                    abs_path,
+                )
         step_params: dict = {"period": period, "fabric_sha256": fabric_sha}
         if batch_size is not None:
             step_params["batch_size"] = int(batch_size)
         if n_workers != 1:
             step_params["n_workers"] = int(n_workers)
+        if missing_outputs:
+            step_params["missing_outputs"] = missing_outputs
         manifest["steps"].append(
             build_step_record(
                 kind="aggregate",
