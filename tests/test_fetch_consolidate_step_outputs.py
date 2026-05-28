@@ -14,11 +14,19 @@ Issue #263: the step-output builders probed a fixed key tuple
 carried no output sha256 -- undercutting the release checksum/provenance
 feature (PR-C #258).
 
-These tests drive each module's ``_update_manifest`` directly with a record
-shaped exactly like the live loop produces (``daily_path`` -> a real NC on
-disk). They fail before the fix (empty ``outputs[]``) and pin the contract that
-a record carrying ``daily_path`` -- whether freshly consolidated or
-mtime-skipped -- attaches an output entry with a correct sha256.
+These tests drive each module's ``_update_manifest`` directly with records
+shaped like the live loop produces. They pin its read-and-checksum contract:
+
+- a record carrying ``daily_path`` -> an existing NC attaches an output entry
+  with a correct sha256 (fails before the fix -- empty ``outputs[]``);
+- a record with no ``daily_path`` (404 / download error / consolidate failure)
+  or a ``daily_path`` whose file has vanished is omitted, not crashed on.
+
+``_update_manifest`` is agnostic to *how* ``daily_path`` got set, so these tests
+do not exercise the consolidator skip path themselves -- that the consolidators
+populate ``daily_path`` on the mtime-skip too (so a skipped-but-present
+year/WY still contributes a checksum) is a property of the consolidators,
+covered by each module's consolidator-idempotency tests.
 """
 
 from __future__ import annotations
@@ -140,3 +148,96 @@ def test_margulis_consolidate_step_records_output_checksums(tmp_path: Path) -> N
         (-124.0, 42.0, -116.0, 46.0),
     )
     _assert_outputs_match(_consolidate_step(workdir, "margulis_wus_sr"), [nc])
+
+
+# ---------------------------------------------------------------------------
+# Omission semantics: records that produced no on-disk NC must be dropped from
+# ``outputs[]`` (not crashed on). A record gets no ``daily_path`` when the
+# download 404'd / errored or consolidation failed (those carry a
+# ``consolidate_error`` and stay visible in ``sources[<key>].years``); a
+# recorded ``daily_path`` may also have vanished from the datastore since. The
+# ``if nc and Path(nc).exists()`` guard is deliberate -- these tests pin that a
+# future refactor dropping it (which would KeyError / FileNotFoundError on a
+# gappy year in production) is a regression.
+# ---------------------------------------------------------------------------
+
+
+def test_ua_swe_consolidate_step_omits_records_without_existing_nc(
+    tmp_path: Path,
+) -> None:
+    workdir = _make_project(tmp_path)
+    daily_dir = workdir / "datastore" / "ua_swe" / "daily"
+    present = _write_tiny_nc(daily_dir / "ua_swe_daily_WY2010.nc")
+    wy_records = [
+        {"water_year": 2010, "status": "downloaded", "daily_path": str(present)},
+        {"water_year": 2011, "status": "missing_404"},  # no daily_path
+        {  # daily_path recorded but file never written / since vanished
+            "water_year": 2012,
+            "status": "downloaded",
+            "daily_path": str(daily_dir / "ua_swe_daily_WY2012.nc"),
+        },
+    ]
+    ua_swe._update_manifest(
+        workdir,
+        "2010/2012",
+        catalog.source("ua_swe"),
+        wy_records,
+        "https://example.org/archive",
+        None,
+    )
+    step = _consolidate_step(workdir, "ua_swe")
+    assert len(step["outputs"]) == 1
+    _assert_outputs_match(step, [present])
+
+
+def test_snodas_consolidate_step_omits_records_without_existing_nc(
+    tmp_path: Path,
+) -> None:
+    workdir = _make_project(tmp_path)
+    daily_dir = workdir / "datastore" / "snodas" / "daily"
+    present = _write_tiny_nc(daily_dir / "snodas_daily_2020.nc")
+    year_records = [
+        {"year": 2020, "daily_path": str(present)},
+        {"year": 2021, "consolidate_error": "boom"},  # no daily_path
+        {  # daily_path recorded but file never written / since vanished
+            "year": 2022,
+            "daily_path": str(daily_dir / "snodas_daily_2022.nc"),
+        },
+    ]
+    snodas._update_manifest(
+        workdir,
+        "2020/2022",
+        catalog.source("snodas"),
+        year_records,
+        "https://example.org/archive",
+    )
+    step = _consolidate_step(workdir, "snodas")
+    assert len(step["outputs"]) == 1
+    _assert_outputs_match(step, [present])
+
+
+def test_margulis_consolidate_step_omits_records_without_existing_nc(
+    tmp_path: Path,
+) -> None:
+    workdir = _make_project(tmp_path)
+    daily_dir = workdir / "datastore" / "margulis_wus_sr" / "daily"
+    present = _write_tiny_nc(daily_dir / "margulis_wus_sr_daily_2000.nc")
+    year_records = [
+        {"year": 2000, "daily_path": str(present)},
+        {"year": 2001, "consolidate_error": "boundary year"},  # no daily_path
+        {  # daily_path recorded but file never written / since vanished
+            "year": 2002,
+            "daily_path": str(daily_dir / "margulis_wus_sr_daily_2002.nc"),
+        },
+    ]
+    margulis_wus_sr._update_manifest(
+        workdir,
+        "2000/2002",
+        catalog.source("margulis_wus_sr"),
+        year_records,
+        {"fabrics": ["or"], "notes": "test"},
+        (-124.0, 42.0, -116.0, 46.0),
+    )
+    step = _consolidate_step(workdir, "margulis_wus_sr")
+    assert len(step["outputs"]) == 1
+    _assert_outputs_match(step, [present])
