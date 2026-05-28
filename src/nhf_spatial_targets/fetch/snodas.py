@@ -1273,13 +1273,15 @@ def _update_manifest(
             output_file_entry,
         )
 
+        # Each record stores the consolidated NC under ``daily_path`` (set
+        # from the consolidator's return value on both the fresh and the
+        # mtime-idempotent skip path), so a skipped-but-present year still
+        # contributes its output checksum to the consolidate step. (#263)
         step_outputs: list[OutputFileEntry] = []
         for rec in year_records:
-            for key in ("consolidated_nc", "consolidated_path"):
-                nc = rec.get(key)
-                if nc and Path(nc).exists():
-                    step_outputs.append(output_file_entry(Path(nc)))
-                    break
+            nc = rec.get("daily_path")
+            if nc and Path(nc).exists():
+                step_outputs.append(output_file_entry(Path(nc)))
         manifest["steps"].append(
             build_step_record(
                 kind="consolidate",
