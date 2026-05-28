@@ -68,6 +68,26 @@ from nhf_spatial_targets.release.payload import (
 )
 from nhf_spatial_targets.release.readme import render_readme
 from nhf_spatial_targets.release.rebuild import rebuild_lineage
+from nhf_spatial_targets.release.registry import (
+    CHILD_FIELDS,
+    DEFAULT_REGISTRY_PATH,
+    UMBRELLA_FIELDS,
+    get_fabric,
+    get_source,
+    get_umbrella,
+    load_registry,
+    put_fabric,
+    put_source,
+    put_umbrella,
+)
+from nhf_spatial_targets.release.sb_client import (
+    RETRYABLE_STATUS_CODES,
+    SbClient,
+    SbClientError,
+    UploadResult,
+    is_retryable,
+    remote_file_checksum,
+)
 from nhf_spatial_targets.release.validate_xml import (
     MpResult,
     mp_available,
@@ -76,10 +96,14 @@ from nhf_spatial_targets.release.validate_xml import (
 )
 
 __all__ = [
+    "CHILD_FIELDS",
+    "DEFAULT_REGISTRY_PATH",
     "MCF_VERSION",
+    "RETRYABLE_STATUS_CODES",
     "STEP_KINDS",
     "CHECKSUM_FILES",
     "RESERVED_METADATA_FILES",
+    "UMBRELLA_FIELDS",
     "BuildResult",
     "ChecksumMismatch",
     "DistributionKind",
@@ -89,10 +113,13 @@ __all__ = [
     "MpResult",
     "OutputFileEntry",
     "ReleasePayload",
+    "SbClient",
+    "SbClientError",
     "SourceChildPlan",
     "StepKind",
     "StepRecord",
     "UmbrellaPlan",
+    "UploadResult",
     "append_step",
     "build_all",
     "build_fabric_child",
@@ -103,7 +130,12 @@ __all__ = [
     "build_umbrella",
     "build_umbrella_mcf",
     "compute_checksums",
+    "get_fabric",
+    "get_source",
+    "get_umbrella",
     "input_file_entry",
+    "is_retryable",
+    "load_registry",
     "load_release_config",
     "load_release_defaults",
     "load_release_yml",
@@ -113,7 +145,11 @@ __all__ = [
     "plan_fabric_child",
     "plan_source_child",
     "plan_umbrella",
+    "put_fabric",
+    "put_source",
+    "put_umbrella",
     "rebuild_lineage",
+    "remote_file_checksum",
     "render_fgdc",
     "render_iso",
     "render_readme",

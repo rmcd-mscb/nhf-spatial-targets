@@ -30,6 +30,10 @@ scipy = ">=1.17.1,<2"
 # lxml: FGDC XML pretty-print + optional well-formedness checks in the
 # release/ metadata renderers (PR-D2). Conda-forge build pulls libxml2.
 lxml = ">=5.0"
+# ruamel.yaml: round-trip (comment- and key-order-preserving) YAML for the
+# release publish-state registry (release/registry.py, PR-E2). plain
+# yaml.safe_dump would strip catalog/release_registry.yml's comment header.
+"ruamel.yaml" = ">=0.18"
 # gdptools: spatial aggregation (install from PyPI if not on conda-forge)
 # sciencebasepy: ScienceBase access
 # earthaccess: NASA EDL access for MODIS, MERRA-2, NLDAS

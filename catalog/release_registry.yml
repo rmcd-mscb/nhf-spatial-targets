@@ -5,9 +5,18 @@
 #
 # Initial state below: `umbrella: null` signals "no first-publish yet";
 # loaders must handle that case explicitly rather than indexing into a
-# missing dict. Once published, the umbrella block carries sb_id, doi,
-# version, published_utc, and title — see docs/data_release/fgdc-field-map.md
-# for the post-PR-E schema and PR-E's writer for the authoritative shape.
+# missing dict. release/registry.py is the authoritative read-merge-write
+# layer (flock-protected, ruamel round-trip so this header survives writes).
+#
+# Per-item schema, written by registry.put_*:
+#   umbrella:                   {sb_id, doi, version, published_utc, title}
+#   consolidated_sources.<key>: {sb_id, uploaded_utc, file_count,
+#                                total_bytes, manifest_sha256}
+#   fabrics.<label>:            {sb_id, uploaded_utc, file_count,
+#                                total_bytes, manifest_sha256}
+# doi stays null until ScienceBase staff mints it post-IPDS approval (a
+# manual step — sciencebasepy does not mint DOIs). See
+# docs/data_release/fgdc-field-map.md for the FGDC field mapping.
 
 umbrella: null
 consolidated_sources: {}
