@@ -1,0 +1,18 @@
+# Minimal project config.yml fixture carrying a per-project release: block.
+# Used by test_release_config.py to exercise load_release_config().
+datastore: /tmp/nhf-datastore-fixture
+fabric:
+  path: /tmp/fabrics/gfv2_nhru_merged.gpkg
+  id_col: nat_hru_id
+release:
+  authors:
+    - given: Jane
+      family: Doe
+      orcid: 0000-0000-0000-0000
+      affiliation: U.S. Geological Survey
+    - given: John
+      family: Roe
+  ipds_number: IP-123456
+  doi: null
+  abstract_notes: Project-specific note appended to the fabric abstract.
+  fabric_label: gfv2

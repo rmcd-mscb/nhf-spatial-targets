@@ -52,6 +52,16 @@ class Project:
         return self.workdir / "manifest.json"
 
     @property
+    def release_dir(self) -> Path:
+        """Return the per-project release working directory."""
+        return self.workdir / "release"
+
+    @property
+    def release_build_dir(self) -> Path:
+        """Return the release staging root (``<project>/release/build``)."""
+        return self.release_dir / "build"
+
+    @property
     def credentials_path(self) -> Path:
         """Return path to .credentials.yml."""
         return self.workdir / ".credentials.yml"

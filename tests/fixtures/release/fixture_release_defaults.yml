@@ -1,0 +1,34 @@
+# Populated-ish release defaults fixture for test_release_defaults.py.
+# Exercises the loader returning fully-shaped sections; not the committed
+# catalog scaffold (which ships empty).
+metadata:
+  schema: fgdc-csdgm-2.0
+  language: eng
+contacts:
+  distributor:
+    name: U.S. Geological Survey - ScienceBase
+    email: sciencebase@usgs.gov
+  point_of_contact:
+    name: NHM Calibration Targets Team
+distribution:
+  use_constraints: >-
+    None. Users are advised to read the dataset's metadata thoroughly.
+  attribution_snippets:
+    copernicus: >-
+      Generated using Copernicus Climate Change Service information.
+keywords:
+  theme:
+    - hydrology
+    - calibration targets
+  place:
+    - CONUS
+umbrella:
+  title_template: "NHM calibration targets data release (v{version})"
+  abstract_template: "Umbrella release for {n_children} child items."
+source:
+  abstract_suffix: " Consolidated to NetCDF for the NHM calibration workflow."
+fabric:
+  title_template: "NHM calibration targets for the {fabric_label} fabric"
+spatial_reference:
+  horizontal_datum: WGS84
+  epsg: 4326
