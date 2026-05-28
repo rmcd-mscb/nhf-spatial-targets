@@ -1008,3 +1008,24 @@ sources:
     units: kg m-2 (mm water equivalent), mm
     license: public domain (NASA NSIDC)
     status: current
+    release:
+      # Explicit decision (not inherited defaults) for a newly added source.
+      # NSIDC-0719 is a NASA-distributed public product (NSIDC DAAC); the
+      # consolidated per-water-year NCs (~3.8 GB total across 42 files) are
+      # small enough to ship and are redistributable as a USGS-derivative
+      # consolidated-source child — same posture as snodas / margulis_wus_sr
+      # (also NSIDC public-domain). NOT metadata_only: unlike daymet (4.6 TB
+      # on ORNL DAAC) the payload fits in the release.
+      publishable: true
+      distribution_kind: data
+      notes: >
+        NASA NSIDC public-domain product; the consolidated source NCs ship
+        in the ScienceBase release as a USGS-derivative consolidated-source
+        child. No use restrictions, but the NSIDC DAAC requests data
+        citation, so the FGDC useconst for ua_swe should carry an
+        attribution line (the NSIDC-0719 analogue of the Copernicus
+        attribution ERA5-Land records in its `license:` field): cite
+        Broxton, P., Zeng, X. & Dawson, N. (2019), "Daily 4 km Gridded SWE
+        and Snow Depth from Assimilated In-Situ and Modeled Data over the
+        Conterminous US, Version 1", NSIDC DAAC, doi:10.5067/0GGPB220EX6A,
+        and acknowledge the NASA National Snow and Ice Data Center DAAC.
