@@ -14,6 +14,7 @@ the config / fabric.json / manifest.json content the MCF builders need.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -272,14 +273,20 @@ def test_build_fabric_child_copy_mode_real_files(tmp_path):
 
 
 def test_build_is_deterministic_for_fixed_now(tmp_path):
-    """A second build with the same now rewrites byte-identical metadata."""
+    """A second build with the same now rewrites byte-identical metadata, and
+    the re-build's distribution list still excludes the metadata records left
+    on disk by the first build (the load-bearing skip-set in
+    _staged_data_relpaths)."""
     project = _build_project(tmp_path)
     first = build.build_fabric_child(project, now=NOW)
     fgdc_bytes = (first.stage_dir / "fgdc.xml").read_bytes()
     iso_bytes = (first.stage_dir / "iso.xml").read_bytes()
-    build.build_fabric_child(project, now=NOW)
-    assert (first.stage_dir / "fgdc.xml").read_bytes() == fgdc_bytes
-    assert (first.stage_dir / "iso.xml").read_bytes() == iso_bytes
+    second = build.build_fabric_child(project, now=NOW)
+    assert (second.stage_dir / "fgdc.xml").read_bytes() == fgdc_bytes
+    assert (second.stage_dir / "iso.xml").read_bytes() == iso_bytes
+    downloads = _download_names(second.mcf)
+    assert "fgdc.xml" not in downloads
+    assert "iso.xml" not in downloads
 
 
 # ---------------------------------------------------------------------------
@@ -303,10 +310,16 @@ def test_build_source_child_data(tmp_path):
     _parse(stage / "iso.xml")
     verify_csv(stage)
 
-    # The consolidated NCs are the source child's distribution payload.
+    # The consolidated NCs are the source child's distribution payload ...
     downloads = _download_names(result.mcf)
     assert "daily/era5_land_daily_1980.nc" in downloads
     assert "monthly/era5_land_monthly_1980.nc" in downloads
+    # ... and the README / metadata records / integrity files are staged and
+    # checksummed but deliberately NOT enumerated there (the inverse of the
+    # fabric-child decision: the source-distribution builder labels every entry
+    # a NetCDF, so listing them would mislabel them).
+    for name in ("README.md", "fgdc.xml", "iso.xml", CHECKSUMS_CSV, SHA256SUMS):
+        assert name not in downloads
 
 
 def test_build_source_child_metadata_only_renders_without_data(tmp_path):
@@ -354,6 +367,12 @@ def test_build_umbrella_unions_children(tmp_path):
     bbox = result.mcf["identification"]["extents"]["spatial"][0]["bbox"]
     assert bbox is not None
     assert bbox[0] <= -125.0 and bbox[2] >= -66.0  # west/east at least the fabric
+
+    # The temporal extent unions the children's periods (fabric targets span
+    # 1980/2020 + 2000/2010, source periods differ); the union must start no
+    # later than the earliest child begin.
+    begin = result.mcf["identification"]["extents"]["temporal"][0]["begin"]
+    assert begin is not None and begin <= "1980-01-01"
 
 
 def test_build_umbrella_with_explicit_children(tmp_path):
@@ -414,3 +433,53 @@ def test_build_all_scope_all_matches_payload_sources_used(tmp_path):
     results = build.build_all(project, scope="all", now=NOW)
     source_keys = sorted(r.key for r in results if r.kind == "source")
     assert source_keys == sorted(payload.sources_used(project))
+
+
+# ---------------------------------------------------------------------------
+# manifest / dangling-symlink failure modes + BuildResult invariant
+# ---------------------------------------------------------------------------
+
+
+def test_corrupt_manifest_is_a_loud_failure(tmp_path):
+    """A corrupt manifest.json fails loudly rather than silently building a
+    release with empty lineage + source list."""
+    project = _build_project(tmp_path)
+    project.manifest_path.write_text("{not valid json")
+    with pytest.raises(ValueError, match="manifest.json.*corrupt"):
+        build.build_fabric_child(project, now=NOW)
+
+
+def test_missing_manifest_builds_without_snapshot(tmp_path):
+    """An absent manifest.json is legitimate: the build succeeds and the
+    fabric stage simply carries no manifest snapshot (and never lists one)."""
+    project = _build_project(tmp_path)
+    project.manifest_path.unlink()
+    result = build.build_fabric_child(project, now=NOW)
+    assert not (result.stage_dir / "manifest.json").exists()
+    assert "manifest.json" not in _download_names(result.mcf)
+    verify_csv(result.stage_dir)
+
+
+def test_staged_data_relpaths_rejects_dangling_symlink(tmp_path):
+    """A dangling staged symlink is rejected up front -- before any file is
+    enumerated into distribution.online or rendered into the metadata records
+    (mirrors checksums._iter_staged_files)."""
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    target = _touch(tmp_path / "source.nc", b"data")
+    os.symlink(target, stage / "data.nc")
+    target.unlink()  # the staged link now dangles
+    with pytest.raises(FileNotFoundError, match="missing target"):
+        build._staged_data_relpaths(stage)
+
+
+def test_build_result_enforces_kind_key_invariant():
+    """umbrella must be keyless; source/fabric must carry a key."""
+    with pytest.raises(ValueError, match="key invariant violated"):
+        build.BuildResult(
+            kind="umbrella", key="oops", stage_dir=Path("/x"), mcf={}, entries=()
+        )
+    with pytest.raises(ValueError, match="key invariant violated"):
+        build.BuildResult(
+            kind="source", key=None, stage_dir=Path("/x"), mcf={}, entries=()
+        )

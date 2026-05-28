@@ -11,9 +11,10 @@ self-contained release payload on disk under
 It is **entirely offline**: no ScienceBase client, registry, or network I/O.
 Publishing, the registry, and dry-run are a later phase (PR-E2); the CLI that
 drives this is PR-F. The build is **catalog- + manifest-driven**: source
-children flow from :func:`catalog.publishable_sources` (via
-:func:`payload.sources_used`) and fabric participation from the project
-``manifest.json`` -- never a hard-coded source list.
+children flow from :func:`payload.sources_used` (the intersection of
+:func:`catalog.publishable_sources` with the sources the project actually
+aggregated on disk) and fabric participation from the project ``manifest.json``
+-- never a hard-coded source list.
 
 Per-item build sequence (deterministic for a fixed ``now``)::
 
@@ -26,7 +27,7 @@ Per-item build sequence (deterministic for a fixed ``now``)::
     6. compute checksums LAST     checksums.csv + SHA256SUMS (after every file
                                   exists -- a manifest must not list itself)
 
-Distribution-list decision (see the PR write-up):
+Distribution-list decision:
     The MCF ``distribution.online`` list records the staged **downloadable
     artifacts**, with the metadata *records* (``fgdc.xml`` / ``iso.xml``)
     excluded -- they describe the item, they are not its data. Because the MCF
@@ -49,6 +50,7 @@ Distribution-list decision (see the PR write-up):
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -89,6 +91,17 @@ class BuildResult:
     mcf: dict
     entries: tuple[FileEntry, ...]
 
+    def __post_init__(self) -> None:
+        # The umbrella is keyless; source/fabric children always carry a key.
+        # Guard the correlation the downstream publish phase will rely on
+        # (mirrors SourceChildPlan.__post_init__ in _models.py).
+        if (self.kind == "umbrella") != (self.key is None):
+            raise ValueError(
+                f"{self.kind!r} child key invariant violated: umbrella must "
+                f"have key=None and source/fabric a non-None key; got "
+                f"key={self.key!r}."
+            )
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -101,11 +114,24 @@ def _load_manifest(project: Project) -> dict:
     The fabric stage carries a point-in-time *copy* of this file (staged by
     :func:`payload.stage_fabric_child`); the MCF lineage reads the same
     content here so the metadata and the staged snapshot agree.
+
+    An absent manifest is a legitimate state (e.g. a freshly-validated project)
+    and the MCF builders accept an empty mapping. A *corrupt* manifest is not:
+    silently falling back to ``{}`` would build a release with empty lineage
+    and an empty source list, so it is a loud failure here -- mirroring
+    :func:`nhf_spatial_targets.release.lineage._load_or_init`.
     """
     path = project.manifest_path
     if not path.exists():
         return {}
-    return json.loads(path.read_text())
+    try:
+        return json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"manifest.json at {path} is corrupt: {exc}. The release lineage "
+            f"and source list are built from this file; inspect it manually or "
+            f"restore it before building."
+        ) from exc
 
 
 def _release_cfg(project: Project) -> dict:
@@ -121,10 +147,23 @@ def _staged_data_relpaths(stage_dir: Path) -> list[str]:
     lets us declare the distribution list *before* those files are written.
     Symlinks are kept (the default stager links data files); only directories
     are skipped.
+
+    A *dangling* symlink (the datastore can live on a separately-mounted drive)
+    is a hard error, not a silent inclusion: were it enumerated, it would be
+    advertised in ``distribution.online`` and baked into the rendered FGDC /
+    ISO / README before :func:`checksums.compute_checksums` caught it. Failing
+    here -- mirroring :func:`checksums._iter_staged_files` -- keeps the failure
+    early and names the real cause.
     """
     skip = set(RESERVED_METADATA_FILES) | set(CHECKSUM_FILES)
     rels: list[str] = []
     for path in stage_dir.rglob("*"):
+        if path.is_symlink() and not path.exists():
+            raise FileNotFoundError(
+                f"staged entry points at a missing target: {path} -> "
+                f"{os.readlink(path)}. The datastore drive may be unmounted, "
+                f"or the source file was removed after staging."
+            )
         if path.is_dir():
             continue
         rel = path.relative_to(stage_dir).as_posix()
