@@ -85,6 +85,14 @@ def test_connection_and_timeout_errors_are_retryable() -> None:
     assert is_retryable(requests.exceptions.Timeout("slow")) is True
 
 
+def test_permanent_connection_subclasses_are_not_retryable() -> None:
+    """SSLError/ProxyError subclass ConnectionError but are permanent config
+    failures -- retrying them just buries the real problem.
+    """
+    assert is_retryable(requests.exceptions.SSLError("bad cert")) is False
+    assert is_retryable(requests.exceptions.ProxyError("bad proxy")) is False
+
+
 def test_http_error_with_response_status_is_retryable() -> None:
     """A requests.HTTPError carrying a 503 response is retryable."""
     exc = requests.exceptions.HTTPError("boom")
@@ -379,6 +387,20 @@ def test_whoami_reads_local_session_state(client_factory) -> None:
     client = client_factory(session)
 
     assert client.whoami() == {"username": "jdoe", "logged_in": True}
+
+
+def test_whoami_tolerates_missing_username() -> None:
+    """A token session may not set ``_username``; whoami yields None, not raise.
+
+    (Uses a bare object rather than MagicMock, whose attribute auto-vivifies.)
+    """
+
+    class _Session:
+        def is_logged_in(self):
+            return False
+
+    client = SbClient(_Session(), sleep=lambda _: None)
+    assert client.whoami() == {"username": None, "logged_in": False}
 
 
 def test_login_factory_dispatches(monkeypatch) -> None:

@@ -47,10 +47,6 @@ logger = logging.getLogger(__name__)
 _CATALOG_DIR = Path(__file__).resolve().parents[3] / "catalog"
 DEFAULT_REGISTRY_PATH = _CATALOG_DIR / "release_registry.yml"
 
-# Canonical top-level sections. ``umbrella`` is a single mapping (or ``None``);
-# the other two are key->entry mappings.
-_TOP_LEVEL_KEYS: tuple[str, ...] = ("umbrella", "consolidated_sources", "fabrics")
-
 # Field schema enforced by the put_* writers. Kept here so the scaffold
 # comment, the plan cheat-sheet, and the code can't drift apart silently.
 UMBRELLA_FIELDS: tuple[str, ...] = ("sb_id", "doi", "version", "published_utc", "title")
@@ -110,41 +106,49 @@ def _load_doc(path: Path):
     Returns the parsed mapping (a ruamel ``CommentedMap``) with all three
     top-level keys guaranteed present. ``umbrella`` may be ``None``.
 
+    A genuinely *absent* file is seeded in memory from the scaffold (the
+    first-run case). A file that exists but is empty is treated as suspicious
+    -- the same loud failure as a corrupt file -- because a registry truncated
+    to zero bytes (e.g. a crashed writer) must never be silently re-scaffolded
+    over live publish state.
+
     Raises
     ------
     ValueError
-        The file exists but does not parse, or its top level is not a
-        mapping. A corrupt registry is a loud failure, not a silent reset.
+        The file exists but is empty, does not parse, or its top level is not
+        a mapping. A populated registry is never silently reset.
     """
     yaml = _yaml()
     if not path.exists():
-        data = yaml.load(_SCAFFOLD_TEXT)
-    else:
-        try:
-            data = yaml.load(path.read_text())
-        except YAMLError as exc:
-            raise ValueError(
-                f"release_registry.yml at {path} is corrupt: {exc}. "
-                f"Inspect the file manually or restore from git; do NOT "
-                f"delete it -- it records live ScienceBase publish state."
-            ) from exc
+        return _normalize(yaml.load(_SCAFFOLD_TEXT))
+    try:
+        data = yaml.load(path.read_text())
+    except YAMLError as exc:
+        raise ValueError(
+            f"release_registry.yml at {path} is corrupt: {exc}. "
+            f"Inspect the file manually or restore from git; do NOT "
+            f"delete it -- it records live ScienceBase publish state."
+        ) from exc
     if data is None:
-        # An empty (but present) file: re-seed in memory rather than crash,
-        # but warn -- a registry that lost its content is suspicious.
-        logger.warning(
-            "release_registry.yml at %s is empty; treating as the initial "
-            "scaffold. If items were published, restore the file from git.",
-            path,
+        raise ValueError(
+            f"release_registry.yml at {path} exists but is empty. This is "
+            f"treated as corruption, not a fresh start: restore it from git "
+            f"(it records live ScienceBase publish state). Delete the file "
+            f"only if you intend to re-seed the scaffold from scratch."
         )
-        data = yaml.load(_SCAFFOLD_TEXT)
     if not hasattr(data, "get"):
         raise ValueError(
             f"release_registry.yml at {path} must be a YAML mapping at the "
             f"top level; got {type(data).__name__}."
         )
-    # Normalize: guarantee the two container sections exist so callers never
-    # index into a missing dict. ``umbrella`` is intentionally left as-is
-    # (its ``None`` sentinel is load-bearing).
+    return _normalize(data)
+
+
+def _normalize(data):
+    """Guarantee the two container sections exist so callers never index into
+    a missing dict. ``umbrella`` is intentionally left as-is (its ``None``
+    sentinel is load-bearing).
+    """
     if data.get("consolidated_sources") is None:
         data["consolidated_sources"] = {}
     if data.get("fabrics") is None:

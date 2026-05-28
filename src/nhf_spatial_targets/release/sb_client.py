@@ -82,9 +82,14 @@ def _status_from_exception(exc: BaseException) -> int | None:
 def is_retryable(exc: BaseException) -> bool:
     """Return whether *exc* represents a transient, retryable failure.
 
-    Connection resets and timeouts are always retryable; HTTP errors are
-    retryable only for :data:`RETRYABLE_STATUS_CODES`.
+    Connection resets and timeouts are retryable; HTTP errors are retryable
+    only for :data:`RETRYABLE_STATUS_CODES`. ``SSLError`` and ``ProxyError``
+    subclass ``ConnectionError`` but signal *permanent* misconfiguration (bad
+    cert, broken proxy), so they are excluded -- retrying them just delays a
+    guaranteed failure and buries the real config problem under retry warnings.
     """
+    if isinstance(exc, (requests.exceptions.SSLError, requests.exceptions.ProxyError)):
+        return False
     if isinstance(
         exc, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)
     ):
@@ -184,6 +189,13 @@ class SbClient:
         max_delay: float = 60.0,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
+        if max_retries < 0:
+            raise ValueError(f"max_retries must be >= 0; got {max_retries}.")
+        if base_delay <= 0 or max_delay <= 0:
+            raise ValueError(
+                f"base_delay and max_delay must be > 0; got "
+                f"base_delay={base_delay}, max_delay={max_delay}."
+            )
         self._session = session
         self._max_retries = max_retries
         self._base_delay = base_delay

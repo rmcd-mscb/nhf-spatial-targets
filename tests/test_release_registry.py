@@ -385,6 +385,52 @@ def test_non_mapping_top_level_is_loud_failure(tmp_path: Path) -> None:
         registry.load_registry(path)
 
 
+def test_present_but_empty_file_is_loud_failure(tmp_path: Path) -> None:
+    """A present-but-empty file is corruption, not a fresh start.
+
+    A registry truncated to zero bytes (crashed writer) must never be silently
+    re-scaffolded over live publish state -- only a genuinely *absent* file
+    seeds. This is the asymmetry three reviewers flagged.
+    """
+    path = tmp_path / "release_registry.yml"
+    path.write_text("")
+    with pytest.raises(ValueError, match="empty"):
+        registry.load_registry(path)
+
+
+def test_atomic_dump_failure_leaves_original_intact(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A serialization failure mid-write leaves no .tmp litter and an
+    unchanged original -- the atomic-write safety net for the #97-class
+    concern this module exists to prevent.
+    """
+    path = tmp_path / "release_registry.yml"
+    path.write_text(_SCAFFOLD)
+    before = path.read_text()
+
+    # Force the rename to fail after the tempfile is written.
+    def _boom(self, target):  # noqa: ANN001
+        raise OSError("simulated rename failure")
+
+    monkeypatch.setattr(Path, "replace", _boom)
+
+    with pytest.raises(OSError, match="simulated rename failure"):
+        registry.put_source(
+            "era5_land",
+            sb_id="src1",
+            uploaded_utc="t1",
+            file_count=1,
+            total_bytes=10,
+            manifest_sha256="aaa",
+            path=path,
+        )
+
+    # Original content untouched and no leftover *.yml.tmp files.
+    assert path.read_text() == before
+    assert not list(tmp_path.glob("*.yml.tmp"))
+
+
 def test_put_does_not_reset_on_reload(reg_path: Path) -> None:
     """A second writer reloads fresh state, never an in-memory stale copy."""
     registry.put_source(
@@ -423,11 +469,17 @@ def test_concurrent_writers_lose_no_entries(reg_path: Path) -> None:
     """4-thread concurrent put_source produces exactly 4 entries, none lost.
 
     Mirrors the lineage concurrency test: the flock serializes the
-    read-merge-write so a naive load/append/dump can't drop a sibling.
+    read-merge-write so a naive load/append/dump can't drop a sibling. A
+    ``Barrier`` releases all workers into ``put_source`` simultaneously so the
+    read-modify-write windows genuinely overlap (without it, the GIL tends to
+    let each worker finish before the next starts, and the test would pass
+    even if the lock did nothing).
     """
     n_threads = 4
+    barrier = threading.Barrier(n_threads)
 
     def _worker(worker_id: int) -> None:
+        barrier.wait()
         registry.put_source(
             f"src_{worker_id}",
             sb_id=f"sb_{worker_id}",
