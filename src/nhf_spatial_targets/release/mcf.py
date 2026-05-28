@@ -1,7 +1,7 @@
 """Build pygeometa-shaped MCF dicts for the ScienceBase data release.
 
 An MCF (Metadata Control File) dict is the single intermediate
-representation rendered twice downstream (PR-D2): to FGDC CSDGM 2.0 XML via
+representation rendered twice in a later phase: to FGDC CSDGM 2.0 XML via
 Jinja2 templates, and to ISO 19139 XML via
 ``pygeometa.schemas.iso19139``. Building one dict and rendering it two ways
 keeps FGDC and ISO from drifting.
@@ -26,8 +26,9 @@ The builders are **pure**: every input is passed in (the populated
 ``catalog/release_defaults.yml`` via :mod:`release.defaults`, the per-source
 catalog entries via :mod:`catalog`, the loaded ``manifest.json`` /
 ``fabric.json`` / project ``config.yml`` dicts). They do no disk walking and
-no registry I/O -- the build orchestrator (PR-E) supplies registry-derived
-values (DOI, version, staged file list) as keyword arguments. A ``now``
+no registry I/O -- the build orchestrator (a later phase) supplies
+registry-derived values (DOI, version, staged file list) as keyword
+arguments. A ``now``
 argument is injectable so golden tests are byte-stable, mirroring
 :func:`nhf_spatial_targets.release.lineage.append_step`.
 
@@ -65,8 +66,13 @@ _FN_INFO = "information"
 # release_defaults.distribution.attribution_snippets. Keyed on the source's
 # catalog `license` text so attribution flows by data, not by hard-coded
 # source key (era5_land's "Copernicus license ..." selects "copernicus").
+# Order matters: first match wins. "ornl" precedes "nasa" so daymet
+# ("public domain (NASA / ORNL DAAC)") is credited to ORNL DAAC, not the
+# NASA Earthdata system; "nsidc" precedes "nasa" so NSIDC-distributed NASA
+# products (margulis_wus_sr) are credited to NSIDC.
 _LICENSE_SNIPPETS: tuple[tuple[str, str], ...] = (
     ("copernicus", "copernicus"),
+    ("ornl", "ornl"),
     ("nsidc", "nsidc"),
     ("nasa", "earthdata"),
 )
@@ -94,7 +100,7 @@ def _collapse_ws(text: str) -> str:
 
 
 def _render(template_str: str, /, **ctx: object) -> str:
-    """Render a Jinja2 template string from defaults, whitespace-collapsed."""
+    """Render a Jinja2 template string, whitespace-collapsed."""
     return _collapse_ws(_JINJA.from_string(template_str).render(**ctx))
 
 
@@ -114,7 +120,6 @@ def _period_bound(token: str, *, end: bool) -> str | None:
 
 
 def _parse_period(period: str | None) -> tuple[str | None, str | None]:
-    """Split a catalog/target ``period`` into (begin, end) ISO dates."""
     if not period or "/" not in period:
         return (None, None)
     lo, hi = period.split("/", 1)
@@ -236,7 +241,6 @@ def _step_description(step: dict) -> str:
 
 
 def _basenames(entries: list[dict] | None) -> list[str]:
-    """Sorted unique file basenames from a step's inputs/outputs list."""
     names = set()
     for entry in entries or []:
         path = entry.get("path")
@@ -522,7 +526,6 @@ def _fabric_label(config: dict, fabric: dict) -> str:
 
 
 def _enabled_targets(config: dict) -> list[tuple[str, str | None]]:
-    """Return ``[(target_name, period), ...]`` for enabled targets, in order."""
     out = []
     for name, cfg in (config.get("targets") or {}).items():
         if isinstance(cfg, dict) and cfg.get("enabled"):
@@ -531,7 +534,11 @@ def _enabled_targets(config: dict) -> list[tuple[str, str | None]]:
 
 
 def _participating_sources(manifest: dict | None) -> list[str]:
-    """Publishable source keys recorded in ``manifest['sources']``, sorted."""
+    # Manifest-driven (provenance of record), in contrast to the disk-driven
+    # payload.sources_used (which aggregated/ subdirs are actually staged).
+    # The two can disagree if the manifest lists a source whose aggregated NCs
+    # are no longer on disk; the build orchestrator is responsible for
+    # reconciling the metadata source list with the staged payload.
     if not manifest:
         return []
     publishable = catalog.publishable_sources()
@@ -539,18 +546,20 @@ def _participating_sources(manifest: dict | None) -> list[str]:
 
 
 def _fabric_bbox(fabric: dict) -> list[float] | None:
+    # None means "no fabric extent supplied"; a present-but-malformed bbox is
+    # a corrupted fabric.json (validate.py always writes the four float keys),
+    # so raise loudly rather than silently shrinking a published bounding box.
     bbox = fabric.get("bbox")
-    if not isinstance(bbox, dict):
+    if bbox is None:
         return None
-    try:
-        return [
-            float(bbox["minx"]),
-            float(bbox["miny"]),
-            float(bbox["maxx"]),
-            float(bbox["maxy"]),
-        ]
-    except (KeyError, TypeError, ValueError):
-        return None
+    if not isinstance(bbox, dict) or not {"minx", "miny", "maxx", "maxy"} <= set(bbox):
+        raise ValueError(f"fabric.json bbox is malformed: {bbox!r}")
+    return [
+        float(bbox["minx"]),
+        float(bbox["miny"]),
+        float(bbox["maxx"]),
+        float(bbox["maxy"]),
+    ]
 
 
 def _fabric_useconstraints(source_names: list[str], defaults: dict) -> str:
@@ -866,7 +875,6 @@ def _doi_url(doi: str | None) -> str | None:
 
 
 def _place_keywords(spatial_extent: str | None) -> list[str]:
-    """Best-effort place keywords from a source's free-text spatial_extent."""
     if not spatial_extent:
         return []
     return [_collapse_ws(spatial_extent)]

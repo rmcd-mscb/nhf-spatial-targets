@@ -241,3 +241,90 @@ def test_fabric_and_umbrella_render_to_iso(config, fabric, defaults, manifest):
     umb = _build_umbrella(defaults, [fab], config["release"]["authors"])
     assert ISO19139OutputSchema().write(fab).lstrip().startswith("<?xml")
     assert ISO19139OutputSchema().write(umb).lstrip().startswith("<?xml")
+
+
+# ---------------------------------------------------------------------------
+# Attribution-snippet selection (license-substring, first-match-wins)
+# ---------------------------------------------------------------------------
+
+
+def test_daymet_attribution_is_ornl_not_earthdata(defaults, manifest):
+    """daymet license names both NASA and ORNL; ORNL must win (it's ORNL DAAC)."""
+    built = mcf.build_source_mcf(
+        "daymet", defaults=defaults, manifest=manifest, now=NOW
+    )
+    useconst = built["identification"]["useconstraints"]
+    assert "Oak Ridge National Laboratory" in useconst
+    assert "NASA Earthdata system" not in useconst
+
+
+def test_nasa_source_attribution_is_earthdata(defaults, manifest):
+    """A NASA-licensed source with no ORNL/NSIDC token gets the Earthdata snippet."""
+    built = mcf.build_source_mcf(
+        "gldas_noah_v21_monthly", defaults=defaults, manifest=manifest, now=NOW
+    )
+    assert "NASA Earthdata system" in built["identification"]["useconstraints"]
+
+
+# ---------------------------------------------------------------------------
+# Edge cases the goldens don't exercise
+# ---------------------------------------------------------------------------
+
+
+def test_empty_children_umbrella(defaults):
+    built = mcf.build_umbrella_mcf(defaults=defaults, children=[], authors=[], now=NOW)
+    assert built["identification"]["extents"]["spatial"][0]["bbox"] is None
+    assert built["identification"]["extents"]["temporal"][0] == {
+        "begin": None,
+        "end": None,
+    }
+    # n_children == 0 renders without the child-title clause.
+    assert "0 child items" in built["identification"]["abstract"]
+    assert ISO19139OutputSchema().write(built).lstrip().startswith("<?xml")
+
+
+def test_fabric_label_falls_back_to_path_stem(config, fabric, defaults, manifest):
+    """With no release.fabric_label, the label is the fabric path stem."""
+    config = {**config, "release": {**config["release"], "fabric_label": None}}
+    built = _build_fabric(config, fabric, defaults, manifest)
+    assert "gfv2_nhru_merged" in built["identification"]["title"]
+
+
+def test_fabric_bbox_malformed_raises(config, defaults, manifest):
+    """A corrupted fabric.json bbox is loud, not a silent None."""
+    bad_fabric = {"hru_count": 1, "bbox": {"minx": -1.0, "miny": 0.0}}  # missing keys
+    with pytest.raises(ValueError, match="bbox is malformed"):
+        _build_fabric(config, bad_fabric, defaults, manifest)
+
+
+def test_fabric_bbox_absent_is_none(config, defaults, manifest):
+    """A genuinely-absent bbox is None (not an error)."""
+    built = _build_fabric(config, {"hru_count": 1}, defaults, manifest)
+    assert built["identification"]["extents"]["spatial"][0]["bbox"] is None
+
+
+@pytest.mark.parametrize(
+    ("period", "expected"),
+    [
+        ("1979/present", ("1979-01-01", None)),
+        ("2000/2010", ("2000-01-01", "2010-12-31")),
+        ("1980/2016-02-29", ("1980-01-01", "2016-02-29")),
+        (None, (None, None)),
+        ("2003", (None, None)),
+    ],
+)
+def test_parse_period(period, expected):
+    assert mcf._parse_period(period) == expected
+
+
+@pytest.mark.parametrize(
+    ("doi", "expected"),
+    [
+        (None, None),
+        ("10.5066/PXXXX", "https://doi.org/10.5066/PXXXX"),
+        ("doi:10.5066/PXXXX", "https://doi.org/10.5066/PXXXX"),
+        ("https://doi.org/10.5066/PXXXX", "https://doi.org/10.5066/PXXXX"),
+    ],
+)
+def test_doi_url(doi, expected):
+    assert mcf._doi_url(doi) == expected

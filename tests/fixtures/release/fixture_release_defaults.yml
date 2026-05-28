@@ -60,6 +60,9 @@ distribution:
     nsidc: >-
       These data are distributed by the NASA National Snow and Ice Data Center
       Distributed Active Archive Center (NSIDC DAAC).
+    ornl: >-
+      These data are distributed by the Oak Ridge National Laboratory
+      Distributed Active Archive Center (ORNL DAAC), Oak Ridge, Tennessee, USA.
 keywords:
   topiccategory:
     - inlandWaters

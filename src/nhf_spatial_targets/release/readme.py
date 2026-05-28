@@ -27,7 +27,9 @@ _ENV = jinja2.Environment(
     trim_blocks=True,
     lstrip_blocks=True,
     keep_trailing_newline=True,
-    undefined=jinja2.Undefined,
+    # StrictUndefined turns a template typo (a variable not in _context)
+    # into a loud UndefinedError instead of silently rendering a blank.
+    undefined=jinja2.StrictUndefined,
 )
 
 
@@ -70,7 +72,6 @@ def _citation_lines(citation: dict) -> list[str]:
 
 
 def _contact_line(contact: dict) -> str:
-    """``Organization (email)`` for a single contact block (email optional)."""
     text = contact.get("organization", "")
     if contact.get("email"):
         text += f" ({contact['email']})"
@@ -78,7 +79,6 @@ def _contact_line(contact: dict) -> str:
 
 
 def _context(mcf: dict) -> dict:
-    """Flatten the MCF dict into a README template context."""
     ident = mcf.get("identification", {})
     extents = ident.get("extents", {})
     spatial = (extents.get("spatial") or [{}])[0]

@@ -39,9 +39,11 @@ None. Users are advised to read the dataset's metadata thoroughly to understand 
 
 Participating source dataset licenses: public domain (NASA / ORNL DAAC); Copernicus license (free, attribution); public domain (NASA); public domain (NSIDC / NOAA).
 
-These data were obtained from the NASA Earthdata system. We acknowledge the use of data products from the NASA Earth science data systems.
+These data are distributed by the Oak Ridge National Laboratory Distributed Active Archive Center (ORNL DAAC), Oak Ridge, Tennessee, USA.
 
 This dataset was generated using Copernicus Climate Change Service (C3S) information (ECMWF ERA5-Land). Neither the European Commission nor ECMWF is responsible for any use of the Copernicus information or data it contains.
+
+These data were obtained from the NASA Earthdata system. We acknowledge the use of data products from the NASA Earth science data systems.
 
 These data are distributed by the NASA National Snow and Ice Data Center Distributed Active Archive Center (NSIDC DAAC).
 

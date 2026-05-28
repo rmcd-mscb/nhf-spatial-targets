@@ -136,3 +136,22 @@ def test_metadata_only_source_readme_has_no_files(defaults, manifest):
     )
     text = readme.render_readme(daymet, kind="source")
     assert "metadata-only item" in text
+
+
+def test_umbrella_readme_empty_authors_fallback(defaults):
+    """No authors -> the 'to be supplied' citation fallback branch renders."""
+    umb = mcf.build_umbrella_mcf(defaults=defaults, children=[], authors=[], now=NOW)
+    text = readme.render_readme(umb, kind="umbrella")
+    assert "Authors to be supplied" in text
+
+
+def test_source_readme_empty_citation_fallback():
+    """A minimal MCF with no citation/files hits both source else-branches.
+
+    The renderer is pure over the MCF dict, so a near-empty dict exercises
+    the empty-citation and no-files fallbacks without needing a catalog
+    source that happens to lack citations.
+    """
+    text = readme.render_readme({}, kind="source")
+    assert "See the upstream archive" in text
+    assert "metadata-only item" in text
