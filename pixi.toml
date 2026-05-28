@@ -40,8 +40,11 @@ gdptools = ">=0.3.13"
 sciencebasepy = "*"
 earthaccess = "*"
 # pygeometa: MCF v3 intermediate representation + ISO 19139 emission for
-# the ScienceBase data release (release/mcf.py, release/iso.py).
-pygeometa = ">=0.16"
+# the ScienceBase data release (release/mcf.py, release/iso.py). Pinned to a
+# compatible-release range: the ISO XML goldens (tests/test_release_iso.py)
+# assert byte-equality, so a pygeometa minor bump that reflows its output
+# would red the suite. Bump deliberately and regenerate the goldens.
+pygeometa = "~=0.21.1"
 # jinja2: README + FGDC templates (release/readme.py, release/fgdc.py).
 jinja2 = ">=3.1"
 

@@ -88,10 +88,13 @@ _ENTTYP = {
 
 
 def _fgdc_date(iso: str | None) -> str | None:
-    """``"2026-05-28"`` -> ``"20260528"``; ``None`` -> ``None``.
+    """Convert an ISO date to the CSDGM ``YYYYMMDD`` form.
 
-    Partial values (a bare ``"1979"``) and the CSDGM special tokens
-    (``"Unknown"``, ``"Present"``) pass through with dashes stripped.
+    ``"2026-05-28"`` -> ``"20260528"``; ``None`` -> ``None``. A partial value
+    (a bare ``"1979"``) keeps its precision (dashes are simply removed). The
+    CSDGM ``"Unknown"`` / ``"Present"`` fallbacks are supplied by
+    :func:`_context`, not here -- this function only ever sees a real ISO date
+    or ``None``.
     """
     if not iso:
         return None
@@ -178,7 +181,7 @@ def _digforms(distribution: dict) -> list[dict]:
         suffix = Path(name).suffix
         out.append(
             {
-                "formname": _FORMNAME.get(suffix, "Text"),
+                "formname": _FORMNAME.get(suffix, "Digital data"),
                 "networkr": entry.get("url", name),
             }
         )
@@ -316,11 +319,24 @@ def render_fgdc(mcf: dict, *, kind: str) -> str:
     Raises
     ------
     ValueError
-        *kind* is not a recognized item type.
+        *kind* is not a recognized item type, or the item has no bounding box
+        (CSDGM ``<spdom>`` is mandatory, so an item with no extent cannot
+        produce valid FGDC).
     """
     if kind not in _KINDS:
         raise ValueError(f"Unknown FGDC kind {kind!r}; expected one of {_KINDS}.")
-    raw = _ENV.get_template(f"{kind}.xml.j2").render(**_context(mcf, kind=kind))
+    context = _context(mcf, kind=kind)
+    if context["bbox"] is None:
+        # CSDGM <spdom><bounding> is mandatory; emitting the record without it
+        # produces XML that mp rejects. Fail loudly here (pointing at the
+        # catalog fix) rather than shipping silently-invalid metadata.
+        raise ValueError(
+            f"Cannot render FGDC for {kind!r} item {mcf.get('identification', {}).get('title', '')!r}: "
+            "it has no bounding box, but CSDGM <spdom> is mandatory. Add "
+            "`access.bbox_nwse` to the source's catalog entry (see the snodas "
+            "entry) or ensure fabric.json carries a bbox."
+        )
+    raw = _ENV.get_template(f"{kind}.xml.j2").render(**context)
     parser = etree.XMLParser(remove_blank_text=True)
     tree = etree.fromstring(raw.encode("utf-8"), parser=parser)
     return etree.tostring(

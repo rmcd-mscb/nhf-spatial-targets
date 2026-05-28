@@ -50,6 +50,56 @@ def test_parse_mp_report_splits_warnings_and_errors():
     ]
 
 
+def test_parse_mp_report_message_body_is_not_mistaken_for_header():
+    """A message line beginning with 'Error'/'warning' stays in its section.
+
+    Only an exact ``Errors:`` / ``Warnings:`` token switches buckets, so the
+    message body is neither dropped nor treated as a new header.
+    """
+    report = (
+        "Errors:\n"
+        "  12: Error in source citation abbreviation\n"
+        "Warnings:\n"
+        "  3: warning suppressed in element foo\n"
+    )
+    warnings, errors = validate_xml._parse_mp_report(report)
+    assert errors == ["12: Error in source citation abbreviation"]
+    assert warnings == ["3: warning suppressed in element foo"]
+
+
+class _FakeProc:
+    def __init__(self, returncode: int, stdout: str = ""):
+        self.returncode = returncode
+        self.stdout = stdout
+
+
+def test_nonzero_returncode_is_failure(monkeypatch, tmp_path):
+    """mp exiting non-zero with no parseable errors must not read as success."""
+    monkeypatch.setattr(validate_xml.shutil, "which", lambda *a, **k: "/usr/bin/mp")
+    monkeypatch.setattr(
+        validate_xml.subprocess, "run", lambda *a, **k: _FakeProc(2, stdout="")
+    )
+    f = tmp_path / "m.xml"
+    f.write_text("<metadata/>")
+    result = validate_xml.validate_xml_file(f)
+    assert result.ok is False
+    assert any("exited with status 2" in e for e in result.errors)
+
+
+def test_timeout_is_failure(monkeypatch, tmp_path):
+    monkeypatch.setattr(validate_xml.shutil, "which", lambda *a, **k: "/usr/bin/mp")
+
+    def _raise(*a, **k):
+        raise validate_xml.subprocess.TimeoutExpired(cmd="mp", timeout=120)
+
+    monkeypatch.setattr(validate_xml.subprocess, "run", _raise)
+    f = tmp_path / "m.xml"
+    f.write_text("<metadata/>")
+    result = validate_xml.validate_xml_file(f)
+    assert result.ok is False
+    assert any("timed out" in e for e in result.errors)
+
+
 def test_wellformed_fallback_passes_valid_xml(monkeypatch):
     _force_no_mp(monkeypatch)
     good = (FX / "expected_source_era5_fgdc.xml").read_text()

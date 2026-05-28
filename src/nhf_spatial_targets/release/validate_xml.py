@@ -24,6 +24,9 @@ from lxml import etree
 
 _MP_TIMEOUT_S = 120
 
+_ERROR_HEADERS = {"error", "errors"}
+_WARNING_HEADERS = {"warning", "warnings"}
+
 
 class MpResult(NamedTuple):
     """Outcome of an XML validation: overall pass flag plus message lists."""
@@ -54,9 +57,18 @@ def _wellformed(path: Path) -> MpResult:
 def _parse_mp_report(report: str) -> tuple[list[str], list[str]]:
     """Split an ``mp`` error report into (warnings, errors).
 
-    ``mp`` groups messages under ``Warnings:`` / ``Errors:`` section headers,
-    one indented message per line. Lines before the first header (the banner)
-    are ignored. If ``mp``'s format differs in a given install, refine here.
+    ``mp`` groups its messages under ``Errors:`` / ``Warnings:`` section
+    headers, one message per (indented) line. A line is treated as a section
+    header only when it is *exactly* that header token (``"Errors:"`` /
+    ``"Warnings:"``, case-insensitive, trailing colon optional) -- so a
+    message body that happens to begin with the word "error"/"warning" stays
+    in its section instead of being mistaken for a header and dropped. Lines
+    before the first header (mp's banner) carry no section and are ignored.
+
+    This categorization is best-effort and used only for human-readable
+    reporting: :func:`validate_xml_file` keys the pass/fail decision on mp's
+    exit status, so a format mismatch here cannot turn an mp failure into a
+    silent pass.
     """
     warnings: list[str] = []
     errors: list[str] = []
@@ -65,11 +77,11 @@ def _parse_mp_report(report: str) -> tuple[list[str], list[str]]:
         stripped = line.strip()
         if not stripped:
             continue
-        low = stripped.lower()
-        if low.startswith("error"):
+        token = stripped.rstrip(":").strip().lower()
+        if token in _ERROR_HEADERS:
             bucket = errors
             continue
-        if low.startswith("warning"):
+        if token in _WARNING_HEADERS:
             bucket = warnings
             continue
         if bucket is not None:
@@ -90,8 +102,9 @@ def validate_xml_file(path: str | Path, *, mp_path: str = "mp") -> MpResult:
     Returns
     -------
     MpResult
-        ``ok`` is False only when ``mp`` reports errors (or, in fallback mode,
-        the XML is not well-formed). ``mp``-absent is a warning, not a failure.
+        ``ok`` is False when ``mp`` exits non-zero or reports errors (or, in
+        fallback mode, the XML is not well-formed). ``mp``-absent is a warning,
+        not a failure.
     """
     path = Path(path)
     if not mp_available(mp_path):
@@ -108,9 +121,19 @@ def validate_xml_file(path: str | Path, *, mp_path: str = "mp") -> MpResult:
             )
         except subprocess.TimeoutExpired:
             return MpResult(False, [], [f"mp timed out after {_MP_TIMEOUT_S}s."])
-        report = err_file.read_text() if err_file.exists() else proc.stdout
+        report = err_file.read_text() if err_file.exists() else (proc.stdout or "")
     warnings, errors = _parse_mp_report(report)
-    return MpResult(not errors, warnings, errors)
+    # mp's exit status is authoritative for pass/fail; the parsed lists are
+    # only for human-readable categorization. A non-zero exit we could not
+    # attribute to a parsed error (mp aborted, or wrote a report format we did
+    # not recognize) must surface as a failure rather than a silent pass.
+    if proc.returncode != 0 and not errors:
+        errors = [
+            f"mp exited with status {proc.returncode}; "
+            f"report: {report.strip() or '(empty)'}"
+        ]
+    ok = proc.returncode == 0 and not errors
+    return MpResult(ok, warnings, errors)
 
 
 def validate_xml_string(xml: str, *, mp_path: str = "mp") -> MpResult:

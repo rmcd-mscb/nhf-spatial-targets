@@ -251,3 +251,80 @@ def test_special_characters_are_escaped(config, fabric, defaults, manifest):
     root = etree.fromstring(xml.encode("utf-8"))
     udoms = " ".join(e.text or "" for e in root.findall(".//udom"))
     assert ">=1 source is finite" in udoms
+
+
+# ---------------------------------------------------------------------------
+# Fallback branches the clean-fixture goldens never reach
+# ---------------------------------------------------------------------------
+
+
+def _minimal_mcf(**overrides) -> dict:
+    """A bbox-carrying MCF with empty optional sections, for edge branches."""
+    m = {
+        "metadata": {"datestamp": "2026-05-28"},
+        "spatial": {"datatype": "grid"},
+        "identification": {
+            "title": "Minimal",
+            "abstract": "A",
+            "purpose": "P",
+            "dates": {"publication": "2026-05-28"},
+            "extents": {
+                "spatial": [{"bbox": [-1.0, -2.0, 3.0, 4.0]}],
+                "temporal": [{"begin": "2000-01-01", "end": "2001-12-31"}],
+            },
+            "keywords": {"theme": {"keywords": ["k"]}, "place": {"keywords": []}},
+            "citation": {"authors": []},
+            "useconstraints": "U",
+            "accessconstraints": "otherRestrictions",
+            "fees": "None.",
+            "entityandattribute": [],
+        },
+        "contact": {},
+        "distribution": {},
+        "dataquality": {"lineage": {"statement": "", "processstep": []}},
+        "spatial_reference": {},
+        "distribution_liability": "L",
+    }
+    m["identification"].update(overrides.get("identification", {}))
+    return m
+
+
+def test_bbox_required_raises(defaults, manifest):
+    """A bbox-less item cannot render valid FGDC (CSDGM <spdom> is mandatory).
+
+    merra2 is global and carries no catalog bbox, so its MCF bbox is None.
+    """
+    merra2_mcf = mcf.build_source_mcf(
+        "merra2", defaults=defaults, manifest=manifest, now=NOW
+    )
+    with pytest.raises(ValueError, match="no bounding box"):
+        fgdc.render_fgdc(merra2_mcf, kind="source")
+
+
+def test_supplinf_omitted_when_no_lineage_or_edition():
+    root = etree.fromstring(fgdc.render_fgdc(_minimal_mcf(), kind="source").encode())
+    assert root.find(".//supplinf") is None
+
+
+def test_begdate_unknown_and_enddate_present_when_open():
+    m = _minimal_mcf(
+        identification={
+            "extents": {
+                "spatial": [{"bbox": [-1.0, -2.0, 3.0, 4.0]}],
+                "temporal": [{"begin": None, "end": None}],
+            }
+        }
+    )
+    root = etree.fromstring(fgdc.render_fgdc(m, kind="source").encode())
+    assert root.findtext(".//begdate") == "Unknown"
+    assert root.findtext(".//enddate") == "Present"
+
+
+def test_srcinfo_unknown_caldate_for_pure_input():
+    """A basename only ever *used* (never produced) gets caldate 'Unknown'."""
+    steps = [
+        {"srcused": ["raw_input.grib"], "srcprod": ["out.nc"], "procdate": "20260101"}
+    ]
+    entries = {e["srccitea"]: e for e in fgdc._srcinfo_entries(steps)}
+    assert entries["raw_input.grib"]["caldate"] == "Unknown"
+    assert entries["out.nc"]["caldate"] == "20260101"
