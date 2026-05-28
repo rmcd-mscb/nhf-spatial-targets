@@ -4,14 +4,218 @@
 # See docs/data_release/fgdc-field-map.md for the field-by-field map
 # from these defaults into FGDC CSDGM 2.0 + ISO 19139 output.
 #
-# Scaffold only at PR-A time; blocks are populated by later PRs in the
-# #241 series.
+# Template strings (title_template, abstract_template, purpose, lineage)
+# are rendered with Jinja2 by release/mcf.py against an item-specific
+# context (version, fabric_label, child_titles, source_names, ...).
+# Use {{ var }} / {% ... %} syntax, not str.format single braces.
 
-metadata: {}
-contacts: {}
-distribution: {}
-keywords: {}
-umbrella: {}
-source: {}
-fabric: {}
-spatial_reference: {}
+# ---------------------------------------------------------------------------
+# Metadata-record level (FGDC <metainfo>, ISO MD_Metadata)
+# ---------------------------------------------------------------------------
+metadata:
+  language: en
+  charset: utf8
+
+# ---------------------------------------------------------------------------
+# Responsible parties. Both blocks carry the full FGDC <cntinfo> field set
+# so the same mapping feeds ISO CI_ResponsibleParty and the FGDC template.
+# ---------------------------------------------------------------------------
+contacts:
+  # Distributor: ScienceBase, the certified USGS Trusted Digital Repository
+  # that hosts the release. FGDC <distrib>; ISO distributorContact.
+  distributor:
+    organization: U.S. Geological Survey - ScienceBase
+    url: https://www.sciencebase.gov
+    individualname: ScienceBase Data Release Team
+    positionname: Distributor
+    phone: 1-888-275-8747
+    fax: ""
+    address: Building 810, Mail Stop 302, Denver Federal Center
+    city: Denver
+    administrativearea: CO
+    postalcode: "80225"
+    country: USA
+    email: sciencebase@usgs.gov
+  # Point of contact for questions about the dataset itself. Overridable
+  # per project; the default is the NHM calibration-targets team mailbox.
+  point_of_contact:
+    organization: U.S. Geological Survey
+    url: https://www.usgs.gov
+    individualname: National Hydrologic Model Calibration Targets Team
+    positionname: Point of Contact
+    phone: 1-888-275-8747
+    fax: ""
+    address: Building 810, Mail Stop 302, Denver Federal Center
+    city: Denver
+    administrativearea: CO
+    postalcode: "80225"
+    country: USA
+    email: gs-w-nhm_calibration@usgs.gov
+
+# ---------------------------------------------------------------------------
+# Distribution + constraints boilerplate (FGDC <distinfo>, <useconst>,
+# <accconst>; ISO distributionInfo + resourceConstraints).
+# ---------------------------------------------------------------------------
+distribution:
+  fees: "None."
+  access_constraints: otherRestrictions
+  # Used when no DOI is minted yet (pre-publish) and the ScienceBase item
+  # URL is not known: the release/mcf builders fall back to this for the
+  # required <identification.url>. Replaced by the DOI URL post-mint.
+  fallback_landing_url: https://www.sciencebase.gov
+  # CSW/Cat-Interop protocol token for a downloadable file resource.
+  distribution_protocol: WWW:DOWNLOAD-1.0-http--download
+  use_constraints: >-
+    None. Users are advised to read the dataset's metadata thoroughly to
+    understand appropriate use and data limitations.
+  liability_statement: >-
+    Unless otherwise stated, all data, metadata and related materials are
+    considered to satisfy the quality standards relative to the purpose for
+    which the data were collected. Although these data and associated metadata
+    have been reviewed for accuracy and completeness and approved for release
+    by the U.S. Geological Survey (USGS), no warranty expressed or implied is
+    made regarding the display or utility of the data on any other system or
+    for general or scientific purposes, nor shall the act of distribution
+    constitute any such warranty.
+  # Per-license acknowledgment text appended to <useconst> and the README
+  # for sources whose upstream license requires attribution. Keyed so a
+  # source's catalog `license` / key selects the right snippet; wired for
+  # era5_land (Copernicus) by release/mcf.py. Add a key here, reference it
+  # from the source, and it flows through with no code change.
+  attribution_snippets:
+    copernicus: >-
+      This dataset was generated using Copernicus Climate Change Service
+      (C3S) information (ECMWF ERA5-Land). Neither the European Commission
+      nor ECMWF is responsible for any use of the Copernicus information or
+      data it contains.
+    earthdata: >-
+      These data were obtained from the NASA Earthdata system. We acknowledge
+      the use of data products from the NASA Earth science data systems.
+    nsidc: >-
+      These data are distributed by the NASA National Snow and Ice Data Center
+      Distributed Active Archive Center (NSIDC DAAC).
+
+# ---------------------------------------------------------------------------
+# Controlled keywords. Theme keywords use the USGS Thesaurus where possible;
+# per-item builders append source/target-specific terms (e.g. variable
+# long_names, enabled-target names) on top of these defaults.
+# ---------------------------------------------------------------------------
+keywords:
+  # ISO topicCategory codelist values (validated against the ISO enum).
+  topiccategory:
+    - inlandWaters
+    - climatologyMeteorologyAtmosphere
+  umbrella:
+    theme:
+      - hydrology
+      - National Hydrologic Model
+      - calibration
+      - water cycle
+    place:
+      - United States
+      - Conterminous United States
+  source:
+    theme:
+      - hydrology
+      - reanalysis
+      - remote sensing
+      - gridded climate data
+  fabric:
+    theme:
+      - hydrology
+      - National Hydrologic Model
+      - hydrologic response unit
+      - calibration targets
+
+# ---------------------------------------------------------------------------
+# Umbrella (DOI parent / series) item templates.
+# ---------------------------------------------------------------------------
+umbrella:
+  title_template: >-
+    Calibration-target datasets for the U.S. Geological Survey National
+    Hydrologic Model (version {{ version }})
+  abstract_template: >-
+    This data release provides curated calibration-target datasets for the
+    U.S. Geological Survey (USGS) National Hydrologic Model (NHM), produced by
+    spatially aggregating gridded source datasets to NHM hydrologic-fabric
+    response units. Targets follow the methodology of USGS Techniques and
+    Methods 6-B10 (Hay and others, 2023): runoff, actual evapotranspiration,
+    recharge, soil moisture, and snow-covered area, extended here with snow
+    water equivalent. The release is organized as an umbrella collection of
+    {{ n_children }} child items{% if child_titles %}: {{ child_titles | join('; ') }}{% endif %}. Each
+    consolidated-source child documents one input dataset; each fabric child
+    carries the aggregated source grids and final calibration targets for one
+    NHM fabric.
+  purpose: >-
+    Provide reproducible, provenance-tracked calibration targets for
+    parameter estimation of the USGS National Hydrologic Model.
+  lineage_statement: >-
+    Calibration targets were produced by the nhf-spatial-targets pipeline,
+    which downloads gridded source datasets, consolidates them to CF-1.6
+    NetCDF, area-weights each source to the NHM hydrologic fabric with
+    gdptools, and derives per-target ranges. Per-item process steps are
+    recorded on the individual child items.
+  versioning_policy: >-
+    New fabrics or refreshed source data are added as child items under the
+    existing DOI without a version bump. Methodology changes or catalog
+    corrections that change target values warrant a new umbrella version and
+    DOI; the prior release remains available.
+
+# ---------------------------------------------------------------------------
+# Consolidated-source child item templates.
+# ---------------------------------------------------------------------------
+source:
+  abstract_suffix: >-
+    These data were consolidated to CF-1.6 NetCDF and, where used, spatially
+    aggregated to NHM hydrologic-fabric response units as part of the USGS
+    National Hydrologic Model calibration-targets workflow. Variable names and
+    units are preserved from the source; see the variable documentation and
+    process steps for details.
+  purpose_template: >-
+    Document and distribute the consolidated form of the {{ source_name }}
+    dataset as used in the USGS National Hydrologic Model calibration-targets
+    workflow.
+  lineage_statement_template: >-
+    Source granules for {{ source_name }} were downloaded from the upstream
+    provider and consolidated to CF-1.6 NetCDF by the nhf-spatial-targets
+    pipeline. Process steps below record each consolidation operation.
+
+# ---------------------------------------------------------------------------
+# Fabric child item templates.
+# ---------------------------------------------------------------------------
+fabric:
+  title_template: >-
+    Calibration targets for the {{ fabric_label }} hydrologic fabric, U.S.
+    Geological Survey National Hydrologic Model
+  abstract_template: >-
+    This child item provides calibration-target datasets for the
+    {{ fabric_label }} hydrologic fabric ({{ hru_count }} hydrologic response
+    units) of the USGS National Hydrologic Model. It contains the fabric
+    GeoPackage, the gridded source datasets area-weighted to the fabric, and
+    the derived calibration targets{% if target_names %} ({{ target_names | join(', ') }}){% endif %}.
+    {% if source_names %}Participating source datasets: {{ source_names | join(', ') }}.{% endif %}
+    {% if abstract_notes %}{{ abstract_notes }}{% endif %}
+  purpose_template: >-
+    Provide calibration targets aggregated to the {{ fabric_label }} fabric
+    for parameter estimation of the USGS National Hydrologic Model.
+  lineage_statement_template: >-
+    Each gridded source dataset was area-weighted to the {{ fabric_label }}
+    fabric's hydrologic response units with gdptools, then combined into
+    per-target ranges by the nhf-spatial-targets pipeline. The process steps
+    below record the full fetch, consolidate, aggregate, and target sequence;
+    the bundled manifest.json carries the complete provenance record.
+
+# ---------------------------------------------------------------------------
+# Horizontal spatial reference. Every release artifact is on WGS84 geographic
+# coordinates (HRU centroids / aggregated grids reprojected to EPSG:4326),
+# so this block is spliced verbatim into every item's FGDC <spref>.
+# ---------------------------------------------------------------------------
+spatial_reference:
+  horizontal_datum: WGS_1984
+  ellipsoid: WGS_1984
+  semiaxis: 6378137.0
+  denflat: 298.257223563
+  latres: 0.001
+  longres: 0.001
+  geogunit: Decimal degrees
+  epsg: 4326

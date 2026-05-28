@@ -1,0 +1,156 @@
+{
+  "mcf": {
+    "version": 2.0
+  },
+  "metadata": {
+    "identifier": "urn:usgs:nhf-release:umbrella",
+    "language": "en",
+    "charset": "utf8",
+    "hierarchylevel": "series",
+    "datestamp": "2026-05-28",
+    "dates": {
+      "creation": "2026-05-28"
+    }
+  },
+  "spatial": {
+    "datatype": "grid",
+    "geomtype": "surface"
+  },
+  "identification": {
+    "language": "eng",
+    "charset": "utf8",
+    "title": "Calibration-target datasets for the U.S. Geological Survey National Hydrologic Model (version 1.0)",
+    "abstract": "This data release provides curated calibration-target datasets for the U.S. Geological Survey (USGS) National Hydrologic Model (NHM). The release is organized as an umbrella collection of 3 child items: ECMWF ERA5-Land Reanalysis (consolidated for NHF); SNODAS Snow Data Assimilation System Data Products (NSIDC G02158) (consolidated for NHF); Calibration targets for the gfv2 hydrologic fabric, U.S. Geological Survey National Hydrologic Model.",
+    "purpose": "Provide reproducible, provenance-tracked calibration targets for parameter estimation of the USGS National Hydrologic Model.",
+    "dates": {
+      "creation": "2026-05-28",
+      "publication": "2026-05-28",
+      "revision": "2026-05-28"
+    },
+    "keywords": {
+      "theme": {
+        "keywords": [
+          "hydrology",
+          "National Hydrologic Model",
+          "calibration",
+          "water cycle"
+        ],
+        "keywords_type": "theme"
+      },
+      "place": {
+        "keywords": [
+          "United States",
+          "Conterminous United States"
+        ],
+        "keywords_type": "place"
+      }
+    },
+    "topiccategory": [
+      "inlandWaters",
+      "climatologyMeteorologyAtmosphere"
+    ],
+    "extents": {
+      "spatial": [
+        {
+          "bbox": [
+            -125.0,
+            24.5,
+            -66.0,
+            53.0
+          ],
+          "crs": 4326
+        }
+      ],
+      "temporal": [
+        {
+          "begin": "1979-01-01",
+          "end": null
+        }
+      ]
+    },
+    "fees": "None.",
+    "accessconstraints": "otherRestrictions",
+    "rights": "None. Users are advised to read the dataset's metadata thoroughly to understand appropriate use and data limitations.",
+    "useconstraints": "None. Users are advised to read the dataset's metadata thoroughly to understand appropriate use and data limitations.",
+    "url": "https://www.sciencebase.gov",
+    "status": "completed",
+    "maintenancefrequency": "asNeeded",
+    "doi": null,
+    "citation": {
+      "authors": [
+        {
+          "given": "Jane",
+          "family": "Doe",
+          "orcid": "0000-0000-0000-0000",
+          "affiliation": "U.S. Geological Survey"
+        },
+        {
+          "given": "John",
+          "family": "Roe"
+        }
+      ],
+      "doi": null
+    },
+    "entityandattribute": [],
+    "edition": "1.0",
+    "versioning_policy": "New fabrics or refreshed source data are added as child items under the existing DOI without a version bump."
+  },
+  "contact": {
+    "pointOfContact": {
+      "organization": "U.S. Geological Survey",
+      "url": "https://www.usgs.gov",
+      "individualname": "National Hydrologic Model Calibration Targets Team",
+      "positionname": "Point of Contact",
+      "phone": "1-888-275-8747",
+      "fax": "",
+      "address": "Building 810, Mail Stop 302, Denver Federal Center",
+      "city": "Denver",
+      "administrativearea": "CO",
+      "postalcode": "80225",
+      "country": "USA",
+      "email": "gs-w-nhm_calibration@usgs.gov"
+    },
+    "distributor": {
+      "organization": "U.S. Geological Survey - ScienceBase",
+      "url": "https://www.sciencebase.gov",
+      "individualname": "ScienceBase Data Release Team",
+      "positionname": "Distributor",
+      "phone": "1-888-275-8747",
+      "fax": "",
+      "address": "Building 810, Mail Stop 302, Denver Federal Center",
+      "city": "Denver",
+      "administrativearea": "CO",
+      "postalcode": "80225",
+      "country": "USA",
+      "email": "sciencebase@usgs.gov"
+    }
+  },
+  "distribution": {
+    "landing": {
+      "url": "https://www.sciencebase.gov",
+      "type": "WWW:LINK",
+      "name": "ScienceBase landing page",
+      "description": "Data release landing page (DOI).",
+      "function": "information"
+    }
+  },
+  "dataquality": {
+    "scope": {
+      "level": "series"
+    },
+    "lineage": {
+      "statement": "Calibration targets were produced by the nhf-spatial-targets pipeline. Per-item process steps are recorded on the individual child items.",
+      "processstep": []
+    }
+  },
+  "spatial_reference": {
+    "horizontal_datum": "WGS_1984",
+    "ellipsoid": "WGS_1984",
+    "semiaxis": 6378137.0,
+    "denflat": 298.257223563,
+    "latres": 0.001,
+    "longres": 0.001,
+    "geogunit": "Decimal degrees",
+    "epsg": 4326
+  }
+}

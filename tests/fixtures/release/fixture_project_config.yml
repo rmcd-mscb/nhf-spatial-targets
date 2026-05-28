@@ -16,3 +16,22 @@ release:
   doi: null
   abstract_notes: Project-specific note appended to the fabric abstract.
   fabric_label: gfv2
+# Representative target subset for the fabric MCF/README goldens. Not the
+# full default set: recharge/soil_moisture/snow_covered_area are disabled so
+# the golden fabric abstract is a stable three-target example.
+targets:
+  runoff:
+    enabled: true
+    period: "2000/2020"
+  aet:
+    enabled: true
+    period: "2000/2010"
+  recharge:
+    enabled: false
+  soil_moisture:
+    enabled: false
+  snow_covered_area:
+    enabled: false
+  snow_water_equivalent:
+    enabled: true
+    period: "2003/present"

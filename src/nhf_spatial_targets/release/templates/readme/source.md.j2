@@ -1,0 +1,65 @@
+# {{ title }}
+
+{{ abstract }}
+
+## Purpose
+
+{{ purpose }}
+
+## Source citation
+
+{% if citation_lines %}
+{% for line in citation_lines %}
+- {{ line }}
+{% endfor %}
+{% else %}
+_See the upstream archive for citation details._
+{% endif %}
+{% if citation_doi %}
+
+DOI: {{ citation_doi }}
+{% endif %}
+
+## Extent
+
+- Temporal: {{ begin or "unknown" }} to {{ end or "present" }}
+{% if bbox %}
+- Bounding coordinates (W, S, E, N): {{ bbox | join(", ") }}
+{% endif %}
+
+## Variables
+
+{% if entityandattribute %}
+| Name | Description | Units | Cell methods |
+| --- | --- | --- | --- |
+{% for v in entityandattribute %}
+| {{ v.name }} | {{ v.definition }} | {{ v.units or "" }} | {{ v.cell_methods or "" }} |
+{% endfor %}
+{% else %}
+_No per-variable documentation available._
+{% endif %}
+
+## Files
+
+{% if download_files %}
+{% for f in download_files %}
+- `{{ f.name }}` — {{ f.description }}
+{% endfor %}
+{% else %}
+_This is a metadata-only item; the data are distributed by the upstream archive._
+{% endif %}
+
+## Use constraints
+
+{{ useconstraints }}
+
+## Contact
+
+- Point of contact: {{ point_of_contact_line }}
+- Distributed by: {{ distributor_line }}
+
+## Provenance
+
+{{ lineage_statement }}
+
+{{ process_step_count }} process step(s) recorded; see `fgdc.xml` and the bundled `manifest.json` for the full lineage.
