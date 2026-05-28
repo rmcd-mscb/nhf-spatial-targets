@@ -8,6 +8,7 @@ from nhf_spatial_targets.release._models import (
     DistributionKind,
     FabricChildPlan,
     FileEntry,
+    ReleaseError,
     ReleasePayload,
     SourceChildPlan,
     UmbrellaPlan,
@@ -31,8 +32,20 @@ from nhf_spatial_targets.release.config import (
     validate_release_config,
 )
 from nhf_spatial_targets.release.defaults import (
+    REQUIRED_POPULATED_PATHS,
     load_release_defaults,
+    missing_release_defaults,
+    require_populated_release_defaults,
     validate_release_defaults,
+)
+
+# Only the result types are re-exported here, NOT the ``dry_run`` function:
+# re-exporting it would bind ``release.dry_run`` to the function and shadow the
+# ``release.dry_run`` submodule. Import the function as
+# ``from nhf_spatial_targets.release.dry_run import dry_run``.
+from nhf_spatial_targets.release.dry_run import (
+    DryRunItem,
+    DryRunReport,
 )
 from nhf_spatial_targets.release.fgdc import render_fgdc
 from nhf_spatial_targets.release.iso import render_iso
@@ -65,6 +78,16 @@ from nhf_spatial_targets.release.payload import (
     stage_fabric_child,
     stage_source_child,
     stage_umbrella,
+)
+from nhf_spatial_targets.release.publish import (
+    PreflightError,
+    PublishResult,
+    ScopeDiff,
+    StaleRegistryError,
+    diff_local_vs_remote,
+    publish_fabric_child,
+    publish_source_child,
+    publish_umbrella,
 )
 from nhf_spatial_targets.release.readme import render_readme
 from nhf_spatial_targets.release.rebuild import rebuild_lineage
@@ -99,6 +122,7 @@ __all__ = [
     "CHILD_FIELDS",
     "DEFAULT_REGISTRY_PATH",
     "MCF_VERSION",
+    "REQUIRED_POPULATED_PATHS",
     "RETRYABLE_STATUS_CODES",
     "STEP_KINDS",
     "CHECKSUM_FILES",
@@ -107,15 +131,22 @@ __all__ = [
     "BuildResult",
     "ChecksumMismatch",
     "DistributionKind",
+    "DryRunItem",
+    "DryRunReport",
     "FabricChildPlan",
     "FileEntry",
     "InputFileEntry",
     "MpResult",
     "OutputFileEntry",
+    "PreflightError",
+    "PublishResult",
+    "ReleaseError",
     "ReleasePayload",
     "SbClient",
     "SbClientError",
+    "ScopeDiff",
     "SourceChildPlan",
+    "StaleRegistryError",
     "StepKind",
     "StepRecord",
     "UmbrellaPlan",
@@ -130,6 +161,7 @@ __all__ = [
     "build_umbrella",
     "build_umbrella_mcf",
     "compute_checksums",
+    "diff_local_vs_remote",
     "get_fabric",
     "get_source",
     "get_umbrella",
@@ -140,11 +172,15 @@ __all__ = [
     "load_release_defaults",
     "load_release_yml",
     "merge_source_and_append_step",
+    "missing_release_defaults",
     "mp_available",
     "output_file_entry",
     "plan_fabric_child",
     "plan_source_child",
     "plan_umbrella",
+    "publish_fabric_child",
+    "publish_source_child",
+    "publish_umbrella",
     "put_fabric",
     "put_source",
     "put_umbrella",
@@ -153,6 +189,7 @@ __all__ = [
     "render_fgdc",
     "render_iso",
     "render_readme",
+    "require_populated_release_defaults",
     "resolve_fabric_label",
     "scaffold_release_yml",
     "sha256_file",

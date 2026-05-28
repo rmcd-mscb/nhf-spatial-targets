@@ -23,6 +23,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+
+class ReleaseError(RuntimeError):
+    """Base for every error the release tooling raises deliberately.
+
+    Lives here (the dependency-free shared-types module) so both the
+    foundational :mod:`~nhf_spatial_targets.release.sb_client` primitive and
+    the publish/dry-run orchestration can subclass it without an import cycle.
+    Catching :class:`ReleaseError` catches every release-layer condition --
+    a stale registry, an ambiguous title, a failed pre-flight gate -- as
+    opposed to a transient transport failure (which the client retries) or a
+    genuine bug (which should propagate).
+    """
+
+
 # The two recognized source distribution kinds, mirroring
 # ``catalog.DISTRIBUTION_KIND_TOKENS``. A test asserts the two stay in
 # sync. "data" ships the consolidated NetCDFs; "metadata_only" ships only

@@ -37,6 +37,8 @@ from typing import Any, Callable
 
 import requests
 
+from nhf_spatial_targets.release._models import ReleaseError
+
 logger = logging.getLogger(__name__)
 
 # HTTP statuses worth retrying: 429 (rate limit) + the transient 5xx family.
@@ -51,12 +53,13 @@ _TOO_MANY_REQUESTS_MARKER = "Too many requests"
 _OTHER_HTTP_ERROR_RE = re.compile(r"Other HTTP error:\s*(\d{3})")
 
 
-class SbClientError(RuntimeError):
+class SbClientError(ReleaseError):
     """Raised for client-side conditions the wrapper itself detects.
 
     Distinct from the transport errors raised by sciencebasepy/requests: this
     signals a logical problem the caller must resolve (e.g. an ambiguous title
-    match), not a transient failure to retry.
+    match), not a transient failure to retry. A :class:`ReleaseError` subclass
+    so the orchestration layer can catch all release-layer errors uniformly.
     """
 
 
@@ -367,3 +370,16 @@ class SbClient:
             self._session.upload_file_to_item, item, str(path), scrape_file
         )
         return UploadResult(skipped=False, name=path.name, item=updated)
+
+    def delete_file(self, sb_id: str, name: str) -> dict:
+        """Delete every file named *name* from item *sb_id*; return its JSON.
+
+        Fetches the item, then dispatches to
+        :meth:`sciencebasepy.SbSession.delete_file`, which drops all matching
+        entries from both the top-level ``files`` list and any facet ``files``
+        lists and PUTs the trimmed item back. Used by the publish layer's
+        ``--delete-orphans`` path to remove files left on a ScienceBase item
+        that the current staged payload no longer contains.
+        """
+        item = self._call(self._session.get_item, sb_id)
+        return self._call(self._session.delete_file, name, item)
