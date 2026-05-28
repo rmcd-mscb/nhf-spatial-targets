@@ -40,6 +40,12 @@ from nhf_spatial_targets.release.lineage import (
     output_file_entry,
     sha256_file,
 )
+from nhf_spatial_targets.release.mcf import (
+    MCF_VERSION,
+    build_fabric_mcf,
+    build_source_mcf,
+    build_umbrella_mcf,
+)
 from nhf_spatial_targets.release.payload import (
     plan_fabric_child,
     plan_source_child,
@@ -51,9 +57,11 @@ from nhf_spatial_targets.release.payload import (
     stage_source_child,
     stage_umbrella,
 )
+from nhf_spatial_targets.release.readme import render_readme
 from nhf_spatial_targets.release.rebuild import rebuild_lineage
 
 __all__ = [
+    "MCF_VERSION",
     "STEP_KINDS",
     "CHECKSUM_FILES",
     "RESERVED_METADATA_FILES",
@@ -69,7 +77,10 @@ __all__ = [
     "StepRecord",
     "UmbrellaPlan",
     "append_step",
+    "build_fabric_mcf",
+    "build_source_mcf",
     "build_step_record",
+    "build_umbrella_mcf",
     "compute_checksums",
     "input_file_entry",
     "load_release_config",
@@ -81,6 +92,7 @@ __all__ = [
     "plan_source_child",
     "plan_umbrella",
     "rebuild_lineage",
+    "render_readme",
     "resolve_fabric_label",
     "scaffold_release_yml",
     "sha256_file",
