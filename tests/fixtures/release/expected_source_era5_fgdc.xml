@@ -1,0 +1,282 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<metadata>
+  <idinfo>
+    <citation>
+      <citeinfo>
+        <origin>Muñoz-Sabater, J., and others, 2021, doi:10.5194/essd-13-4349-2021</origin>
+        <pubdate>20260528</pubdate>
+        <title>ECMWF ERA5-Land Reanalysis (consolidated for NHF)</title>
+        <geoform>raster digital data</geoform>
+        <pubinfo>
+          <pubplace>Denver, CO</pubplace>
+          <publish>U.S. Geological Survey - ScienceBase</publish>
+        </pubinfo>
+        <onlink>https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land</onlink>
+      </citeinfo>
+    </citation>
+    <descript>
+      <abstract>ECMWF ERA5-Land hourly reanalysis. Total runoff (ro), surface runoff (sro), sub-surface runoff (ssro), and snow depth water equivalent (sd) downloaded for CONUS plus contributing watersheds (Canada/ Mexico). Used as a source for the runoff calibration target (ro), the recharge calibration target (ssro, as drainage proxy), and the snow water equivalent calibration target (sd). These data were consolidated to CF-1.6 NetCDF as part of the USGS National Hydrologic Model calibration-targets workflow.</abstract>
+      <purpose>Document and distribute the consolidated form of the ECMWF ERA5-Land Reanalysis dataset as used in the USGS National Hydrologic Model workflow.</purpose>
+      <supplinf>Source granules for ECMWF ERA5-Land Reanalysis were downloaded and consolidated to CF-1.6 NetCDF by the nhf-spatial-targets pipeline.</supplinf>
+    </descript>
+    <timeperd>
+      <timeinfo>
+        <rngdates>
+          <begdate>19790101</begdate>
+          <enddate>Present</enddate>
+        </rngdates>
+      </timeinfo>
+      <current>ground condition</current>
+    </timeperd>
+    <status>
+      <progress>Complete</progress>
+      <update>As needed</update>
+    </status>
+    <spdom>
+      <bounding>
+        <westbc>-125.0</westbc>
+        <eastbc>-66.0</eastbc>
+        <northbc>53.0</northbc>
+        <southbc>24.7</southbc>
+      </bounding>
+    </spdom>
+    <keywords>
+      <theme>
+        <themekt>None</themekt>
+        <themekey>hydrology</themekey>
+        <themekey>reanalysis</themekey>
+        <themekey>remote sensing</themekey>
+        <themekey>gridded climate data</themekey>
+        <themekey>total runoff</themekey>
+        <themekey>surface runoff</themekey>
+        <themekey>sub-surface runoff</themekey>
+        <themekey>snow depth water equivalent</themekey>
+      </theme>
+      <theme>
+        <themekt>ISO 19115 Topic Category</themekt>
+        <themekey>inlandWaters</themekey>
+        <themekey>climatologyMeteorologyAtmosphere</themekey>
+      </theme>
+      <place>
+        <placekt>None</placekt>
+        <placekey>CONUS+contributing-watersheds</placekey>
+      </place>
+    </keywords>
+    <accconst>None. Please see Use Constraints.</accconst>
+    <useconst>None. Users are advised to read the dataset's metadata thoroughly to understand appropriate use and data limitations.
+
+Source dataset license: Copernicus license (free, attribution).
+
+This dataset was generated using Copernicus Climate Change Service (C3S) information (ECMWF ERA5-Land). Neither the European Commission nor ECMWF is responsible for any use of the Copernicus information or data it contains.</useconst>
+    <ptcontac>
+      <cntinfo>
+        <cntperp>
+          <cntper>National Hydrologic Model Calibration Targets Team</cntper>
+          <cntorg>U.S. Geological Survey</cntorg>
+        </cntperp>
+        <cntpos>Point of Contact</cntpos>
+        <cntaddr>
+          <addrtype>mailing and physical</addrtype>
+          <address>Building 810, Mail Stop 302, Denver Federal Center</address>
+          <city>Denver</city>
+          <state>CO</state>
+          <postal>80225</postal>
+          <country>USA</country>
+        </cntaddr>
+        <cntvoice>1-888-275-8747</cntvoice>
+        <cntemail>gs-w-nhm_calibration@usgs.gov</cntemail>
+      </cntinfo>
+    </ptcontac>
+  </idinfo>
+  <dataqual>
+    <lineage>
+      <srcinfo>
+        <srccite>
+          <citeinfo>
+            <origin>U.S. Geological Survey</origin>
+            <pubdate>20260522</pubdate>
+            <title>era5_land_2003.nc</title>
+          </citeinfo>
+        </srccite>
+        <typesrc>Digital data</typesrc>
+        <srctime>
+          <timeinfo>
+            <sngdate>
+              <caldate>20260522</caldate>
+            </sngdate>
+          </timeinfo>
+          <srccurr>Process date</srccurr>
+        </srctime>
+        <srccitea>era5_land_2003.nc</srccitea>
+        <srccontr>Intermediate or source dataset processed by the nhf-spatial-targets pipeline.</srccontr>
+      </srcinfo>
+      <srcinfo>
+        <srccite>
+          <citeinfo>
+            <origin>U.S. Geological Survey</origin>
+            <pubdate>20260521</pubdate>
+            <title>era5_land_monthly_2003.nc</title>
+          </citeinfo>
+        </srccite>
+        <typesrc>Digital data</typesrc>
+        <srctime>
+          <timeinfo>
+            <sngdate>
+              <caldate>20260521</caldate>
+            </sngdate>
+          </timeinfo>
+          <srccurr>Process date</srccurr>
+        </srctime>
+        <srccitea>era5_land_monthly_2003.nc</srccitea>
+        <srccontr>Intermediate or source dataset processed by the nhf-spatial-targets pipeline.</srccontr>
+      </srcinfo>
+      <procstep>
+        <procdesc>consolidate via nhf-targets 0.7.0; command: fetch era5-land; params: resample=monthly</procdesc>
+        <srcused>era5_land_2003.nc</srcused>
+        <procdate>20260521</procdate>
+        <proctime>103015</proctime>
+        <srcprod>era5_land_monthly_2003.nc</srcprod>
+      </procstep>
+      <procstep>
+        <procdesc>aggregate via nhf-targets 0.7.0; command: agg era5-land; params: batch_size=500, method=area_weighted</procdesc>
+        <srcused>era5_land_monthly_2003.nc</srcused>
+        <procdate>20260522</procdate>
+        <proctime>080000</proctime>
+        <srcprod>era5_land_2003.nc</srcprod>
+      </procstep>
+    </lineage>
+  </dataqual>
+  <spref>
+    <horizsys>
+      <geograph>
+        <latres>0.001</latres>
+        <longres>0.001</longres>
+        <geogunit>Decimal degrees</geogunit>
+      </geograph>
+      <geodetic>
+        <horizdn>WGS_1984</horizdn>
+        <ellips>WGS_1984</ellips>
+        <semiaxis>6378137.0</semiaxis>
+        <denflat>298.257223563</denflat>
+      </geodetic>
+    </horizsys>
+  </spref>
+  <eainfo>
+    <detailed>
+      <enttyp>
+        <enttypl>Consolidated NetCDF variables</enttypl>
+        <enttypd>Variables carried in the consolidated CF-1.6 NetCDF files for this source dataset.</enttypd>
+        <enttypds>Producer defined</enttypds>
+      </enttyp>
+      <attr>
+        <attrlabl>ro</attrlabl>
+        <attrdef>total runoff</attrdef>
+        <attrdefs>Producer defined</attrdefs>
+        <attrdomv>
+          <udom>Units: m. Cell methods: time: sum.</udom>
+        </attrdomv>
+      </attr>
+      <attr>
+        <attrlabl>sro</attrlabl>
+        <attrdef>surface runoff</attrdef>
+        <attrdefs>Producer defined</attrdefs>
+        <attrdomv>
+          <udom>Units: m. Cell methods: time: sum.</udom>
+        </attrdomv>
+      </attr>
+      <attr>
+        <attrlabl>ssro</attrlabl>
+        <attrdef>sub-surface runoff</attrdef>
+        <attrdefs>Producer defined</attrdefs>
+        <attrdomv>
+          <udom>Units: m. Cell methods: time: sum.</udom>
+        </attrdomv>
+      </attr>
+      <attr>
+        <attrlabl>sd</attrlabl>
+        <attrdef>snow depth water equivalent</attrdef>
+        <attrdefs>Producer defined</attrdefs>
+        <attrdomv>
+          <udom>Units: m. Cell methods: time: point.</udom>
+        </attrdomv>
+      </attr>
+    </detailed>
+  </eainfo>
+  <distinfo>
+    <distrib>
+      <cntinfo>
+        <cntperp>
+          <cntper>ScienceBase Data Release Team</cntper>
+          <cntorg>U.S. Geological Survey - ScienceBase</cntorg>
+        </cntperp>
+        <cntpos>Distributor</cntpos>
+        <cntaddr>
+          <addrtype>mailing and physical</addrtype>
+          <address>Building 810, Mail Stop 302, Denver Federal Center</address>
+          <city>Denver</city>
+          <state>CO</state>
+          <postal>80225</postal>
+          <country>USA</country>
+        </cntaddr>
+        <cntvoice>1-888-275-8747</cntvoice>
+        <cntemail>sciencebase@usgs.gov</cntemail>
+      </cntinfo>
+    </distrib>
+    <distliab>Although these data have been processed successfully on a computer system at the U.S. Geological Survey (USGS), no warranty expressed or implied is made regarding the display or utility of the data on any other system or for general or scientific purposes, nor shall the act of distribution constitute any such warranty.</distliab>
+    <stdorder>
+      <digform>
+        <digtinfo>
+          <formname>NetCDF</formname>
+        </digtinfo>
+        <digtopt>
+          <onlinopt>
+            <computer>
+              <networka>
+                <networkr>monthly/era5_land_monthly_2003.nc</networkr>
+              </networka>
+            </computer>
+          </onlinopt>
+        </digtopt>
+      </digform>
+      <digform>
+        <digtinfo>
+          <formname>NetCDF</formname>
+        </digtinfo>
+        <digtopt>
+          <onlinopt>
+            <computer>
+              <networka>
+                <networkr>daily/era5_land_daily_2003.nc</networkr>
+              </networka>
+            </computer>
+          </onlinopt>
+        </digtopt>
+      </digform>
+      <fees>None.</fees>
+    </stdorder>
+  </distinfo>
+  <metainfo>
+    <metd>20260528</metd>
+    <metc>
+      <cntinfo>
+        <cntperp>
+          <cntper>National Hydrologic Model Calibration Targets Team</cntper>
+          <cntorg>U.S. Geological Survey</cntorg>
+        </cntperp>
+        <cntpos>Point of Contact</cntpos>
+        <cntaddr>
+          <addrtype>mailing and physical</addrtype>
+          <address>Building 810, Mail Stop 302, Denver Federal Center</address>
+          <city>Denver</city>
+          <state>CO</state>
+          <postal>80225</postal>
+          <country>USA</country>
+        </cntaddr>
+        <cntvoice>1-888-275-8747</cntvoice>
+        <cntemail>gs-w-nhm_calibration@usgs.gov</cntemail>
+      </cntinfo>
+    </metc>
+    <metstdn>FGDC Content Standard for Digital Geospatial Metadata</metstdn>
+    <metstdv>FGDC-STD-001-1998</metstdv>
+  </metainfo>
+</metadata>

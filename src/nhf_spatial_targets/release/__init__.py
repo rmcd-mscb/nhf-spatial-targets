@@ -27,6 +27,8 @@ from nhf_spatial_targets.release.defaults import (
     load_release_defaults,
     validate_release_defaults,
 )
+from nhf_spatial_targets.release.fgdc import render_fgdc
+from nhf_spatial_targets.release.iso import render_iso
 from nhf_spatial_targets.release.lineage import (
     STEP_KINDS,
     InputFileEntry,
@@ -59,6 +61,12 @@ from nhf_spatial_targets.release.payload import (
 )
 from nhf_spatial_targets.release.readme import render_readme
 from nhf_spatial_targets.release.rebuild import rebuild_lineage
+from nhf_spatial_targets.release.validate_xml import (
+    MpResult,
+    mp_available,
+    validate_xml_file,
+    validate_xml_string,
+)
 
 __all__ = [
     "MCF_VERSION",
@@ -70,6 +78,7 @@ __all__ = [
     "FabricChildPlan",
     "FileEntry",
     "InputFileEntry",
+    "MpResult",
     "OutputFileEntry",
     "ReleasePayload",
     "SourceChildPlan",
@@ -87,11 +96,14 @@ __all__ = [
     "load_release_defaults",
     "load_release_yml",
     "merge_source_and_append_step",
+    "mp_available",
     "output_file_entry",
     "plan_fabric_child",
     "plan_source_child",
     "plan_umbrella",
     "rebuild_lineage",
+    "render_fgdc",
+    "render_iso",
     "render_readme",
     "resolve_fabric_label",
     "scaffold_release_yml",
@@ -103,5 +115,7 @@ __all__ = [
     "stage_umbrella",
     "validate_release_config",
     "validate_release_defaults",
+    "validate_xml_file",
+    "validate_xml_string",
     "verify_csv",
 ]

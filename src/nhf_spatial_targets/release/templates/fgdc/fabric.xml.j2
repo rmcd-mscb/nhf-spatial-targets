@@ -1,0 +1,27 @@
+{#- Fabric child FGDC. The entity-and-attribute section lists the calibration
+    targets; the unrepresentable-domain text carries units, the range method,
+    and any range notes. -#}
+{% extends "base.xml.j2" %}
+{% block eainfo %}
+{% if entityandattribute %}
+<eainfo>
+  <detailed>
+    <enttyp>
+      <enttypl>{{ enttypl }}</enttypl>
+      <enttypd>{{ enttypd }}</enttypd>
+      <enttypds>Producer defined</enttypds>
+    </enttyp>
+    {% for v in entityandattribute %}
+    <attr>
+      <attrlabl>{{ v.name }}</attrlabl>
+      <attrdef>{{ v.definition }}</attrdef>
+      <attrdefs>Producer defined</attrdefs>
+      <attrdomv>
+        <udom>Units: {{ v.units or "dimensionless" }}. Range method: {{ v.range_method or "n/a" }}.{% if v.range_notes %} {{ v.range_notes }}{% endif %}</udom>
+      </attrdomv>
+    </attr>
+    {% endfor %}
+  </detailed>
+</eainfo>
+{% endif %}
+{% endblock %}
