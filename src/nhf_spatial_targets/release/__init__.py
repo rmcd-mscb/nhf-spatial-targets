@@ -12,6 +12,13 @@ from nhf_spatial_targets.release._models import (
     SourceChildPlan,
     UmbrellaPlan,
 )
+from nhf_spatial_targets.release.build import (
+    BuildResult,
+    build_all,
+    build_fabric_child,
+    build_source_child,
+    build_umbrella,
+)
 from nhf_spatial_targets.release.checksums import (
     ChecksumMismatch,
     compute_checksums,
@@ -73,6 +80,7 @@ __all__ = [
     "STEP_KINDS",
     "CHECKSUM_FILES",
     "RESERVED_METADATA_FILES",
+    "BuildResult",
     "ChecksumMismatch",
     "DistributionKind",
     "FabricChildPlan",
@@ -86,9 +94,13 @@ __all__ = [
     "StepRecord",
     "UmbrellaPlan",
     "append_step",
+    "build_all",
+    "build_fabric_child",
     "build_fabric_mcf",
+    "build_source_child",
     "build_source_mcf",
     "build_step_record",
+    "build_umbrella",
     "build_umbrella_mcf",
     "compute_checksums",
     "input_file_entry",
