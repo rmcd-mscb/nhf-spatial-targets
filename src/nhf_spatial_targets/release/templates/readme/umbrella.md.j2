@@ -1,0 +1,45 @@
+# {{ title }}
+
+{{ abstract }}
+
+## Purpose
+
+{{ purpose }}
+
+## Citation
+
+{% if citation_lines %}
+{% for line in citation_lines %}
+- {{ line }}
+{% endfor %}
+{% else %}
+_Authors to be supplied before publication._
+{% endif %}
+{% if citation_doi %}
+
+DOI: {{ citation_doi }}
+{% endif %}
+
+## Extent
+
+- Temporal: {{ begin or "unknown" }} to {{ end or "present" }}
+{% if bbox %}
+- Bounding coordinates (W, S, E, N): {{ bbox | join(", ") }}
+{% endif %}
+
+## Keywords
+
+{{ theme_keywords | join(", ") }}
+
+## Use constraints
+
+{{ useconstraints }}
+
+## Contact
+
+- Point of contact: {{ point_of_contact_line }}
+- Distributed by: {{ distributor_line }}
+
+## Provenance
+
+{{ lineage_statement }}

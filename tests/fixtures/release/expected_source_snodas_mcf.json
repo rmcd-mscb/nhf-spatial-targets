@@ -1,0 +1,163 @@
+{
+  "mcf": {
+    "version": 2.0
+  },
+  "metadata": {
+    "identifier": "urn:usgs:nhf-release:source:snodas",
+    "language": "en",
+    "charset": "utf8",
+    "hierarchylevel": "dataset",
+    "datestamp": "2026-05-28",
+    "dates": {
+      "creation": "2026-05-28"
+    }
+  },
+  "spatial": {
+    "datatype": "grid",
+    "geomtype": "surface"
+  },
+  "identification": {
+    "language": "eng",
+    "charset": "utf8",
+    "title": "SNODAS Snow Data Assimilation System Data Products (NSIDC G02158) (consolidated for NHF)",
+    "abstract": "NOAA NOHRSC SNODAS daily snow products distributed by NSIDC (collection G02158). Daily 1 km CONUS analysis combining satellite observations, ground stations, and an energy-balance snow model. Used as one source for the SWE calibration target. These data were consolidated to CF-1.6 NetCDF as part of the USGS National Hydrologic Model calibration-targets workflow.",
+    "purpose": "Document and distribute the consolidated form of the SNODAS Snow Data Assimilation System Data Products (NSIDC G02158) dataset as used in the USGS National Hydrologic Model workflow.",
+    "dates": {
+      "creation": "2026-05-28",
+      "publication": "2026-05-28"
+    },
+    "keywords": {
+      "theme": {
+        "keywords": [
+          "hydrology",
+          "reanalysis",
+          "remote sensing",
+          "gridded climate data",
+          "snow water equivalent"
+        ],
+        "keywords_type": "theme"
+      },
+      "place": {
+        "keywords": [
+          "CONUS"
+        ],
+        "keywords_type": "place"
+      }
+    },
+    "topiccategory": [
+      "inlandWaters",
+      "climatologyMeteorologyAtmosphere"
+    ],
+    "extents": {
+      "spatial": [
+        {
+          "bbox": null,
+          "crs": 4326
+        }
+      ],
+      "temporal": [
+        {
+          "begin": "2003-01-01",
+          "end": null
+        }
+      ]
+    },
+    "fees": "None.",
+    "accessconstraints": "otherRestrictions",
+    "rights": "None. Users are advised to read the dataset's metadata thoroughly to understand appropriate use and data limitations.\n\nSource dataset license: public domain (NSIDC / NOAA).\n\nThese data are distributed by the NASA National Snow and Ice Data Center Distributed Active Archive Center (NSIDC DAAC).",
+    "useconstraints": "None. Users are advised to read the dataset's metadata thoroughly to understand appropriate use and data limitations.\n\nSource dataset license: public domain (NSIDC / NOAA).\n\nThese data are distributed by the NASA National Snow and Ice Data Center Distributed Active Archive Center (NSIDC DAAC).",
+    "url": "https://doi.org/10.7265/N5TB14TC",
+    "status": "completed",
+    "maintenancefrequency": "asNeeded",
+    "doi": "https://doi.org/10.7265/N5TB14TC",
+    "citation": {
+      "authors": [
+        "National Operational Hydrologic Remote Sensing Center, 2004, doi:10.7265/N5TB14TC"
+      ],
+      "doi": "https://doi.org/10.7265/N5TB14TC"
+    },
+    "entityandattribute": [
+      {
+        "name": "swe",
+        "definition": "snow water equivalent",
+        "units": "kg m-2",
+        "cell_methods": "time: point"
+      }
+    ]
+  },
+  "contact": {
+    "pointOfContact": {
+      "organization": "U.S. Geological Survey",
+      "url": "https://www.usgs.gov",
+      "individualname": "National Hydrologic Model Calibration Targets Team",
+      "positionname": "Point of Contact",
+      "phone": "1-888-275-8747",
+      "fax": "",
+      "address": "Building 810, Mail Stop 302, Denver Federal Center",
+      "city": "Denver",
+      "administrativearea": "CO",
+      "postalcode": "80225",
+      "country": "USA",
+      "email": "gs-w-nhm_calibration@usgs.gov"
+    },
+    "distributor": {
+      "organization": "U.S. Geological Survey - ScienceBase",
+      "url": "https://www.sciencebase.gov",
+      "individualname": "ScienceBase Data Release Team",
+      "positionname": "Distributor",
+      "phone": "1-888-275-8747",
+      "fax": "",
+      "address": "Building 810, Mail Stop 302, Denver Federal Center",
+      "city": "Denver",
+      "administrativearea": "CO",
+      "postalcode": "80225",
+      "country": "USA",
+      "email": "sciencebase@usgs.gov"
+    }
+  },
+  "distribution": {
+    "upstream": {
+      "url": "https://nsidc.org/data/g02158",
+      "type": "WWW:LINK",
+      "name": "Upstream source archive",
+      "description": "Original data provider's landing page.",
+      "function": "information"
+    },
+    "daily/snodas_2003.nc": {
+      "url": "daily/snodas_2003.nc",
+      "type": "WWW:DOWNLOAD-1.0-http--download",
+      "name": "daily/snodas_2003.nc",
+      "description": "Consolidated CF-1.6 NetCDF.",
+      "function": "download"
+    }
+  },
+  "dataquality": {
+    "scope": {
+      "level": "dataset"
+    },
+    "lineage": {
+      "statement": "Source granules for SNODAS Snow Data Assimilation System Data Products (NSIDC G02158) were downloaded and consolidated to CF-1.6 NetCDF by the nhf-spatial-targets pipeline.",
+      "processstep": [
+        {
+          "procdesc": "consolidate via nhf-targets 0.7.0; command: fetch snodas",
+          "procdate": "20260521",
+          "proctime": "124500",
+          "srcused": [],
+          "srcprod": [
+            "snodas_2003.nc"
+          ]
+        }
+      ]
+    }
+  },
+  "spatial_reference": {
+    "horizontal_datum": "WGS_1984",
+    "ellipsoid": "WGS_1984",
+    "semiaxis": 6378137.0,
+    "denflat": 298.257223563,
+    "latres": 0.001,
+    "longres": 0.001,
+    "geogunit": "Decimal degrees",
+    "epsg": 4326
+  }
+}

@@ -1,0 +1,65 @@
+# {{ title }}
+
+{{ abstract }}
+
+## Purpose
+
+{{ purpose }}
+
+## Citation
+
+{% if citation_lines %}
+{% for line in citation_lines %}
+- {{ line }}
+{% endfor %}
+{% else %}
+_Authors to be supplied before publication._
+{% endif %}
+{% if citation_doi %}
+
+DOI: {{ citation_doi }}
+{% endif %}
+
+## Extent
+
+- Temporal: {{ begin or "unknown" }} to {{ end or "present" }}
+{% if bbox %}
+- Bounding coordinates (W, S, E, N): {{ bbox | join(", ") }}
+{% endif %}
+
+## Calibration targets
+
+{% if entityandattribute %}
+| Target | Description | Units | Range method |
+| --- | --- | --- | --- |
+{% for v in entityandattribute %}
+| {{ v.name }} | {{ v.definition }} | {{ v.units or "" }} | {{ v.range_method or "" }} |
+{% endfor %}
+{% else %}
+_No enabled targets._
+{% endif %}
+
+## Files
+
+{% if download_files %}
+{% for f in download_files %}
+- `{{ f.name }}` — {{ f.description }}
+{% endfor %}
+{% else %}
+_No staged files._
+{% endif %}
+
+## Use constraints
+
+{{ useconstraints }}
+
+## Contact
+
+- Point of contact: {{ point_of_contact_line }}
+- Distributed by: {{ distributor_line }}
+
+## Provenance
+
+{{ lineage_statement }}
+
+{{ process_step_count }} process step(s) recorded; see `fgdc.xml` and the bundled `manifest.json` for the full lineage.

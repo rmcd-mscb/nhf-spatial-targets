@@ -1,0 +1,209 @@
+{
+  "mcf": {
+    "version": 2.0
+  },
+  "metadata": {
+    "identifier": "urn:usgs:nhf-release:source:era5_land",
+    "language": "en",
+    "charset": "utf8",
+    "hierarchylevel": "dataset",
+    "datestamp": "2026-05-28",
+    "dates": {
+      "creation": "2026-05-28"
+    }
+  },
+  "spatial": {
+    "datatype": "grid",
+    "geomtype": "surface"
+  },
+  "identification": {
+    "language": "eng",
+    "charset": "utf8",
+    "title": "ECMWF ERA5-Land Reanalysis (consolidated for NHF)",
+    "abstract": "ECMWF ERA5-Land hourly reanalysis. Total runoff (ro), surface runoff (sro), sub-surface runoff (ssro), and snow depth water equivalent (sd) downloaded for CONUS plus contributing watersheds (Canada/ Mexico). Used as a source for the runoff calibration target (ro), the recharge calibration target (ssro, as drainage proxy), and the snow water equivalent calibration target (sd). These data were consolidated to CF-1.6 NetCDF as part of the USGS National Hydrologic Model calibration-targets workflow.",
+    "purpose": "Document and distribute the consolidated form of the ECMWF ERA5-Land Reanalysis dataset as used in the USGS National Hydrologic Model workflow.",
+    "dates": {
+      "creation": "2026-05-28",
+      "publication": "2026-05-28"
+    },
+    "keywords": {
+      "theme": {
+        "keywords": [
+          "hydrology",
+          "reanalysis",
+          "remote sensing",
+          "gridded climate data",
+          "total runoff",
+          "surface runoff",
+          "sub-surface runoff",
+          "snow depth water equivalent"
+        ],
+        "keywords_type": "theme"
+      },
+      "place": {
+        "keywords": [
+          "CONUS+contributing-watersheds"
+        ],
+        "keywords_type": "place"
+      }
+    },
+    "topiccategory": [
+      "inlandWaters",
+      "climatologyMeteorologyAtmosphere"
+    ],
+    "extents": {
+      "spatial": [
+        {
+          "bbox": [
+            -125.0,
+            24.7,
+            -66.0,
+            53.0
+          ],
+          "crs": 4326
+        }
+      ],
+      "temporal": [
+        {
+          "begin": "1979-01-01",
+          "end": null
+        }
+      ]
+    },
+    "fees": "None.",
+    "accessconstraints": "otherRestrictions",
+    "rights": "None. Users are advised to read the dataset's metadata thoroughly to understand appropriate use and data limitations.\n\nSource dataset license: Copernicus license (free, attribution).\n\nThis dataset was generated using Copernicus Climate Change Service (C3S) information (ECMWF ERA5-Land). Neither the European Commission nor ECMWF is responsible for any use of the Copernicus information or data it contains.",
+    "useconstraints": "None. Users are advised to read the dataset's metadata thoroughly to understand appropriate use and data limitations.\n\nSource dataset license: Copernicus license (free, attribution).\n\nThis dataset was generated using Copernicus Climate Change Service (C3S) information (ECMWF ERA5-Land). Neither the European Commission nor ECMWF is responsible for any use of the Copernicus information or data it contains.",
+    "url": "https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land",
+    "status": "completed",
+    "maintenancefrequency": "asNeeded",
+    "doi": null,
+    "citation": {
+      "authors": [
+        "Muñoz-Sabater, J., and others, 2021, doi:10.5194/essd-13-4349-2021"
+      ],
+      "doi": null
+    },
+    "entityandattribute": [
+      {
+        "name": "ro",
+        "definition": "total runoff",
+        "units": "m",
+        "cell_methods": "time: sum"
+      },
+      {
+        "name": "sro",
+        "definition": "surface runoff",
+        "units": "m",
+        "cell_methods": "time: sum"
+      },
+      {
+        "name": "ssro",
+        "definition": "sub-surface runoff",
+        "units": "m",
+        "cell_methods": "time: sum"
+      },
+      {
+        "name": "sd",
+        "definition": "snow depth water equivalent",
+        "units": "m",
+        "cell_methods": "time: point"
+      }
+    ]
+  },
+  "contact": {
+    "pointOfContact": {
+      "organization": "U.S. Geological Survey",
+      "url": "https://www.usgs.gov",
+      "individualname": "National Hydrologic Model Calibration Targets Team",
+      "positionname": "Point of Contact",
+      "phone": "1-888-275-8747",
+      "fax": "",
+      "address": "Building 810, Mail Stop 302, Denver Federal Center",
+      "city": "Denver",
+      "administrativearea": "CO",
+      "postalcode": "80225",
+      "country": "USA",
+      "email": "gs-w-nhm_calibration@usgs.gov"
+    },
+    "distributor": {
+      "organization": "U.S. Geological Survey - ScienceBase",
+      "url": "https://www.sciencebase.gov",
+      "individualname": "ScienceBase Data Release Team",
+      "positionname": "Distributor",
+      "phone": "1-888-275-8747",
+      "fax": "",
+      "address": "Building 810, Mail Stop 302, Denver Federal Center",
+      "city": "Denver",
+      "administrativearea": "CO",
+      "postalcode": "80225",
+      "country": "USA",
+      "email": "sciencebase@usgs.gov"
+    }
+  },
+  "distribution": {
+    "upstream": {
+      "url": "https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land",
+      "type": "WWW:LINK",
+      "name": "Upstream source archive",
+      "description": "Original data provider's landing page.",
+      "function": "information"
+    },
+    "monthly/era5_land_monthly_2003.nc": {
+      "url": "monthly/era5_land_monthly_2003.nc",
+      "type": "WWW:DOWNLOAD-1.0-http--download",
+      "name": "monthly/era5_land_monthly_2003.nc",
+      "description": "Consolidated CF-1.6 NetCDF.",
+      "function": "download"
+    },
+    "daily/era5_land_daily_2003.nc": {
+      "url": "daily/era5_land_daily_2003.nc",
+      "type": "WWW:DOWNLOAD-1.0-http--download",
+      "name": "daily/era5_land_daily_2003.nc",
+      "description": "Consolidated CF-1.6 NetCDF.",
+      "function": "download"
+    }
+  },
+  "dataquality": {
+    "scope": {
+      "level": "dataset"
+    },
+    "lineage": {
+      "statement": "Source granules for ECMWF ERA5-Land Reanalysis were downloaded and consolidated to CF-1.6 NetCDF by the nhf-spatial-targets pipeline.",
+      "processstep": [
+        {
+          "procdesc": "consolidate via nhf-targets 0.7.0; command: fetch era5-land; params: resample=monthly",
+          "procdate": "20260521",
+          "proctime": "103015",
+          "srcused": [
+            "era5_land_2003.nc"
+          ],
+          "srcprod": [
+            "era5_land_monthly_2003.nc"
+          ]
+        },
+        {
+          "procdesc": "aggregate via nhf-targets 0.7.0; command: agg era5-land; params: batch_size=500, method=area_weighted",
+          "procdate": "20260522",
+          "proctime": "080000",
+          "srcused": [
+            "era5_land_monthly_2003.nc"
+          ],
+          "srcprod": [
+            "era5_land_2003.nc"
+          ]
+        }
+      ]
+    }
+  },
+  "spatial_reference": {
+    "horizontal_datum": "WGS_1984",
+    "ellipsoid": "WGS_1984",
+    "semiaxis": 6378137.0,
+    "denflat": 298.257223563,
+    "latres": 0.001,
+    "longres": 0.001,
+    "geogunit": "Decimal degrees",
+    "epsg": 4326
+  }
+}

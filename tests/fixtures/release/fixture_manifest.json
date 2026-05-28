@@ -1,0 +1,92 @@
+{
+  "created_utc": "2026-05-20T00:00:00+00:00",
+  "last_validated_utc": "2026-05-25T00:00:00+00:00",
+  "nhf_spatial_targets_version": "0.7.0",
+  "fabric": {
+    "path": "/tmp/fabrics/gfv2_nhru_merged.gpkg",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "crs": "EPSG:5070",
+    "id_col": "nat_hru_id",
+    "id_col_sorted": true,
+    "hru_count": 109951
+  },
+  "sources": {
+    "era5_land": {"last_consolidated_utc": "2026-05-21T10:00:00+00:00"},
+    "gldas_noah_v21_monthly": {"last_consolidated_utc": "2026-05-21T11:00:00+00:00"},
+    "snodas": {"last_consolidated_utc": "2026-05-21T12:00:00+00:00"},
+    "daymet": {"last_verified_utc": "2026-05-21T13:00:00+00:00"},
+    "watergap22d": {"last_consolidated_utc": "2026-05-21T14:00:00+00:00"},
+    "merra_land": {"note": "superseded source present in legacy manifest"}
+  },
+  "steps": [
+    {
+      "kind": "consolidate",
+      "source_key": "era5_land",
+      "timestamp_utc": "2026-05-21T10:30:15+00:00",
+      "software_version": "0.7.0",
+      "tool": "nhf-targets",
+      "command": "fetch era5-land",
+      "inputs": [
+        {"path": "/ds/era5_land/raw/era5_land_2003.nc", "size_bytes": 100, "mtime_utc": "2026-05-21T10:00:00+00:00"}
+      ],
+      "outputs": [
+        {"path": "/ds/era5_land/monthly/era5_land_monthly_2003.nc", "sha256": "aaaa", "size_bytes": 200, "mtime_utc": "2026-05-21T10:30:00+00:00"}
+      ],
+      "params": {"resample": "monthly"}
+    },
+    {
+      "kind": "aggregate",
+      "source_key": "era5_land",
+      "timestamp_utc": "2026-05-22T08:00:00+00:00",
+      "software_version": "0.7.0",
+      "tool": "nhf-targets",
+      "command": "agg era5-land",
+      "inputs": [
+        {"path": "/ds/era5_land/monthly/era5_land_monthly_2003.nc", "size_bytes": 200, "mtime_utc": "2026-05-21T10:30:00+00:00"}
+      ],
+      "outputs": [
+        {"path": "/proj/data/aggregated/era5_land/era5_land_2003.nc", "sha256": "bbbb", "size_bytes": 50, "mtime_utc": "2026-05-22T08:00:00+00:00"}
+      ],
+      "params": {"batch_size": 500, "method": "area_weighted"}
+    },
+    {
+      "kind": "consolidate",
+      "source_key": "snodas",
+      "timestamp_utc": "2026-05-21T12:45:00+00:00",
+      "software_version": "0.7.0",
+      "tool": "nhf-targets",
+      "command": "fetch snodas",
+      "inputs": [],
+      "outputs": [
+        {"path": "/ds/snodas/daily/snodas_2003.nc", "sha256": "cccc", "size_bytes": 300, "mtime_utc": "2026-05-21T12:45:00+00:00"}
+      ],
+      "params": {}
+    },
+    {
+      "kind": "target",
+      "source_key": null,
+      "timestamp_utc": "2026-05-24T09:15:30+00:00",
+      "software_version": "0.7.0",
+      "tool": "nhf-targets",
+      "command": "run-runoff",
+      "inputs": [
+        {"path": "/proj/data/aggregated/era5_land/era5_land_2003.nc", "size_bytes": 50, "mtime_utc": "2026-05-22T08:00:00+00:00"}
+      ],
+      "outputs": [
+        {"path": "/proj/targets/runoff_targets.nc", "sha256": "dddd", "size_bytes": 70, "mtime_utc": "2026-05-24T09:15:30+00:00"}
+      ],
+      "params": {"range_method": "multi_source_minmax"}
+    },
+    {
+      "kind": "validate",
+      "source_key": null,
+      "timestamp_utc": "2026-05-25T00:00:00+00:00",
+      "software_version": "0.7.0",
+      "tool": "nhf-targets",
+      "command": "validate",
+      "inputs": [],
+      "outputs": [],
+      "params": {}
+    }
+  ]
+}

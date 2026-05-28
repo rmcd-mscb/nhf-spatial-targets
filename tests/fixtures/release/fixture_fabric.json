@@ -1,0 +1,21 @@
+{
+  "path": "/tmp/fabrics/gfv2_nhru_merged.gpkg",
+  "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "crs": "EPSG:5070",
+  "id_col": "nat_hru_id",
+  "id_col_sorted": true,
+  "hru_count": 109951,
+  "bbox": {
+    "minx": -124.7,
+    "miny": 24.5,
+    "maxx": -66.95,
+    "maxy": 49.4
+  },
+  "bbox_buffered": {
+    "minx": -124.8,
+    "miny": 24.4,
+    "maxx": -66.85,
+    "maxy": 49.5
+  },
+  "buffer_deg": 0.1
+}

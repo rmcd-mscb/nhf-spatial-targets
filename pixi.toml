@@ -27,6 +27,9 @@ cdsapi = "*"
 # PROJ's CDN fetch fails.
 proj-data = "*"
 scipy = ">=1.17.1,<2"
+# lxml: FGDC XML pretty-print + optional well-formedness checks in the
+# release/ metadata renderers (PR-D2). Conda-forge build pulls libxml2.
+lxml = ">=5.0"
 # gdptools: spatial aggregation (install from PyPI if not on conda-forge)
 # sciencebasepy: ScienceBase access
 # earthaccess: NASA EDL access for MODIS, MERRA-2, NLDAS
@@ -36,6 +39,11 @@ nhf-spatial-targets = { path = ".", editable = true }
 gdptools = ">=0.3.13"
 sciencebasepy = "*"
 earthaccess = "*"
+# pygeometa: MCF v3 intermediate representation + ISO 19139 emission for
+# the ScienceBase data release (release/mcf.py, release/iso.py).
+pygeometa = ">=0.16"
+# jinja2: README + FGDC templates (release/readme.py, release/fgdc.py).
+jinja2 = ">=3.1"
 
 [feature.dev.dependencies]
 pytest = ">=8.0"
