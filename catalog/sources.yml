@@ -704,6 +704,13 @@ sources:
     access:
       type: zarr_verify
       url: https://daac.ornl.gov/cgi-bin/dsviewer.pl?ds_id=2129
+      bbox_nwse: [82.9, -178.1, 14.1, -53.1]
+      bbox_notes: >
+        Daymet V4 full coverage envelope (North America + Hawaii + Puerto
+        Rico), expressed as [N, W, S, E] to match era5_land. Daymet ships as a
+        metadata-only release child (no file payload), but CSDGM <bounding> is
+        still mandatory, so this records the published ORNL DAAC spatial extent
+        and satisfies the FGDC <bounding> element for the source child.
       stores:
         na: "{daymet_root}/daymet_na.zarr"
         hi: "{daymet_root}/daymet_hi.zarr"
