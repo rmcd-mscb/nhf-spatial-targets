@@ -367,6 +367,54 @@ def test_publish_create_umbrella_composes_umbrella_then_child(tmp_path, monkeypa
     assert f"[fabric/{LABEL}]" in log_text
 
 
+@pytest.mark.parametrize(
+    "publish_scope,preview_scope",
+    [("source", "sources"), ("umbrella", "all"), ("fabric", "fabric")],
+)
+def test_publish_without_confirm_previews_mapped_scope(
+    tmp_path, monkeypatch, publish_scope, preview_scope
+):
+    """The publish-scope -> dry-run-scope preview mapping (_PUBLISH_PREVIEW_SCOPE):
+    a no-confirm publish runs dry_run with the mapped build scope, never the raw
+    publish scope (umbrella/source are not valid dry_run scopes)."""
+    project = build_release_project(tmp_path)
+    _patch_seams(monkeypatch, project, make_sb_client(FakeSbSession()))
+    recorder = MagicMock()
+    monkeypatch.setattr(rel, "dry_run", recorder)
+
+    _run("release", "publish", "-d", str(project.workdir), "--scope", publish_scope)
+
+    recorder.assert_called_once()
+    assert recorder.call_args.kwargs["scope"] == preview_scope
+
+
+def test_publish_create_umbrella_confirm_requires_parent_id(tmp_path, monkeypatch):
+    """The --create-umbrella arm of the parent-id guard (not just --scope umbrella)."""
+    project = build_release_project(tmp_path)
+    _patch_seams(monkeypatch, project, make_sb_client(FakeSbSession()))
+    monkeypatch.setattr(rel, "publish_umbrella", MagicMock())
+    monkeypatch.setattr(rel, "publish_fabric_child", MagicMock())
+
+    _expect_exit(
+        2,
+        "release",
+        "publish",
+        "-d",
+        str(project.workdir),
+        "--scope",
+        "fabric",
+        "--confirm",
+        "--create-umbrella",
+    )
+
+
+@pytest.mark.parametrize("sub", ["build", "dry-run", "status"])
+def test_project_command_missing_dir_exits_2(tmp_path, sub):
+    """build / dry-run / status all route through _load_project_or_exit, which
+    exits 2 before any client work when --project-dir does not exist."""
+    _expect_exit(2, "release", sub, "-d", str(tmp_path / "nope"))
+
+
 # ---------------------------------------------------------------------------
 # auth-test + the client seam
 # ---------------------------------------------------------------------------
@@ -385,4 +433,11 @@ def test_auth_test_without_credentials_exits_1(monkeypatch):
     # Exercise the real _resolve_client no-credentials branch + exit wrapper
     # (no SB_TOKEN, no --token). Must not import sciencebasepy.
     monkeypatch.delenv("SB_TOKEN", raising=False)
+    _expect_exit(1, "release", "auth-test")
+
+
+def test_auth_test_ping_failure_exits_1(monkeypatch):
+    client = MagicMock()
+    client.ping.side_effect = RuntimeError("ScienceBase unreachable")
+    monkeypatch.setattr(rel, "_resolve_client", lambda **kwargs: client)
     _expect_exit(1, "release", "auth-test")

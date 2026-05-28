@@ -33,7 +33,7 @@ import logging
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal, NoReturn
 
 from cyclopts import App, Parameter
 
@@ -143,7 +143,15 @@ def _resolve_client(*, token: str | None = None, env: str | None = None) -> SbCl
             "environment variable. (Reading the `sciencebase:` block from "
             ".credentials.yml lands in PR-G.)"
         )
-    return SbClient.from_token(resolved, env=env)
+    try:
+        return SbClient.from_token(resolved, env=env)
+    except Exception as exc:  # noqa: BLE001 -- a mangled token must read cleanly
+        # from_token parses the token JSON (sciencebasepy add_token); a
+        # copy-paste-mangled --token / SB_TOKEN raises JSONDecodeError / KeyError
+        # here. Surface it as the same clean CLI error the no-token case uses.
+        raise ReleaseCliError(
+            f"could not authenticate to ScienceBase with the provided token: {exc}"
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +159,7 @@ def _resolve_client(*, token: str | None = None, env: str | None = None) -> SbCl
 # ---------------------------------------------------------------------------
 
 
-def _fail(message: str, code: int) -> None:
+def _fail(message: str, code: int) -> NoReturn:
     """Print *message* to stderr and exit with *code* (never returns)."""
     print(f"Error: {message}", file=sys.stderr)
     sys.exit(code)
@@ -165,7 +173,6 @@ def _load_project_or_exit(workdir: Path) -> Project:
         return _load_project(workdir)
     except (FileNotFoundError, ValueError) as exc:
         _fail(str(exc), 1)
-        raise  # unreachable; satisfies the type checker that this returns Project
 
 
 def _resolve_client_or_exit(*, token: str | None, env: str | None) -> SbClient:
@@ -174,7 +181,24 @@ def _resolve_client_or_exit(*, token: str | None, env: str | None) -> SbClient:
         return _resolve_client(token=token, env=env)
     except ReleaseCliError as exc:
         _fail(str(exc), 1)
-        raise  # unreachable; satisfies the type checker
+
+
+def _run_client_op(label: str, fn, *args, **kwargs):
+    """Run a ScienceBase orchestrator call, converting any failure to a clean exit.
+
+    The read-only commands (``dry-run`` / ``status``) and the publish no-confirm
+    preview call into the release library, which raises typed errors
+    (``PreflightError`` / ``StaleRegistryError`` / ``SbClientError``) and lets
+    transport errors propagate. Surfacing those as the module's ``Error: …`` +
+    exit 1 convention -- with the traceback in the log -- keeps a failed preview
+    or status check from dumping a raw traceback at the operator, matching the
+    confirmed-publish path.
+    """
+    try:
+        return fn(*args, **kwargs)
+    except Exception as exc:  # noqa: BLE001 -- top-level CLI: any failure -> clean exit
+        _logger.exception("release %s failed", label)
+        _fail(f"{label} failed: {exc}", 1)
 
 
 # ---------------------------------------------------------------------------
@@ -340,7 +364,7 @@ def dry_run_cmd(
     """
     project = _load_project_or_exit(workdir)
     client = _resolve_client_or_exit(token=token, env=env)
-    dry_run(project, client, scope=scope)
+    _run_client_op("dry-run", dry_run, project, client, scope=scope)
 
 
 @release_app.command(name="status")
@@ -359,7 +383,7 @@ def status(
 
     project = _load_project_or_exit(workdir)
     client = _resolve_client_or_exit(token=token, env=env)
-    diffs = diff_local_vs_remote(project, client, scope=scope)
+    diffs = _run_client_op("status", diff_local_vs_remote, project, client, scope=scope)
 
     table = Table(title="ScienceBase release status")
     table.add_column("scope")
@@ -440,7 +464,9 @@ def publish(
     if not confirm:
         # Preview only -- the dry run builds + mp-validates locally and queries
         # ScienceBase read-only. See _PUBLISH_PREVIEW_SCOPE for the mapping.
-        dry_run(project, client, scope=_PUBLISH_PREVIEW_SCOPE[scope])
+        _run_client_op(
+            "dry-run", dry_run, project, client, scope=_PUBLISH_PREVIEW_SCOPE[scope]
+        )
         target = (
             scope if scope != "source" else f"source/{source_key or '<source-key>'}"
         )
@@ -527,6 +553,7 @@ def auth_test(
     try:
         client.ping()
     except Exception as exc:  # noqa: BLE001 -- a failed ping is the answer here
+        _logger.exception("release auth-test ping failed")
         _fail(f"ScienceBase ping failed: {exc}", 1)
     who = client.whoami()
     Console().print(
