@@ -12,6 +12,13 @@ to the source docs it cites) and render to HTML or PDF on demand.
   consensus on (a) period of record per target group and (b) datasets per
   target group. References figures saved to
   `../figures/{consolidated,aggregated}/gfv2-spatial-targets/`.
+- `2026-05-ua-swe-source-review-gfv2-spatial-targets.slides.md` — short
+  go/no-go review of adding **UA daily 4-km SWE (NSIDC-0719)** as a new
+  source feeding both the SWE and snow-covered-area targets. Uses only the
+  consolidated source grids (`../figures/consolidated/gfv2-spatial-targets/`
+  `swe_raw_panels.png`, `swe_normalized_comparison.png`,
+  `snow_covered_area_raw_panels.png`) so colleagues can decide whether to
+  wire up aggregation + target builders (PR-B/C/D) before that work begins.
 
 ## Naming convention
 
