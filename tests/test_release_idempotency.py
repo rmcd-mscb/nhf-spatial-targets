@@ -194,12 +194,41 @@ def test_per_file_skip_then_replace_on_content_change(tmp_path):
     assert second.mode == "update"
     assert "runoff_targets.nc" in second.skipped
     assert "aet_targets.nc" in second.skipped
+    sha_before = registry.get_fabric(LABEL, reg)["manifest_sha256"]
 
     # Change one source file's content -> only that file re-uploads.
     (project.workdir / "targets" / "runoff_targets.nc").write_bytes(b"runoff-v2")
     third = _publish(project, session, reg)
     assert "runoff_targets.nc" in third.uploaded
     assert "aet_targets.nc" in third.skipped
+    # The recorded payload fingerprint is content-sensitive: it must change.
+    assert registry.get_fabric(LABEL, reg)["manifest_sha256"] != sha_before
+
+
+def test_empty_item_response_is_treated_as_stale(tmp_path):
+    """A registry sb_id whose get_item returns an empty/falsy item (vs raising)
+    is the same stale condition -- fatal unless create_new."""
+    project = build_release_project(tmp_path)
+    reg = _registry(tmp_path)
+    _seed_umbrella(reg)
+    registry.put_fabric(
+        LABEL,
+        sb_id="EMPTY",
+        uploaded_utc="2026-01-01T00:00:00+00:00",
+        file_count=1,
+        total_bytes=1,
+        manifest_sha256="deadbeef",
+        path=reg,
+    )
+    session = FakeSbSession()
+    session.items["EMPTY"] = {}  # get_item returns a falsy item
+
+    with pytest.raises(publish.StaleRegistryError):
+        _publish(project, session, reg)
+
+    result = _publish(project, session, reg, create_new=True)
+    assert result.mode == "create"
+    assert result.sb_id != "EMPTY"
 
 
 # ---------------------------------------------------------------------------

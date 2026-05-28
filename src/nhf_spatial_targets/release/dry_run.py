@@ -27,7 +27,7 @@ from rich.table import Table
 
 from nhf_spatial_targets.release import publish
 from nhf_spatial_targets.release.build import BuildResult, BuildScope, build_all
-from nhf_spatial_targets.release.publish import ScopeDiff
+from nhf_spatial_targets.release.publish import Scope, ScopeDiff
 from nhf_spatial_targets.release.sb_client import SbClient
 from nhf_spatial_targets.release.validate_xml import MpResult, validate_xml_file
 from nhf_spatial_targets.workspace import Project
@@ -37,7 +37,7 @@ from nhf_spatial_targets.workspace import Project
 class DryRunItem:
     """One item's dry-run findings: payload size, mp result, and SB parity."""
 
-    scope: str
+    scope: Scope
     key: str | None
     sb_id: str | None
     file_count: int

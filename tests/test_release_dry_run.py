@@ -15,7 +15,7 @@ from pathlib import Path
 from rich.console import Console
 
 import nhf_spatial_targets.release.dry_run as dry_run_mod
-from nhf_spatial_targets.release import registry
+from nhf_spatial_targets.release import publish, registry
 from nhf_spatial_targets.release.build import build_fabric_child
 from nhf_spatial_targets.release.dry_run import dry_run
 from nhf_spatial_targets.release.validate_xml import MpResult
@@ -216,4 +216,52 @@ def test_render_writes_a_table_without_touching_sciencebase(tmp_path):
     output = console.file.getvalue()
     assert "dry run" in output.lower()
     assert "would create" in output  # nothing is in the registry yet
+    _assert_no_writes(session)
+
+
+# ---------------------------------------------------------------------------
+# diff_local_vs_remote: stale local + stale remote sb_id (read-only, no build)
+# ---------------------------------------------------------------------------
+
+
+def test_diff_reports_stale_local_when_staged_file_drifts(tmp_path):
+    """diff does NOT rebuild, so a staged file edited after build surfaces as
+    a 'stale' local payload via the narrowed verify_csv catch."""
+    project = build_release_project(tmp_path)
+    reg = _registry(tmp_path)
+    session = FakeSbSession()
+    build_fabric_child(project, now=NOW)  # stage exists with checksums.csv
+    # Edit a staged data file's content (via its symlink target) -> verify fails.
+    (project.workdir / "targets" / "runoff_targets.nc").write_bytes(b"DRIFTED-CONTENT")
+
+    diffs = publish.diff_local_vs_remote(
+        project, make_sb_client(session), scope="fabric", registry_path=reg
+    )
+    assert diffs[0].local == "stale"
+    _assert_no_writes(session)
+
+
+def test_diff_reports_stale_remote_sb_id_as_missing(tmp_path):
+    """A registry sb_id that ScienceBase 404s reads as remote 'missing' with a
+    stale-id note (the get_item-404 path in the read-only diff)."""
+    project = build_release_project(tmp_path)
+    reg = _registry(tmp_path)
+    session = FakeSbSession()  # store is empty -> get_item raises not-found
+    build_fabric_child(project, now=NOW)  # local payload built
+    registry.put_fabric(
+        LABEL,
+        sb_id="GONE",
+        uploaded_utc="2026-01-01T00:00:00+00:00",
+        file_count=1,
+        total_bytes=1,
+        manifest_sha256="x",
+        path=reg,
+    )
+
+    diffs = publish.diff_local_vs_remote(
+        project, make_sb_client(session), scope="fabric", registry_path=reg
+    )
+    assert diffs[0].local == "built"
+    assert diffs[0].remote == "missing"
+    assert "stale" in (diffs[0].detail or "")
     _assert_no_writes(session)

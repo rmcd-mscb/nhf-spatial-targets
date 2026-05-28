@@ -27,8 +27,8 @@ Per-item sequence (mirrors the plan's idempotency matrix)::
     6. record                         registry.put_* (flock read-merge-write)
 
 **The MD5 decision (per the plan).** ScienceBase records uploaded-file
-checksums as **MD5**, not SHA-256 (verified in sciencebasepy 2.0.22
-``SbSession._replace_file``), and
+checksums as **MD5**, not SHA-256 (sciencebasepy's
+``SbSession._replace_file`` stamps ``checksum = {'type': 'MD5', ...}``), and
 :meth:`SbClient.upload_file`'s ``skip_if_sha256_matches`` does plain
 value-equality against the remote file's recorded ``checksum.value``. The
 skip-if-unchanged fast path therefore computes the **local file's MD5** and
@@ -72,7 +72,7 @@ from nhf_spatial_targets.release.build import (
     build_source_child,
     build_umbrella,
 )
-from nhf_spatial_targets.release.checksums import verify_csv
+from nhf_spatial_targets.release.checksums import ChecksumMismatch, verify_csv
 from nhf_spatial_targets.release.defaults import (
     load_release_defaults,
     require_populated_release_defaults,
@@ -132,7 +132,10 @@ class PublishResult:
     remote files no longer in the staged payload; ``orphans_deleted`` is the
     subset actually removed (only with ``delete_orphans``). ``body_patched``
     lists the item-body fields changed on update (empty on create).
-    ``registry_entry`` is the merged record written back to the registry.
+    ``registry_entry`` is a shallow snapshot of the merged record written back
+    to the registry (a plain dict because its shape varies by scope -- umbrella
+    carries version/doi, children carry file_count/total_bytes); treat it as
+    read-only even though this dataclass is frozen.
     """
 
     scope: Scope
@@ -146,6 +149,16 @@ class PublishResult:
     orphans_deleted: tuple[str, ...]
     body_patched: tuple[str, ...]
     registry_entry: dict
+
+    def __post_init__(self) -> None:
+        # The umbrella is keyless; source/fabric children always carry a key.
+        # Same invariant BuildResult guards -- enforced here so a future second
+        # producer (the PR-F CLI / status command) can't construct a mismatch.
+        if (self.scope == "umbrella") != (self.key is None):
+            raise ValueError(
+                f"{self.scope!r} key invariant violated: umbrella must have "
+                f"key=None and source/fabric a non-None key; got key={self.key!r}."
+            )
 
 
 LocalStatus = Literal["built", "stale", "missing"]
@@ -171,6 +184,13 @@ class ScopeDiff:
     remote: RemoteStatus
     detail: str | None = None
 
+    def __post_init__(self) -> None:
+        if (self.scope == "umbrella") != (self.key is None):
+            raise ValueError(
+                f"{self.scope!r} key invariant violated: umbrella must have "
+                f"key=None and source/fabric a non-None key; got key={self.key!r}."
+            )
+
 
 # ---------------------------------------------------------------------------
 # Small pure helpers
@@ -190,20 +210,33 @@ def _file_md5(path: Path) -> str:
     return h.hexdigest()
 
 
-def _is_not_found(exc: BaseException) -> bool:
-    """Best-effort "ScienceBase says this id does not exist" classifier.
+# sciencebasepy wraps a missing item in a bare ``Exception`` whose text is
+# either ``"Resource not found"`` or the catch-all ``"Other HTTP error: 404:
+# ..."`` (mirrors ``sb_client._OTHER_HTTP_ERROR_RE``). Matching only these
+# recognized shapes -- never a bare "not found" substring or a "404" appearing
+# anywhere in a 5xx body -- keeps a non-404 error from being mistaken for a
+# missing item, which under ``create_new`` would wrongly mint a duplicate.
+_RESOURCE_NOT_FOUND_MARKER = "resource not found"
+_HTTP_ERROR_CODE_RE = re.compile(r"Other HTTP error:\s*(\d{3})")
 
-    sciencebasepy surfaces a missing item as a bare ``Exception`` whose text is
-    ``"Resource not found"`` or ``"Other HTTP error: 404: ..."``; a
-    ``requests``-level error carries ``response.status_code == 404``.
+
+def _is_not_found(exc: BaseException) -> bool:
+    """Whether *exc* is ScienceBase reporting that an id does not exist.
+
+    Recognizes a ``requests``-level ``response.status_code == 404``, the
+    literal ``"Resource not found"`` marker, and the
+    ``"Other HTTP error: 404"`` catch-all form -- and deliberately nothing
+    looser, so a 5xx whose body merely contains the words "not found" or "404"
+    is not misread as a missing item.
     """
     response = getattr(exc, "response", None)
     if getattr(response, "status_code", None) == 404:
         return True
-    message = str(exc).lower()
-    if "not found" in message:
+    message = str(exc)
+    if _RESOURCE_NOT_FOUND_MARKER in message.lower():
         return True
-    return bool(re.search(r"\b404\b", message))
+    match = _HTTP_ERROR_CODE_RE.search(message)
+    return bool(match and match.group(1) == "404")
 
 
 @dataclass(frozen=True)
@@ -385,6 +418,12 @@ def _resolve_target(
             raise
         if not item:
             if create_new:
+                logger.warning(
+                    "publish: registry %s sb_id=%s returned an empty item; "
+                    "create_new set -- minting a fresh item.",
+                    scope if key is None else f"{scope}/{key}",
+                    sb_id,
+                )
                 return ("create", None, None, False)
             raise _stale_registry_error(scope, key, sb_id)
         return ("update", sb_id, item, False)
@@ -417,7 +456,10 @@ def _upload_payload(
     """Upload each payload file, skipping ones whose remote MD5 already matches.
 
     On create the item has no files, so nothing skips and every file uploads --
-    same code path as update.
+    same code path as update. Each transfer is logged at INFO before the next
+    so that a mid-loop failure (a multi-GB child can be many files) leaves a
+    record of how far the upload got -- the propagated exception aborts before
+    the aggregate summary in :func:`_reconcile_and_publish` would run.
     """
     uploaded: list[str] = []
     skipped: list[str] = []
@@ -425,7 +467,12 @@ def _upload_payload(
         result = client.upload_file(
             sb_id, pf.abs_path, skip_if_sha256_matches=_file_md5(pf.abs_path)
         )
-        (skipped if result.skipped else uploaded).append(pf.name)
+        if result.skipped:
+            skipped.append(pf.name)
+            logger.info("publish: skipped %s on %s (checksum match)", pf.name, sb_id)
+        else:
+            uploaded.append(pf.name)
+            logger.info("publish: uploaded %s to %s", pf.name, sb_id)
     return uploaded, skipped
 
 
@@ -524,9 +571,16 @@ def _reconcile_and_publish(
         orphans = tuple(sorted(set(_remote_files(remote_item)) - staged_names))
         if orphans:
             if delete_orphans:
+                # Deletes are destructive and the registry is only re-stamped
+                # after the whole loop, so log each one as it lands -- a
+                # mid-loop failure then leaves a trail of what was removed
+                # rather than silent, un-recoverable divergence.
+                deleted: list[str] = []
                 for name in orphans:
                     client.delete_file(sb_id, name)
-                orphans_deleted = orphans
+                    deleted.append(name)
+                    logger.info("publish: deleted orphan %s from %s", name, sb_id)
+                orphans_deleted = tuple(deleted)
             else:
                 logger.warning(
                     "publish: %s has %d orphan file(s) on ScienceBase not in the "
@@ -695,9 +749,11 @@ def _local_status(stage_dir: Path) -> LocalStatus:
         return "missing"
     try:
         verify_csv(stage_dir)
-    except Exception:
-        # ChecksumMismatch (drift / unlisted / missing file) or a dangling
-        # symlink: the stage exists but is not a clean, complete payload.
+    except (ChecksumMismatch, FileNotFoundError, OSError):
+        # Genuine drift / unlisted / missing-file, or a dangling symlink: the
+        # stage exists but is not a clean, complete payload. A narrow catch --
+        # a programming error inside verify_csv must surface loudly, not be
+        # reported to the operator as benign "stale".
         return "stale"
     return "built"
 

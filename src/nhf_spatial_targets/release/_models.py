@@ -15,6 +15,11 @@ filenames are recorded on every plan) but **not** generated in this
 phase -- metadata rendering is a later phase. ``checksums.py`` only
 fingerprints files that actually exist, so the reserved slots do not
 appear in ``SHA256SUMS`` until those files exist.
+
+This module also hosts :class:`ReleaseError`, the shared base for every
+deliberate release-layer error. It lives here -- the dependency-free leaf
+both ``sb_client`` and ``publish`` import -- so they can subclass it without
+an import cycle.
 """
 
 from __future__ import annotations

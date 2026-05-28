@@ -8,10 +8,14 @@ fabric child against an in-memory ScienceBase (the :class:`FakeSbSession`).
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
+import requests
 
 from nhf_spatial_targets.release import publish, registry
+from nhf_spatial_targets.release._models import FileEntry, ReleaseError
+from nhf_spatial_targets.release.build import BuildResult
 from nhf_spatial_targets.release.checksums import ChecksumMismatch
 from tests.conftest import FakeSbSession, build_release_project, make_sb_client
 
@@ -157,3 +161,105 @@ def test_fabric_create_then_update_patches_changed_body(tmp_path):
     third = publish.publish_fabric_child(project, client, registry_path=reg, now=NOW)
     assert "body" in third.body_patched
     assert session.items[first.sb_id]["body"] != "STALE DESCRIPTION"
+
+
+def test_source_child_create_then_update_skips(tmp_path):
+    """A source child re-published with no change goes to update + skips its NCs."""
+    project = build_release_project(tmp_path)
+    reg = _registry(tmp_path)
+    _seed_umbrella(reg)
+    session = FakeSbSession()
+    client = make_sb_client(session)
+
+    first = publish.publish_source_child(
+        project, client, "era5_land", registry_path=reg, now=NOW
+    )
+    assert first.mode == "create"
+
+    second = publish.publish_source_child(
+        project, client, "era5_land", registry_path=reg, now=NOW
+    )
+    assert second.mode == "update"
+    assert "era5_land_daily_1980.nc" in second.skipped
+    assert registry.get_source("era5_land", reg)["sb_id"] == first.sb_id
+
+
+# ---------------------------------------------------------------------------
+# _payload_files flat-namespace collision guard
+# ---------------------------------------------------------------------------
+
+
+def test_payload_files_raises_on_basename_collision(tmp_path):
+    """Two staged files with the same basename would collide in ScienceBase's
+    flat namespace -- _payload_files must refuse rather than silently overwrite."""
+    stage = tmp_path / "stage"
+    (stage / "a").mkdir(parents=True)
+    (stage / "b").mkdir(parents=True)
+    (stage / "a" / "data.nc").write_bytes(b"x")
+    (stage / "b" / "data.nc").write_bytes(b"y")
+    entries = (
+        FileEntry(path="a/data.nc", sha256="0" * 64, size=1, mtime="t"),
+        FileEntry(path="b/data.nc", sha256="0" * 64, size=1, mtime="t"),
+    )
+    result = BuildResult(
+        kind="fabric", key="x", stage_dir=stage, mcf={}, entries=entries
+    )
+    with pytest.raises(ReleaseError, match="flat namespace"):
+        publish._payload_files(result)
+
+
+# ---------------------------------------------------------------------------
+# _is_not_found classifier (the tightened 404 detection)
+# ---------------------------------------------------------------------------
+
+
+def test_is_not_found_recognizes_real_not_found_shapes():
+    assert publish._is_not_found(Exception("Resource not found")) is True
+    assert publish._is_not_found(Exception("Other HTTP error: 404: missing")) is True
+    exc = requests.exceptions.HTTPError("boom")
+    exc.response = SimpleNamespace(status_code=404)
+    assert publish._is_not_found(exc) is True
+
+
+def test_is_not_found_rejects_misleading_messages():
+    """A 5xx whose body merely mentions 'not found' or '404' must NOT classify
+    as not-found -- otherwise create_new would mint a duplicate item."""
+    assert (
+        publish._is_not_found(
+            Exception("Other HTTP error: 503: upstream service not found")
+        )
+        is False
+    )
+    assert (
+        publish._is_not_found(Exception("Other HTTP error: 500: route /v/404 failed"))
+        is False
+    )
+    assert publish._is_not_found(Exception("Unauthorized access")) is False
+
+
+# ---------------------------------------------------------------------------
+# typed-record key invariant
+# ---------------------------------------------------------------------------
+
+
+def test_typed_records_enforce_key_invariant():
+    """umbrella must be keyless; source/fabric must carry a key (mirrors
+    BuildResult)."""
+    with pytest.raises(ValueError, match="key invariant"):
+        publish.PublishResult(
+            scope="umbrella",
+            key="oops",
+            sb_id="x",
+            mode="create",
+            adopted=False,
+            uploaded=(),
+            skipped=(),
+            orphans=(),
+            orphans_deleted=(),
+            body_patched=(),
+            registry_entry={},
+        )
+    with pytest.raises(ValueError, match="key invariant"):
+        publish.ScopeDiff(
+            scope="fabric", key=None, sb_id=None, local="missing", remote="missing"
+        )
