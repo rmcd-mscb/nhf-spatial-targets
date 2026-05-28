@@ -39,6 +39,45 @@ REQUIRED_SECTIONS: tuple[str, ...] = (
     "spatial_reference",
 )
 
+# Dotted paths into a defaults document that must be *populated* (truthy) for a
+# release to be publishable. This is the publish-time gate the loader's
+# shape-only check deliberately omits: the committed scaffold may ship empty
+# sections and an operator builds/dry-runs against them, but publishing
+# metadata with an empty title template or no distributor contact would emit a
+# broken FGDC/ISO record. Every path here is read by a
+# :mod:`nhf_spatial_targets.release.mcf` builder; an empty value renders an
+# empty (and invalid) metadata field.
+#
+# A path segment navigates nested mappings; the leaf must be truthy after the
+# same normalization the renderers see (non-empty string, list, or mapping; a
+# nonzero number such as the EPSG code). Kept beside REQUIRED_SECTIONS so the
+# two can't drift.
+REQUIRED_POPULATED_PATHS: tuple[str, ...] = (
+    "contacts.distributor",
+    "contacts.point_of_contact",
+    "distribution.use_constraints",
+    "distribution.liability_statement",
+    "distribution.fallback_landing_url",
+    "distribution.distribution_protocol",
+    "keywords.topiccategory",
+    "keywords.umbrella.theme",
+    "keywords.source.theme",
+    "keywords.fabric.theme",
+    "umbrella.title_template",
+    "umbrella.abstract_template",
+    "umbrella.purpose",
+    "umbrella.lineage_statement",
+    "umbrella.versioning_policy",
+    "source.abstract_suffix",
+    "source.purpose_template",
+    "source.lineage_statement_template",
+    "fabric.title_template",
+    "fabric.abstract_template",
+    "fabric.purpose_template",
+    "fabric.lineage_statement_template",
+    "spatial_reference.epsg",
+)
+
 
 def validate_release_defaults(
     data: dict, *, source: str = "release_defaults.yml"
@@ -84,6 +123,79 @@ def validate_release_defaults(
                 f"{source}: section '{section}' must be a mapping; "
                 f"got {type(value).__name__}."
             )
+
+
+def _resolve_path(data: dict, dotted: str) -> object | None:
+    """Navigate *dotted* (e.g. ``"umbrella.title_template"``) into *data*.
+
+    Returns the leaf value, or ``None`` if any intermediate segment is absent
+    or not a mapping. A literal ``None`` leaf is indistinguishable from a
+    missing one here, which is fine: both are "not populated".
+    """
+    node: object = data
+    for segment in dotted.split("."):
+        if not isinstance(node, dict) or segment not in node:
+            return None
+        node = node[segment]
+    return node
+
+
+def _is_populated(value: object) -> bool:
+    """Whether *value* counts as filled in for publish purposes.
+
+    A string is populated only if it has non-whitespace content (folded YAML
+    scalars can leave a bare newline); a list/mapping must be non-empty; a
+    number (the EPSG code) is populated when nonzero. ``None`` is never
+    populated.
+    """
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, dict)):
+        return len(value) > 0
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return True
+
+
+def missing_release_defaults(data: dict) -> list[str]:
+    """Return the dotted paths in :data:`REQUIRED_POPULATED_PATHS` left empty.
+
+    Pure inspection -- no I/O, no raising. An empty list means every
+    publish-required field is populated. Used by both the publish pre-flight
+    (which raises on a non-empty result) and the read-only dry-run report
+    (which surfaces it without failing).
+    """
+    return [
+        p for p in REQUIRED_POPULATED_PATHS if not _is_populated(_resolve_path(data, p))
+    ]
+
+
+def require_populated_release_defaults(
+    data: dict, *, source: str = "release_defaults.yml"
+) -> None:
+    """Raise ``ValueError`` if any publish-required default is unpopulated.
+
+    The hard "fully populated" gate the module docstring defers to publish
+    time. Distinct from :func:`validate_release_defaults` (shape only): this
+    fails when a required field is *present-but-empty*, which the loader
+    deliberately tolerates so a half-filled scaffold can still build/dry-run.
+
+    Raises
+    ------
+    ValueError
+        One or more paths in :data:`REQUIRED_POPULATED_PATHS` are empty; the
+        message lists every empty path so an operator fills them in one pass.
+    """
+    missing = missing_release_defaults(data)
+    if missing:
+        raise ValueError(
+            f"{source}: release defaults are not fully populated; publishing "
+            f"would emit incomplete metadata. Fill in: {missing}."
+        )
 
 
 def load_release_defaults(path: Path | None = None) -> dict:

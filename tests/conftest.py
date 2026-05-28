@@ -12,7 +12,10 @@ with the ``_home`` parameter rather than relying on module-level patching.
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,6 +24,8 @@ import pandas as pd
 import pytest
 import xarray as xr
 import yaml
+
+from nhf_spatial_targets.workspace import Project
 
 
 @pytest.fixture()
@@ -93,3 +98,209 @@ def make_minimal_project(tmp_path, fabric_path: str | None = None):
     )
     (workdir / "fabric.json").write_text(json.dumps({"id_col": "nhm_id"}))
     return workdir
+
+
+# ---------------------------------------------------------------------------
+# Release publish/dry-run test helpers (PR-E3)
+# ---------------------------------------------------------------------------
+
+# A populated author list satisfies the publish pre-flight; tests pass
+# ``authors=[]`` to exercise the empty-authors gate.
+DEFAULT_RELEASE_AUTHORS = [
+    {"given": "Jane", "family": "Doe", "affiliation": "U.S. Geological Survey"}
+]
+
+
+def build_release_project(
+    tmp_path,
+    *,
+    fabric_label: str = "gfv_test",
+    authors: list | None = None,
+    with_manifest: bool = True,
+) -> Project:
+    """Synthesize a release-ready ``Project`` on disk for publish/dry-run tests.
+
+    Mirrors tests/test_release_build.py's project fixture (publishable
+    era5_land kept, watergap22d excluded, daymet metadata-only) and adds the
+    knobs the publish pre-flight exercises: ``authors`` (``[]`` triggers the
+    empty-authors gate) and ``with_manifest`` (``False`` removes manifest.json
+    to trigger the missing-manifest gate).
+    """
+    workdir = tmp_path / "proj"
+    datastore = tmp_path / "store"
+    fabric_file = tmp_path / "fab" / "gfv_test.gpkg"
+    fabric_file.parent.mkdir(parents=True, exist_ok=True)
+    fabric_file.write_bytes(b"GPKG-bytes")
+
+    def _touch(path: Path, content: bytes) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+
+    agg = workdir / "data" / "aggregated"
+    _touch(agg / "era5_land" / "era5_land_1980_agg.nc", b"era5-1980")
+    _touch(agg / "watergap22d" / "watergap22d_1980_agg.nc", b"wg-held")
+    _touch(agg / "daymet" / "daymet_na_1980_agg.nc", b"daymet-1980")
+    _touch(workdir / "targets" / "runoff_targets.nc", b"runoff")
+    _touch(workdir / "targets" / "aet_targets.nc", b"aet")
+
+    _touch(datastore / "era5_land" / "daily" / "era5_land_daily_1980.nc", b"d-1980")
+    _touch(datastore / "era5_land" / "monthly" / "era5_land_monthly_1980.nc", b"m-1980")
+    _touch(datastore / "daymet" / "daymet_consolidated.nc", b"should-not-stage")
+
+    if with_manifest:
+        (workdir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "sources": {"era5_land": {}, "watergap22d": {}},
+                    "steps": [
+                        {
+                            "kind": "aggregate",
+                            "source_key": "era5_land",
+                            "timestamp_utc": "2026-01-02T03:04:05+00:00",
+                            "software_version": "0.7.0",
+                            "tool": "nhf-targets",
+                            "command": "agg era5-land",
+                            "inputs": [],
+                            "outputs": [],
+                            "params": {"method": "area_weighted"},
+                        }
+                    ],
+                }
+            )
+        )
+
+    config = {
+        "fabric": {"path": str(fabric_file), "id_col": "nhm_id"},
+        "release": {
+            "authors": DEFAULT_RELEASE_AUTHORS if authors is None else authors,
+            "fabric_label": fabric_label,
+            "doi": None,
+            "abstract_notes": "Synthetic project for publish tests.",
+            "ipds_number": "IP-123456",
+        },
+        "targets": {
+            "runoff": {"enabled": True, "period": "1980/2020"},
+            "aet": {"enabled": True, "period": "2000/2010"},
+        },
+    }
+    fabric = {
+        "path": str(fabric_file),
+        "bbox": {"minx": -125.0, "miny": 24.0, "maxx": -66.0, "maxy": 53.0},
+        "hru_count": 4242,
+    }
+    return Project(
+        workdir=workdir,
+        datastore=datastore,
+        config=config,
+        fabric=fabric,
+        dir_mode=None,
+    )
+
+
+def _md5_file(filename: str) -> str:
+    h = hashlib.md5()
+    with open(filename, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+class FakeSbSession:
+    """In-memory stand-in for ``sciencebasepy.SbSession`` for offline tests.
+
+    Maintains an item store keyed by id and records every mutating call so a
+    test can assert read-only behavior (``created`` / ``updated`` / ``uploaded``
+    / ``deleted``). ``upload_file_to_item`` records each file's **MD5** as its
+    checksum value -- matching ScienceBase, which stores MD5 -- so the
+    SbClient skip-if-checksum-matches fast path fires on an unchanged re-upload.
+
+    A missing id raises ``Exception("Resource not found")``, mirroring
+    sciencebasepy, so the publish layer's stale-registry detection is exercised.
+    """
+
+    def __init__(self) -> None:
+        self.items: dict[str, dict] = {}
+        self._counter = 0
+        self.created: list[dict] = []
+        self.updated: list[dict] = []
+        self.uploaded: list[tuple[str, str]] = []
+        self.deleted: list[tuple[str, str]] = []
+
+    # -- helpers for tests to pre-seed remote state -----------------------
+    def seed_item(
+        self,
+        sb_id: str,
+        *,
+        title: str,
+        parent_id: str | None = None,
+        files: list[dict] | None = None,
+    ) -> dict:
+        item = {"id": sb_id, "title": title, "files": list(files or [])}
+        if parent_id is not None:
+            item["parentId"] = parent_id
+        self.items[sb_id] = item
+        return item
+
+    # -- sciencebasepy surface used by SbClient ---------------------------
+    def get_item(self, itemid, params=None):
+        if itemid not in self.items:
+            raise Exception("Resource not found")
+        return copy.deepcopy(self.items[itemid])
+
+    def create_item(self, item_json):
+        self.created.append(copy.deepcopy(item_json))
+        self._counter += 1
+        new_id = f"sb{self._counter}"
+        item = copy.deepcopy(item_json)
+        item["id"] = new_id
+        item.setdefault("files", [])
+        self.items[new_id] = item
+        return copy.deepcopy(item)
+
+    def update_item(self, item_json):
+        self.updated.append(copy.deepcopy(item_json))
+        sb_id = item_json["id"]
+        self.items[sb_id].update(copy.deepcopy(item_json))
+        return copy.deepcopy(self.items[sb_id])
+
+    def get_child_ids(self, parentid):
+        return [i for i, it in self.items.items() if it.get("parentId") == parentid]
+
+    def upload_file_to_item(self, item, filename, scrape_file=True):
+        sb_id = item["id"]
+        stored = self.items[sb_id]
+        name = os.path.basename(filename)
+        files = [f for f in stored.get("files", []) if f["name"] != name]
+        files.append(
+            {
+                "name": name,
+                "size": os.path.getsize(filename),
+                "checksum": {"type": "MD5", "value": _md5_file(filename)},
+            }
+        )
+        stored["files"] = files
+        self.uploaded.append((sb_id, name))
+        return copy.deepcopy(stored)
+
+    def delete_file(self, sb_filename, item):
+        sb_id = item["id"]
+        stored = self.items[sb_id]
+        stored["files"] = [
+            f for f in stored.get("files", []) if f["name"] != sb_filename
+        ]
+        self.deleted.append((sb_filename, sb_id))
+        return copy.deepcopy(stored)
+
+    def is_logged_in(self):
+        return True
+
+    def ping(self):
+        return {"ok": True}
+
+
+def make_sb_client(session, **kwargs):
+    """Wrap *session* in an SbClient with a no-op sleep (no wall-clock backoff)."""
+    from nhf_spatial_targets.release.sb_client import SbClient
+
+    kwargs.setdefault("sleep", lambda _: None)
+    return SbClient(session, **kwargs)

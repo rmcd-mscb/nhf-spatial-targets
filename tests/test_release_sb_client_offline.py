@@ -25,6 +25,7 @@ import pytest
 import requests
 
 from nhf_spatial_targets.release import sb_client
+from nhf_spatial_targets.release._models import ReleaseError
 from nhf_spatial_targets.release.sb_client import (
     SbClient,
     SbClientError,
@@ -423,3 +424,29 @@ def test_from_token_factory_dispatches(monkeypatch) -> None:
 
     assert client.session is fake
     fake.add_token.assert_called_once_with("token-json")
+
+
+# ---------------------------------------------------------------------------
+# delete_file + the ReleaseError base
+# ---------------------------------------------------------------------------
+
+
+def test_delete_file_fetches_item_then_dispatches(client_factory) -> None:
+    """delete_file gets the item, then calls session.delete_file(name, item)."""
+    session = MagicMock()
+    item = {"id": "child1", "files": [{"name": "orphan.nc"}]}
+    session.get_item.return_value = item
+    session.delete_file.return_value = {"id": "child1", "files": []}
+    client = client_factory(session)
+
+    result = client.delete_file("child1", "orphan.nc")
+
+    session.get_item.assert_called_once_with("child1")
+    session.delete_file.assert_called_once_with("orphan.nc", item)
+    assert result == {"id": "child1", "files": []}
+
+
+def test_sb_client_error_is_a_release_error() -> None:
+    """SbClientError is catchable as the release-layer base ReleaseError."""
+    assert issubclass(SbClientError, ReleaseError)
+    assert isinstance(SbClientError("x"), ReleaseError)

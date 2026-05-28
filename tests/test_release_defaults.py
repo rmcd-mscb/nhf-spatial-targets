@@ -8,8 +8,11 @@ import pytest
 import yaml
 
 from nhf_spatial_targets.release.defaults import (
+    REQUIRED_POPULATED_PATHS,
     REQUIRED_SECTIONS,
     load_release_defaults,
+    missing_release_defaults,
+    require_populated_release_defaults,
     validate_release_defaults,
 )
 
@@ -70,3 +73,37 @@ def test_non_mapping_top_level_fails():
 def test_missing_file_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         load_release_defaults(tmp_path / "does-not-exist.yml")
+
+
+# ---------------------------------------------------------------------------
+# publish-time populated-check (separate from the shape-only loader)
+# ---------------------------------------------------------------------------
+
+
+def test_committed_defaults_are_fully_populated():
+    """The committed catalog/release_defaults.yml passes the publish gate."""
+    data = load_release_defaults()
+    assert missing_release_defaults(data) == []
+    require_populated_release_defaults(data)  # no raise
+
+
+def test_empty_scaffold_reports_every_required_path():
+    """A shape-valid but empty scaffold is loadable but not publishable."""
+    empty = {s: {} for s in REQUIRED_SECTIONS}
+    validate_release_defaults(empty)  # shape-only check passes
+    missing = missing_release_defaults(empty)
+    assert set(missing) == set(REQUIRED_POPULATED_PATHS)
+    with pytest.raises(ValueError, match="not fully populated"):
+        require_populated_release_defaults(empty)
+
+
+def test_single_blank_leaf_is_reported(tmp_path):
+    """A present-but-blank required field (folded YAML can leave whitespace)
+    is reported by path, while the rest stay populated."""
+    data = load_release_defaults()
+    data["umbrella"] = dict(data["umbrella"])
+    data["umbrella"]["title_template"] = "   \n  "  # whitespace only
+    missing = missing_release_defaults(data)
+    assert missing == ["umbrella.title_template"]
+    with pytest.raises(ValueError, match="umbrella.title_template"):
+        require_populated_release_defaults(data)

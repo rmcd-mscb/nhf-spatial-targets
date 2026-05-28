@@ -15,6 +15,11 @@ filenames are recorded on every plan) but **not** generated in this
 phase -- metadata rendering is a later phase. ``checksums.py`` only
 fingerprints files that actually exist, so the reserved slots do not
 appear in ``SHA256SUMS`` until those files exist.
+
+This module also hosts :class:`ReleaseError`, the shared base for every
+deliberate release-layer error. It lives here -- the dependency-free leaf
+both ``sb_client`` and ``publish`` import -- so they can subclass it without
+an import cycle.
 """
 
 from __future__ import annotations
@@ -22,6 +27,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+
+
+class ReleaseError(RuntimeError):
+    """Base for every error the release tooling raises deliberately.
+
+    Lives here (the dependency-free shared-types module) so both the
+    foundational :mod:`~nhf_spatial_targets.release.sb_client` primitive and
+    the publish/dry-run orchestration can subclass it without an import cycle.
+    Catching :class:`ReleaseError` catches every release-layer condition --
+    a stale registry, an ambiguous title, a failed pre-flight gate -- as
+    opposed to a transient transport failure (which the client retries) or a
+    genuine bug (which should propagate).
+    """
+
 
 # The two recognized source distribution kinds, mirroring
 # ``catalog.DISTRIBUTION_KIND_TOKENS``. A test asserts the two stay in
