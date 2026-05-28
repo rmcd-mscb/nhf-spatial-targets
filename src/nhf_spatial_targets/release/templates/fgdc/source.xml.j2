@@ -1,0 +1,27 @@
+{#- Consolidated-source child FGDC. The entity-and-attribute section lists the
+    NetCDF variables; the unrepresentable-domain text carries CF units and
+    cell_methods. -#}
+{% extends "base.xml.j2" %}
+{% block eainfo %}
+{% if entityandattribute %}
+<eainfo>
+  <detailed>
+    <enttyp>
+      <enttypl>{{ enttypl }}</enttypl>
+      <enttypd>{{ enttypd }}</enttypd>
+      <enttypds>Producer defined</enttypds>
+    </enttyp>
+    {% for v in entityandattribute %}
+    <attr>
+      <attrlabl>{{ v.name }}</attrlabl>
+      <attrdef>{{ v.definition }}</attrdef>
+      <attrdefs>Producer defined</attrdefs>
+      <attrdomv>
+        <udom>Units: {{ v.units or "dimensionless" }}. Cell methods: {{ v.cell_methods or "n/a" }}.</udom>
+      </attrdomv>
+    </attr>
+    {% endfor %}
+  </detailed>
+</eainfo>
+{% endif %}
+{% endblock %}

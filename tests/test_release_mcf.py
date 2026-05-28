@@ -162,12 +162,14 @@ def test_bbox_nwse_converted_to_wsen(defaults, manifest):
 
 
 def test_source_without_bbox_is_none(defaults, manifest):
-    """SNODAS has no access.bbox_nwse, so its MCF bbox is honestly None.
+    """A source with no access.bbox_nwse gets an honest None MCF bbox.
 
-    (FGDC bounding coordinates are mandatory; supplying a fallback or a
-    catalog bbox for CONUS-only sources is a PR-D2 follow-up.)
+    merra2 is global and subsets at aggregation time, so the catalog carries
+    no bbox for it. (SNODAS used to be the example here, but PR-D2 gave it a
+    catalog CONUS bbox so its FGDC <bounding> is valid; the code-side None
+    path is also covered by test_fabric_bbox_absent_is_none.)
     """
-    built = _build_source("snodas", defaults, manifest)
+    built = _build_source("merra2", defaults, manifest)
     assert built["identification"]["extents"]["spatial"][0]["bbox"] is None
 
 

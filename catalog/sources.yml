@@ -778,6 +778,13 @@ sources:
       type: nsidc_https
       url: https://nsidc.org/data/g02158
       archive_url: https://noaadata.apps.nsidc.org/NOAA/G02158/masked/
+      bbox_nwse: [53.0, -125.0, 24.7, -66.0]
+      bbox_notes: >
+        CONUS analysis domain of the SNODAS `masked/` subtree (2003-present),
+        expressed as [N, W, S, E] to match era5_land. SNODAS fetches by date
+        rather than by bbox, so this is the published spatial extent, not a
+        download subset; it satisfies the mandatory FGDC <bounding> element
+        for the consolidated-source release child.
       # CMR collection record (granule-less metadata stub) — kept for
       # provenance and to flag the trap for the next reader; do NOT use
       # earthaccess.search_data on this short_name, it returns 0 hits.

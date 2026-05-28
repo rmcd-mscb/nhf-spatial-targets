@@ -152,5 +152,6 @@
     "longres": 0.001,
     "geogunit": "Decimal degrees",
     "epsg": 4326
-  }
+  },
+  "distribution_liability": "Although these data have been processed successfully on a computer system at the U.S. Geological Survey (USGS), no warranty expressed or implied is made regarding the display or utility of the data on any other system or for general or scientific purposes, nor shall the act of distribution constitute any such warranty."
 }

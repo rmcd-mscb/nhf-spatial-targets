@@ -1,0 +1,211 @@
+{#-
+  FGDC CSDGM 2.0 (FGDC-STD-001-1998) base template. Element order is fixed and
+  load-bearing -- `mp` rejects out-of-order elements. Per-item-type templates
+  (umbrella / source / fabric) extend this and override {% block eainfo %}.
+  Output is pretty-printed by lxml after rendering, so whitespace here is only
+  for human readability.
+-#}
+{%- macro cntinfo(c) -%}
+<cntinfo>
+  {%- if c.cntper %}
+  <cntperp>
+    <cntper>{{ c.cntper }}</cntper>
+    {%- if c.cntorg %}
+    <cntorg>{{ c.cntorg }}</cntorg>
+    {%- endif %}
+  </cntperp>
+  {%- else %}
+  <cntorgp>
+    <cntorg>{{ c.cntorg }}</cntorg>
+  </cntorgp>
+  {%- endif %}
+  {%- if c.cntpos %}
+  <cntpos>{{ c.cntpos }}</cntpos>
+  {%- endif %}
+  <cntaddr>
+    <addrtype>mailing and physical</addrtype>
+    <address>{{ c.address }}</address>
+    <city>{{ c.city }}</city>
+    <state>{{ c.state }}</state>
+    <postal>{{ c.postal }}</postal>
+    <country>{{ c.country }}</country>
+  </cntaddr>
+  <cntvoice>{{ c.cntvoice }}</cntvoice>
+  {%- if c.cntfax %}
+  <cntfax>{{ c.cntfax }}</cntfax>
+  {%- endif %}
+  {%- if c.cntemail %}
+  <cntemail>{{ c.cntemail }}</cntemail>
+  {%- endif %}
+</cntinfo>
+{%- endmacro -%}
+<metadata>
+  <idinfo>
+    <citation>
+      <citeinfo>
+        {% for o in origins %}
+        <origin>{{ o }}</origin>
+        {% endfor %}
+        <pubdate>{{ pubdate }}</pubdate>
+        <title>{{ title }}</title>
+        <geoform>{{ geoform }}</geoform>
+        <pubinfo>
+          <pubplace>{{ pub_place }}</pubplace>
+          <publish>{{ publisher }}</publish>
+        </pubinfo>
+        {% for u in onlinks %}
+        <onlink>{{ u }}</onlink>
+        {% endfor %}
+      </citeinfo>
+    </citation>
+    <descript>
+      <abstract>{{ abstract }}</abstract>
+      <purpose>{{ purpose }}</purpose>
+      {% if supplinf %}
+      <supplinf>{{ supplinf }}</supplinf>
+      {% endif %}
+    </descript>
+    <timeperd>
+      <timeinfo>
+        <rngdates>
+          <begdate>{{ begdate }}</begdate>
+          <enddate>{{ enddate }}</enddate>
+        </rngdates>
+      </timeinfo>
+      <current>ground condition</current>
+    </timeperd>
+    <status>
+      <progress>{{ progress }}</progress>
+      <update>{{ update }}</update>
+    </status>
+    {% if bbox %}
+    <spdom>
+      <bounding>
+        <westbc>{{ bbox[0] }}</westbc>
+        <eastbc>{{ bbox[2] }}</eastbc>
+        <northbc>{{ bbox[3] }}</northbc>
+        <southbc>{{ bbox[1] }}</southbc>
+      </bounding>
+    </spdom>
+    {% endif %}
+    <keywords>
+      <theme>
+        <themekt>None</themekt>
+        {% for k in theme_keywords %}
+        <themekey>{{ k }}</themekey>
+        {% endfor %}
+      </theme>
+      {% if topic_categories %}
+      <theme>
+        <themekt>ISO 19115 Topic Category</themekt>
+        {% for k in topic_categories %}
+        <themekey>{{ k }}</themekey>
+        {% endfor %}
+      </theme>
+      {% endif %}
+      {% if place_keywords %}
+      <place>
+        <placekt>None</placekt>
+        {% for k in place_keywords %}
+        <placekey>{{ k }}</placekey>
+        {% endfor %}
+      </place>
+      {% endif %}
+    </keywords>
+    <accconst>{{ accconst }}</accconst>
+    <useconst>{{ useconst }}</useconst>
+    <ptcontac>{{ cntinfo(point_of_contact) }}</ptcontac>
+  </idinfo>
+  {% if has_lineage %}
+  <dataqual>
+    <lineage>
+      {% for s in srcinfo_entries %}
+      <srcinfo>
+        <srccite>
+          <citeinfo>
+            <origin>{{ s.origin }}</origin>
+            <pubdate>{{ s.caldate }}</pubdate>
+            <title>{{ s.title }}</title>
+          </citeinfo>
+        </srccite>
+        <typesrc>{{ s.typesrc }}</typesrc>
+        <srctime>
+          <timeinfo>
+            <sngdate>
+              <caldate>{{ s.caldate }}</caldate>
+            </sngdate>
+          </timeinfo>
+          <srccurr>{{ s.srccurr }}</srccurr>
+        </srctime>
+        <srccitea>{{ s.srccitea }}</srccitea>
+        <srccontr>{{ s.srccontr }}</srccontr>
+      </srcinfo>
+      {% endfor %}
+      {% for p in procsteps %}
+      <procstep>
+        <procdesc>{{ p.procdesc }}</procdesc>
+        {% for u in p.srcused %}
+        <srcused>{{ u }}</srcused>
+        {% endfor %}
+        <procdate>{{ p.procdate or "Unknown" }}</procdate>
+        {% if p.proctime %}
+        <proctime>{{ p.proctime }}</proctime>
+        {% endif %}
+        {% for u in p.srcprod %}
+        <srcprod>{{ u }}</srcprod>
+        {% endfor %}
+      </procstep>
+      {% endfor %}
+    </lineage>
+  </dataqual>
+  {% endif %}
+  {% if spref %}
+  <spref>
+    <horizsys>
+      <geograph>
+        <latres>{{ spref.latres }}</latres>
+        <longres>{{ spref.longres }}</longres>
+        <geogunit>{{ spref.geogunit }}</geogunit>
+      </geograph>
+      <geodetic>
+        <horizdn>{{ spref.horizontal_datum }}</horizdn>
+        <ellips>{{ spref.ellipsoid }}</ellips>
+        <semiaxis>{{ spref.semiaxis }}</semiaxis>
+        <denflat>{{ spref.denflat }}</denflat>
+      </geodetic>
+    </horizsys>
+  </spref>
+  {% endif %}
+  {% block eainfo %}{% endblock %}
+  <distinfo>
+    <distrib>{{ cntinfo(distributor) }}</distrib>
+    <distliab>{{ distliab }}</distliab>
+    {% if digforms %}
+    <stdorder>
+      {% for d in digforms %}
+      <digform>
+        <digtinfo>
+          <formname>{{ d.formname }}</formname>
+        </digtinfo>
+        <digtopt>
+          <onlinopt>
+            <computer>
+              <networka>
+                <networkr>{{ d.networkr }}</networkr>
+              </networka>
+            </computer>
+          </onlinopt>
+        </digtopt>
+      </digform>
+      {% endfor %}
+      <fees>{{ fees }}</fees>
+    </stdorder>
+    {% endif %}
+  </distinfo>
+  <metainfo>
+    <metd>{{ metadata_date }}</metd>
+    <metc>{{ cntinfo(point_of_contact) }}</metc>
+    <metstdn>FGDC Content Standard for Digital Geospatial Metadata</metstdn>
+    <metstdv>FGDC-STD-001-1998</metstdv>
+  </metainfo>
+</metadata>

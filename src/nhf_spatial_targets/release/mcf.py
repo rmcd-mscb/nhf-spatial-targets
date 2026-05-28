@@ -21,6 +21,7 @@ pygeometa ignores but the FGDC Jinja templates read:
   ``<eainfo>`` records
 - ``dataquality.lineage.processstep`` -- ``<procstep>`` blocks built from
   ``manifest.json.steps[]``
+- ``distribution_liability`` (top level) -- FGDC ``<distliab>`` boilerplate
 
 The builders are **pure**: every input is passed in (the populated
 ``catalog/release_defaults.yml`` via :mod:`release.defaults`, the per-source
@@ -854,6 +855,12 @@ def _assemble(
         "distribution": distribution,
         "dataquality": dataquality,
         "spatial_reference": dict(defaults.get("spatial_reference", {})),
+        # FGDC <distliab> is mandatory within <distinfo>; pygeometa/ISO ignore
+        # this key. Sourced from release_defaults so the boilerplate is edited
+        # in one place and flows to every rendered FGDC document.
+        "distribution_liability": _collapse_ws(
+            defaults.get("distribution", {}).get("liability_statement", "")
+        ),
     }
     if version is not None:
         mcf["identification"]["edition"] = version

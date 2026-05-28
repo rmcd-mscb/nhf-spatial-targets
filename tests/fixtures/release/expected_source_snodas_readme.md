@@ -15,6 +15,7 @@ DOI: https://doi.org/10.7265/N5TB14TC
 ## Extent
 
 - Temporal: 2003-01-01 to present
+- Bounding coordinates (W, S, E, N): -125.0, 24.7, -66.0, 53.0
 
 ## Variables
 

@@ -1,0 +1,394 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<metadata>
+  <idinfo>
+    <citation>
+      <citeinfo>
+        <origin>Doe, Jane</origin>
+        <origin>Roe, John</origin>
+        <pubdate>20260528</pubdate>
+        <title>Calibration targets for the gfv2 hydrologic fabric, U.S. Geological Survey National Hydrologic Model</title>
+        <geoform>vector digital data</geoform>
+        <pubinfo>
+          <pubplace>Denver, CO</pubplace>
+          <publish>U.S. Geological Survey - ScienceBase</publish>
+        </pubinfo>
+        <onlink>https://www.sciencebase.gov</onlink>
+      </citeinfo>
+    </citation>
+    <descript>
+      <abstract>This child item provides calibration-target datasets for the gfv2 hydrologic fabric (109951 hydrologic response units) of the USGS National Hydrologic Model. Targets: runoff, aet, snow_water_equivalent. Participating sources: daymet, era5_land, gldas_noah_v21_monthly, snodas. Project-specific note appended to the fabric abstract.</abstract>
+      <purpose>Provide calibration targets aggregated to the gfv2 fabric for parameter estimation of the USGS National Hydrologic Model.</purpose>
+      <supplinf>Each gridded source dataset was area-weighted to the gfv2 fabric with gdptools, then combined into per-target ranges by the nhf-spatial-targets pipeline.</supplinf>
+    </descript>
+    <timeperd>
+      <timeinfo>
+        <rngdates>
+          <begdate>20000101</begdate>
+          <enddate>Present</enddate>
+        </rngdates>
+      </timeinfo>
+      <current>ground condition</current>
+    </timeperd>
+    <status>
+      <progress>Complete</progress>
+      <update>As needed</update>
+    </status>
+    <spdom>
+      <bounding>
+        <westbc>-124.7</westbc>
+        <eastbc>-66.95</eastbc>
+        <northbc>49.4</northbc>
+        <southbc>24.5</southbc>
+      </bounding>
+    </spdom>
+    <keywords>
+      <theme>
+        <themekt>None</themekt>
+        <themekey>hydrology</themekey>
+        <themekey>National Hydrologic Model</themekey>
+        <themekey>hydrologic response unit</themekey>
+        <themekey>calibration targets</themekey>
+        <themekey>runoff</themekey>
+        <themekey>aet</themekey>
+        <themekey>snow_water_equivalent</themekey>
+      </theme>
+      <theme>
+        <themekt>ISO 19115 Topic Category</themekt>
+        <themekey>inlandWaters</themekey>
+        <themekey>climatologyMeteorologyAtmosphere</themekey>
+      </theme>
+      <place>
+        <placekt>None</placekt>
+        <placekey>gfv2</placekey>
+      </place>
+    </keywords>
+    <accconst>None. Please see Use Constraints.</accconst>
+    <useconst>None. Users are advised to read the dataset's metadata thoroughly to understand appropriate use and data limitations.
+
+Participating source dataset licenses: public domain (NASA / ORNL DAAC); Copernicus license (free, attribution); public domain (NASA); public domain (NSIDC / NOAA).
+
+These data are distributed by the Oak Ridge National Laboratory Distributed Active Archive Center (ORNL DAAC), Oak Ridge, Tennessee, USA.
+
+This dataset was generated using Copernicus Climate Change Service (C3S) information (ECMWF ERA5-Land). Neither the European Commission nor ECMWF is responsible for any use of the Copernicus information or data it contains.
+
+These data were obtained from the NASA Earthdata system. We acknowledge the use of data products from the NASA Earth science data systems.
+
+These data are distributed by the NASA National Snow and Ice Data Center Distributed Active Archive Center (NSIDC DAAC).</useconst>
+    <ptcontac>
+      <cntinfo>
+        <cntperp>
+          <cntper>National Hydrologic Model Calibration Targets Team</cntper>
+          <cntorg>U.S. Geological Survey</cntorg>
+        </cntperp>
+        <cntpos>Point of Contact</cntpos>
+        <cntaddr>
+          <addrtype>mailing and physical</addrtype>
+          <address>Building 810, Mail Stop 302, Denver Federal Center</address>
+          <city>Denver</city>
+          <state>CO</state>
+          <postal>80225</postal>
+          <country>USA</country>
+        </cntaddr>
+        <cntvoice>1-888-275-8747</cntvoice>
+        <cntemail>gs-w-nhm_calibration@usgs.gov</cntemail>
+      </cntinfo>
+    </ptcontac>
+  </idinfo>
+  <dataqual>
+    <lineage>
+      <srcinfo>
+        <srccite>
+          <citeinfo>
+            <origin>U.S. Geological Survey</origin>
+            <pubdate>20260522</pubdate>
+            <title>era5_land_2003.nc</title>
+          </citeinfo>
+        </srccite>
+        <typesrc>Digital data</typesrc>
+        <srctime>
+          <timeinfo>
+            <sngdate>
+              <caldate>20260522</caldate>
+            </sngdate>
+          </timeinfo>
+          <srccurr>Process date</srccurr>
+        </srctime>
+        <srccitea>era5_land_2003.nc</srccitea>
+        <srccontr>Intermediate or source dataset processed by the nhf-spatial-targets pipeline.</srccontr>
+      </srcinfo>
+      <srcinfo>
+        <srccite>
+          <citeinfo>
+            <origin>U.S. Geological Survey</origin>
+            <pubdate>20260521</pubdate>
+            <title>era5_land_monthly_2003.nc</title>
+          </citeinfo>
+        </srccite>
+        <typesrc>Digital data</typesrc>
+        <srctime>
+          <timeinfo>
+            <sngdate>
+              <caldate>20260521</caldate>
+            </sngdate>
+          </timeinfo>
+          <srccurr>Process date</srccurr>
+        </srctime>
+        <srccitea>era5_land_monthly_2003.nc</srccitea>
+        <srccontr>Intermediate or source dataset processed by the nhf-spatial-targets pipeline.</srccontr>
+      </srcinfo>
+      <srcinfo>
+        <srccite>
+          <citeinfo>
+            <origin>U.S. Geological Survey</origin>
+            <pubdate>20260524</pubdate>
+            <title>runoff_targets.nc</title>
+          </citeinfo>
+        </srccite>
+        <typesrc>Digital data</typesrc>
+        <srctime>
+          <timeinfo>
+            <sngdate>
+              <caldate>20260524</caldate>
+            </sngdate>
+          </timeinfo>
+          <srccurr>Process date</srccurr>
+        </srctime>
+        <srccitea>runoff_targets.nc</srccitea>
+        <srccontr>Intermediate or source dataset processed by the nhf-spatial-targets pipeline.</srccontr>
+      </srcinfo>
+      <srcinfo>
+        <srccite>
+          <citeinfo>
+            <origin>U.S. Geological Survey</origin>
+            <pubdate>20260521</pubdate>
+            <title>snodas_2003.nc</title>
+          </citeinfo>
+        </srccite>
+        <typesrc>Digital data</typesrc>
+        <srctime>
+          <timeinfo>
+            <sngdate>
+              <caldate>20260521</caldate>
+            </sngdate>
+          </timeinfo>
+          <srccurr>Process date</srccurr>
+        </srctime>
+        <srccitea>snodas_2003.nc</srccitea>
+        <srccontr>Intermediate or source dataset processed by the nhf-spatial-targets pipeline.</srccontr>
+      </srcinfo>
+      <procstep>
+        <procdesc>consolidate via nhf-targets 0.7.0; command: fetch era5-land; params: resample=monthly</procdesc>
+        <srcused>era5_land_2003.nc</srcused>
+        <procdate>20260521</procdate>
+        <proctime>103015</proctime>
+        <srcprod>era5_land_monthly_2003.nc</srcprod>
+      </procstep>
+      <procstep>
+        <procdesc>aggregate via nhf-targets 0.7.0; command: agg era5-land; params: batch_size=500, method=area_weighted</procdesc>
+        <srcused>era5_land_monthly_2003.nc</srcused>
+        <procdate>20260522</procdate>
+        <proctime>080000</proctime>
+        <srcprod>era5_land_2003.nc</srcprod>
+      </procstep>
+      <procstep>
+        <procdesc>consolidate via nhf-targets 0.7.0; command: fetch snodas</procdesc>
+        <procdate>20260521</procdate>
+        <proctime>124500</proctime>
+        <srcprod>snodas_2003.nc</srcprod>
+      </procstep>
+      <procstep>
+        <procdesc>target via nhf-targets 0.7.0; command: run-runoff; params: range_method=multi_source_minmax</procdesc>
+        <srcused>era5_land_2003.nc</srcused>
+        <procdate>20260524</procdate>
+        <proctime>091530</proctime>
+        <srcprod>runoff_targets.nc</srcprod>
+      </procstep>
+      <procstep>
+        <procdesc>validate via nhf-targets 0.7.0; command: validate</procdesc>
+        <procdate>20260525</procdate>
+        <proctime>000000</proctime>
+      </procstep>
+    </lineage>
+  </dataqual>
+  <spref>
+    <horizsys>
+      <geograph>
+        <latres>0.001</latres>
+        <longres>0.001</longres>
+        <geogunit>Decimal degrees</geogunit>
+      </geograph>
+      <geodetic>
+        <horizdn>WGS_1984</horizdn>
+        <ellips>WGS_1984</ellips>
+        <semiaxis>6378137.0</semiaxis>
+        <denflat>298.257223563</denflat>
+      </geodetic>
+    </horizsys>
+  </spref>
+  <eainfo>
+    <detailed>
+      <enttyp>
+        <enttypl>Calibration target variables</enttypl>
+        <enttypd>Calibration-target variables provided for this hydrologic fabric.</enttypd>
+        <enttypds>Producer defined</enttypds>
+      </enttyp>
+      <attr>
+        <attrlabl>runoff</attrlabl>
+        <attrdef>Monthly basin mean runoff. Range is min/max across two reanalysis sources per HRU and time step.</attrdef>
+        <attrdefs>Producer defined</attrdefs>
+        <attrdomv>
+          <udom>Units: cfs. Range method: multi_source_minmax. ERA5-Land 'ro' (m water equivalent), GLDAS-2.1 NOAH 'Qs_acc + Qsb_acc' (kg/m² ≡ mm), and MWBM ClimGrid 'runoff' (mm/month) are aggregated to HRU polygons via gdptools, harmonized to mm/month, then converted to cfs using HRU area and days-in-month. Per-HRU per-month: lower_bound = nanmin(era5, gldas, mwbm), upper_bound = nanmax(era5, gldas, mwbm). nanmin/nanmax (xr.concat([...]).min(skipna=True)) means a bound is defined whenever &gt;=1 source is finite at that (HRU, time); only all-NaN cells produce NaN. mwbm_climgrid (Wieczorek et al. 2024, ClimGrid-forced) is the third source; all three are consumed by targets/run.py.</udom>
+        </attrdomv>
+      </attr>
+      <attr>
+        <attrlabl>aet</attrlabl>
+        <attrdef>Monthly actual evapotranspiration. Range is min/max across three independent source datasets per HRU and time step. Absolute values used (not normalized); range reflects inter-product spread.</attrdef>
+        <attrdefs>Producer defined</attrdefs>
+        <attrdomv>
+          <udom>Units: inches/day. Range method: multi_source_minmax. For each HRU and time step: lower_bound = min(src1, src2, src3), upper_bound = max(src1, src2, src3). All sources must be spatially aggregated to HRU polygons via gdptools before comparison. AET is NOT normalized — absolute values are compared directly. mwbm_climgrid contributes the MWBM-family AET trace (Wieczorek et al. 2024, mm/month native). MOD16A2 v061 flat seasonality was traced to fill-value contamination during sinusoidal→WGS84 reprojection (rioxarray Resampling.average averaging special codes into valid neighbours); fixed in PR #88 by masking ET_500m fills before reprojection. All three sources are now included. Existing consolidated/aggregated NCs produced before PR #88 must be re-fetched and re-aggregated.</udom>
+        </attrdomv>
+      </attr>
+      <attr>
+        <attrlabl>snow_water_equivalent</attrlabl>
+        <attrdef>Daily basin snow water equivalent. Range is min/max across four independent SWE sources per HRU and time step. Margulis Western US Snow Reanalysis is fabric-scoped to Oregon only (see fabric_scope in catalog/sources.yml); non-Oregon fabrics are bounded by the remaining three sources. Absolute values used (not normalized).</attrdef>
+        <attrdefs>Producer defined</attrdefs>
+        <attrdomv>
+          <udom>Units: inches. Range method: multi_source_minmax. Daymet 'swe' (kg/m² ≡ mm), SNODAS 'swe' (kg/m² ≡ mm), ERA5-Land 'sd' (m water-eq → mm), Margulis WUS-SR 'SWE' (m water-eq → mm) are aggregated to HRU polygons via gdptools and harmonized to mm, then converted to inches in the target builder to match the PRMS variable pkwater_equiv (per TM 6-B7). Per-HRU per-day: lower_bound = nanmin(daymet, snodas, era5_sd, margulis), upper_bound = nanmax(daymet, snodas, era5_sd, margulis). nanmin/nanmax (xr.concat([...]).min(skipna=True)) means a bound is defined whenever &gt;=1 source is finite at that (HRU, time); only all-NaN cells produce NaN. Margulis WUS-SR is fabric-scoped to Oregon (see catalog/sources.yml fabric_scope); for non-OR fabrics it is excluded by the target builder so the bound reduces to a 3-source min/max.</udom>
+        </attrdomv>
+      </attr>
+    </detailed>
+  </eainfo>
+  <distinfo>
+    <distrib>
+      <cntinfo>
+        <cntperp>
+          <cntper>ScienceBase Data Release Team</cntper>
+          <cntorg>U.S. Geological Survey - ScienceBase</cntorg>
+        </cntperp>
+        <cntpos>Distributor</cntpos>
+        <cntaddr>
+          <addrtype>mailing and physical</addrtype>
+          <address>Building 810, Mail Stop 302, Denver Federal Center</address>
+          <city>Denver</city>
+          <state>CO</state>
+          <postal>80225</postal>
+          <country>USA</country>
+        </cntaddr>
+        <cntvoice>1-888-275-8747</cntvoice>
+        <cntemail>sciencebase@usgs.gov</cntemail>
+      </cntinfo>
+    </distrib>
+    <distliab>Although these data have been processed successfully on a computer system at the U.S. Geological Survey (USGS), no warranty expressed or implied is made regarding the display or utility of the data on any other system or for general or scientific purposes, nor shall the act of distribution constitute any such warranty.</distliab>
+    <stdorder>
+      <digform>
+        <digtinfo>
+          <formname>GeoPackage</formname>
+        </digtinfo>
+        <digtopt>
+          <onlinopt>
+            <computer>
+              <networka>
+                <networkr>fabric.gpkg</networkr>
+              </networka>
+            </computer>
+          </onlinopt>
+        </digtopt>
+      </digform>
+      <digform>
+        <digtinfo>
+          <formname>NetCDF</formname>
+        </digtinfo>
+        <digtopt>
+          <onlinopt>
+            <computer>
+              <networka>
+                <networkr>aggregated/era5_land/era5_land_2003.nc</networkr>
+              </networka>
+            </computer>
+          </onlinopt>
+        </digtopt>
+      </digform>
+      <digform>
+        <digtinfo>
+          <formname>NetCDF</formname>
+        </digtinfo>
+        <digtopt>
+          <onlinopt>
+            <computer>
+              <networka>
+                <networkr>aggregated/snodas/snodas_2003.nc</networkr>
+              </networka>
+            </computer>
+          </onlinopt>
+        </digtopt>
+      </digform>
+      <digform>
+        <digtinfo>
+          <formname>NetCDF</formname>
+        </digtinfo>
+        <digtopt>
+          <onlinopt>
+            <computer>
+              <networka>
+                <networkr>targets/runoff_targets.nc</networkr>
+              </networka>
+            </computer>
+          </onlinopt>
+        </digtopt>
+      </digform>
+      <digform>
+        <digtinfo>
+          <formname>NetCDF</formname>
+        </digtinfo>
+        <digtopt>
+          <onlinopt>
+            <computer>
+              <networka>
+                <networkr>targets/swe_targets.nc</networkr>
+              </networka>
+            </computer>
+          </onlinopt>
+        </digtopt>
+      </digform>
+      <digform>
+        <digtinfo>
+          <formname>JSON</formname>
+        </digtinfo>
+        <digtopt>
+          <onlinopt>
+            <computer>
+              <networka>
+                <networkr>manifest.json</networkr>
+              </networka>
+            </computer>
+          </onlinopt>
+        </digtopt>
+      </digform>
+      <fees>None.</fees>
+    </stdorder>
+  </distinfo>
+  <metainfo>
+    <metd>20260528</metd>
+    <metc>
+      <cntinfo>
+        <cntperp>
+          <cntper>National Hydrologic Model Calibration Targets Team</cntper>
+          <cntorg>U.S. Geological Survey</cntorg>
+        </cntperp>
+        <cntpos>Point of Contact</cntpos>
+        <cntaddr>
+          <addrtype>mailing and physical</addrtype>
+          <address>Building 810, Mail Stop 302, Denver Federal Center</address>
+          <city>Denver</city>
+          <state>CO</state>
+          <postal>80225</postal>
+          <country>USA</country>
+        </cntaddr>
+        <cntvoice>1-888-275-8747</cntvoice>
+        <cntemail>gs-w-nhm_calibration@usgs.gov</cntemail>
+      </cntinfo>
+    </metc>
+    <metstdn>FGDC Content Standard for Digital Geospatial Metadata</metstdn>
+    <metstdv>FGDC-STD-001-1998</metstdv>
+  </metainfo>
+</metadata>
