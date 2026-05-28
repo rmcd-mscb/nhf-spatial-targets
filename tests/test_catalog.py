@@ -484,6 +484,27 @@ def test_release_block_margulis_publishable_despite_fabric_scope():
     assert rb["distribution_kind"] == "data"
 
 
+def test_release_block_ua_swe_explicit_decision():
+    """ua_swe carries a deliberate release decision (not inherited defaults).
+
+    A newly added source gets an explicit publishable/distribution_kind call
+    plus the NSIDC-0719 citation/attribution text in `notes`, which the FGDC
+    useconst builder should surface as a use constraint. Locking it here keeps
+    the decision from silently regressing to the bare defaults.
+    """
+    from nhf_spatial_targets.catalog import release_block, source
+
+    # The block must be physically present, not the inherited default.
+    assert source("ua_swe").get("release") is not None
+
+    rb = release_block("ua_swe")
+    assert rb["publishable"] is True
+    assert rb["distribution_kind"] == "data"
+    # Attribution requirement recorded for the FGDC useconst.
+    assert "10.5067/0GGPB220EX6A" in rb["notes"]
+    assert "NSIDC" in rb["notes"]
+
+
 def test_release_block_watergap22d_preserves_distribution_kind_default():
     """Partial-override: setting `publishable` alone must leave the
     `distribution_kind` default in place. Locks the per-key merge contract
