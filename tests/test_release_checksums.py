@@ -101,17 +101,54 @@ def test_compute_on_missing_dir_raises(tmp_path):
         compute_checksums(tmp_path / "nope")
 
 
+def test_compute_on_empty_stage_writes_header_only_and_empty_sums(tmp_path):
+    """Umbrella / metadata-only stages are empty; the manifests must still
+    be well-formed: a header-only CSV and a zero-length SHA256SUMS."""
+    stage = tmp_path / "empty"
+    stage.mkdir()
+    entries = compute_checksums(stage)
+    assert entries == []
+    assert (stage / SHA256SUMS).read_text() == ""
+    header = (stage / CHECKSUMS_CSV).read_text().splitlines()[0]
+    assert header == "path,sha256,size_bytes,mtime_utc"
+    verify_csv(stage)  # an empty stage verifies clean
+
+
+def test_dangling_symlink_is_a_hard_error_not_a_silent_skip(tmp_path):
+    """A staged symlink whose target vanished must fail loudly, not be
+    silently dropped from the integrity manifest."""
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    target = tmp_path / "gone.nc"
+    target.write_bytes(b"data")
+    (stage / "linked.nc").symlink_to(target)
+    target.unlink()  # break the link
+    with pytest.raises(FileNotFoundError, match="missing target.*linked.nc"):
+        compute_checksums(stage)
+
+
 def test_verify_passes_after_compute(tmp_path):
     stage = _make_stage(tmp_path)
     compute_checksums(stage)
     verify_csv(stage)  # no raise
 
 
-def test_verify_detects_content_drift(tmp_path):
+def test_verify_detects_sha256_drift_same_size(tmp_path):
     stage = _make_stage(tmp_path)
     compute_checksums(stage)
-    (stage / "fabric.gpkg").write_bytes(b"TAMPERED")
+    # Same length (4 bytes), different content -> size matches, so the
+    # hash check is what catches the drift.
+    (stage / "fabric.gpkg").write_bytes(b"XXXX")
     with pytest.raises(ChecksumMismatch, match="sha256 drift.*fabric.gpkg"):
+        verify_csv(stage)
+
+
+def test_verify_detects_size_drift(tmp_path):
+    stage = _make_stage(tmp_path)
+    compute_checksums(stage)
+    # Different length -> size is the cheap pre-filter that catches it.
+    (stage / "fabric.gpkg").write_bytes(b"TAMPERED")
+    with pytest.raises(ChecksumMismatch, match="size drift.*fabric.gpkg"):
         verify_csv(stage)
 
 

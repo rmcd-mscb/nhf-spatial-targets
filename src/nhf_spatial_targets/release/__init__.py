@@ -5,6 +5,7 @@ from __future__ import annotations
 from nhf_spatial_targets.release._models import (
     CHECKSUM_FILES,
     RESERVED_METADATA_FILES,
+    DistributionKind,
     FabricChildPlan,
     FileEntry,
     ReleasePayload,
@@ -57,6 +58,7 @@ __all__ = [
     "CHECKSUM_FILES",
     "RESERVED_METADATA_FILES",
     "ChecksumMismatch",
+    "DistributionKind",
     "FabricChildPlan",
     "FileEntry",
     "InputFileEntry",

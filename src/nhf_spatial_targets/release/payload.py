@@ -25,9 +25,10 @@ Publishability filtering (fabric children):
     they are products of a publishable source, not independently gated.
 
 The README / FGDC / ISO slots are *reserved* (recorded on each plan) but
-not written here -- that is PR-D. Re-running a stage overwrites each
-managed file in place (idempotent for the same inputs); pruning entries
-whose inputs were removed is deferred to the PR-E build orchestrator.
+not written here -- metadata generation is a later phase. Re-running a
+stage overwrites each managed file in place (idempotent for the same
+inputs); pruning entries whose inputs were removed is deferred to the
+build orchestrator.
 """
 
 from __future__ import annotations
@@ -50,7 +51,8 @@ def resolve_fabric_label(project: Project) -> str:
     """Return the human-readable fabric label for *project*.
 
     Uses ``config.release.fabric_label`` when set, else the stem of the
-    fabric file path (e.g. ``gfv2_nhru_merged`` -> ``gfv2_nhru_merged``).
+    fabric file path (e.g. ``/data/fab/gfv2_nhru_merged.gpkg`` ->
+    ``gfv2_nhru_merged``).
     """
     release_cfg = project.config.get("release") or {}
     label = release_cfg.get("fabric_label")
@@ -179,7 +181,7 @@ def stage_fabric_child(project: Project, *, copy: bool = False) -> FabricChildPl
         targets/<nc>                 (symlinks)
 
     README.md / fgdc.xml / iso.xml are reserved on the returned plan but
-    not written (PR-D).
+    not yet generated.
     """
     plan = plan_fabric_child(project)
     plan.stage_dir.mkdir(parents=True, exist_ok=True)
@@ -207,7 +209,7 @@ def stage_source_child(
 
     Datastore subpaths are preserved (e.g. ``daily/era5_land_daily_1979.nc``
     stages to ``<stage>/daily/era5_land_daily_1979.nc``). ``metadata_only``
-    sources stage no data files -- only the reserved metadata slots (PR-D).
+    sources stage no data files -- only the reserved metadata slots.
     """
     plan = plan_source_child(project, source_key)
     plan.stage_dir.mkdir(parents=True, exist_ok=True)

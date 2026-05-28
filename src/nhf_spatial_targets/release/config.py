@@ -14,7 +14,7 @@ round-trips -- loading it back yields exactly the block that was written.
 
 Validation here is **shape only** (types + recognized keys). ``authors``
 being non-empty is required to *publish*, not to load; that gate lives in
-the publish pre-flight (PR-E), matching the note in
+the publish pre-flight, matching the note in
 :data:`nhf_spatial_targets.defaults.DEFAULTS`.
 """
 

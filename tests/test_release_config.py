@@ -122,3 +122,29 @@ def test_scaffold_overwrite_flag(tmp_path):
 def test_scaffold_validates_block(tmp_path):
     with pytest.raises(ValueError, match="unknown key"):
         scaffold_release_yml(tmp_path / "release", block={"bogus": 1})
+
+
+def test_load_release_yml_comment_only_returns_empty_block(tmp_path):
+    """An operator who deletes every key (leaving only the comment header)
+    leaves a file that parses to None; it must yield the empty block."""
+    path = tmp_path / "release.yml"
+    path.write_text("# just a comment, no keys\n")
+    assert load_release_yml(path) == {
+        "authors": [],
+        "ipds_number": None,
+        "doi": None,
+        "abstract_notes": None,
+        "fabric_label": None,
+    }
+
+
+def test_load_release_yml_non_mapping_raises(tmp_path):
+    path = tmp_path / "release.yml"
+    path.write_text("- a\n- b\n")
+    with pytest.raises(ValueError, match="expected a YAML mapping"):
+        load_release_yml(path)
+
+
+def test_load_release_yml_missing_raises(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        load_release_yml(tmp_path / "nope.yml")

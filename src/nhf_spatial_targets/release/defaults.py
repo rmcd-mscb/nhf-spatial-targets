@@ -9,7 +9,7 @@ and are handled by :mod:`nhf_spatial_targets.release.config`.
 Validation here is **shape only**: the eight canonical top-level sections
 must be present and be mappings, and no unknown sections may appear. It
 deliberately does *not* require the sections to be populated -- the
-committed file ships as an empty scaffold and is filled in over PR-D/PR-E.
+committed file ships as an empty scaffold and is filled in over later phases.
 The hard "fully populated" gate is a publish-time pre-flight check, not a
 load-time one, so an operator can build + dry-run a payload before the
 boilerplate is final.

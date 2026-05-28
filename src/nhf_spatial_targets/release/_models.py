@@ -12,20 +12,27 @@ these by walking a finished stage directory.
 
 The README / FGDC / ISO files are *reserved* here (their canonical
 filenames are recorded on every plan) but **not** generated in this
-phase -- MCF + FGDC + ISO + README rendering is PR-D. ``checksums.py``
-only fingerprints files that actually exist, so the reserved slots do not
-appear in ``SHA256SUMS`` until PR-D fills them.
+phase -- metadata rendering is a later phase. ``checksums.py`` only
+fingerprints files that actually exist, so the reserved slots do not
+appear in ``SHA256SUMS`` until those files exist.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
-# Metadata files every item carries. Generated in PR-D (MCF + FGDC + ISO
-# + README); the staging code in PR-C records these names on each plan
-# but writes no placeholder, so they stay out of the checksum manifest
-# until they exist.
+# The two recognized source distribution kinds, mirroring
+# ``catalog.DISTRIBUTION_KIND_TOKENS``. A test asserts the two stay in
+# sync. "data" ships the consolidated NetCDFs; "metadata_only" ships only
+# metadata pointing at the upstream archive.
+DistributionKind = Literal["data", "metadata_only"]
+
+# Metadata files every item carries. Generated in a later phase (MCF +
+# FGDC + ISO + README); the staging code here records these names on each
+# plan but writes no placeholder, so they stay out of the checksum
+# manifest until they exist.
 RESERVED_METADATA_FILES: tuple[str, ...] = ("README.md", "fgdc.xml", "iso.xml")
 
 # Integrity files written by checksums.py. Named here so the checksum
@@ -56,7 +63,7 @@ class UmbrellaPlan:
     """Metadata-only umbrella (DOI parent) item.
 
     Carries no data payload -- only the reserved README / FGDC / ISO
-    slots filled in PR-D. ``stage_dir`` is ``<build>/umbrella``.
+    slots filled in a later phase. ``stage_dir`` is ``<build>/umbrella``.
     """
 
     stage_dir: Path
@@ -73,10 +80,19 @@ class SourceChildPlan:
     """
 
     source_key: str
-    distribution_kind: str
+    distribution_kind: DistributionKind
     stage_dir: Path
     data_files: tuple[Path, ...] = ()
     reserved_files: tuple[str, ...] = RESERVED_METADATA_FILES
+
+    def __post_init__(self) -> None:
+        # A metadata-only child publishes no data, so carrying data files
+        # would be a contradiction that misleads downstream FGDC emission.
+        if self.distribution_kind == "metadata_only" and self.data_files:
+            raise ValueError(
+                f"metadata_only source {self.source_key!r} must carry no "
+                f"data_files; got {len(self.data_files)}."
+            )
 
 
 @dataclass(frozen=True)
@@ -105,5 +121,5 @@ class ReleasePayload:
 
     build_root: Path
     umbrella: UmbrellaPlan | None = None
-    sources: tuple[SourceChildPlan, ...] = field(default_factory=tuple)
+    sources: tuple[SourceChildPlan, ...] = ()
     fabric: FabricChildPlan | None = None

@@ -3,7 +3,7 @@
 Two integrity artifacts are written next to a finished stage tree:
 
 - ``checksums.csv`` -- columns ``path,sha256,size_bytes,mtime_utc``; the
-  rich record (sizes + mtimes) used by ``release status`` / publish drift
+  rich record (sizes + mtimes) for status reporting and publish-time drift
   detection.
 - ``SHA256SUMS`` -- GNU ``sha256sum`` format (``<hex>␠␠<path>``) so an
   operator can run ``sha256sum -c SHA256SUMS`` from inside the stage
@@ -23,6 +23,7 @@ but not compared (touching a file must not fail verification).
 from __future__ import annotations
 
 import csv
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -43,10 +44,21 @@ def _iter_staged_files(stage_dir: Path) -> list[Path]:
 
     Skips the top-level integrity files (a manifest must not list itself);
     a same-named file nested in a subdirectory is still included.
+
+    A *dangling* symlink (the default stager links data files, and the
+    datastore can live on a separately-mounted drive) is a hard error, not
+    a skip: ``is_file()`` is False for a broken link, so a silent skip would
+    drop the file from the integrity manifest and let ``verify_csv`` /
+    ``sha256sum -c`` pass over an incomplete payload.
     """
     skip = set(CHECKSUM_FILES)
     rels: list[Path] = []
     for path in stage_dir.rglob("*"):
+        if path.is_symlink() and not path.exists():
+            raise FileNotFoundError(
+                f"staged entry points at a missing target: {path} -> "
+                f"{os.readlink(path)}"
+            )
         if not path.is_file():
             continue
         rel = path.relative_to(stage_dir)
@@ -141,17 +153,22 @@ def verify_csv(stage_dir: Path) -> None:
         if not abs_path.is_file():
             problems.append(f"missing: {rel}")
             continue
-        actual_sha = sha256_file(abs_path)
-        if actual_sha != row["sha256"]:
-            problems.append(
-                f"sha256 drift: {rel} (recorded {row['sha256'][:12]}…, "
-                f"now {actual_sha[:12]}…)"
-            )
+        # Size is the cheap pre-filter: a mismatch already proves drift, so
+        # skip hashing a (potentially multi-GB) file whose size changed, and
+        # report one unambiguous problem per file rather than a redundant
+        # size+sha256 pair.
         actual_size = abs_path.stat().st_size
         if str(actual_size) != row["size_bytes"]:
             problems.append(
                 f"size drift: {rel} (recorded {row['size_bytes']} bytes, "
                 f"now {actual_size})"
+            )
+            continue
+        actual_sha = sha256_file(abs_path)
+        if actual_sha != row["sha256"]:
+            problems.append(
+                f"sha256 drift: {rel} (recorded {row['sha256'][:12]}…, "
+                f"now {actual_sha[:12]}…)"
             )
 
     on_disk = {rel.as_posix() for rel in _iter_staged_files(stage_dir)}
