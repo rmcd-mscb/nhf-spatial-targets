@@ -205,6 +205,16 @@ agg-all          = { cmd = "nhf-targets agg all",          description = "Aggreg
 catalog-sources   = { cmd = "nhf-targets catalog sources" }
 catalog-variables = { cmd = "nhf-targets catalog variables" }
 
+# ScienceBase data release (PR-F). Pass --project-dir (and publish flags) as
+# extra args, e.g.  pixi run release-build -- --project-dir /data/nhf-runs/gfv2
+release-init      = { cmd = "nhf-targets release init",      description = "Scaffold a project's ScienceBase release directory" }
+release-build     = { cmd = "nhf-targets release build",     description = "Build the ScienceBase release payload on disk (offline)" }
+release-manifest  = { cmd = "nhf-targets release manifest",  description = "Recompute checksums for staged release items" }
+release-dry-run   = { cmd = "nhf-targets release dry-run",   description = "Preview a ScienceBase release (read-only)" }
+release-publish   = { cmd = "nhf-targets release publish",   description = "Publish the release to ScienceBase (idempotent)" }
+release-status    = { cmd = "nhf-targets release status",    description = "Diff release intent vs ScienceBase" }
+release-auth-test = { cmd = "nhf-targets release auth-test", description = "Check ScienceBase authentication" }
+
 # Development
 test  = { cmd = "pytest tests/ -v -m 'not integration'", description = "Run test suite (excludes integration)" }
 test-quiet = { cmd = "pytest tests/ -q -m 'not integration'", description = "Run test suite quietly (for pre-commit hooks)" }

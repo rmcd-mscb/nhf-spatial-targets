@@ -71,6 +71,7 @@ def launcher(
 from nhf_spatial_targets.cli.agg import agg_app  # noqa: E402
 from nhf_spatial_targets.cli.catalog import catalog_app  # noqa: E402
 from nhf_spatial_targets.cli.fetch import fetch_app  # noqa: E402
+from nhf_spatial_targets.cli.release import release_app  # noqa: E402
 from nhf_spatial_targets.cli.run import (  # noqa: E402
     _dispatch,
     init,
@@ -86,6 +87,7 @@ from nhf_spatial_targets.cli.run import (  # noqa: E402
 app.command(fetch_app)
 app.command(agg_app)
 app.command(catalog_app)
+app.command(release_app)
 _register_run_commands(app)
 
 
