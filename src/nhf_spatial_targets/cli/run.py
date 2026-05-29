@@ -384,8 +384,9 @@ def upgrade_manifest_cmd(
     """Report whether manifest.json predates the current manifest schema.
 
     Report-only: never mutates the manifest. Exits 0 if current, 1 if behind
-    (so scripted heartbeats detect drift). To normalize a behind manifest, run
-    'nhf-targets rebuild-manifest -d <dir>'.
+    (so scripted heartbeats detect drift). A behind manifest will be normalized
+    by the forthcoming 'rebuild-manifest' command (issue #279, lands in a later
+    PR).
     """
     from rich.console import Console
 
@@ -412,9 +413,9 @@ def upgrade_manifest_cmd(
     console.print(
         f"[bold yellow]manifest.json is schema version {behind}; current is "
         f"{CURRENT_MANIFEST_SCHEMA_VERSION}.[/bold yellow]\n\n"
-        "Run 'nhf-targets rebuild-manifest -d <dir>' to regenerate it as a "
-        "complete, version-stamped projection of the on-disk artifacts. "
-        "This command never edits your manifest."
+        "The forthcoming 'rebuild-manifest' command (issue #279, lands in a "
+        "later PR) will regenerate it as a complete, version-stamped projection "
+        "of the on-disk artifacts. This command never edits your manifest."
     )
     sys.exit(1)
 

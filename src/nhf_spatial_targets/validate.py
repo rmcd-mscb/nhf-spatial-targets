@@ -550,8 +550,17 @@ def _write_manifest(workdir: Path, fabric_meta: dict) -> None:
     preserved: dict = {}
     if path.exists():
         try:
-            preserved = json.loads(path.read_text())
-        except json.JSONDecodeError as exc:
+            loaded = json.loads(path.read_text())
+            # Valid JSON that isn't an object (``[]``/``null``/``42``) is just
+            # as unusable as a parse error -- fold it into the tolerant path
+            # instead of letting ``preserved.get(...)`` raise AttributeError
+            # below and bypass this warning.
+            if not isinstance(loaded, dict):
+                raise ValueError(
+                    f"manifest.json is {type(loaded).__name__}, not an object"
+                )
+            preserved = loaded
+        except (json.JSONDecodeError, ValueError) as exc:
             logger.warning(
                 "manifest.json in %s could not be parsed (%s); writing a "
                 "fresh skeleton. Inspect the file manually if you need "

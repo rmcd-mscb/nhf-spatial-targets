@@ -435,6 +435,31 @@ def test_validate_recovers_from_corrupt_manifest(
     # Corrupt-manifest recovery seeds a fresh skeleton then validate
     # appends its own kind=validate step.
     assert [s["kind"] for s in after["steps"]] == ["validate"]
+    # Recovery still stamps the current schema version -- a from-scratch
+    # rebuild must not silently produce a version-0 manifest (#279).
+    from nhf_spatial_targets.release.lineage import CURRENT_MANIFEST_SCHEMA_VERSION
+
+    assert after["manifest_schema_version"] == CURRENT_MANIFEST_SCHEMA_VERSION
+
+
+def test_validate_recovers_from_non_object_manifest(
+    tmp_path, minimal_fabric, no_system_cred_checks
+):
+    """A valid-JSON-but-non-object manifest recovers gracefully, not crashes.
+
+    ``[]`` / ``null`` / ``42`` parse fine but are not a manifest dict; the
+    tolerant path must treat them like a corrupt manifest (warn + fresh
+    skeleton) rather than raising AttributeError on ``preserved.get(...)``.
+    """
+    _full_setup(tmp_path, minimal_fabric)
+    (tmp_path / "manifest.json").write_text("[]")
+
+    # Should not raise.
+    validate_workspace(tmp_path)
+
+    after = json.loads((tmp_path / "manifest.json").read_text())
+    assert after["sources"] == {}
+    assert [s["kind"] for s in after["steps"]] == ["validate"]
 
 
 def test_validate_preserves_unknown_keys(
