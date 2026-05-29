@@ -41,3 +41,29 @@ def test_check_never_mutates(tmp_path):
     before = p.read_text()
     check_manifest_schema(tmp_path)
     assert p.read_text() == before  # report-only
+
+
+def test_cli_exits_1_on_drift(tmp_path):
+    from nhf_spatial_targets.cli.run import upgrade_manifest_cmd
+
+    (tmp_path / "manifest.json").write_text(json.dumps({"sources": {}, "steps": []}))
+    with pytest.raises(SystemExit) as e:
+        upgrade_manifest_cmd(tmp_path)
+    assert e.value.code == 1
+
+
+def test_cli_exits_0_in_sync(tmp_path):
+    from nhf_spatial_targets.cli.run import upgrade_manifest_cmd
+    from nhf_spatial_targets.release.lineage import CURRENT_MANIFEST_SCHEMA_VERSION
+
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "manifest_schema_version": CURRENT_MANIFEST_SCHEMA_VERSION,
+                "sources": {},
+                "steps": [],
+            }
+        )
+    )
+    # No SystemExit on the in-sync path (returns normally / exit 0).
+    upgrade_manifest_cmd(tmp_path)

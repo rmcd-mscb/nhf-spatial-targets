@@ -30,6 +30,7 @@ def register(app: "App") -> None:
     app.command(rechunk)
     app.command(reconcile_manifest_cmd, name="reconcile-manifest")
     app.command(upgrade_config_cmd, name="upgrade-config")
+    app.command(upgrade_manifest_cmd, name="upgrade-manifest")
     app.command(init)
     app.command(materialize_credentials_cmd, name="materialize-credentials")
     app.command(validate)
@@ -368,6 +369,53 @@ def upgrade_config_cmd(
     for feat in missing:
         console.print(f"[bold]# --- {feat.name} ---[/bold]")
         console.print(feat.block)
+    sys.exit(1)
+
+
+def upgrade_manifest_cmd(
+    workdir: Annotated[
+        Path,
+        Parameter(
+            name=["--project-dir", "-d"],
+            help="Project created by 'nhf-targets init'.",
+        ),
+    ],
+):
+    """Report whether manifest.json predates the current manifest schema.
+
+    Report-only: never mutates the manifest. Exits 0 if current, 1 if behind
+    (so scripted heartbeats detect drift). To normalize a behind manifest, run
+    'nhf-targets rebuild-manifest -d <dir>'.
+    """
+    from rich.console import Console
+
+    from nhf_spatial_targets.release.lineage import CURRENT_MANIFEST_SCHEMA_VERSION
+    from nhf_spatial_targets.upgrade_manifest import check_manifest_schema
+
+    console = Console()
+    if not workdir.exists():
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
+        sys.exit(2)
+    try:
+        behind = check_manifest_schema(workdir)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"upgrade-manifest failed: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if behind is None:
+        console.print(
+            "[bold green]manifest.json is at the current schema version "
+            f"({CURRENT_MANIFEST_SCHEMA_VERSION}).[/bold green]"
+        )
+        return
+
+    console.print(
+        f"[bold yellow]manifest.json is schema version {behind}; current is "
+        f"{CURRENT_MANIFEST_SCHEMA_VERSION}.[/bold yellow]\n\n"
+        "Run 'nhf-targets rebuild-manifest -d <dir>' to regenerate it as a "
+        "complete, version-stamped projection of the on-disk artifacts. "
+        "This command never edits your manifest."
+    )
     sys.exit(1)
 
 
