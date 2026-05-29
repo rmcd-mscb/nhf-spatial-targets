@@ -161,6 +161,19 @@ def build_release_project(
             "aet": {"enabled": True, "period": "2000/2010"},
         },
     }
+
+    # config.yml on disk + a CURRENT config.effective.yml (the version/hash
+    # stamp written by validate._write_effective_config). The PR-4 publish
+    # staleness gate reads both and refuses if config.effective.yml's recorded
+    # source_config_sha256 != sha256(config.yml); seed them in sync so the
+    # happy-path publish flows clear the gate. Tests that exercise staleness
+    # mutate config.yml or the effective config after this call.
+    workdir.mkdir(parents=True, exist_ok=True)
+    (workdir / "config.yml").write_text(yaml.safe_dump(config))
+    from nhf_spatial_targets.validate import _write_effective_config
+
+    _write_effective_config(workdir, config)
+
     fabric = {
         "path": str(fabric_file),
         "bbox": {"minx": -125.0, "miny": 24.0, "maxx": -66.0, "maxy": 53.0},
