@@ -31,9 +31,15 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+from nhf_spatial_targets import __version__ as _SOFTWARE_VERSION
 from nhf_spatial_targets import catalog as _catalog
 from nhf_spatial_targets.release import lineage
+
+if TYPE_CHECKING:
+    from nhf_spatial_targets.release.lineage import _Manifest
+    from nhf_spatial_targets.workspace import Project
 
 # Aggregated NCs end in ``_agg.nc``; an optional 4-digit year may precede it.
 # ``<key>_agg.nc`` | ``<key>_<year>_agg.nc`` | ``<key>_<region>_<year>_agg.nc``.
@@ -250,3 +256,84 @@ def synthesize_steps(
         _record(kind="validate", source_key=None, outputs=outputs)
 
     return sorted(steps, key=lineage.step_sort_key)
+
+
+def _project_source_dirs(project: "Project") -> dict[str, Path]:
+    """Return ``{source_key: source_dir}`` for the sources[] union.
+
+    The union is (datastore consolidated dirs n catalog) U all
+    ``data/aggregated/`` dirs. When a key appears in both, the aggregated
+    (project-specific final) dir wins -- that is the artifact the published
+    fabric ships, and the consolidate step still records the datastore NCs.
+    Keys are returned in sorted order for deterministic emission.
+    """
+    catalog_keys = set(_catalog.sources())
+    dirs: dict[str, Path] = {}
+    for d in _sorted_source_dirs(project.datastore):
+        if d.name in catalog_keys:
+            dirs[d.name] = d
+    for d in _sorted_source_dirs(project.aggregated_dir()):
+        dirs[d.name] = d
+    return {key: dirs[key] for key in sorted(dirs)}
+
+
+def rebuild_manifest(
+    project: "Project",
+    *,
+    compute_sha256: bool = False,
+    dry_run: bool = False,
+) -> "_Manifest":
+    """Project the on-disk artifacts into a complete, canonical ``manifest.json``.
+
+    ``sources`` is the (datastore n catalog) U ``data/aggregated/`` union;
+    ``steps`` is the deterministic :func:`synthesize_steps` output. Identity
+    fields are read-merged from the existing manifest -- ``created_utc``,
+    ``last_validated_utc`` (never re-minted), the ``fabric`` authorship block,
+    and any extra top-level blocks (e.g. ``release``) are preserved verbatim;
+    only the derived catalog (``sources`` / ``steps``) and
+    ``manifest_schema_version`` are rewritten.
+
+    With ``dry_run=True`` the projection is returned without touching disk;
+    otherwise it is written via ``lineage.with_flock`` + atomic rename. The
+    result is byte-identical on re-run for the same disk + catalog + code
+    (modulo the opt-in ``compute_sha256``); no ``datetime.now()`` is on the
+    path (all timestamps come from file mtime).
+    """
+    manifest_path = project.manifest_path
+    existing = lineage.read_manifest(manifest_path)
+
+    source_dirs = _project_source_dirs(project)
+    sources = {
+        key: build_source_entry(key, source_dir, compute_sha256=compute_sha256)
+        for key, source_dir in source_dirs.items()
+    }
+    steps = synthesize_steps(
+        datastore=project.datastore,
+        project_dir=project.workdir,
+        compute_sha256=compute_sha256,
+    )
+
+    manifest = lineage._new_manifest_skeleton()
+    # Read-merge identity fields (never re-mint a clock; never clobber authorship).
+    manifest["created_utc"] = existing.get("created_utc")
+    manifest["last_validated_utc"] = existing.get("last_validated_utc")
+    manifest["nhf_spatial_targets_version"] = (
+        existing.get("nhf_spatial_targets_version") or _SOFTWARE_VERSION
+    )
+    manifest["fabric"] = existing.get("fabric")
+    # Regenerate the derived catalog.
+    manifest["sources"] = sources
+    manifest["steps"] = steps
+    # Preserve any extra top-level blocks (e.g. a release config) verbatim.
+    for key, value in existing.items():
+        if key not in manifest:
+            manifest[key] = value
+
+    if dry_run:
+        return manifest
+
+    lock_path = manifest_path.with_suffix(manifest_path.suffix + ".lock")
+    lineage.with_flock(
+        lock_path, lambda: lineage.atomic_write_manifest(manifest_path, manifest)
+    )
+    return manifest

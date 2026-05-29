@@ -150,3 +150,190 @@ def test_synthesize_steps_validate_only_when_minimal(tmp_path):
     )
     assert [s["kind"] for s in steps] == ["validate"]
     assert steps[0]["source_key"] is None
+
+
+# ---------------------------------------------------------------------------
+# Task 2.5: rebuild_manifest (assemble + read-merge + write/dry-run)
+# ---------------------------------------------------------------------------
+
+import json  # noqa: E402
+
+import yaml  # noqa: E402
+
+from nhf_spatial_targets.workspace import load as load_project  # noqa: E402
+
+
+def _make_project(tmp_path, *, datastore_dirs=(), aggregated_dirs=(), targets=()):
+    """Build a loadable Project over a synthetic datastore/aggregated/targets tree.
+
+    ``datastore_dirs`` / ``aggregated_dirs`` are ``{dirname: [filenames]}``;
+    ``targets`` is a list of target NC filenames.
+    """
+    datastore = tmp_path / "datastore"
+    datastore.mkdir()
+    for name, files in dict(datastore_dirs).items():
+        d = datastore / name
+        d.mkdir(parents=True)
+        for fn in files:
+            (d / fn).write_bytes(b"x")
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    agg_root = proj / "data" / "aggregated"
+    for name, files in dict(aggregated_dirs).items():
+        d = agg_root / name
+        d.mkdir(parents=True)
+        for fn in files:
+            (d / fn).write_bytes(b"x")
+    if targets:
+        tdir = proj / "targets"
+        tdir.mkdir(parents=True)
+        for fn in targets:
+            (tdir / fn).write_bytes(b"x")
+
+    (proj / "config.yml").write_text(
+        yaml.dump(
+            {
+                "fabric": {"path": "/fake/fabric.gpkg", "id_col": "hru_id"},
+                "datastore": str(datastore),
+            }
+        )
+    )
+    (proj / "fabric.json").write_text(
+        json.dumps(
+            {"sha256": "abc", "hru_count": 3, "id_col": "hru_id", "id_col_sorted": True}
+        )
+    )
+    return load_project(proj)
+
+
+def test_rebuild_is_byte_identical_on_rerun(tmp_path):
+    from nhf_spatial_targets.rebuild_manifest import rebuild_manifest
+
+    project = _make_project(
+        tmp_path,
+        datastore_dirs={"merra2": ["merra2_2000.nc", "merra2_2001.nc"]},
+        aggregated_dirs={
+            "merra2": ["merra2_agg.nc"],
+            "ssebop": ["ssebop_2000_agg.nc"],
+            "era5_land_sd": ["era5_land_sd_agg.nc"],
+        },
+        targets=["aet_targets.nc"],
+    )
+    m1 = rebuild_manifest(project, dry_run=True)
+    m2 = rebuild_manifest(project, dry_run=True)
+    assert json.dumps(m1, indent=2) == json.dumps(m2, indent=2)
+
+
+def test_rebuild_dry_run_writes_nothing(tmp_path):
+    from nhf_spatial_targets.rebuild_manifest import rebuild_manifest
+
+    project = _make_project(tmp_path, aggregated_dirs={"merra2": ["merra2_agg.nc"]})
+    assert not project.manifest_path.exists()
+    rebuild_manifest(project, dry_run=True)
+    assert not project.manifest_path.exists()
+
+
+def test_rebuild_writes_canonical_manifest(tmp_path):
+    from nhf_spatial_targets.rebuild_manifest import rebuild_manifest
+    from nhf_spatial_targets.release.lineage import (
+        CURRENT_MANIFEST_SCHEMA_VERSION,
+        _new_manifest_skeleton,
+    )
+
+    project = _make_project(tmp_path, aggregated_dirs={"merra2": ["merra2_agg.nc"]})
+    rebuild_manifest(project)
+    m = json.loads(project.manifest_path.read_text())
+    assert set(m) >= set(_new_manifest_skeleton())
+    assert m["manifest_schema_version"] == CURRENT_MANIFEST_SCHEMA_VERSION
+    assert "merra2" in m["sources"]
+    assert all(s["provenance"] == "reconstructed" for s in m["steps"])
+
+
+def test_rebuild_preserves_created_utc_and_fabric(tmp_path):
+    from nhf_spatial_targets.rebuild_manifest import rebuild_manifest
+
+    project = _make_project(tmp_path, aggregated_dirs={"merra2": ["merra2_agg.nc"]})
+    seeded = {
+        "manifest_schema_version": 1,
+        "created_utc": "2020-01-01T00:00:00+00:00",
+        "last_validated_utc": "2020-06-01T00:00:00+00:00",
+        "nhf_spatial_targets_version": "0.0.1",
+        "fabric": {"id_col": "hru_id", "sha256": "SEEDED"},
+        "release": {"sb_id": "abc123"},
+        "sources": {},
+        "steps": [],
+    }
+    project.manifest_path.write_text(json.dumps(seeded))
+
+    rebuild_manifest(project)
+    m = json.loads(project.manifest_path.read_text())
+    assert m["created_utc"] == "2020-01-01T00:00:00+00:00"  # never re-minted
+    assert m["last_validated_utc"] == "2020-06-01T00:00:00+00:00"  # not re-minted
+    assert m["fabric"]["sha256"] == "SEEDED"  # authorship preserved
+    assert m["release"] == {"sb_id": "abc123"}  # extra blocks read-merged
+    assert "merra2" in m["sources"]  # derived catalog regenerated
+
+
+def test_rebuild_includes_derived_variant(tmp_path):
+    from nhf_spatial_targets.rebuild_manifest import rebuild_manifest
+
+    project = _make_project(
+        tmp_path, aggregated_dirs={"era5_land_sd": ["era5_land_sd_agg.nc"]}
+    )
+    m = rebuild_manifest(project, dry_run=True)
+    assert m["sources"]["era5_land_sd"]["derived_variant"] is True
+
+
+def test_rebuild_records_nonpublishable_source(tmp_path):
+    from nhf_spatial_targets.rebuild_manifest import rebuild_manifest
+
+    project = _make_project(
+        tmp_path, aggregated_dirs={"watergap22d": ["watergap22d_agg.nc"]}
+    )
+    m = rebuild_manifest(project, dry_run=True)
+    assert "watergap22d" in m["sources"]
+    assert m["sources"]["watergap22d"]["derived_variant"] is False
+
+
+def test_rebuild_concurrent_flock_merge(tmp_path):
+    import threading
+
+    from nhf_spatial_targets.rebuild_manifest import rebuild_manifest
+
+    project = _make_project(
+        tmp_path,
+        aggregated_dirs={"merra2": ["merra2_agg.nc"], "ssebop": ["ssebop_2000_agg.nc"]},
+    )
+    project.manifest_path.write_text(
+        json.dumps(
+            {
+                "manifest_schema_version": 1,
+                "created_utc": "2020-01-01T00:00:00+00:00",
+                "last_validated_utc": None,
+                "nhf_spatial_targets_version": "0.0.1",
+                "fabric": {"id_col": "hru_id"},
+                "sources": {},
+                "steps": [],
+            }
+        )
+    )
+
+    errors = []
+
+    def _run():
+        try:
+            rebuild_manifest(project)
+        except Exception as exc:  # pragma: no cover - failure path
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_run) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors
+    m = json.loads(project.manifest_path.read_text())
+    assert m["created_utc"] == "2020-01-01T00:00:00+00:00"  # identity survived races
+    assert "merra2" in m["sources"]
