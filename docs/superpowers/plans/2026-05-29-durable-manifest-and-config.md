@@ -25,12 +25,11 @@ These are non-negotiable (spec decisions E/F and CLAUDE.md):
 
 ## Branch & PR strategy (stacked) — resolved 2026-05-29
 
-The seven PRs ship as a **stacked chain**: each PR branches off the previous PR's branch and targets it as its base, so every PR's diff shows only its own changes. `feature/279-durable-artifacts` is the integration base holding the spec + this plan.
+The seven PRs ship as a **stacked chain**: each PR branches off the previous PR's branch and targets it as its base, so every PR's diff shows only its own changes. The spec + this plan (on `feature/279-durable-artifacts`) **ride along inside PR-1** (resolved 2026-05-29) — no separate docs PR. Because `feature/279-pr1-skeleton` is cut from `feature/279-durable-artifacts`, it already carries the spec+plan commits, so PR-1 (targeting `main`) shows spec + plan + PR-1 code as one diff.
 
 | PR | Branch | Base (PR target) |
 |---|---|---|
-| (base) | `feature/279-durable-artifacts` | `main` (spec+plan; open a PR or fold into PR-1) |
-| PR-1 | `feature/279-pr1-skeleton` | `feature/279-durable-artifacts` |
+| PR-1 | `feature/279-pr1-skeleton` (off `feature/279-durable-artifacts`) | `main` (carries spec+plan+PR-1 code) |
 | PR-2 | `feature/279-pr2-rebuild` | `feature/279-pr1-skeleton` |
 | PR-3 | `feature/279-pr3-publish-gate` | `feature/279-pr2-rebuild` |
 | PR-4 | `feature/279-pr4-effective-config` | `feature/279-pr3-publish-gate` |
@@ -82,7 +81,7 @@ Create each branch off its base at the start of that PR's work. After a PR merge
 
 # PR-1 — Schema version + single skeleton + `upgrade-manifest`
 
-**Branch note (stacked):** Branch `feature/279-pr1-skeleton` off `feature/279-durable-artifacts`; open PR-1 with base = `feature/279-durable-artifacts`. Earlier PRs reference `#279`; `Closes #279` goes only on the final PR in the chain.
+**Branch note (stacked):** Branch `feature/279-pr1-skeleton` off `feature/279-durable-artifacts`; open PR-1 with base = `main` (the spec+plan commits ride along in this PR). Earlier PRs reference `#279`; `Closes #279` goes only on the final PR in the chain.
 
 ```bash
 git switch feature/279-durable-artifacts
@@ -601,8 +600,8 @@ pixi run -e dev pytest tests/test_release_lineage.py tests/test_validate.py test
 
 ```bash
 git push -u origin feature/279-pr1-skeleton
-gh pr create --base feature/279-durable-artifacts --title "PR-1: manifest schema version + single skeleton + upgrade-manifest (#279)" \
-  --body "First slice of #279 (stacked; base = feature/279-durable-artifacts). Unifies the two manifest skeletons, stamps manifest_schema_version (start 1), read_manifest defaults pre-version manifests to 0, adds report-only nhf-targets upgrade-manifest. See docs/superpowers/plans/2026-05-29-durable-manifest-and-config.md."
+gh pr create --base main --title "PR-1: manifest schema version + single skeleton + upgrade-manifest (#279)" \
+  --body "First slice of #279 (stacked chain; base = main, carries the design spec + implementation plan). Unifies the two manifest skeletons, stamps manifest_schema_version (start 1), read_manifest defaults pre-version manifests to 0, adds report-only nhf-targets upgrade-manifest. See docs/superpowers/plans/2026-05-29-durable-manifest-and-config.md."
 ```
 
 ---
