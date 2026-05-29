@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from nhf_spatial_targets.rebuild_manifest import rebuild_manifest
 from nhf_spatial_targets.release import publish, registry
 from nhf_spatial_targets.release.build import build_fabric_child
 from nhf_spatial_targets.release.sb_client import SbClientError
@@ -196,8 +197,12 @@ def test_per_file_skip_then_replace_on_content_change(tmp_path):
     assert "aet_targets.nc" in second.skipped
     sha_before = registry.get_fabric(LABEL, reg)["manifest_sha256"]
 
-    # Change one source file's content -> only that file re-uploads.
+    # Change one source file's content -> only that file re-uploads. Editing a
+    # published artifact drifts the manifest projection, so the operator must
+    # re-run rebuild-manifest before publishing (the PR-3 verify-don't-mutate
+    # gate would otherwise refuse) -- mirror that explicit step here.
     (project.workdir / "targets" / "runoff_targets.nc").write_bytes(b"runoff-v2")
+    rebuild_manifest(project, dry_run=False)
     third = _publish(project, session, reg)
     assert "runoff_targets.nc" in third.uploaded
     assert "aet_targets.nc" in third.skipped

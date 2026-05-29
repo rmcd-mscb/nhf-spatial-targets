@@ -249,6 +249,29 @@ def test_publish_fabric_confirm_dispatches_logs_and_reminds(
     assert "release_registry.yml" in capsys.readouterr().out
 
 
+def test_publish_allow_incomplete_sources_threads_to_publisher(tmp_path, monkeypatch):
+    """``--allow-incomplete-sources`` reaches the publisher as the deliberate,
+    logged override of the completeness gate; it defaults to False."""
+    project = build_release_project(tmp_path)
+    client = make_sb_client(FakeSbSession())
+    _patch_seams(monkeypatch, project, client)
+    pub = MagicMock(return_value=_fake_result("fabric", LABEL))
+    monkeypatch.setattr(rel, "publish_fabric_child", pub)
+
+    _run(
+        "release",
+        "publish",
+        "-d",
+        str(project.workdir),
+        "--scope",
+        "fabric",
+        "--confirm",
+        "--allow-incomplete-sources",
+    )
+
+    assert pub.call_args.kwargs["allow_incomplete_sources"] is True
+
+
 def test_publish_source_confirm_requires_source_key(tmp_path, monkeypatch):
     project = build_release_project(tmp_path)
     _patch_seams(monkeypatch, project, make_sb_client(FakeSbSession()))

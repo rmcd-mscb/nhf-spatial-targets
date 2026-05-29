@@ -449,15 +449,19 @@ def test_corrupt_manifest_is_a_loud_failure(tmp_path):
         build.build_fabric_child(project, now=NOW)
 
 
-def test_missing_manifest_builds_without_snapshot(tmp_path):
-    """An absent manifest.json is legitimate: the build succeeds and the
-    fabric stage simply carries no manifest snapshot (and never lists one)."""
+def test_missing_manifest_is_a_hard_error(tmp_path):
+    """An absent manifest.json is fatal at staging (PR-3, #279).
+
+    Staging must never emit a fabric child with no provenance snapshot, so
+    ``stage_fabric_child`` (reached via ``build_fabric_child``) raises rather
+    than silently skipping the copy. The operator runs validate /
+    rebuild-manifest first."""
+    from nhf_spatial_targets.release._models import ReleaseError
+
     project = _build_project(tmp_path)
     project.manifest_path.unlink()
-    result = build.build_fabric_child(project, now=NOW)
-    assert not (result.stage_dir / "manifest.json").exists()
-    assert "manifest.json" not in _download_names(result.mcf)
-    verify_csv(result.stage_dir)
+    with pytest.raises(ReleaseError, match="manifest.json"):
+        build.build_fabric_child(project, now=NOW)
 
 
 def test_staged_data_relpaths_rejects_dangling_symlink(tmp_path):

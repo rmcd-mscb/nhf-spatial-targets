@@ -441,6 +441,18 @@ def publish(
             help="Delete remote files no longer in the staged payload.",
         ),
     ] = False,
+    allow_incomplete_sources: Annotated[
+        bool,
+        Parameter(
+            name=["--allow-incomplete-sources"],
+            help=(
+                "Override the manifest completeness gate: publish even if the "
+                "manifest under-reports sources or drifts from the projection "
+                "(logged warning). Schema/fabric/steps checks stay fatal. "
+                "Prefer 'nhf-targets rebuild-manifest' instead."
+            ),
+        ),
+    ] = False,
     parent_id: Annotated[
         str | None,
         Parameter(
@@ -497,6 +509,7 @@ def publish(
                     parent_id=parent_id,  # guarded above
                     create_new=create_new,
                     delete_orphans=delete_orphans,
+                    allow_incomplete_sources=allow_incomplete_sources,
                 )
             )
         if scope == "umbrella":
@@ -507,6 +520,7 @@ def publish(
                     parent_id=parent_id,  # guarded above
                     create_new=create_new,
                     delete_orphans=delete_orphans,
+                    allow_incomplete_sources=allow_incomplete_sources,
                 )
             )
         elif scope == "source":
@@ -517,6 +531,7 @@ def publish(
                     source_key,  # guarded above
                     create_new=create_new,
                     delete_orphans=delete_orphans,
+                    allow_incomplete_sources=allow_incomplete_sources,
                 )
             )
         else:  # fabric
@@ -526,6 +541,7 @@ def publish(
                     client,
                     create_new=create_new,
                     delete_orphans=delete_orphans,
+                    allow_incomplete_sources=allow_incomplete_sources,
                 )
             )
     except Exception as exc:  # noqa: BLE001 -- surface any publish failure cleanly

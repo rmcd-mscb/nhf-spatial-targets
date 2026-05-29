@@ -7,12 +7,15 @@ fabric child against an in-memory ScienceBase (the :class:`FakeSbSession`).
 
 from __future__ import annotations
 
+import json
+import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
 import requests
 
+from nhf_spatial_targets.rebuild_manifest import rebuild_manifest
 from nhf_spatial_targets.release import publish, registry
 from nhf_spatial_targets.release._models import FileEntry, ReleaseError
 from nhf_spatial_targets.release.build import BuildResult
@@ -85,6 +88,139 @@ def test_checksum_drift_is_fatal(tmp_path, monkeypatch):
         publish.publish_fabric_child(
             project, make_sb_client(FakeSbSession()), registry_path=reg, now=NOW
         )
+
+
+# ---------------------------------------------------------------------------
+# Provenance completeness gate (verify-don't-mutate) -- PR-3 / #279
+# ---------------------------------------------------------------------------
+
+
+def test_complete_manifest_passes(tmp_path):
+    """A release-ready project (complete, rebuilt manifest) clears the gate."""
+    project = build_release_project(tmp_path)
+    publish._preflight_provenance_complete(project)  # does not raise
+
+
+def test_under_report_aggregate_raises(tmp_path):
+    """An aggregated source dir on disk but absent from the manifest is a
+    fatal under-report (the #277 case)."""
+    project = build_release_project(tmp_path)
+    new_agg = project.aggregated_dir() / "gldas_noah_v21_monthly"
+    new_agg.mkdir(parents=True)
+    (new_agg / "gldas_noah_v21_monthly_2000_agg.nc").write_bytes(b"g")
+    # Match the source name (not the universal rebuild-manifest hint) so this
+    # genuinely pins the aggregate-dir arm rather than any PreflightError.
+    with pytest.raises(publish.PreflightError, match="gldas_noah_v21_monthly"):
+        publish._preflight_provenance_complete(project)
+
+
+def test_under_report_consolidate_raises(tmp_path):
+    """A consolidated datastore source on disk but absent from the manifest is
+    a fatal under-report (the #278 case)."""
+    project = build_release_project(tmp_path)
+    new_src = project.datastore / "merra2" / "monthly"
+    new_src.mkdir(parents=True)
+    (new_src / "merra2_2000.nc").write_bytes(b"m")
+    # Match the source name so this pins the datastore arm specifically.
+    with pytest.raises(publish.PreflightError, match="merra2"):
+        publish._preflight_provenance_complete(project)
+
+
+def test_drift_between_disk_and_projection_refuses(tmp_path):
+    """An on-disk manifest whose steps[] differ from the deterministic
+    projection (here: a phantom extra step) is refused as drift, even though
+    every source is still present."""
+    project = build_release_project(tmp_path)
+    manifest = json.loads(project.manifest_path.read_text())
+    manifest["steps"].append(
+        {"kind": "aggregate", "source_key": "ghost", "outputs": []}
+    )
+    project.manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(publish.PreflightError, match="drift"):
+        publish._preflight_provenance_complete(project)
+
+
+def test_published_target_without_step_raises(tmp_path):
+    """A target NC on disk with no matching ``target`` step in the manifest is
+    a fatal completeness failure (Pillar 3 assertion (e))."""
+    project = build_release_project(tmp_path)
+    manifest = json.loads(project.manifest_path.read_text())
+    manifest["steps"] = [s for s in manifest["steps"] if s.get("kind") != "target"]
+    project.manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(publish.PreflightError, match="no matching 'target' step"):
+        publish._preflight_provenance_complete(project)
+
+
+def test_allow_incomplete_sources_bypasses(tmp_path, caplog):
+    """``allow_incomplete_sources`` downgrades the source/drift failure to a
+    logged warning instead of raising; the warning carries the problem detail
+    (here: the under-reported source name), not just the override literal."""
+    project = build_release_project(tmp_path)
+    new_agg = project.aggregated_dir() / "gldas_noah_v21_monthly"
+    new_agg.mkdir(parents=True)
+    (new_agg / "gldas_noah_v21_monthly_2000_agg.nc").write_bytes(b"g")
+    with caplog.at_level(logging.WARNING):
+        publish._preflight_provenance_complete(
+            project, allow_incomplete_sources=True
+        )  # does not raise
+    warnings = "\n".join(r.message for r in caplog.records)
+    assert "allow-incomplete-sources" in warnings
+    assert "gldas_noah_v21_monthly" in warnings  # the downgraded problem is shown
+
+
+# --- always-fatal structural checks: fatal AND not bypassable by the override ---
+
+
+def test_schema_behind_is_fatal_even_with_override(tmp_path):
+    """A behind/unexpected manifest_schema_version is fatal and cannot be
+    waved through by --allow-incomplete-sources."""
+    project = build_release_project(tmp_path)
+    manifest = json.loads(project.manifest_path.read_text())
+    manifest["manifest_schema_version"] = 0
+    project.manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(publish.PreflightError, match="schema version"):
+        publish._preflight_provenance_complete(project, allow_incomplete_sources=True)
+
+
+def test_missing_fabric_is_fatal_even_with_override(tmp_path):
+    """A manifest with no fabric block is fatal and not bypassable."""
+    project = build_release_project(tmp_path)
+    manifest = json.loads(project.manifest_path.read_text())
+    manifest["fabric"] = None
+    project.manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(publish.PreflightError, match="no fabric block"):
+        publish._preflight_provenance_complete(project, allow_incomplete_sources=True)
+
+
+def test_empty_steps_is_fatal_even_with_override(tmp_path):
+    """An empty steps[] (no lineage) is fatal and not bypassable."""
+    project = build_release_project(tmp_path)
+    manifest = json.loads(project.manifest_path.read_text())
+    manifest["steps"] = []
+    project.manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(publish.PreflightError, match="no lineage"):
+        publish._preflight_provenance_complete(project, allow_incomplete_sources=True)
+
+
+def test_live_captured_manifest_refused_then_passes_after_rebuild(tmp_path):
+    """The intended verify-don't-mutate workflow: a live-captured manifest
+    carries richer metadata than the deterministic projection (real command /
+    timestamp / params / sha256, no ``provenance`` tag), so it is refused as
+    drift even with no source/file divergence. Running rebuild-manifest
+    regenerates it as the projection, after which the gate passes -- so the
+    *published* manifest is always the deterministic projection (Pillar 6)."""
+    project = build_release_project(tmp_path)
+    manifest = json.loads(project.manifest_path.read_text())
+    # A command string the projection would never emit (it uses
+    # "rebuild-manifest:<kind>"); pure capture-vs-rebuild drift, no missing
+    # source or target.
+    manifest["steps"][0]["command"] = "agg era5-land"
+    project.manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(publish.PreflightError, match="drift"):
+        publish._preflight_provenance_complete(project)
+
+    rebuild_manifest(project, dry_run=False)  # operator's explicit action
+    publish._preflight_provenance_complete(project)  # now passes
 
 
 # ---------------------------------------------------------------------------
