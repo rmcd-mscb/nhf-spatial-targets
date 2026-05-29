@@ -147,28 +147,6 @@ def build_release_project(
     _touch(datastore / "era5_land" / "monthly" / "era5_land_monthly_1980.nc", b"m-1980")
     _touch(datastore / "daymet" / "daymet_consolidated.nc", b"should-not-stage")
 
-    if with_manifest:
-        (workdir / "manifest.json").write_text(
-            json.dumps(
-                {
-                    "sources": {"era5_land": {}, "watergap22d": {}},
-                    "steps": [
-                        {
-                            "kind": "aggregate",
-                            "source_key": "era5_land",
-                            "timestamp_utc": "2026-01-02T03:04:05+00:00",
-                            "software_version": "0.7.0",
-                            "tool": "nhf-targets",
-                            "command": "agg era5-land",
-                            "inputs": [],
-                            "outputs": [],
-                            "params": {"method": "area_weighted"},
-                        }
-                    ],
-                }
-            )
-        )
-
     config = {
         "fabric": {"path": str(fabric_file), "id_col": "nhm_id"},
         "release": {
@@ -188,13 +166,35 @@ def build_release_project(
         "bbox": {"minx": -125.0, "miny": 24.0, "maxx": -66.0, "maxy": 53.0},
         "hru_count": 4242,
     }
-    return Project(
+    project = Project(
         workdir=workdir,
         datastore=datastore,
         config=config,
         fabric=fabric,
         dir_mode=None,
     )
+    if with_manifest:
+        # A release-ready fixture carries a COMPLETE manifest: seed the fabric
+        # authorship block (as ``validate`` would) then project the on-disk
+        # datastore / aggregated / targets artifacts into sources[]/steps[] via
+        # ``rebuild_manifest``, so the PR-3 publish completeness gate clears for
+        # the happy paths. Tests that need an incomplete/stale manifest mutate
+        # disk (add a source dir) or the manifest after this call.
+        from nhf_spatial_targets.rebuild_manifest import rebuild_manifest
+        from nhf_spatial_targets.release.lineage import (
+            _new_manifest_skeleton,
+            atomic_write_manifest,
+        )
+
+        skeleton = _new_manifest_skeleton()
+        skeleton["fabric"] = {
+            "path": str(fabric_file),
+            "id_col": "nhm_id",
+            "hru_count": 4242,
+        }
+        atomic_write_manifest(project.manifest_path, skeleton)
+        rebuild_manifest(project, dry_run=False)
+    return project
 
 
 def _md5_file(filename: str) -> str:

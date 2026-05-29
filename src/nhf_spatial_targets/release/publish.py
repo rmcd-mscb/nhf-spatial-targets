@@ -57,6 +57,7 @@ content or the file set changes.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -64,6 +65,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
+from nhf_spatial_targets import catalog
 from nhf_spatial_targets.release import registry
 from nhf_spatial_targets.release._models import ReleaseError
 from nhf_spatial_targets.release.build import (
@@ -77,7 +79,11 @@ from nhf_spatial_targets.release.defaults import (
     load_release_defaults,
     require_populated_release_defaults,
 )
-from nhf_spatial_targets.release.lineage import read_manifest, sha256_file
+from nhf_spatial_targets.release.lineage import (
+    CURRENT_MANIFEST_SCHEMA_VERSION,
+    read_manifest,
+    sha256_file,
+)
 from nhf_spatial_targets.release.payload import resolve_fabric_label, sources_used
 from nhf_spatial_targets.release.sb_client import SbClient, SbClientError
 from nhf_spatial_targets.workspace import Project
@@ -317,7 +323,150 @@ def _item_body(mcf: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _preflight_common(project: Project) -> None:
+def _drift_fingerprint(manifest: dict) -> str:
+    """JSON-normalized (sorted-key) fingerprint of a manifest's derived catalog.
+
+    Publish compares only the *derived* catalog (``sources`` + ``steps``)
+    between the on-disk manifest and the deterministic projection -- identity
+    fields (``created_utc``, ``fabric`` authorship) are read-merged by the
+    rebuild and are not drift. ``sort_keys`` makes the comparison insensitive
+    to dict-key ordering; the projection already emits steps in a deterministic
+    order, so a byte-equal fingerprint means no drift.
+    """
+    return json.dumps(
+        {
+            "sources": manifest.get("sources") or {},
+            "steps": manifest.get("steps") or [],
+        },
+        sort_keys=True,
+    )
+
+
+def _preflight_provenance_complete(
+    project: Project, *, allow_incomplete_sources: bool = False
+) -> None:
+    """Verify (don't mutate) that the on-disk manifest is complete + current.
+
+    Runs ``rebuild_manifest`` in ``dry_run`` to obtain the deterministic
+    projection of the on-disk artifacts, reads the on-disk manifest, and
+    refuses to publish unless they agree. Publish stays a pure read-local /
+    write-remote operation: this gate never writes the manifest -- regenerating
+    it is the operator's explicit ``nhf-targets rebuild-manifest`` action, which
+    is what keeps publish idempotent.
+
+    Always-fatal (a manifest this broken cannot be published at all):
+
+    - ``manifest_schema_version`` behind :data:`CURRENT_MANIFEST_SCHEMA_VERSION`,
+    - no ``fabric`` block,
+    - empty ``steps[]`` (no lineage).
+
+    Source-completeness + drift (the deliberate
+    ``allow_incomplete_sources`` override downgrades these to a logged warning):
+
+    - ``sources[]`` missing an aggregated dir or a consolidated datastore
+      catalog source present on disk (the #277 ∪ #278 union),
+    - a published target NC with no matching ``target`` step,
+    - on-disk ``sources``/``steps`` differing from the projection (drift).
+    """
+    from nhf_spatial_targets.rebuild_manifest import rebuild_manifest
+
+    projection = rebuild_manifest(project, dry_run=True)
+    on_disk = read_manifest(project.manifest_path)
+
+    rebuild_hint = (
+        f"run 'nhf-targets rebuild-manifest -d {project.workdir}' to regenerate "
+        f"manifest.json as a complete projection of the on-disk artifacts, then "
+        f"re-publish"
+    )
+
+    # --- always-fatal structural checks (not bypassable) ---
+    schema = on_disk.get("manifest_schema_version", 0)
+    if schema != CURRENT_MANIFEST_SCHEMA_VERSION:
+        raise PreflightError(
+            f"manifest.json at {project.manifest_path} is schema version "
+            f"{schema}; current is {CURRENT_MANIFEST_SCHEMA_VERSION}. {rebuild_hint}."
+        )
+    if on_disk.get("fabric") is None:
+        raise PreflightError(
+            f"manifest.json at {project.manifest_path} has no fabric block; "
+            f"run 'nhf-targets validate -d {project.workdir}' then {rebuild_hint}."
+        )
+    if not on_disk.get("steps"):
+        raise PreflightError(
+            f"manifest.json at {project.manifest_path} records no steps[] "
+            f"(no lineage); {rebuild_hint}."
+        )
+
+    # --- source-completeness + drift (override-downgradable) ---
+    problems: list[str] = []
+
+    on_disk_sources = set(on_disk.get("sources") or {})
+    catalog_keys = set(catalog.sources())
+    agg_root = project.aggregated_dir()
+    agg_dirs = (
+        {p.name for p in agg_root.iterdir() if p.is_dir()}
+        if agg_root.is_dir()
+        else set()
+    )
+    datastore_used = (
+        {
+            p.name
+            for p in project.datastore.iterdir()
+            if p.is_dir() and p.name in catalog_keys
+        }
+        if project.datastore.is_dir()
+        else set()
+    )
+    missing_sources = sorted((agg_dirs | datastore_used) - on_disk_sources)
+    if missing_sources:
+        problems.append(
+            f"sources[] is missing {missing_sources} (present on disk under "
+            f"data/aggregated/ or the datastore, absent from the manifest)"
+        )
+
+    targets_dir = project.targets_dir()
+    target_ncs = (
+        sorted(p.name for p in targets_dir.glob("*.nc") if p.is_file())
+        if targets_dir.is_dir()
+        else []
+    )
+    target_step_outputs = {
+        Path(out.get("path", "")).name
+        for step in (on_disk.get("steps") or [])
+        if step.get("kind") == "target"
+        for out in (step.get("outputs") or [])
+    }
+    missing_targets = sorted(set(target_ncs) - target_step_outputs)
+    if missing_targets:
+        problems.append(
+            f"published target NC(s) {missing_targets} have no matching 'target' step"
+        )
+
+    if _drift_fingerprint(on_disk) != _drift_fingerprint(projection):
+        problems.append(
+            "sources[]/steps[] differ from the deterministic rebuild-manifest "
+            "projection (drift)"
+        )
+
+    if problems:
+        message = (
+            f"publish pre-flight: manifest.json at {project.manifest_path} is "
+            f"incomplete or stale:\n  - "
+            + "\n  - ".join(problems)
+            + f"\nTo fix, {rebuild_hint}."
+        )
+        if allow_incomplete_sources:
+            logger.warning(
+                "%s\nProceeding anyway because --allow-incomplete-sources was set.",
+                message,
+            )
+            return
+        raise PreflightError(message)
+
+
+def _preflight_common(
+    project: Project, *, allow_incomplete_sources: bool = False
+) -> None:
     """Fatal, cheap, fail-fast checks shared by every publish scope.
 
     Credential resolvability is intentionally *not* checked here: PR-E3 assumes
@@ -347,6 +496,13 @@ def _preflight_common(project: Project) -> None:
             "config.yml release.authors is empty; add at least one author "
             "(given/family) before publishing."
         )
+
+    # The provenance completeness gate (verify-don't-mutate): every publish
+    # scope is gated, so a child can never ship an under-reported or stale
+    # manifest. The override is the deliberate, logged escape hatch.
+    _preflight_provenance_complete(
+        project, allow_incomplete_sources=allow_incomplete_sources
+    )
 
 
 def _require_umbrella_sb_id(registry_path: Path | None) -> str:
@@ -637,6 +793,7 @@ def publish_umbrella(
     parent_id: str,
     create_new: bool = False,
     delete_orphans: bool = False,
+    allow_incomplete_sources: bool = False,
     now: datetime | None = None,
     registry_path: Path | None = None,
 ) -> PublishResult:
@@ -647,7 +804,7 @@ def publish_umbrella(
     identification.doi), so an operator-set ``config.release.doi`` flows into
     the registry on the next publish.
     """
-    _preflight_common(project)
+    _preflight_common(project, allow_incomplete_sources=allow_incomplete_sources)
     build_result = build_umbrella(project, now=now)
     verify_csv(build_result.stage_dir)
     return _reconcile_and_publish(
@@ -670,6 +827,7 @@ def publish_source_child(
     *,
     create_new: bool = False,
     delete_orphans: bool = False,
+    allow_incomplete_sources: bool = False,
     now: datetime | None = None,
     registry_path: Path | None = None,
 ) -> PublishResult:
@@ -678,7 +836,7 @@ def publish_source_child(
     Parented under the umbrella item recorded in the registry (a missing
     umbrella sb_id is a fatal pre-flight error).
     """
-    _preflight_common(project)
+    _preflight_common(project, allow_incomplete_sources=allow_incomplete_sources)
     parent_id = _require_umbrella_sb_id(registry_path)
     build_result = build_source_child(project, source_key, now=now)
     verify_csv(build_result.stage_dir)
@@ -701,6 +859,7 @@ def publish_fabric_child(
     *,
     create_new: bool = False,
     delete_orphans: bool = False,
+    allow_incomplete_sources: bool = False,
     now: datetime | None = None,
     registry_path: Path | None = None,
 ) -> PublishResult:
@@ -710,7 +869,7 @@ def publish_fabric_child(
     umbrella sb_id is a fatal pre-flight error). The registry key is the
     resolved fabric label.
     """
-    _preflight_common(project)
+    _preflight_common(project, allow_incomplete_sources=allow_incomplete_sources)
     parent_id = _require_umbrella_sb_id(registry_path)
     build_result = build_fabric_child(project, now=now)
     verify_csv(build_result.stage_dir)
