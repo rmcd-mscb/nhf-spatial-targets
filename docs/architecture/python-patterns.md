@@ -13,7 +13,7 @@ If you are new to the repo and have Python experience but limited software-engin
 | `Annotated[Type, Parameter(...)]` cyclopts wiring | every `@app.command` in [`cli.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/cli.py) | CLI help text lives next to the parameter; no separate argparse spec |
 | `@dataclass(frozen=True)` plugin adapters | [`aggregate/_adapter.py:SourceAdapter`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/aggregate/_adapter.py) | Declarative source plugins; immutable singletons safe to share |
 | Atomic file writes (tempfile + `os.replace`) | [`io_nc.py:atomic_to_netcdf`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/io_nc.py) | Crashed jobs never leave partial NetCDFs that look valid |
-| Manifest read-merge-write under `flock` | [`reconcile.py:_apply_records`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/reconcile.py) | Concurrent SLURM array jobs can't clobber each other's manifest writes |
+| Manifest read-merge-write under `flock` | [`release/lineage.py:merge_source_and_append_step`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/release/lineage.py) | Concurrent SLURM array jobs can't clobber each other's manifest writes |
 | Fingerprint-based cache invalidation | [`targets/_intermediates.py:should_skip_year_build`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/targets/_intermediates.py) | Year-chunked intermediates auto-rebuild when config or code changes |
 
 ## 1. `from __future__ import annotations`
@@ -91,19 +91,19 @@ tmp_path.replace(path)
 
 **Why:** a partial write left by a crashed or SIGKILL'd job is worse than no write. A truncated NetCDF looks valid to `xr.open_dataset` (the file format doesn't have a "this is incomplete" marker) — it just has missing or zero-padded data at the tail. POSIX guarantees that `rename` on the same filesystem is atomic: readers see either the old file or the new file, never a partial one. The tempfile must be in the same directory as the target so the rename stays atomic (cross-filesystem renames degrade to copy+delete and are not atomic). On any exception, the tempfile is unlinked so no `.tmp` cruft accumulates.
 
-**How to extend:** never call `ds.to_netcdf(...)` or `path.write_text(...)` directly for any persisted artifact (target NCs, aggregated NCs, manifest.json, fabric.json). Route NetCDFs through `io_nc.atomic_to_netcdf`; route JSON through the same tempfile-then-rename pattern (see [`reconcile.py:_atomic_write`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/reconcile.py#L108) for the JSON variant). The exception is logs and scratch files (under `<project>/logs/` or `/tmp`) where a partial file is harmless.
+**How to extend:** never call `ds.to_netcdf(...)` or `path.write_text(...)` directly for any persisted artifact (target NCs, aggregated NCs, manifest.json, fabric.json). Route NetCDFs through `io_nc.atomic_to_netcdf`; route JSON through the same tempfile-then-rename pattern (see [`release/lineage.py:atomic_write_manifest`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/release/lineage.py) for the JSON variant). The exception is logs and scratch files (under `<project>/logs/` or `/tmp`) where a partial file is harmless.
 
 ## 6. Manifest read-merge-write under `flock`
 
-**What:** `manifest.json` lives at the project root and accumulates provenance for every fetch, aggregation, and target run. Multiple SLURM array tasks can hit it concurrently (e.g. 14 parallel fetch jobs each appending a source entry). The pipeline serializes those writes with a POSIX advisory lock. Pattern from [`reconcile.py:_apply_records`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/reconcile.py#L119-L180):
+**What:** `manifest.json` lives at the project root and accumulates provenance for every fetch, aggregation, and target run. Multiple SLURM array tasks can hit it concurrently (e.g. 14 parallel fetch jobs each appending a source entry). The pipeline serializes those writes with a POSIX advisory lock. Pattern from [`release/lineage.py:merge_source_and_append_step`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/release/lineage.py):
 
 ```python
-with open(lock_path, "a") as lock_f:
-    if _HAVE_FLOCK:
-        _fcntl.flock(lock_f, _fcntl.LOCK_EX)
-    manifest = _read_manifest(manifest_path)   # read current state
+def _do() -> None:
+    manifest = read_manifest(manifest_path)        # read current state
     # ... merge new records into manifest ...
-    _atomic_write(manifest_path, manifest)     # write back atomically
+    atomic_write_manifest(manifest_path, manifest)  # write back atomically
+
+with_flock(lock_path, _do)                          # LOCK_EX around read-merge-write
 ```
 
 **Why:** without the lock, two concurrent fetches would both `read → mutate → write` and the slower writer would clobber the faster one's changes. This is the classic lost-update race. We use `fcntl.flock` on a sibling `.lock` file (the lock file is appended to so its inode is stable) with `LOCK_EX` (exclusive). On Windows where `fcntl` is unavailable, the code emits a one-time warning that writes are unserialized — acceptable for single-user laptop runs, never for HPC concurrency.
@@ -130,6 +130,6 @@ with open(lock_path, "a") as lock_f:
 
 These seven patterns are **production-correctness scaffolding**. They show up in every module in `src/`, but they're not the *interesting* part of any module — the science is. Read this doc once, then ignore the patterns when reading new code; they should fade into the background.
 
-If you find yourself writing code that looks like one of these patterns but isn't quite right (e.g. a direct `ds.to_netcdf(...)`, a manifest write without `flock`, a new CLI command without `Annotated`), the answer is almost always to route through the existing helper — `io_nc.atomic_to_netcdf`, `reconcile._apply_records` (or its caller), `cli._AGG_*_PARAM`. Reinventing them per-module is how the codebase decays.
+If you find yourself writing code that looks like one of these patterns but isn't quite right (e.g. a direct `ds.to_netcdf(...)`, a manifest write without `flock`, a new CLI command without `Annotated`), the answer is almost always to route through the existing helper — `io_nc.atomic_to_netcdf`, `lineage.merge_source_and_append_step` (or `lineage.with_flock`), `cli._AGG_*_PARAM`. Reinventing them per-module is how the codebase decays.
 
 For the calibration-target science (what does the bound mean, when does it collapse, how does NaN propagate through multi-source combination), see [`transformation-pipeline.md`](transformation-pipeline.md). For the NetCDF encoding policy (chunk shapes, codecs, time pinning), see [`nc-encoding-policy.md`](nc-encoding-policy.md).

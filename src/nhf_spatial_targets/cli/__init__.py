@@ -6,7 +6,7 @@ The CLI is split across per-stage submodules:
 - ``cli.agg``      — ``agg`` sub-app (HRU aggregation)
 - ``cli.catalog``  — ``catalog`` sub-app (registry inspection)
 - ``cli.run``      — root-level commands (init / validate / run / rechunk
-  / reconcile-manifest / upgrade-config / materialize-credentials)
+  / rebuild-manifest / upgrade-config / materialize-credentials)
 - ``cli._params``  — shared ``Annotated[..., Parameter(...)]`` aliases for
   the agg sub-app
 
@@ -76,8 +76,8 @@ from nhf_spatial_targets.cli.run import (  # noqa: E402
     _dispatch,
     init,
     materialize_credentials_cmd,
+    rebuild_manifest_cmd,
     rechunk,
-    reconcile_manifest_cmd,
     register as _register_run_commands,
     run,
     upgrade_config_cmd,
@@ -107,7 +107,7 @@ __all__ = [
     "validate",
     "run",
     "rechunk",
-    "reconcile_manifest_cmd",
+    "rebuild_manifest_cmd",
     "upgrade_config_cmd",
     "upgrade_manifest_cmd",
     "materialize_credentials_cmd",

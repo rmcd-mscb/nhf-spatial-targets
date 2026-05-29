@@ -1,7 +1,7 @@
 """Root-level ``nhf-targets`` commands.
 
 Contains: ``init``, ``materialize-credentials``, ``validate``, ``run``,
-``rechunk``, ``reconcile-manifest``, and ``upgrade-config``. These attach
+``rechunk``, ``rebuild-manifest``, and ``upgrade-config``. These attach
 to the root ``app`` defined in :mod:`nhf_spatial_targets.cli` rather
 than to one of the per-stage sub-apps (``fetch``, ``agg``, ``catalog``).
 """
@@ -28,7 +28,7 @@ def register(app: "App") -> None:
     """Register the root-level commands on ``app``."""
     app.command(run)
     app.command(rechunk)
-    app.command(reconcile_manifest_cmd, name="reconcile-manifest")
+    app.command(rebuild_manifest_cmd, name="rebuild-manifest")
     app.command(upgrade_config_cmd, name="upgrade-config")
     app.command(upgrade_manifest_cmd, name="upgrade-manifest")
     app.command(init)
@@ -232,7 +232,7 @@ def rechunk(
         sys.exit(1)
 
 
-def reconcile_manifest_cmd(
+def rebuild_manifest_cmd(
     workdir: Annotated[
         Path,
         Parameter(
@@ -240,34 +240,32 @@ def reconcile_manifest_cmd(
             help="Project created by 'nhf-targets init'.",
         ),
     ],
-    source: Annotated[
-        list[str] | None,
+    compute_sha256: Annotated[
+        bool,
         Parameter(
-            name=["--source"],
-            help="Catalog source key to reconcile (repeatable). Default: all.",
+            name=["--compute-sha256"],
+            help="Fingerprint every file (slow; multi-GB NCs). Default: off.",
         ),
-    ] = None,
+    ] = False,
     dry_run: Annotated[
         bool,
-        Parameter(name=["--dry-run"], help="Report what would change; write nothing."),
-    ] = False,
-    checksum: Annotated[
-        bool,
-        Parameter(name=["--checksum"], help="Compute sha256 for each record (slow)."),
+        Parameter(name=["--dry-run"], help="Report the projection; write nothing."),
     ] = False,
 ):
-    """Backfill manifest.json from consolidated NCs already in the datastore.
+    """Regenerate manifest.json as a deterministic projection of on-disk artifacts.
 
-    Use after creating a new project against a datastore that another project
-    already populated. Adds 'provenance: reconciled' file records for sources
-    found on disk but missing from this project's manifest; never overwrites
-    existing records. See docs/architecture/reconcile-manifest.md.
+    The one authoritative provenance command: manifest.json = f(datastore x
+    catalog, data/aggregated/, targets/, fabric.json). Sources are the
+    (datastore n catalog) U aggregated-dirs union; steps are synthesized
+    deterministically. Identity fields (created_utc, fabric authorship, any
+    release block) are read-merged, never re-minted; the result is
+    byte-identical on re-run. Subsumes the former 'reconcile-manifest'.
     """
     from rich.console import Console
     from rich.table import Table
 
     from nhf_spatial_targets import workspace
-    from nhf_spatial_targets.reconcile import reconcile_manifest
+    from nhf_spatial_targets.rebuild_manifest import rebuild_manifest
 
     console = Console()
     if not workdir.exists():
@@ -276,38 +274,32 @@ def reconcile_manifest_cmd(
 
     try:
         project = workspace.load(workdir)
-        results = reconcile_manifest(
-            project, sources=source, dry_run=dry_run, checksum=checksum
+        manifest = rebuild_manifest(
+            project, compute_sha256=compute_sha256, dry_run=dry_run
         )
     except (FileNotFoundError, ValueError, KeyError, OSError) as e:
-        print(f"reconcile-manifest failed: {e}", file=sys.stderr)
+        print(f"rebuild-manifest failed: {e}", file=sys.stderr)
         sys.exit(1)
 
+    sources = manifest["sources"]
+    derived = sum(1 for s in sources.values() if s.get("derived_variant"))
     title = (
-        "reconcile-manifest (dry run — no changes written)"
+        "rebuild-manifest (dry run — no changes written)"
         if dry_run
-        else "reconcile-manifest"
+        else "rebuild-manifest"
     )
     table = Table(title=title)
-    table.add_column("source", style="bold")
-    table.add_column("status")
-    table.add_column("on disk", justify="right")
-    table.add_column("already recorded", justify="right")
-    table.add_column("added", justify="right")
-    for r in results:
-        table.add_row(
-            r.source_key,
-            r.status,
-            str(r.on_disk),
-            str(r.already_recorded),
-            str(r.added),
-        )
+    table.add_column("metric", style="bold")
+    table.add_column("count", justify="right")
+    table.add_row("sources", str(len(sources)))
+    table.add_row("  of which derived variants", str(derived))
+    table.add_row("steps", str(len(manifest["steps"])))
     console.print(table)
 
-    total_added = sum(r.added for r in results)
-    verb = "would add" if dry_run else "added"
+    verb = "would write" if dry_run else "wrote"
     console.print(
-        f"[bold green]{verb} {total_added} reconciled record(s).[/bold green]"
+        f"[bold green]{verb} manifest.json with {len(sources)} source(s) "
+        f"and {len(manifest['steps'])} step(s).[/bold green]"
     )
 
 
@@ -384,9 +376,8 @@ def upgrade_manifest_cmd(
     """Report whether manifest.json predates the current manifest schema.
 
     Report-only: never mutates the manifest. Exits 0 if current, 1 if behind
-    (so scripted heartbeats detect drift). A behind manifest will be normalized
-    by the forthcoming 'rebuild-manifest' command (issue #279, lands in a later
-    PR).
+    (so scripted heartbeats detect drift). To normalize a behind manifest, run
+    'nhf-targets rebuild-manifest -d <dir>'.
     """
     from rich.console import Console
 
@@ -413,9 +404,9 @@ def upgrade_manifest_cmd(
     console.print(
         f"[bold yellow]manifest.json is schema version {behind}; current is "
         f"{CURRENT_MANIFEST_SCHEMA_VERSION}.[/bold yellow]\n\n"
-        "The forthcoming 'rebuild-manifest' command (issue #279, lands in a "
-        "later PR) will regenerate it as a complete, version-stamped projection "
-        "of the on-disk artifacts. This command never edits your manifest."
+        "Run 'nhf-targets rebuild-manifest -d <dir>' to regenerate it as a "
+        "complete, version-stamped projection of the on-disk artifacts. "
+        "This command never edits your manifest."
     )
     sys.exit(1)
 

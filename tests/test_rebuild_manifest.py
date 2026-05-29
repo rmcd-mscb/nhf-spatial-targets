@@ -378,3 +378,38 @@ def test_frozen_clock_guard_rebuild_dry_run(tmp_path, monkeypatch):
     )
     # Must not raise: every timestamp is mtime-derived.
     rebuild_manifest(project, dry_run=True)
+
+
+# ---------------------------------------------------------------------------
+# Task 2.7: CLI wiring + reconcile removal
+# ---------------------------------------------------------------------------
+
+
+def test_rebuild_manifest_cmd_dry_run_writes_nothing(tmp_path):
+    from nhf_spatial_targets.cli.run import rebuild_manifest_cmd
+
+    project = _make_project(tmp_path, aggregated_dirs={"merra2": ["merra2_agg.nc"]})
+    rebuild_manifest_cmd(project.workdir, dry_run=True)
+    assert not project.manifest_path.exists()
+
+
+def test_rebuild_manifest_cmd_writes(tmp_path):
+    from nhf_spatial_targets.cli.run import rebuild_manifest_cmd
+
+    project = _make_project(tmp_path, aggregated_dirs={"merra2": ["merra2_agg.nc"]})
+    rebuild_manifest_cmd(project.workdir)
+    assert project.manifest_path.exists()
+    m = json.loads(project.manifest_path.read_text())
+    assert "merra2" in m["sources"]
+
+
+def test_reconcile_manifest_is_removed():
+    import importlib
+
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("nhf_spatial_targets.reconcile")
+
+    from nhf_spatial_targets.cli import app
+
+    assert "reconcile-manifest" not in app  # command de-registered
+    assert "rebuild-manifest" in app  # replacement registered
