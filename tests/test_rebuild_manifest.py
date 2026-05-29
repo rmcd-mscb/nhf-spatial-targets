@@ -97,3 +97,56 @@ def test_source_entry_files_sorted(tmp_path):
     entry = build_source_entry("merra2", d, compute_sha256=False)
     paths = [f["path"] for f in entry["files"]]
     assert paths == sorted(paths)
+
+
+# ---------------------------------------------------------------------------
+# Task 2.4: synthesize_steps
+# ---------------------------------------------------------------------------
+
+
+def _kind_order(kind):
+    return ["consolidate", "aggregate", "target", "validate"].index(kind)
+
+
+def test_synthesize_steps_sorted_and_kinds(tmp_path):
+    from nhf_spatial_targets.rebuild_manifest import synthesize_steps
+
+    ds = tmp_path / "datastore" / "merra2"
+    ds.mkdir(parents=True)
+    (ds / "merra2_2000.nc").write_bytes(b"x")
+    agg = tmp_path / "proj" / "data" / "aggregated" / "merra2"
+    agg.mkdir(parents=True)
+    (agg / "merra2_agg.nc").write_bytes(b"x")
+    tgt = tmp_path / "proj" / "targets"
+    tgt.mkdir(parents=True)
+    (tgt / "aet_targets.nc").write_bytes(b"x")
+    (tmp_path / "proj" / "fabric.json").write_text("{}")
+
+    steps = synthesize_steps(
+        datastore=tmp_path / "datastore",
+        project_dir=tmp_path / "proj",
+        compute_sha256=False,
+    )
+    kinds = [s["kind"] for s in steps]
+    assert kinds == sorted(kinds, key=_kind_order)
+    assert {"consolidate", "aggregate", "target", "validate"} <= set(kinds)
+    assert all(s["provenance"] == "reconstructed" for s in steps)
+    # Timestamps are mtime-derived, never None.
+    assert all(s["timestamp_utc"] for s in steps)
+
+
+def test_synthesize_steps_validate_only_when_minimal(tmp_path):
+    from nhf_spatial_targets.rebuild_manifest import synthesize_steps
+
+    (tmp_path / "datastore").mkdir()
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "fabric.json").write_text("{}")
+
+    steps = synthesize_steps(
+        datastore=tmp_path / "datastore",
+        project_dir=proj,
+        compute_sha256=False,
+    )
+    assert [s["kind"] for s in steps] == ["validate"]
+    assert steps[0]["source_key"] is None

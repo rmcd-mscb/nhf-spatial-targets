@@ -133,3 +133,120 @@ def build_source_entry(
             if value is not None:
                 entry[key] = value
     return entry
+
+
+def _sorted_source_dirs(parent: Path) -> list[Path]:
+    """Return the immediate sub-directories of *parent*, sorted by name."""
+    if not parent.is_dir():
+        return []
+    return sorted((p for p in parent.iterdir() if p.is_dir()), key=lambda p: p.name)
+
+
+def _ncs_in(source_dir: Path) -> list[Path]:
+    """Return the ``*.nc`` files under *source_dir*, recursively, sorted."""
+    return sorted((p for p in source_dir.rglob("*.nc") if p.is_file()), key=str)
+
+
+def _target_nc_params(nc: Path) -> dict:
+    """Best-effort read of resolved-target attrs (``period``, ``sources``).
+
+    PR-7 persists the full resolved per-target params as NC global attrs; PR-2
+    reads back whatever already exists. A placeholder / non-NetCDF file (tests,
+    a truncated write) simply yields ``{}`` -- the read is never fatal.
+    """
+    params: dict = {}
+    try:
+        import xarray as xr
+
+        with xr.open_dataset(nc) as ds:
+            for attr in ("period", "sources"):
+                if attr in ds.attrs:
+                    value = ds.attrs[attr]
+                    # numpy scalars / arrays -> plain Python for JSON stability.
+                    params[attr] = value.tolist() if hasattr(value, "tolist") else value
+    except Exception:
+        return {}
+    return params
+
+
+def synthesize_steps(
+    *,
+    datastore: Path,
+    project_dir: Path,
+    compute_sha256: bool,
+) -> list[dict]:
+    """Synthesize the deterministic ``steps[]`` for a project.
+
+    One ``consolidate`` step per datastore source dir that is a catalog key
+    (matching the ``sources[]`` union), one ``aggregate`` step per
+    ``data/aggregated/<key>/`` dir, one ``target`` step per ``targets/*.nc``,
+    and one ``validate`` step for ``fabric.json``. Every timestamp is
+    ``iso_from_mtime`` of the step's first output (never ``datetime.now()``);
+    every record is tagged ``provenance: "reconstructed"``; the list is sorted
+    by :func:`~nhf_spatial_targets.release.lineage.step_sort_key`.
+    """
+    catalog_keys = set(_catalog.sources())
+    steps: list[dict] = []
+
+    def _record(*, kind, source_key, outputs, params=None):
+        # Anchor the timestamp to the first output's mtime. Steps always carry
+        # at least one output here except an empty aggregated/consolidated dir,
+        # which is skipped by the callers below, so first-output always exists.
+        timestamp = lineage.iso_from_mtime(Path(outputs[0]["path"]))
+        record = lineage.build_step_record(
+            kind=kind,
+            source_key=source_key,
+            outputs=outputs,
+            params=params or {},
+            command=f"rebuild-manifest:{kind}",
+            timestamp_utc=timestamp,
+        )
+        record["provenance"] = "reconstructed"
+        steps.append(record)
+
+    # consolidate: datastore source dirs that are catalog keys.
+    for source_dir in _sorted_source_dirs(datastore):
+        if source_dir.name not in catalog_keys:
+            continue
+        outputs = [
+            lineage.output_file_entry(p, compute_sha256=compute_sha256)
+            for p in _ncs_in(source_dir)
+        ]
+        if not outputs:
+            continue
+        _record(kind="consolidate", source_key=source_dir.name, outputs=outputs)
+
+    # aggregate: every data/aggregated/<key>/ dir (incl. derived variants).
+    aggregated_root = project_dir / "data" / "aggregated"
+    for source_dir in _sorted_source_dirs(aggregated_root):
+        outputs = [
+            lineage.output_file_entry(p, compute_sha256=compute_sha256)
+            for p in _ncs_in(source_dir)
+        ]
+        if not outputs:
+            continue
+        _record(kind="aggregate", source_key=source_dir.name, outputs=outputs)
+
+    # target: one per targets/*.nc (one-level glob; never per-year intermediates).
+    targets_dir = project_dir / "targets"
+    if targets_dir.is_dir():
+        for nc in sorted(targets_dir.glob("*.nc"), key=str):
+            if not nc.is_file():
+                continue
+            outputs = [lineage.output_file_entry(nc, compute_sha256=compute_sha256)]
+            _record(
+                kind="target",
+                source_key=None,
+                outputs=outputs,
+                params=_target_nc_params(nc),
+            )
+
+    # validate: the fabric.json anchor.
+    fabric_json = project_dir / "fabric.json"
+    if fabric_json.exists():
+        outputs = [
+            lineage.output_file_entry(fabric_json, compute_sha256=compute_sha256)
+        ]
+        _record(kind="validate", source_key=None, outputs=outputs)
+
+    return sorted(steps, key=lineage.step_sort_key)
