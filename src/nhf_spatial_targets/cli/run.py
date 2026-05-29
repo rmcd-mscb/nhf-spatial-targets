@@ -326,7 +326,11 @@ def upgrade_config_cmd(
     from rich.console import Console
     from rich.table import Table
 
-    from nhf_spatial_targets.upgrade_config import check_drift
+    from nhf_spatial_targets.upgrade_config import (
+        check_available_sources,
+        check_drift,
+        check_missing_targets,
+    )
 
     console = Console()
     if not workdir.exists():
@@ -334,34 +338,64 @@ def upgrade_config_cmd(
         sys.exit(2)
     try:
         missing = check_drift(workdir)
+        missing_targets = check_missing_targets(workdir)
+        available = check_available_sources(workdir)
     except FileNotFoundError as e:
         print(f"upgrade-config failed: {e}", file=sys.stderr)
         sys.exit(1)
 
+    # --- Optional-feature stubs (the only signal that drives the exit code) ---
     if not missing:
         console.print(
             "[bold green]Project config is in sync with the latest "
             "optional-feature stubs in the init template.[/bold green]"
         )
-        return
+    else:
+        table = Table(title="Optional features missing from this project's config.yml")
+        table.add_column("feature", style="bold")
+        table.add_column("added")
+        table.add_column("why")
+        for feat in missing:
+            table.add_row(feat.name, feat.added, feat.why)
+        console.print(table)
 
-    table = Table(title="Optional features missing from this project's config.yml")
-    table.add_column("feature", style="bold")
-    table.add_column("added")
-    table.add_column("why")
-    for feat in missing:
-        table.add_row(feat.name, feat.added, feat.why)
-    console.print(table)
+        console.print(
+            "\nPaste each block below into config.yml (or see "
+            "src/nhf_spatial_targets/init_run.py:_CONFIG_TEMPLATE for context). "
+            "This command never edits your file.\n"
+        )
+        for feat in missing:
+            console.print(f"[bold]# --- {feat.name} ---[/bold]")
+            console.print(feat.block)
 
-    console.print(
-        "\nPaste each block below into config.yml (or see "
-        "src/nhf_spatial_targets/init_run.py:_CONFIG_TEMPLATE for context). "
-        "This command never edits your file.\n"
-    )
-    for feat in missing:
-        console.print(f"[bold]# --- {feat.name} ---[/bold]")
-        console.print(feat.block)
-    sys.exit(1)
+    # --- Whole-target additions (report-only hint; issue #279, PR-5) ---
+    if missing_targets:
+        ttable = Table(
+            title="Targets in the defaults schema absent from your config.yml"
+        )
+        ttable.add_column("target", style="bold")
+        ttable.add_column("note")
+        for tname in missing_targets:
+            ttable.add_row(
+                tname,
+                "in defaults; add a targets: entry to build it on this fabric",
+            )
+        console.print(ttable)
+
+    # --- Newly-available catalog sources (report-only hint; issue #279, PR-5) ---
+    if available:
+        stable = Table(title="Catalog sources available but not in targets.*.sources[]")
+        stable.add_column("target", style="bold")
+        stable.add_column("available source(s)")
+        for tname, srcs in available.items():
+            stable.add_row(tname, ", ".join(srcs))
+        console.print(stable)
+
+    # Exit code stays driven solely by optional-feature drift, preserving the
+    # report-only contract; the whole-target and new-source tables above are
+    # informational hints and never, on their own, fail the command.
+    if missing:
+        sys.exit(1)
 
 
 def upgrade_manifest_cmd(

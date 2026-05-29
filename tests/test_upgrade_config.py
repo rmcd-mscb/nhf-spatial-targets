@@ -158,3 +158,115 @@ def test_cli_exits_two_when_project_missing(tmp_path, capsys):
     assert exc.value.code == 2
     err = capsys.readouterr().err
     assert "not found" in err.lower()
+
+
+# --- whole-target + new-source hints (issue #279, PR-5) ----------------------
+#
+# upgrade-config is extended beyond the enumerated optional params to surface
+# (a) whole targets present in the defaults schema but absent from the
+# operator's config.yml, and (b) catalog sources eligible for a target (per
+# variables.yml) but not pinned in the operator's targets.<t>.sources[]. Both
+# are report-only hints: they print but never mutate config.yml and never
+# change the exit-code contract (exit driven solely by optional-feature drift).
+
+
+def _config_with_targets(project_dir: Path) -> Path:
+    """Write a config with five of six targets; aet pins a partial sources[].
+
+    Omits ``snow_water_equivalent`` entirely (a missing-target case) and pins
+    ``aet.sources`` to a single key (an available-sources case: ssebop +
+    mwbm_climgrid are eligible but not listed).
+    """
+    project_dir.mkdir(parents=True, exist_ok=True)
+    text = (
+        "fabric:\n"
+        "  path: /x.gpkg\n"
+        "  id_col: nhm_id\n"
+        "datastore: /x\n"
+        "targets:\n"
+        "  runoff:\n"
+        '    period: "2000/2010"\n'
+        "  aet:\n"
+        "    sources:\n"
+        "      - mod16a2_v061\n"
+        '    period: "2000/2010"\n'
+        "  recharge:\n"
+        '    period: "2000/2010"\n'
+        "  soil_moisture:\n"
+        '    period: "2000/2010"\n'
+        "  snow_covered_area:\n"
+        '    period: "2000/2010"\n'
+    )
+    p = project_dir / "config.yml"
+    p.write_text(text)
+    return p
+
+
+def test_check_missing_targets_reports_absent_target(tmp_path):
+    from nhf_spatial_targets.upgrade_config import check_missing_targets
+
+    _config_with_targets(tmp_path)
+    missing = check_missing_targets(tmp_path)
+    # snow_water_equivalent is in the defaults schema but absent from config.
+    assert "snow_water_equivalent" in missing
+    # Targets that ARE present are not reported.
+    assert "aet" not in missing
+    assert "runoff" not in missing
+
+
+def test_check_missing_targets_reports_all_when_no_targets_block(tmp_path):
+    from nhf_spatial_targets.upgrade_config import check_missing_targets
+    from nhf_spatial_targets.defaults import DEFAULTS
+
+    _write_minimal_config(tmp_path)  # no targets: mapping
+    missing = check_missing_targets(tmp_path)
+    assert set(missing) == set(DEFAULTS["targets"])
+
+
+def test_check_available_sources_lists_omitted_eligible(tmp_path):
+    from nhf_spatial_targets.upgrade_config import check_available_sources
+
+    _config_with_targets(tmp_path)
+    available = check_available_sources(tmp_path)
+    # aet pins only mod16a2_v061; ssebop is eligible per variables.yml.
+    assert "aet" in available
+    assert "ssebop" in available["aet"]
+    # The pinned key is not reported as "available" (already in use).
+    assert "mod16a2_v061" not in available["aet"]
+
+
+def test_check_available_sources_skips_unpinned_targets(tmp_path):
+    """Targets without an explicit sources[] track defaults and so cannot
+    fossilize — they are not reported (avoids noise)."""
+    from nhf_spatial_targets.upgrade_config import check_available_sources
+
+    _config_with_targets(tmp_path)
+    available = check_available_sources(tmp_path)
+    # runoff has a period but no explicit sources[] -> on defaults -> skipped.
+    assert "runoff" not in available
+
+
+def test_target_to_variable_mapping_is_consistent():
+    """The explicit config-target -> variables.yml-key map must cover exactly
+    the defaults targets and point at real variable definitions (guards the
+    reconciliation against future renames)."""
+    from nhf_spatial_targets.catalog import variables
+    from nhf_spatial_targets.defaults import DEFAULTS
+    from nhf_spatial_targets.upgrade_config import _TARGET_TO_VARIABLE
+
+    assert set(_TARGET_TO_VARIABLE) == set(DEFAULTS["targets"])
+    all_vars = variables()
+    for var_key in _TARGET_TO_VARIABLE.values():
+        assert var_key in all_vars
+
+
+def test_cli_never_mutates_config(tmp_path):
+    """upgrade-config (with the new hints) is report-only: config.yml is
+    byte-identical before and after the command runs."""
+    from nhf_spatial_targets.cli import app
+
+    cfg = _config_with_targets(tmp_path)
+    before = cfg.read_bytes()
+    with pytest.raises(SystemExit):
+        app(["upgrade-config", "--project-dir", str(tmp_path)])
+    assert cfg.read_bytes() == before
