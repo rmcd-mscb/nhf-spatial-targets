@@ -10,7 +10,11 @@ import pytest
 
 from nhf_spatial_targets import catalog
 from nhf_spatial_targets.release import payload
-from nhf_spatial_targets.release._models import DistributionKind, SourceChildPlan
+from nhf_spatial_targets.release._models import (
+    DistributionKind,
+    ReleaseError,
+    SourceChildPlan,
+)
 from nhf_spatial_targets.release.checksums import compute_checksums, verify_csv
 from nhf_spatial_targets.workspace import Project
 
@@ -107,6 +111,19 @@ def test_manifest_is_copied_not_symlinked(tmp_path):
     assert staged.exists()
     assert not staged.is_symlink()  # snapshot copy, never a link
     assert staged.read_bytes() == project.manifest_path.read_bytes()
+
+
+def test_stage_fabric_child_missing_manifest_is_hard_error(tmp_path):
+    """A fabric child must never stage without its provenance snapshot.
+
+    The earlier ``if manifest_src.exists()`` soft skip would emit a child with
+    no manifest at all; PR-3 makes that a hard error so staging fails loudly
+    and the operator runs validate / rebuild-manifest first.
+    """
+    project = _build_project(tmp_path)
+    project.manifest_path.unlink()
+    with pytest.raises(ReleaseError, match="manifest.json"):
+        payload.stage_fabric_child(project, copy=True)
 
 
 def test_watergap22d_excluded_from_fabric(tmp_path):

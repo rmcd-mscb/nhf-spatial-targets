@@ -40,6 +40,7 @@ from pathlib import Path
 from nhf_spatial_targets import catalog
 from nhf_spatial_targets.release._models import (
     FabricChildPlan,
+    ReleaseError,
     ReleasePayload,
     SourceChildPlan,
     UmbrellaPlan,
@@ -188,8 +189,13 @@ def stage_fabric_child(project: Project, *, copy: bool = False) -> FabricChildPl
 
     _link_or_copy(plan.fabric_gpkg, plan.stage_dir / "fabric.gpkg", copy=copy)
 
-    if plan.manifest_src.exists():
-        _copy_file(plan.manifest_src, plan.stage_dir / "manifest.json")
+    if not plan.manifest_src.exists():
+        raise ReleaseError(
+            f"Cannot stage fabric child: manifest.json missing at "
+            f"{plan.manifest_src}. Run 'nhf-targets validate' then "
+            f"'nhf-targets rebuild-manifest' for this project before publishing."
+        )
+    _copy_file(plan.manifest_src, plan.stage_dir / "manifest.json")
 
     aggregated_root = project.aggregated_dir()
     for src in plan.aggregated_files:
