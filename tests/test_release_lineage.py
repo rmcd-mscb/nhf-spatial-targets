@@ -429,3 +429,33 @@ def test_read_manifest_absent_returns_current_skeleton(tmp_path):
     m = read_manifest(tmp_path / "manifest.json")  # absent
     assert m["manifest_schema_version"] == CURRENT_MANIFEST_SCHEMA_VERSION
     assert "fabric" in m  # canonical key always present
+
+
+def test_iso_from_mtime_is_deterministic(tmp_path):
+    import os
+
+    from nhf_spatial_targets.release.lineage import iso_from_mtime
+
+    f = tmp_path / "x.nc"
+    f.write_bytes(b"data")
+    os.utime(f, (1_600_000_000, 1_600_000_000))
+    a = iso_from_mtime(f)
+    b = iso_from_mtime(f)
+    assert a == b  # pure function of mtime, no now()
+    assert a.startswith("2020-")  # 2020-09-13T... UTC
+
+
+def test_step_sort_key_orders_by_kind_then_source_then_path():
+    from nhf_spatial_targets.release.lineage import step_sort_key
+
+    consolidate = {
+        "kind": "consolidate",
+        "source_key": "merra2",
+        "outputs": [{"path": "/d/merra2/2000.nc"}],
+    }
+    aggregate = {
+        "kind": "aggregate",
+        "source_key": "merra2",
+        "outputs": [{"path": "/a/merra2_agg.nc"}],
+    }
+    assert step_sort_key(consolidate) < step_sort_key(aggregate)

@@ -90,7 +90,6 @@ from nhf_spatial_targets.release.publish import (
     publish_umbrella,
 )
 from nhf_spatial_targets.release.readme import render_readme
-from nhf_spatial_targets.release.rebuild import rebuild_lineage
 from nhf_spatial_targets.release.registry import (
     CHILD_FIELDS,
     DEFAULT_REGISTRY_PATH,
@@ -184,7 +183,6 @@ __all__ = [
     "put_fabric",
     "put_source",
     "put_umbrella",
-    "rebuild_lineage",
     "remote_file_checksum",
     "render_fgdc",
     "render_iso",

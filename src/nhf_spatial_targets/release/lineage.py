@@ -63,6 +63,50 @@ STEP_KINDS: frozenset[StepKind] = frozenset(get_args(StepKind))
 CURRENT_MANIFEST_SCHEMA_VERSION = 1
 
 
+# Deterministic step ordering: consolidate < aggregate < target < validate
+# (fetch/nn_fill slot in their pipeline positions). The rebuild projection
+# sorts steps by this rank, then source_key, then the lexicographically
+# smallest output path, so the same disk produces a byte-identical steps[]
+# every run.
+_STEP_KIND_RANK: dict[str, int] = {
+    "fetch": 0,
+    "consolidate": 1,
+    "aggregate": 2,
+    "nn_fill": 3,
+    "target": 4,
+    "validate": 5,
+}
+
+
+def iso_from_mtime(path: Path) -> str:
+    """Return *path*'s mtime as a UTC ISO-8601 string. No ``datetime.now()``.
+
+    This is the ONLY timestamp source permitted in the rebuild projection
+    path (spec decision E); it makes the projection a pure function of disk.
+    """
+    st = path.stat()
+    return datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat()
+
+
+def step_sort_key(step: dict) -> tuple[int, str, str]:
+    """Deterministic sort key for a step record.
+
+    Orders by ``(kind-rank, source_key, smallest-output-path)`` -- the
+    tiebreaker is the lexicographically smallest output path (``min``), not the
+    positional first, so list order need not be stable for the rebuild
+    projection to emit ``steps[]`` byte-identically for the same on-disk state.
+    """
+    first_out = ""
+    outs = step.get("outputs") or []
+    if outs:
+        first_out = min(str(o.get("path", "")) for o in outs)
+    return (
+        _STEP_KIND_RANK.get(step.get("kind", ""), 99),
+        step.get("source_key") or "",
+        first_out,
+    )
+
+
 class InputFileEntry(TypedDict):
     """Shape for ``step["inputs"][i]``. Path + size + mtime only."""
 
