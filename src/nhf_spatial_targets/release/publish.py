@@ -491,10 +491,11 @@ def _preflight_effective_config_current(project: Project) -> None:
 
     Stale (any of) -> :class:`PreflightError`:
 
-    - ``config.effective.yml`` absent,
+    - ``config.effective.yml`` absent or unparseable,
     - no ``_effective_config_meta`` block (predates the PR-4 stamp),
-    - ``effective_config_schema_version`` behind
-      :data:`~nhf_spatial_targets.validate.EFFECTIVE_CONFIG_SCHEMA_VERSION`,
+    - ``effective_config_schema_version`` missing/malformed, or not equal to
+      :data:`~nhf_spatial_targets.validate.EFFECTIVE_CONFIG_SCHEMA_VERSION`
+      (behind OR an unexpected future version -- parity with the manifest gate),
     - recorded ``source_config_sha256`` != sha256(current ``config.yml``).
     """
     from nhf_spatial_targets.validate import EFFECTIVE_CONFIG_SCHEMA_VERSION
@@ -523,11 +524,26 @@ def _preflight_effective_config_current(project: Project) -> None:
             f"version/hash stamp)."
         )
 
-    schema = meta.get("effective_config_schema_version", 0)
-    if schema < EFFECTIVE_CONFIG_SCHEMA_VERSION:
+    schema = meta.get("effective_config_schema_version")
+    # A malformed stamp (absent / null / non-int / bool) is itself a
+    # "regenerate me" signal: turn it into a clean PreflightError rather than
+    # letting the comparison leak a raw TypeError (None/str/list) or a
+    # float/bool slip through silently. (bool is an int subclass, so exclude it
+    # explicitly.)
+    if not isinstance(schema, int) or isinstance(schema, bool):
         raise PreflightError(
-            f"{hint} (effective_config_schema_version {schema} is behind the "
-            f"current {EFFECTIVE_CONFIG_SCHEMA_VERSION})."
+            f"{hint} (effective_config_schema_version {schema!r} is missing or "
+            f"not a valid integer version)."
+        )
+    # Mirror the manifest gate (_preflight_provenance_complete): ANY mismatch is
+    # fatal, not just "behind". A future/unexpected version is an effective
+    # config this code cannot validate -- refuse rather than ship provenance we
+    # did not fully check.
+    if schema != EFFECTIVE_CONFIG_SCHEMA_VERSION:
+        raise PreflightError(
+            f"{hint} (effective_config_schema_version {schema} != the current "
+            f"{EFFECTIVE_CONFIG_SCHEMA_VERSION}; behind or unexpected -- the "
+            f"stamped shape cannot be trusted)."
         )
 
     recorded = meta.get("source_config_sha256")

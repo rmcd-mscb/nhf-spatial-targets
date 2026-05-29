@@ -48,6 +48,9 @@ def test_effective_config_carries_meta_block(tmp_path: Path):
     meta = body["_effective_config_meta"]
     assert meta["effective_config_schema_version"] == EFFECTIVE_CONFIG_SCHEMA_VERSION
     assert EFFECTIVE_CONFIG_SCHEMA_VERSION == 1
+    # Exactly two keys -- pins "no wall-clock timestamp" (a future generated_at
+    # field would break this) and the reproducible meta shape.
+    assert set(meta) == {"effective_config_schema_version", "source_config_sha256"}
 
 
 def test_source_config_sha256_matches_verbatim_config_bytes(tmp_path: Path):
@@ -64,6 +67,22 @@ def test_source_config_sha256_matches_verbatim_config_bytes(tmp_path: Path):
         body["_effective_config_meta"]["source_config_sha256"]
         == hashlib.sha256(config_bytes).hexdigest()
     )
+
+
+def test_effective_config_is_reproducible(tmp_path: Path):
+    """No wall-clock timestamp: two writes on an unchanged config.yml produce
+    byte-identical output (locks out any future generated_at-style field that
+    would silently defeat the version/hash staleness check)."""
+    from nhf_spatial_targets.defaults import apply_defaults
+    from nhf_spatial_targets.validate import _write_effective_config
+
+    workdir = _make_project(tmp_path)
+    user_cfg = yaml.safe_load((workdir / "config.yml").read_text())
+    _write_effective_config(workdir, apply_defaults(user_cfg))
+    first = (workdir / "config.effective.yml").read_text()
+    _write_effective_config(workdir, apply_defaults(user_cfg))
+    second = (workdir / "config.effective.yml").read_text()
+    assert first == second
 
 
 def test_meta_block_not_leaked_into_merged_dict(tmp_path: Path):

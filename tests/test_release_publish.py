@@ -242,7 +242,9 @@ def test_effective_config_hash_mismatch_is_fatal(tmp_path):
     project = build_release_project(tmp_path)
     # Edit config.yml without re-running validate: the hash now diverges.
     (project.workdir / "config.yml").write_text("datastore: /somewhere/else\n")
-    with pytest.raises(publish.PreflightError, match="stale"):
+    # Match the hash-arm-specific tail (not the shared "stale" hint) so this
+    # genuinely pins the hash-mismatch arm rather than any PreflightError.
+    with pytest.raises(publish.PreflightError, match="config.yml has changed"):
         publish._preflight_effective_config_current(project)
 
 
@@ -278,6 +280,78 @@ def test_effective_config_schema_behind_is_fatal(tmp_path):
     eff.write_text(yaml.safe_dump(body))
     with pytest.raises(publish.PreflightError, match="behind"):
         publish._preflight_effective_config_current(project)
+
+
+def test_effective_config_schema_ahead_is_fatal(tmp_path):
+    """A future/unexpected effective_config_schema_version is ALSO fatal -- the
+    gate mirrors the manifest gate's `!=`, not just "behind" (the PR-4 review
+    decision over the spec's literal wording). A v2 effective config is one this
+    v1 publish cannot validate, so refuse rather than ship it."""
+    import yaml
+
+    from nhf_spatial_targets.validate import EFFECTIVE_CONFIG_SCHEMA_VERSION
+
+    project = build_release_project(tmp_path)
+    eff = project.workdir / "config.effective.yml"
+    body = yaml.safe_load(eff.read_text())
+    body["_effective_config_meta"]["effective_config_schema_version"] = (
+        EFFECTIVE_CONFIG_SCHEMA_VERSION + 1
+    )
+    eff.chmod(0o644)
+    eff.write_text(yaml.safe_dump(body))
+    with pytest.raises(publish.PreflightError, match="!= the current"):
+        publish._preflight_effective_config_current(project)
+
+
+@pytest.mark.parametrize(
+    "bad_version",
+    [None, "1", 1.0, [1], True],
+    ids=["null", "str", "float", "list", "bool"],
+)
+def test_effective_config_nonint_schema_is_fatal(tmp_path, bad_version):
+    """A non-int effective_config_schema_version (hand-tampered / malformed) is
+    a clean PreflightError, not a raw TypeError. The gate exists to turn a bad
+    stamp into a "regenerate me" signal, so a malformed value must not leak a
+    traceback (None/str/list would TypeError on `<`; a float/bool would compare
+    and slip through silently)."""
+    import yaml
+
+    project = build_release_project(tmp_path)
+    eff = project.workdir / "config.effective.yml"
+    body = yaml.safe_load(eff.read_text())
+    body["_effective_config_meta"]["effective_config_schema_version"] = bad_version
+    eff.chmod(0o644)
+    eff.write_text(yaml.safe_dump(body))
+    with pytest.raises(publish.PreflightError, match="not a valid integer"):
+        publish._preflight_effective_config_current(project)
+
+
+def test_effective_config_unparseable_is_fatal(tmp_path):
+    """An existing-but-unparseable config.effective.yml is a clean
+    PreflightError, not a raw yaml error."""
+    project = build_release_project(tmp_path)
+    eff = project.workdir / "config.effective.yml"
+    eff.chmod(0o644)
+    eff.write_text("_effective_config_meta: [unclosed\n")  # invalid YAML
+    with pytest.raises(publish.PreflightError, match="unparseable"):
+        publish._preflight_effective_config_current(project)
+
+
+def test_stale_effective_config_blocks_real_publish(tmp_path):
+    """End-to-end: a stale config.effective.yml aborts a real publish_*() through
+    _preflight_common BEFORE any ScienceBase mutation -- proving the wiring, not
+    just the gate function in isolation."""
+    project = build_release_project(tmp_path)
+    reg = _registry(tmp_path)
+    _seed_umbrella(reg)
+    session = FakeSbSession()
+    # Edit config.yml after the fixture stamped config.effective.yml.
+    (project.workdir / "config.yml").write_text("datastore: /elsewhere\n")
+    with pytest.raises(publish.PreflightError, match="config.yml has changed"):
+        publish.publish_fabric_child(
+            project, make_sb_client(session), registry_path=reg, now=NOW
+        )
+    assert session.created == []  # nothing published -- gate fired fail-fast
 
 
 def test_effective_config_gate_never_mutates(tmp_path):

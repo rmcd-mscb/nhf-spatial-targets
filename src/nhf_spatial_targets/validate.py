@@ -35,7 +35,8 @@ _SOURCE_KEYS: list[str] = [
 # constant parallel to lineage.CURRENT_MANIFEST_SCHEMA_VERSION (the manifest
 # and the effective config are independently versioned derived artifacts) --
 # do NOT reuse the manifest constant. The publish staleness gate treats an
-# effective config whose stamped version is behind this as stale.
+# effective config whose stamped version differs from this as stale (parity
+# with the manifest gate -- behind OR an unexpected future version both refuse).
 EFFECTIVE_CONFIG_SCHEMA_VERSION = 1
 
 
