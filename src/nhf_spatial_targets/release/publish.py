@@ -356,7 +356,9 @@ def _preflight_provenance_complete(
 
     Always-fatal (a manifest this broken cannot be published at all):
 
-    - ``manifest_schema_version`` behind :data:`CURRENT_MANIFEST_SCHEMA_VERSION`,
+    - ``manifest_schema_version`` not equal to
+      :data:`CURRENT_MANIFEST_SCHEMA_VERSION` (behind, or an unexpected future
+      version -- either way the shape can't be trusted),
     - no ``fabric`` block,
     - empty ``steps[]`` (no lineage).
 
@@ -467,7 +469,12 @@ def _preflight_provenance_complete(
 def _preflight_common(
     project: Project, *, allow_incomplete_sources: bool = False
 ) -> None:
-    """Fatal, cheap, fail-fast checks shared by every publish scope.
+    """Fatal, fail-fast checks shared by every publish scope.
+
+    The early checks are constant-time, but the provenance gate (last) walks
+    the datastore / ``data/aggregated/`` / ``targets/`` trees to project the
+    manifest, so this is not constant-time overall -- it is still fail-fast
+    (runs before any build / upload).
 
     Credential resolvability is intentionally *not* checked here: PR-E3 assumes
     a ready, injected client (the credential/session wiring is PR-G).
