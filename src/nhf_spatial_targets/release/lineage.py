@@ -57,6 +57,12 @@ StepKind = Literal["fetch", "consolidate", "aggregate", "target", "nn_fill", "va
 STEP_KINDS: frozenset[StepKind] = frozenset(get_args(StepKind))
 
 
+# Bumped ONLY when the manifest top-level *shape* changes (not when
+# sources/steps content changes). read_manifest defaults a manifest with no
+# version key to 0, so pre-version manifests are detectable and upgradable.
+CURRENT_MANIFEST_SCHEMA_VERSION = 1
+
+
 class InputFileEntry(TypedDict):
     """Shape for ``step["inputs"][i]``. Path + size + mtime only."""
 
@@ -159,20 +165,39 @@ def input_file_entry(path: Path) -> InputFileEntry:
 
 
 class _Manifest(TypedDict):
-    """In-memory shape of ``manifest.json``."""
+    """In-memory shape of ``manifest.json`` (canonical top-level)."""
 
+    manifest_schema_version: int
+    created_utc: str | None
+    last_validated_utc: str | None
+    nhf_spatial_targets_version: str
+    fabric: dict | None
     sources: dict[str, dict]
     steps: list[StepRecord]
 
 
 def _new_manifest_skeleton() -> _Manifest:
-    """Return a fresh ``manifest.json`` skeleton.
+    """Return a fresh ``manifest.json`` skeleton -- the single source of truth
+    for the canonical top-level shape.
 
-    Single source of truth: ``{"sources": {}, "steps": []}``. Used both
-    when ``manifest.json`` is absent and when this module is invoked
-    against a fresh project (validate stage).
+    Both ``validate._write_manifest`` and the lineage writers build on this,
+    so a lineage-first write can no longer produce a ``fabric``-less manifest
+    (the ``fabric`` key is always present, ``None`` until validate fills it).
+
+    Identity/timestamp fields are ``None`` here, never ``datetime.now()`` -- the
+    skeleton must be importable from the rebuild path without minting a clock
+    read. ``validate`` (which may call ``now()``) fills ``created_utc`` /
+    ``last_validated_utc`` / ``fabric``.
     """
-    return {"sources": {}, "steps": []}
+    return {
+        "manifest_schema_version": CURRENT_MANIFEST_SCHEMA_VERSION,
+        "created_utc": None,
+        "last_validated_utc": None,
+        "nhf_spatial_targets_version": _SOFTWARE_VERSION,
+        "fabric": None,
+        "sources": {},
+        "steps": [],
+    }
 
 
 def read_manifest(manifest_path: Path) -> _Manifest:
