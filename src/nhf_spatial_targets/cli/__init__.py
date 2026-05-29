@@ -81,6 +81,7 @@ from nhf_spatial_targets.cli.run import (  # noqa: E402
     register as _register_run_commands,
     run,
     upgrade_config_cmd,
+    upgrade_manifest_cmd,
     validate,
 )
 
@@ -108,6 +109,7 @@ __all__ = [
     "rechunk",
     "reconcile_manifest_cmd",
     "upgrade_config_cmd",
+    "upgrade_manifest_cmd",
     "materialize_credentials_cmd",
     # aggregate callables (test-patch targets)
     "aggregate_daymet",

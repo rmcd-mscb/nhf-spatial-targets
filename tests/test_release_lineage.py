@@ -105,22 +105,33 @@ def test_append_step_creates_manifest_with_skeleton(manifest_path: Path) -> None
         timestamp_utc="2026-05-27T12:00:00+00:00",
     )
     manifest = json.loads(manifest_path.read_text())
-    assert manifest == {
-        "sources": {},
-        "steps": [
-            {
-                "kind": "validate",
-                "source_key": None,
-                "timestamp_utc": "2026-05-27T12:00:00+00:00",
-                "software_version": manifest["steps"][0]["software_version"],
-                "tool": "nhf-targets",
-                "command": None,
-                "inputs": [],
-                "outputs": [],
-                "params": {},
-            }
-        ],
-    }
+    # First append into a fresh project builds on the canonical skeleton, so
+    # the top-level shape is the full 7-key manifest (identity/timestamp fields
+    # left None for validate to fill -- append_step never mints a clock read
+    # for them), with the single step recorded.
+    from nhf_spatial_targets.release.lineage import (
+        CURRENT_MANIFEST_SCHEMA_VERSION,
+        _new_manifest_skeleton,
+    )
+
+    assert set(manifest) == set(_new_manifest_skeleton())
+    assert manifest["manifest_schema_version"] == CURRENT_MANIFEST_SCHEMA_VERSION
+    assert manifest["created_utc"] is None
+    assert manifest["fabric"] is None
+    assert manifest["sources"] == {}
+    assert manifest["steps"] == [
+        {
+            "kind": "validate",
+            "source_key": None,
+            "timestamp_utc": "2026-05-27T12:00:00+00:00",
+            "software_version": manifest["steps"][0]["software_version"],
+            "tool": "nhf-targets",
+            "command": None,
+            "inputs": [],
+            "outputs": [],
+            "params": {},
+        }
+    ]
 
 
 def test_append_step_preserves_existing_sources(manifest_path: Path) -> None:
@@ -369,3 +380,52 @@ def test_merge_source_returns_appended_record(manifest_path: Path) -> None:
     )
     assert record["kind"] == "consolidate"
     assert record["source_key"] == "merra2"
+
+
+def test_new_manifest_skeleton_carries_canonical_top_level():
+    from nhf_spatial_targets.release.lineage import (
+        CURRENT_MANIFEST_SCHEMA_VERSION,
+        _new_manifest_skeleton,
+    )
+
+    skel = _new_manifest_skeleton()
+    assert set(skel) == {
+        "manifest_schema_version",
+        "created_utc",
+        "last_validated_utc",
+        "nhf_spatial_targets_version",
+        "fabric",
+        "sources",
+        "steps",
+    }
+    assert skel["manifest_schema_version"] == CURRENT_MANIFEST_SCHEMA_VERSION
+    assert CURRENT_MANIFEST_SCHEMA_VERSION == 1
+    # Identity/timestamp fields are left for the caller (validate) to fill,
+    # so the skeleton itself never calls datetime.now().
+    assert skel["fabric"] is None
+    assert skel["created_utc"] is None
+    assert skel["sources"] == {}
+    assert skel["steps"] == []
+
+
+def test_read_manifest_defaults_preversion_to_zero(tmp_path):
+    import json
+
+    from nhf_spatial_targets.release.lineage import read_manifest
+
+    # A pre-version manifest (old validate / old lineage skeleton).
+    p = tmp_path / "manifest.json"
+    p.write_text(json.dumps({"sources": {}, "steps": []}))
+    m = read_manifest(p)
+    assert m["manifest_schema_version"] == 0  # detectable as behind
+
+
+def test_read_manifest_absent_returns_current_skeleton(tmp_path):
+    from nhf_spatial_targets.release.lineage import (
+        CURRENT_MANIFEST_SCHEMA_VERSION,
+        read_manifest,
+    )
+
+    m = read_manifest(tmp_path / "manifest.json")  # absent
+    assert m["manifest_schema_version"] == CURRENT_MANIFEST_SCHEMA_VERSION
+    assert "fabric" in m  # canonical key always present

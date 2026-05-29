@@ -5,10 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import platform
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -533,6 +531,11 @@ def _write_manifest(workdir: Path, fabric_meta: dict) -> None:
     Write is atomic (tempfile + rename) so a concurrent reader never
     sees a half-written manifest.
     """
+    from nhf_spatial_targets.release.lineage import (
+        _new_manifest_skeleton,
+        atomic_write_manifest,
+    )
+
     now_utc = datetime.now(timezone.utc).isoformat()
     fabric_block = {
         "path": fabric_meta["path"],
@@ -547,8 +550,17 @@ def _write_manifest(workdir: Path, fabric_meta: dict) -> None:
     preserved: dict = {}
     if path.exists():
         try:
-            preserved = json.loads(path.read_text())
-        except json.JSONDecodeError as exc:
+            loaded = json.loads(path.read_text())
+            # Valid JSON that isn't an object (``[]``/``null``/``42``) is just
+            # as unusable as a parse error -- fold it into the tolerant path
+            # instead of letting ``preserved.get(...)`` raise AttributeError
+            # below and bypass this warning.
+            if not isinstance(loaded, dict):
+                raise ValueError(
+                    f"manifest.json is {type(loaded).__name__}, not an object"
+                )
+            preserved = loaded
+        except (json.JSONDecodeError, ValueError) as exc:
             logger.warning(
                 "manifest.json in %s could not be parsed (%s); writing a "
                 "fresh skeleton. Inspect the file manually if you need "
@@ -558,20 +570,16 @@ def _write_manifest(workdir: Path, fabric_meta: dict) -> None:
             )
             preserved = {}
 
-    manifest = {
-        "created_utc": preserved.get("created_utc") or now_utc,
-        "last_validated_utc": now_utc,
-        "nhf_spatial_targets_version": __version__,
-        "fabric": fabric_block,
-        "sources": preserved.get("sources") or {},
-        "steps": preserved.get("steps") or [],
-    }
+    # Build on the single canonical skeleton (issue #279) -- this is the only
+    # other manifest writer besides the lineage module, and routing it through
+    # the shared skeleton + atomic writer kills the second inline definition
+    # and stamps manifest_schema_version automatically.
+    manifest = _new_manifest_skeleton()
+    manifest["created_utc"] = preserved.get("created_utc") or now_utc
+    manifest["last_validated_utc"] = now_utc
+    manifest["nhf_spatial_targets_version"] = __version__
+    manifest["fabric"] = fabric_block
+    manifest["sources"] = preserved.get("sources") or {}
+    manifest["steps"] = preserved.get("steps") or []
 
-    tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".json.tmp")
-    try:
-        with os.fdopen(tmp_fd, "w") as f:
-            json.dump(manifest, f, indent=2)
-        Path(tmp_path).replace(path)
-    except BaseException:
-        Path(tmp_path).unlink(missing_ok=True)
-        raise
+    atomic_write_manifest(path, manifest)
