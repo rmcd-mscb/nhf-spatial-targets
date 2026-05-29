@@ -21,7 +21,24 @@ These are non-negotiable (spec decisions E/F and CLAUDE.md):
 3. **Regenerate is non-clobbering of identity fields.** `created_utc`, the `fabric` authorship block, and any `release` config are read-merged, never overwritten. Adding a new dataset/variable/target must never mutate an existing manifest until that project produces new on-disk artifacts.
 4. **Honesty tags.** Every regenerated record carries `provenance: "reconstructed"`; the manifest carries `manifest_schema_version` (starts at `1`).
 5. **Publish gate is verify-don't-mutate.** It runs `rebuild-manifest --dry-run`, refuses if on-disk ≠ projection or incomplete, and tells the operator to run `rebuild-manifest`. `--allow-incomplete-sources` is the logged override.
-6. **Workflow:** branch `feature/279-durable-artifacts` already exists off main. Commit via `pixi run git commit` (never bare `git commit`). Stage files explicitly by path. Run `pixi run -e dev fmt` + `pixi run -e dev lint` locally; let GitHub Actions run pytest (slow HPC box) — but author and run targeted tests locally where fast.
+6. **Workflow:** branch `feature/279-durable-artifacts` already exists off main (holds spec + this plan). Commit via `pixi run git commit` (never bare `git commit`). Stage files explicitly by path. Run `pixi run -e dev fmt` + `pixi run -e dev lint` locally; let GitHub Actions run pytest (slow HPC box) — but author and run targeted tests locally where fast.
+
+## Branch & PR strategy (stacked) — resolved 2026-05-29
+
+The seven PRs ship as a **stacked chain**: each PR branches off the previous PR's branch and targets it as its base, so every PR's diff shows only its own changes. `feature/279-durable-artifacts` is the integration base holding the spec + this plan.
+
+| PR | Branch | Base (PR target) |
+|---|---|---|
+| (base) | `feature/279-durable-artifacts` | `main` (spec+plan; open a PR or fold into PR-1) |
+| PR-1 | `feature/279-pr1-skeleton` | `feature/279-durable-artifacts` |
+| PR-2 | `feature/279-pr2-rebuild` | `feature/279-pr1-skeleton` |
+| PR-3 | `feature/279-pr3-publish-gate` | `feature/279-pr2-rebuild` |
+| PR-4 | `feature/279-pr4-effective-config` | `feature/279-pr3-publish-gate` |
+| PR-5 | `feature/279-pr5-config-validation` | `feature/279-pr4-effective-config` |
+| PR-6 | `feature/279-pr6-claude-md` | `feature/279-pr5-config-validation` |
+| PR-7 | `feature/279-pr7-triangle` | `feature/279-pr6-claude-md` |
+
+Create each branch off its base at the start of that PR's work. After a PR merges, re-target the next PR in the chain to `main` (GitHub auto-retargets on base-branch merge). Never force-push a shared branch without explicit maintainer approval (CLAUDE.md). When a base PR absorbs review changes, rebase the downstream branch onto the updated base before continuing.
 
 ## Key existing code (verified on disk 2026-05-29)
 
@@ -65,7 +82,12 @@ These are non-negotiable (spec decisions E/F and CLAUDE.md):
 
 # PR-1 — Schema version + single skeleton + `upgrade-manifest`
 
-**Branch note:** All PRs share `feature/279-durable-artifacts`. Open PR-1 as its own PR to `main` (`Closes #279` only on the final PR; earlier PRs reference `#279`). If the team prefers stacked PRs, branch `feature/279-pr1-skeleton` off the feature branch — confirm with the maintainer before opening.
+**Branch note (stacked):** Branch `feature/279-pr1-skeleton` off `feature/279-durable-artifacts`; open PR-1 with base = `feature/279-durable-artifacts`. Earlier PRs reference `#279`; `Closes #279` goes only on the final PR in the chain.
+
+```bash
+git switch feature/279-durable-artifacts
+git switch -c feature/279-pr1-skeleton
+```
 
 **Goal:** Unify the two manifest skeletons into one canonical top-level shape in `lineage.py`, stamp `manifest_schema_version` (start `1`), have `read_manifest` surface it (default `0` for pre-version manifests), and add a report-only `nhf-targets upgrade-manifest -d <dir>`.
 
@@ -578,9 +600,9 @@ pixi run -e dev pytest tests/test_release_lineage.py tests/test_validate.py test
 - [ ] **Step 3:** Push, open PR referencing `#279`, **stop for maintainer review** (do not start PR-2 until approved).
 
 ```bash
-git push -u origin feature/279-durable-artifacts
-gh pr create --title "PR-1: manifest schema version + single skeleton + upgrade-manifest (#279)" \
-  --body "First slice of #279. Unifies the two manifest skeletons, stamps manifest_schema_version (start 1), read_manifest defaults pre-version manifests to 0, adds report-only nhf-targets upgrade-manifest. See docs/superpowers/plans/2026-05-29-durable-manifest-and-config.md."
+git push -u origin feature/279-pr1-skeleton
+gh pr create --base feature/279-durable-artifacts --title "PR-1: manifest schema version + single skeleton + upgrade-manifest (#279)" \
+  --body "First slice of #279 (stacked; base = feature/279-durable-artifacts). Unifies the two manifest skeletons, stamps manifest_schema_version (start 1), read_manifest defaults pre-version manifests to 0, adds report-only nhf-targets upgrade-manifest. See docs/superpowers/plans/2026-05-29-durable-manifest-and-config.md."
 ```
 
 ---
@@ -894,23 +916,42 @@ Additionally add a frozen-clock behavioural guard: monkeypatch `nhf_spatial_targ
 - [ ] **Step 2-4:** Run; confirm PASS (rebuild module already mtime-only by construction).
 - [ ] **Step 5: Commit.**
 
-### Task 2.7: Wire `rebuild-manifest` CLI + demote `reconcile-manifest` to a shim
+### Task 2.7: Wire `rebuild-manifest` CLI + DELETE `reconcile-manifest` outright
+
+**Decision (resolved 2026-05-29):** `reconcile-manifest` is **deleted**, not shimmed. `rebuild-manifest` is generic and catalog-keyed, so the per-source reconcile hook registry (`_RECONCILERS`, the `era5_land`/`mod16a2_v061` fetch-module hooks) is exactly the `no-hook` design being eliminated — there is nothing to preserve.
 
 **Files:**
-- Modify: `src/nhf_spatial_targets/cli/run.py` (add `rebuild_manifest_cmd`, register `rebuild-manifest`)
-- Modify: `src/nhf_spatial_targets/cli/__init__.py` (re-export)
-- Modify: `src/nhf_spatial_targets/reconcile.py` (deprecation note delegating to `rebuild_manifest`)
-- Modify: `src/nhf_spatial_targets/release/rebuild.py` (`rebuild_lineage` → thin wrapper over `synthesize_steps`, or deprecate with note)
-- Test: `tests/test_rebuild_manifest.py`, `tests/test_reconcile_manifest.py`
+- Modify: `src/nhf_spatial_targets/cli/run.py` (add `rebuild_manifest_cmd` + register `rebuild-manifest`; **remove** `reconcile_manifest_cmd` and its registration in `register()`, run.py:31)
+- Modify: `src/nhf_spatial_targets/cli/__init__.py` (re-export `rebuild_manifest_cmd`; **remove** `reconcile_manifest_cmd` from the import block + `__all__`, __init__.py:79/108)
+- Delete: `src/nhf_spatial_targets/reconcile.py`
+- Modify: `src/nhf_spatial_targets/fetch/era5_land.py` (remove the now-orphaned `reconcile` hook), `src/nhf_spatial_targets/fetch/modis.py` (remove `reconcile_mod16a2`) — **only after** `grep -rn "reconcile" src/ tests/` confirms `reconcile.py:_RECONCILERS` was the sole caller
+- Modify: `src/nhf_spatial_targets/release/rebuild.py` (`rebuild_lineage` → delegate to `synthesize_steps`, or remove and repoint callers)
+- Delete: `tests/test_reconcile_manifest.py`, `tests/test_reconcile_era5_land.py`, `tests/test_reconcile_modis.py`
+- Modify/Delete: `docs/architecture/reconcile-manifest.md` → replace body with a one-paragraph redirect to `rebuild-manifest` (or delete and add a note in the rebuild docs)
 
-- [ ] **Step 1: Write the failing test** — `rebuild_manifest_cmd` exists, `--dry-run` writes nothing, default writes a complete manifest; `reconcile-manifest` still runs but logs a deprecation pointing to `rebuild-manifest`.
-- [ ] **Step 2: Run — Expected FAIL.**
+- [ ] **Step 1: Write the failing test** — in `tests/test_rebuild_manifest.py`: `rebuild_manifest_cmd` exists, `--dry-run` writes nothing, default writes a complete manifest. Add a guard test that `nhf_spatial_targets.reconcile` no longer imports and `reconcile-manifest` is not a registered command:
+
+```python
+def test_reconcile_manifest_is_removed():
+    import importlib
+    import pytest
+
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("nhf_spatial_targets.reconcile")
+    from nhf_spatial_targets.cli import app
+    assert "reconcile-manifest" not in app  # cyclopts: command name not registered
+```
+
+(Confirm the cyclopts membership idiom against the version in use; if `in` is unsupported, assert the command is absent from `app._commands` or invoke `app(["reconcile-manifest", ...])` and assert it errors as unknown.)
+
+- [ ] **Step 2: Run — Expected FAIL** (`reconcile` still imports; command still registered).
 - [ ] **Step 3: Implement:**
-  - `rebuild_manifest_cmd(workdir, *, compute_sha256=False, dry_run=False)` modeled on `reconcile_manifest_cmd` (run.py:234), Rich summary table (sources count, steps count, derived-variant count); register `app.command(rebuild_manifest_cmd, name="rebuild-manifest")` in `register()`.
-  - In `reconcile.py`: keep the function for back-compat but log `logger.warning("reconcile-manifest is superseded by rebuild-manifest; ...")` at entry. **Do not delete** until a follow-up confirms no external callers (search `grep -rn reconcile_manifest`).
-  - In `release/rebuild.py`: have `rebuild_lineage` delegate to `synthesize_steps` (or mark deprecated and route callers). Verify `release/publish.py` / `release/__init__.py` callers still resolve.
-  - Re-export `rebuild_manifest_cmd` in `cli/__init__.py` (`from ...cli.run import` block + `__all__`).
-- [ ] **Step 4: Run — Expected PASS.** Smoke: `pixi run nhf-targets rebuild-manifest --help`.
+  - Add `rebuild_manifest_cmd(workdir, *, compute_sha256=False, dry_run=False)` modeled on the old `reconcile_manifest_cmd` shape (Rich summary table: sources count, steps count, derived-variant count); register `app.command(rebuild_manifest_cmd, name="rebuild-manifest")` in `register()`.
+  - Remove `reconcile_manifest_cmd` (function + `register()` line) from `cli/run.py`; remove its import + `__all__` entry from `cli/__init__.py`. Add `rebuild_manifest_cmd` to both.
+  - `git rm src/nhf_spatial_targets/reconcile.py`.
+  - After grep-confirming no other callers, remove the fetch-module reconcile hooks and `git rm` the three reconcile test files.
+  - In `release/rebuild.py`: have `rebuild_lineage` delegate to `synthesize_steps` (or remove + repoint). Verify `release/publish.py` / `release/__init__.py` callers still resolve (`grep -rn rebuild_lineage src/`).
+- [ ] **Step 4: Run — Expected PASS.** Smoke: `pixi run nhf-targets rebuild-manifest --help`; `pixi run nhf-targets reconcile-manifest --help` should now error (unknown command). Run the broader CLI test module to catch a stale `reconcile` reference.
 - [ ] **Step 5: Commit.**
 
 ### Task 2.8: Smoke test against real projects (offline, no ScienceBase)
@@ -1203,10 +1244,8 @@ def test_dangling_target_source_key_fails_loudly(tmp_path, monkeypatch):
 
 **Type/name consistency:** `CURRENT_MANIFEST_SCHEMA_VERSION` (lineage.py) used identically across PR-1/PR-2/PR-3; `iso_from_mtime` / `step_sort_key` defined in PR-2 Task 2.1 and consumed in 2.4/2.5; `rebuild_manifest(project, *, compute_sha256, dry_run)` signature consistent across PR-2 and the PR-3 gate; `build_source_entry` / `synthesize_steps` / `parse_aggregated_filename` names stable.
 
-**Open items to confirm with the maintainer before/while implementing (flagged, not blocking PR-1):**
-1. Stacked-PR vs single-branch sequencing (Task 1.1 note).
-2. PR-2: delete `reconcile-manifest` outright vs keep as a deprecated shim (plan keeps the shim; spec permits either).
-3. PR-4: exact placement of the `_effective_config_meta` block (top-level vs nested) — chosen nested to avoid colliding with config keys; confirm no downstream consumer reads `config.effective.yml` positionally.
-4. PR-7: inconsistency at publish = hard `PreflightError` vs warning (plan defaults to `PreflightError`).
-
-These are recorded for the review checkpoint; PR-1 does not depend on any of them.
+**Open items — all resolved with the maintainer 2026-05-29:**
+1. **Sequencing → stacked PRs.** See "Branch & PR strategy (stacked)" above; each PR branches off and targets the previous PR's branch.
+2. **PR-2 → delete `reconcile-manifest` outright** (not a shim). Task 2.7 deletes `reconcile.py`, the fetch-module reconcile hooks, the three reconcile tests, and redirects the reconcile-manifest doc.
+3. **PR-4 → as written:** nested `_effective_config_meta` block. (When implementing, still grep for any consumer that reads `config.effective.yml` positionally — none expected.)
+4. **PR-7 → as written:** inconsistency at publish is a hard `PreflightError`, not bypassed by `--allow-incomplete-sources`.
