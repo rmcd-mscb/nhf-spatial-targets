@@ -65,6 +65,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
+import yaml
+
 from nhf_spatial_targets import catalog
 from nhf_spatial_targets.release import registry
 from nhf_spatial_targets.release._models import ReleaseError
@@ -466,6 +468,77 @@ def _preflight_provenance_complete(
         raise PreflightError(message)
 
 
+def _preflight_effective_config_current(project: Project) -> None:
+    """Verify (don't mutate) that ``config.effective.yml`` is current.
+
+    ``config.effective.yml`` is a DERIVED artifact: a version/hash-stamped
+    projection of (``config.yml`` x ``defaults.py`` x ``fabric.json``) written
+    by ``validate``. This gate reads its ``_effective_config_meta`` stamp and
+    refuses to publish unless the recorded ``source_config_sha256`` still
+    matches the sha256 of the current ``config.yml`` bytes -- i.e. ``config.yml``
+    has not been edited since the effective config was generated.
+
+    Verify-don't-mutate: like :func:`_preflight_provenance_complete`, this gate
+    NEVER regenerates ``config.effective.yml``. Regenerating it is the
+    operator's explicit ``nhf-targets validate`` action, which is what keeps
+    publish idempotent.
+
+    Unconditionally fatal: unlike :func:`_preflight_provenance_complete`, this
+    gate has NO ``allow_incomplete_sources`` override. A stale effective config
+    means the published provenance would describe a configuration that no
+    longer matches the operator's intent (the spec's Pillar 5 fossil) -- there
+    is no defensible reason to ship it.
+
+    Stale (any of) -> :class:`PreflightError`:
+
+    - ``config.effective.yml`` absent,
+    - no ``_effective_config_meta`` block (predates the PR-4 stamp),
+    - ``effective_config_schema_version`` behind
+      :data:`~nhf_spatial_targets.validate.EFFECTIVE_CONFIG_SCHEMA_VERSION`,
+    - recorded ``source_config_sha256`` != sha256(current ``config.yml``).
+    """
+    from nhf_spatial_targets.validate import EFFECTIVE_CONFIG_SCHEMA_VERSION
+
+    eff_path = project.workdir / "config.effective.yml"
+    config_path = project.workdir / "config.yml"
+    hint = (
+        f"config.effective.yml is stale; re-run "
+        f"'nhf-targets validate -d {project.workdir}' to regenerate it"
+    )
+
+    if not eff_path.exists():
+        raise PreflightError(f"{hint} (not found at {eff_path}).")
+
+    try:
+        effective = yaml.safe_load(eff_path.read_text()) or {}
+    except yaml.YAMLError as exc:
+        raise PreflightError(
+            f"{hint} (config.effective.yml at {eff_path} is unparseable: {exc})."
+        ) from exc
+
+    meta = effective.get("_effective_config_meta")
+    if not isinstance(meta, dict):
+        raise PreflightError(
+            f"{hint} (no _effective_config_meta block; it predates the "
+            f"version/hash stamp)."
+        )
+
+    schema = meta.get("effective_config_schema_version", 0)
+    if schema < EFFECTIVE_CONFIG_SCHEMA_VERSION:
+        raise PreflightError(
+            f"{hint} (effective_config_schema_version {schema} is behind the "
+            f"current {EFFECTIVE_CONFIG_SCHEMA_VERSION})."
+        )
+
+    recorded = meta.get("source_config_sha256")
+    current = hashlib.sha256(config_path.read_bytes()).hexdigest()
+    if recorded != current:
+        raise PreflightError(
+            f"{hint} (config.yml has changed since it was generated: recorded "
+            f"sha256 {recorded} != current {current})."
+        )
+
+
 def _preflight_common(
     project: Project, *, allow_incomplete_sources: bool = False
 ) -> None:
@@ -503,6 +576,13 @@ def _preflight_common(
             "config.yml release.authors is empty; add at least one author "
             "(given/family) before publishing."
         )
+
+    # The config.effective.yml staleness gate (verify-don't-mutate,
+    # unconditionally fatal -- no override). Cheap (read one small YAML + hash
+    # one small file), so it runs before the tree-walking provenance gate. A
+    # stale effective config would leak a wrong-window configuration into the
+    # published provenance, so there is no defensible reason to override it.
+    _preflight_effective_config_current(project)
 
     # The provenance completeness gate (verify-don't-mutate): every publish
     # scope is gated, so a child can never ship an under-reported or stale
