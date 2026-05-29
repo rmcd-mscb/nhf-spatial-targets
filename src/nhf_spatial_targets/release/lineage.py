@@ -65,8 +65,9 @@ CURRENT_MANIFEST_SCHEMA_VERSION = 1
 
 # Deterministic step ordering: consolidate < aggregate < target < validate
 # (fetch/nn_fill slot in their pipeline positions). The rebuild projection
-# sorts steps by this rank, then source_key, then first output path, so the
-# same disk produces a byte-identical steps[] every run.
+# sorts steps by this rank, then source_key, then the lexicographically
+# smallest output path, so the same disk produces a byte-identical steps[]
+# every run.
 _STEP_KIND_RANK: dict[str, int] = {
     "fetch": 0,
     "consolidate": 1,
@@ -90,8 +91,10 @@ def iso_from_mtime(path: Path) -> str:
 def step_sort_key(step: dict) -> tuple[int, str, str]:
     """Deterministic sort key for a step record.
 
-    Orders by ``(kind-rank, source_key, first-output-path)`` so the rebuild
-    projection emits ``steps[]`` byte-identically for the same on-disk state.
+    Orders by ``(kind-rank, source_key, smallest-output-path)`` -- the
+    tiebreaker is the lexicographically smallest output path (``min``), not the
+    positional first, so list order need not be stable for the rebuild
+    projection to emit ``steps[]`` byte-identically for the same on-disk state.
     """
     first_out = ""
     outs = step.get("outputs") or []

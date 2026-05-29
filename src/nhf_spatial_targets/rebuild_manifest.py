@@ -3,12 +3,13 @@
 ``manifest.json`` is a deterministic projection of (on-disk artifacts x
 current catalog x ``fabric.json``). This module computes that projection:
 
-- ``sources[]`` = (datastore consolidated dirs n catalog) U project
-  ``data/aggregated/`` dirs. Per-key metadata (DOI, version, access type)
-  is pulled from the catalog by key; file lists + periods are parsed from
-  on-disk filenames; size/mtime come from ``stat``; sha256 is opt-in. A dir
-  whose name is not a catalog key (e.g. ``era5_land_sd``) gets a minimal
-  entry tagged ``derived_variant: True`` so shipped NCs are not orphaned.
+- ``sources[]`` = (datastore consolidated dirs ∩ catalog) ∪ project
+  ``data/aggregated/`` dirs. Per-key catalog metadata (the ``access`` block,
+  plus any top-level ``doi`` / ``version`` / ``access_type``) is pulled from
+  the catalog by key; file lists + periods are parsed from on-disk filenames;
+  size/mtime come from ``stat``; sha256 is opt-in. A dir whose name is not a
+  catalog key (e.g. ``era5_land_sd``) gets a minimal entry tagged
+  ``derived_variant: True`` so shipped NCs are not orphaned.
 - ``steps[]`` are synthesized deterministically: ``consolidate`` (datastore
   NCs), ``aggregate`` (aggregated dirs), ``target`` (``targets/`` NCs),
   ``validate`` (``fabric.json``).
@@ -29,6 +30,7 @@ Non-clobbering: regenerate rewrites only the derived catalog (``sources``,
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -40,6 +42,8 @@ from nhf_spatial_targets.release import lineage
 if TYPE_CHECKING:
     from nhf_spatial_targets.release.lineage import _Manifest
     from nhf_spatial_targets.workspace import Project
+
+logger = logging.getLogger(__name__)
 
 # Aggregated NCs end in ``_agg.nc``; an optional 4-digit year may precede it.
 # ``<key>_agg.nc`` | ``<key>_<year>_agg.nc`` | ``<key>_<region>_<year>_agg.nc``.
@@ -86,12 +90,35 @@ def _year_in_filename(name: str) -> int | None:
     return int(m.group()) if m else None
 
 
-def _file_entry(path: Path, *, compute_sha256: bool) -> dict:
-    """Return a sorted-stable file record: path/size/mtime (+ opt-in sha256)."""
-    entry = dict(lineage._file_basics(path))
-    if compute_sha256:
-        entry["sha256"] = lineage.sha256_file(path)
-    return entry
+def _guarded_output_entries(
+    paths: list[Path], *, compute_sha256: bool, source_key: str | None = None
+) -> list[dict]:
+    """Build file/output entries, skipping any path that vanishes mid-scan.
+
+    The datastore is a shared Lustre filesystem; a concurrent scratch-purge,
+    another project's run, or a stale NFS/Lustre handle can make a file
+    disappear between the ``rglob``/``glob`` enumeration and the ``stat()``
+    inside :func:`~nhf_spatial_targets.release.lineage.output_file_entry`. A
+    single such race must not abort the whole multi-source rebuild (the
+    deleted ``reconcile.py`` / ``release/rebuild.py`` carried this same
+    log-and-continue posture): the offending path is logged at WARNING and
+    skipped, every other artifact is still recorded.
+    """
+    entries: list[dict] = []
+    for path in paths:
+        try:
+            entries.append(
+                lineage.output_file_entry(path, compute_sha256=compute_sha256)
+            )
+        except OSError as exc:
+            logger.warning(
+                "rebuild-manifest: skipping %s%s (%s); vanished or unreadable "
+                "mid-scan.",
+                path,
+                f" for source {source_key!r}" if source_key else "",
+                exc,
+            )
+    return entries
 
 
 def build_source_entry(
@@ -120,8 +147,12 @@ def build_source_entry(
         (p for p in source_dir.rglob("*.nc") if p.is_file()),
         key=str,
     )
-    file_records = [_file_entry(p, compute_sha256=compute_sha256) for p in files]
+    file_records = _guarded_output_entries(
+        files, compute_sha256=compute_sha256, source_key=source_key
+    )
 
+    # Years come from filenames (no stat), so a file skipped above by a
+    # vanish-race still contributes its year to the derived period.
     years = sorted({y for p in files if (y := _year_in_filename(p.name)) is not None})
 
     entry: dict = {
@@ -156,9 +187,12 @@ def _ncs_in(source_dir: Path) -> list[Path]:
 def _target_nc_params(nc: Path) -> dict:
     """Best-effort read of resolved-target attrs (``period``, ``sources``).
 
-    PR-7 persists the full resolved per-target params as NC global attrs; PR-2
-    reads back whatever already exists. A placeholder / non-NetCDF file (tests,
-    a truncated write) simply yields ``{}`` -- the read is never fatal.
+    Reads the ``period`` / ``sources`` global attrs when present. Target
+    writers may not yet persist the full resolved param set, so a missing attr
+    -- or a non-NetCDF placeholder file -- simply yields ``{}``; the read is
+    never fatal to the projection. A present-but-unreadable NC (a truncated or
+    corrupt *published* target) is logged at WARNING so the lost resolved-param
+    provenance is at least visible, rather than vanishing silently.
     """
     params: dict = {}
     try:
@@ -170,7 +204,15 @@ def _target_nc_params(nc: Path) -> dict:
                     value = ds.attrs[attr]
                     # numpy scalars / arrays -> plain Python for JSON stability.
                     params[attr] = value.tolist() if hasattr(value, "tolist") else value
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "rebuild-manifest: could not read resolved-target attrs from %s "
+            "(%s); the target step's params will be empty. If this is a "
+            "published target NC and not a placeholder, it may be truncated "
+            "or corrupt.",
+            nc,
+            exc,
+        )
         return {}
     return params
 
@@ -195,10 +237,12 @@ def synthesize_steps(
     steps: list[dict] = []
 
     def _record(*, kind, source_key, outputs, params=None):
-        # Anchor the timestamp to the first output's mtime. Steps always carry
-        # at least one output here except an empty aggregated/consolidated dir,
-        # which is skipped by the callers below, so first-output always exists.
-        timestamp = lineage.iso_from_mtime(Path(outputs[0]["path"]))
+        # Reuse the mtime already captured when ``outputs`` was built rather
+        # than re-stat'ing outputs[0] -- that avoids a second TOCTOU window and
+        # keeps the step timestamp byte-consistent with the recorded output.
+        # ``outputs`` is always non-empty here: every caller skips a group that
+        # produced no entries (empty dir, or all files vanished mid-scan).
+        timestamp = outputs[0]["mtime_utc"]
         record = lineage.build_step_record(
             kind=kind,
             source_key=source_key,
@@ -214,10 +258,11 @@ def synthesize_steps(
     for source_dir in _sorted_source_dirs(datastore):
         if source_dir.name not in catalog_keys:
             continue
-        outputs = [
-            lineage.output_file_entry(p, compute_sha256=compute_sha256)
-            for p in _ncs_in(source_dir)
-        ]
+        outputs = _guarded_output_entries(
+            _ncs_in(source_dir),
+            compute_sha256=compute_sha256,
+            source_key=source_dir.name,
+        )
         if not outputs:
             continue
         _record(kind="consolidate", source_key=source_dir.name, outputs=outputs)
@@ -225,10 +270,11 @@ def synthesize_steps(
     # aggregate: every data/aggregated/<key>/ dir (incl. derived variants).
     aggregated_root = project_dir / "data" / "aggregated"
     for source_dir in _sorted_source_dirs(aggregated_root):
-        outputs = [
-            lineage.output_file_entry(p, compute_sha256=compute_sha256)
-            for p in _ncs_in(source_dir)
-        ]
+        outputs = _guarded_output_entries(
+            _ncs_in(source_dir),
+            compute_sha256=compute_sha256,
+            source_key=source_dir.name,
+        )
         if not outputs:
             continue
         _record(kind="aggregate", source_key=source_dir.name, outputs=outputs)
@@ -239,7 +285,9 @@ def synthesize_steps(
         for nc in sorted(targets_dir.glob("*.nc"), key=str):
             if not nc.is_file():
                 continue
-            outputs = [lineage.output_file_entry(nc, compute_sha256=compute_sha256)]
+            outputs = _guarded_output_entries([nc], compute_sha256=compute_sha256)
+            if not outputs:
+                continue
             _record(
                 kind="target",
                 source_key=None,
@@ -250,10 +298,9 @@ def synthesize_steps(
     # validate: the fabric.json anchor.
     fabric_json = project_dir / "fabric.json"
     if fabric_json.exists():
-        outputs = [
-            lineage.output_file_entry(fabric_json, compute_sha256=compute_sha256)
-        ]
-        _record(kind="validate", source_key=None, outputs=outputs)
+        outputs = _guarded_output_entries([fabric_json], compute_sha256=compute_sha256)
+        if outputs:
+            _record(kind="validate", source_key=None, outputs=outputs)
 
     return sorted(steps, key=lineage.step_sort_key)
 
@@ -261,7 +308,7 @@ def synthesize_steps(
 def _project_source_dirs(project: "Project") -> dict[str, Path]:
     """Return ``{source_key: source_dir}`` for the sources[] union.
 
-    The union is (datastore consolidated dirs n catalog) U all
+    The union is (datastore consolidated dirs ∩ catalog) ∪ all
     ``data/aggregated/`` dirs. When a key appears in both, the aggregated
     (project-specific final) dir wins -- that is the artifact the published
     fabric ships, and the consolidate step still records the datastore NCs.
@@ -285,7 +332,7 @@ def rebuild_manifest(
 ) -> "_Manifest":
     """Project the on-disk artifacts into a complete, canonical ``manifest.json``.
 
-    ``sources`` is the (datastore n catalog) U ``data/aggregated/`` union;
+    ``sources`` is the (datastore ∩ catalog) ∪ ``data/aggregated/`` union;
     ``steps`` is the deterministic :func:`synthesize_steps` output. Identity
     fields are read-merged from the existing manifest -- ``created_utc``,
     ``last_validated_utc`` (never re-minted), the ``fabric`` authorship block,

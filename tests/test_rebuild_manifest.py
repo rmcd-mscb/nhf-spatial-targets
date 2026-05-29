@@ -18,6 +18,8 @@ Invariants locked here (spec decisions E/F, plan PR-2):
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from nhf_spatial_targets.rebuild_manifest import parse_aggregated_filename
@@ -413,3 +415,115 @@ def test_reconcile_manifest_is_removed():
 
     assert "reconcile-manifest" not in app  # command de-registered
     assert "rebuild-manifest" in app  # replacement registered
+
+
+# ---------------------------------------------------------------------------
+# Review fixup (PR #281): content-derivation + shared-Lustre resilience
+# ---------------------------------------------------------------------------
+
+
+def test_target_nc_params_reads_real_attrs(tmp_path):
+    """A real target NC's period/sources attrs land on the target step.
+
+    Every other fixture writes placeholder bytes (-> {} via the fallback);
+    this exercises the actual xarray attr read + numpy .tolist() conversion,
+    which is the one runtime path manifest JSON-stability depends on.
+    """
+    import numpy as np
+    import xarray as xr
+
+    from nhf_spatial_targets.rebuild_manifest import rebuild_manifest
+
+    project = _make_project(tmp_path, aggregated_dirs={"merra2": ["merra2_agg.nc"]})
+    tdir = project.workdir / "targets"
+    tdir.mkdir(parents=True)
+    ds = xr.Dataset(attrs={"period": "2000-01-01/2010-12-31"})
+    # numpy array attr -> must round-trip to a plain JSON list via .tolist().
+    ds.attrs["sources"] = np.array(["merra2", "gldas"])
+    ds.to_netcdf(tdir / "aet_targets.nc")
+
+    m = rebuild_manifest(project, dry_run=True)
+    target_steps = [s for s in m["steps"] if s["kind"] == "target"]
+    assert len(target_steps) == 1
+    params = target_steps[0]["params"]
+    assert params["period"] == "2000-01-01/2010-12-31"
+    assert params["sources"] == ["merra2", "gldas"]  # numpy -> list
+    # The whole manifest must remain JSON-serializable (no numpy leaks).
+    json.dumps(m)
+
+
+def test_target_nc_params_warns_on_unreadable(tmp_path, caplog):
+    """A present-but-unreadable target NC yields {} AND logs a warning.
+
+    Silent {} would lose resolved-param provenance from a corrupt published
+    NC with no trace; the warning is the operator's only signal.
+    """
+    import logging
+
+    from nhf_spatial_targets.rebuild_manifest import _target_nc_params
+
+    bad = tmp_path / "aet_targets.nc"
+    bad.write_bytes(b"not a netcdf")
+    with caplog.at_level(logging.WARNING):
+        assert _target_nc_params(bad) == {}
+    assert any("aet_targets.nc" in r.message for r in caplog.records)
+
+
+def test_rebuild_aggregated_dir_wins_union(tmp_path):
+    """When a key is in BOTH datastore and aggregated, the aggregated dir wins.
+
+    The published fabric ships the aggregated NC, so sources[key].files must
+    reflect it; the datastore NCs are still recorded by the consolidate step.
+    """
+    from nhf_spatial_targets.rebuild_manifest import rebuild_manifest
+
+    project = _make_project(
+        tmp_path,
+        datastore_dirs={"merra2": ["merra2_2000.nc", "merra2_2001.nc"]},
+        aggregated_dirs={"merra2": ["merra2_agg.nc"]},
+    )
+    m = rebuild_manifest(project, dry_run=True)
+    files = [Path(f["path"]).name for f in m["sources"]["merra2"]["files"]]
+    assert files == ["merra2_agg.nc"]  # aggregated wins, not the datastore NCs
+    # The datastore NCs still surface via the consolidate step.
+    consolidate = [
+        s
+        for s in m["steps"]
+        if s["kind"] == "consolidate" and s["source_key"] == "merra2"
+    ]
+    assert len(consolidate) == 1
+    cons_files = [Path(o["path"]).name for o in consolidate[0]["outputs"]]
+    assert cons_files == ["merra2_2000.nc", "merra2_2001.nc"]
+
+
+def test_rebuild_skips_vanished_file_without_aborting(tmp_path, monkeypatch, caplog):
+    """A file that vanishes mid-scan (TOCTOU) is logged and skipped, not fatal.
+
+    Restores the log-and-continue resilience the deleted reconcile.py /
+    release/rebuild.py carried for the shared Lustre datastore.
+    """
+    import logging
+
+    from nhf_spatial_targets import rebuild_manifest as rm
+
+    project = _make_project(
+        tmp_path,
+        aggregated_dirs={"merra2": ["merra2_2000_agg.nc", "merra2_2001_agg.nc"]},
+    )
+    real = rm.lineage.output_file_entry
+
+    def flaky(path, *, compute_sha256):
+        if path.name == "merra2_2000_agg.nc":
+            raise OSError("stale NFS handle")
+        return real(path, compute_sha256=compute_sha256)
+
+    monkeypatch.setattr(rm.lineage, "output_file_entry", flaky)
+    with caplog.at_level(logging.WARNING):
+        m = rm.rebuild_manifest(project, dry_run=True)  # must NOT raise
+
+    # The surviving file is recorded; the vanished one is skipped + logged.
+    agg = [s for s in m["steps"] if s["kind"] == "aggregate"]
+    assert len(agg) == 1
+    names = [Path(o["path"]).name for o in agg[0]["outputs"]]
+    assert names == ["merra2_2001_agg.nc"]
+    assert any("merra2_2000_agg.nc" in r.message for r in caplog.records)
