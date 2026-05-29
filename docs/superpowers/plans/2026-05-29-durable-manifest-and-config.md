@@ -1089,17 +1089,33 @@ Compute the hash from the raw `config.yml` text (not the merged dict) so stalene
 - [ ] **Step 4: Run — Expected PASS.**
 - [ ] **Step 5: Commit.**
 
-### Task 4.3: `rebuild.py` parses effective config (not just lists it)
+### Task 4.3: RESOLVED 2026-05-29 — NO CODE CHANGE (obsolete as written)
 
-**Files:**
-- Modify: `src/nhf_spatial_targets/release/rebuild.py:408-410`
-- Test: `tests/test_release_rebuild.py`
+**Status:** Resolved as a no-code note, verified against merged `main`. The
+original wording below ("`rebuild.py:408-410` parses effective config; test
+`tests/test_release_rebuild.py`") is **obsolete** and was never implemented:
 
-- [ ] **Step 1: Write the failing test:** the release-lineage input now reflects the *current* re-merged config values (e.g. the runoff `period` from `config.yml`), not a fossil window.
-- [ ] **Step 2: Run — Expected FAIL.**
-- [ ] **Step 3: Implement** — parse `config.effective.yml` (strip the `_effective_config_meta` block before consuming) and feed resolved per-target params into the lineage input.
-- [ ] **Step 4: Run — Expected PASS.**
-- [ ] **Step 5: Commit + PR-4 self-review; stop for review.**
+- `src/nhf_spatial_targets/release/rebuild.py` was **deleted in PR-2**, and
+  `tests/test_release_rebuild.py` never existed.
+- **Nothing in `src/` reads `config.effective.yml`** — it is write-only
+  (`validate._write_effective_config`).
+- The "fossil window leaks into published provenance" problem this task meant
+  to fix is **already solved by PR-2 + Pillar 6**:
+  `rebuild_manifest._target_nc_params` (rebuild_manifest.py:187, used at :295)
+  reads the resolved `period` / `sources` from the **target-NC global attrs**,
+  so the published manifest's `target` steps already reflect current values,
+  not `config.effective.yml`.
+- The deterministic projection must **NOT** depend on a derived artifact like
+  `config.effective.yml` (hard constraint E). Do **not** add
+  `config.effective.yml` to the manifest projection.
+
+Therefore Task 4.3 is satisfied by PR-2 + Pillar 6 and requires no code and no
+test. (The "PR-4 self-review; stop for review" step now follows Task 4.2.)
+
+~~Original (obsolete):~~
+- ~~Modify `src/nhf_spatial_targets/release/rebuild.py:408-410`; parse
+  `config.effective.yml` and feed resolved per-target params into the lineage
+  input; test `tests/test_release_rebuild.py`.~~
 
 ### Task 4.4: Config-schema-additions follow-through (CLAUDE.md checklist)
 
