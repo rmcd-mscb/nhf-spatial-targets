@@ -337,3 +337,44 @@ def test_rebuild_concurrent_flock_merge(tmp_path):
     m = json.loads(project.manifest_path.read_text())
     assert m["created_utc"] == "2020-01-01T00:00:00+00:00"  # identity survived races
     assert "merra2" in m["sources"]
+
+
+# ---------------------------------------------------------------------------
+# Task 2.6: no datetime.now() reachable from the rebuild path
+# ---------------------------------------------------------------------------
+
+
+def test_no_datetime_now_in_rebuild_module():
+    import inspect
+
+    from nhf_spatial_targets import rebuild_manifest as rm
+
+    src = inspect.getsource(rm)
+    assert "datetime.now" not in src, (
+        "rebuild_manifest must derive all timestamps from file mtime "
+        "(spec decision E). Use lineage.iso_from_mtime."
+    )
+
+
+def test_frozen_clock_guard_rebuild_dry_run(tmp_path, monkeypatch):
+    import datetime as _dt
+
+    from nhf_spatial_targets.rebuild_manifest import rebuild_manifest
+    from nhf_spatial_targets.release import lineage
+
+    class _NoNow(_dt.datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: ARG003
+            raise AssertionError("datetime.now() called on the rebuild path")
+
+    # build_step_record + iso_from_mtime + _file_basics all reference
+    # lineage.datetime; freezing .now here proves the rebuild never mints a clock.
+    monkeypatch.setattr(lineage, "datetime", _NoNow)
+    project = _make_project(
+        tmp_path,
+        datastore_dirs={"merra2": ["merra2_2000.nc"]},
+        aggregated_dirs={"merra2": ["merra2_agg.nc"]},
+        targets=["aet_targets.nc"],
+    )
+    # Must not raise: every timestamp is mtime-derived.
+    rebuild_manifest(project, dry_run=True)

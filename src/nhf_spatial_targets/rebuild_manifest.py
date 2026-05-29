@@ -14,8 +14,8 @@ current catalog x ``fabric.json``). This module computes that projection:
   ``validate`` (``fabric.json``).
 
 Determinism (spec decision E): every timestamp comes from file ``mtime`` via
-:func:`nhf_spatial_targets.release.lineage.iso_from_mtime` -- **never**
-``datetime.now()``. Sources are emitted with sorted keys; steps are sorted by
+:func:`nhf_spatial_targets.release.lineage.iso_from_mtime` -- **never** a
+wall-clock read. Sources are emitted with sorted keys; steps are sorted by
 :func:`~nhf_spatial_targets.release.lineage.step_sort_key`. Same disk + catalog
 + code -> byte-identical manifest (modulo the opt-in ``--compute-sha256``).
 
@@ -187,7 +187,7 @@ def synthesize_steps(
     (matching the ``sources[]`` union), one ``aggregate`` step per
     ``data/aggregated/<key>/`` dir, one ``target`` step per ``targets/*.nc``,
     and one ``validate`` step for ``fabric.json``. Every timestamp is
-    ``iso_from_mtime`` of the step's first output (never ``datetime.now()``);
+    ``iso_from_mtime`` of the step's first output (never a wall-clock read);
     every record is tagged ``provenance: "reconstructed"``; the list is sorted
     by :func:`~nhf_spatial_targets.release.lineage.step_sort_key`.
     """
@@ -296,7 +296,7 @@ def rebuild_manifest(
     With ``dry_run=True`` the projection is returned without touching disk;
     otherwise it is written via ``lineage.with_flock`` + atomic rename. The
     result is byte-identical on re-run for the same disk + catalog + code
-    (modulo the opt-in ``compute_sha256``); no ``datetime.now()`` is on the
+    (modulo the opt-in ``compute_sha256``); no wall-clock read is on the
     path (all timestamps come from file mtime).
     """
     manifest_path = project.manifest_path
