@@ -673,3 +673,126 @@ def test_write_manifest_preserves_identity_on_rerun(tmp_path):
     assert second["created_utc"] == first["created_utc"]  # never re-minted
     assert "era5_land" in second["sources"]  # preserved
     assert len(second["steps"]) == 1  # preserved
+
+
+# ---------------------------------------------------------------------------
+# Catalog-key validation of config.targets.*.sources[] (issue #279, PR-5)
+#
+# validate must fail loudly when a target's configured source key is not a
+# *current* catalog source: either absent from sources.yml entirely (typo /
+# removed) or present but carrying superseded_by (merra_land -> merra2,
+# watergap22a -> watergap22d). A superseded key would otherwise silently drop
+# that source from a multi_source_minmax bound -- a silent under-build.
+# ---------------------------------------------------------------------------
+
+
+def test_check_catalog_consistency_rejects_superseded_target_source():
+    """A superseded key fails with a hint naming the superseded_by replacement."""
+    from nhf_spatial_targets.validate import _check_catalog_consistency
+
+    cfg = {"targets": {"aet": {"sources": ["merra_land"]}}}
+    with pytest.raises(ValueError, match="merra2"):
+        _check_catalog_consistency(cfg)
+
+
+def test_check_catalog_consistency_rejects_absent_target_source():
+    """A truly-absent key (typo) fails loudly, naming the offending key."""
+    from nhf_spatial_targets.validate import _check_catalog_consistency
+
+    cfg = {"targets": {"aet": {"sources": ["merra_lnd"]}}}
+    with pytest.raises(ValueError, match="merra_lnd"):
+        _check_catalog_consistency(cfg)
+
+
+def test_check_catalog_consistency_accepts_current_target_sources():
+    """All-current catalog source keys validate clean (no raise)."""
+    from nhf_spatial_targets.validate import _check_catalog_consistency
+
+    cfg = {"targets": {"aet": {"sources": ["mod16a2_v061", "ssebop"]}}}
+    _check_catalog_consistency(cfg)  # must not raise
+
+
+def test_check_catalog_consistency_validates_disabled_targets():
+    """A dangling key is a config error even when the target is disabled."""
+    from nhf_spatial_targets.validate import _check_catalog_consistency
+
+    cfg = {"targets": {"aet": {"enabled": False, "sources": ["merra_land"]}}}
+    with pytest.raises(ValueError, match="merra2"):
+        _check_catalog_consistency(cfg)
+
+
+def test_check_catalog_consistency_still_checks_variables_to_sources():
+    """The existing variables.yml -> sources.yml check stays intact: a config
+    with no targets still validates the catalog-internal cross-references and
+    passes (the shipped catalog is consistent)."""
+    from nhf_spatial_targets.validate import _check_catalog_consistency
+
+    _check_catalog_consistency({})  # no targets key -> only the variables check
+
+
+def test_validate_superseded_target_source_fails_with_hint(
+    tmp_path, minimal_fabric, no_system_cred_checks
+):
+    """End-to-end: validate_workspace threads the merged config into the
+    catalog check and fails on a superseded target source, naming merra2."""
+    _write_config(
+        tmp_path,
+        overrides={
+            "fabric": {"path": str(minimal_fabric), "id_col": "nhm_id"},
+            "datastore": str(tmp_path / "datastore"),
+            "targets": {
+                "aet": {
+                    "sources": ["merra_land"],
+                    "period": "2000-01-01/2010-12-31",
+                }
+            },
+        },
+    )
+    _write_credentials(tmp_path)
+    with pytest.raises(ValueError, match="merra2"):
+        validate_workspace(tmp_path)
+
+
+def test_validate_absent_target_source_fails_loudly(
+    tmp_path, minimal_fabric, no_system_cred_checks
+):
+    """End-to-end: a typo'd (absent) target source fails validate loudly."""
+    _write_config(
+        tmp_path,
+        overrides={
+            "fabric": {"path": str(minimal_fabric), "id_col": "nhm_id"},
+            "datastore": str(tmp_path / "datastore"),
+            "targets": {
+                "aet": {
+                    "sources": ["merra_lnd"],
+                    "period": "2000-01-01/2010-12-31",
+                }
+            },
+        },
+    )
+    _write_credentials(tmp_path)
+    with pytest.raises(ValueError, match="merra_lnd"):
+        validate_workspace(tmp_path)
+
+
+def test_validate_current_target_sources_pass(
+    tmp_path, minimal_fabric, no_system_cred_checks
+):
+    """End-to-end: all-current target sources let validate complete and write
+    its output artifacts."""
+    _write_config(
+        tmp_path,
+        overrides={
+            "fabric": {"path": str(minimal_fabric), "id_col": "nhm_id"},
+            "datastore": str(tmp_path / "datastore"),
+            "targets": {
+                "aet": {
+                    "sources": ["mod16a2_v061", "ssebop"],
+                    "period": "2000-01-01/2010-12-31",
+                }
+            },
+        },
+    )
+    _write_credentials(tmp_path)
+    validate_workspace(tmp_path)  # must not raise
+    assert (tmp_path / "fabric.json").exists()
