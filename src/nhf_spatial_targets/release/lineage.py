@@ -217,6 +217,7 @@ def read_manifest(manifest_path: Path) -> _Manifest:
             f"it to force a fresh skeleton (you will lose prior "
             f"provenance)."
         ) from exc
+    manifest.setdefault("manifest_schema_version", 0)
     manifest.setdefault("sources", {})
     manifest.setdefault("steps", [])
     return manifest

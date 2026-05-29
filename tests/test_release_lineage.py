@@ -406,3 +406,26 @@ def test_new_manifest_skeleton_carries_canonical_top_level():
     assert skel["created_utc"] is None
     assert skel["sources"] == {}
     assert skel["steps"] == []
+
+
+def test_read_manifest_defaults_preversion_to_zero(tmp_path):
+    import json
+
+    from nhf_spatial_targets.release.lineage import read_manifest
+
+    # A pre-version manifest (old validate / old lineage skeleton).
+    p = tmp_path / "manifest.json"
+    p.write_text(json.dumps({"sources": {}, "steps": []}))
+    m = read_manifest(p)
+    assert m["manifest_schema_version"] == 0  # detectable as behind
+
+
+def test_read_manifest_absent_returns_current_skeleton(tmp_path):
+    from nhf_spatial_targets.release.lineage import (
+        CURRENT_MANIFEST_SCHEMA_VERSION,
+        read_manifest,
+    )
+
+    m = read_manifest(tmp_path / "manifest.json")  # absent
+    assert m["manifest_schema_version"] == CURRENT_MANIFEST_SCHEMA_VERSION
+    assert "fabric" in m  # canonical key always present
