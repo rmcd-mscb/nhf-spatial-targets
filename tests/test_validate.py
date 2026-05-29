@@ -592,3 +592,59 @@ def test_validate_writes_effective_config(
     # Defaults applied:
     assert body["fabric"]["area_crs"] == "EPSG:5070"
     assert body["targets"]["runoff"]["nn_fill"] is True
+
+
+# ---------------------------------------------------------------------------
+# _write_manifest builds on the shared canonical skeleton (issue #279, PR-1)
+# ---------------------------------------------------------------------------
+
+
+def test_write_manifest_uses_canonical_skeleton(tmp_path):
+    from nhf_spatial_targets import validate as V
+    from nhf_spatial_targets.release.lineage import (
+        CURRENT_MANIFEST_SCHEMA_VERSION,
+        _new_manifest_skeleton,
+    )
+
+    fabric_meta = {
+        "path": "/data/fabric.gpkg",
+        "sha256": "deadbeef",
+        "crs": "EPSG:5070",
+        "id_col": "nhru_v11",
+        "id_col_sorted": True,
+        "hru_count": 10,
+    }
+    V._write_manifest(tmp_path, fabric_meta)
+    m = json.loads((tmp_path / "manifest.json").read_text())
+
+    # Top-level shape matches the single canonical skeleton exactly.
+    assert set(m) == set(_new_manifest_skeleton())
+    assert m["manifest_schema_version"] == CURRENT_MANIFEST_SCHEMA_VERSION
+    assert m["fabric"]["id_col"] == "nhru_v11"
+    assert m["created_utc"] is not None  # validate fills the clock
+
+
+def test_write_manifest_preserves_identity_on_rerun(tmp_path):
+    from nhf_spatial_targets import validate as V
+
+    fabric_meta = {
+        "path": "/data/fabric.gpkg",
+        "sha256": "a",
+        "crs": "EPSG:5070",
+        "id_col": "nhru_v11",
+        "id_col_sorted": True,
+        "hru_count": 10,
+    }
+    V._write_manifest(tmp_path, fabric_meta)
+    first = json.loads((tmp_path / "manifest.json").read_text())
+    # Simulate prior provenance + a source.
+    m = first
+    m["sources"]["era5_land"] = {"source_key": "era5_land"}
+    m["steps"].append({"kind": "validate"})
+    (tmp_path / "manifest.json").write_text(json.dumps(m))
+
+    V._write_manifest(tmp_path, fabric_meta)
+    second = json.loads((tmp_path / "manifest.json").read_text())
+    assert second["created_utc"] == first["created_utc"]  # never re-minted
+    assert "era5_land" in second["sources"]  # preserved
+    assert len(second["steps"]) == 1  # preserved
