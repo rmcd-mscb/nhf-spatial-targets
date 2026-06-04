@@ -698,7 +698,21 @@ def _preflight_config_product_consistency(project: Project) -> None:
                 continue
             nc_params = _target_nc_params(nc)
             if not nc_params:
-                continue  # placeholder / pre-PR-7 product: nothing to compare
+                # A readable NC with no resolved-param attrs is a pre-PR-7 build
+                # (or a placeholder): the gate cannot verify it, so it does NOT
+                # fabricate a mismatch -- but unverifiable provenance on a
+                # publish is worth a loud, named WARNING so the operator knows to
+                # rebuild that product before a first release (issue #279 / I1).
+                logger.warning(
+                    "publish pre-flight: target '%s' product %s carries no "
+                    "resolved-param attrs (a pre-PR-7 build); its config/product "
+                    "consistency cannot be verified. Rebuild this target, then "
+                    "rebuild-manifest, so its provenance is checkable before "
+                    "release.",
+                    tgt_name,
+                    nc.name,
+                )
+                continue
             problems.extend(
                 _config_product_problems(tgt_name, nc.name, tgt_cfg, nc_params)
             )

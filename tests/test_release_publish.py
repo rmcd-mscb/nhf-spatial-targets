@@ -341,6 +341,56 @@ def test_config_product_som_explicit_normalize_period_mismatch_is_fatal(tmp_path
         publish._preflight_config_product_consistency(project)
 
 
+@pytest.mark.parametrize(
+    "param,cfg_value,nc_value",
+    [
+        ("range_method", "multi_source_minmax", "normalized_minmax"),
+        ("normalize_period", "1990/2000", "1982/2010"),
+        ("ci_threshold", 0.70, 0.50),
+    ],
+)
+def test_config_product_direct_param_mismatch_is_fatal(
+    tmp_path, param, cfg_value, nc_value
+):
+    """Every _TRIANGLE_DIRECT_PARAMS key is compared, not just period: a
+    range_method / normalize_period / ci_threshold disagreement is each fatal.
+    Uses aet's NC name with an explicit effective-config target so the param is
+    present on both sides (the gate compares only when the key is set)."""
+    project = build_release_project(tmp_path)
+    _add_target_to_effective_config(
+        project, "aet", {"period": "2000/2010", param: cfg_value}
+    )
+    _write_real_target_nc(
+        project, "aet_targets.nc", {"period": "2000/2010", param: nc_value}
+    )
+    with pytest.raises(publish.PreflightError, match=param):
+        publish._preflight_config_product_consistency(project)
+
+
+def test_config_product_attrless_nc_passes_with_warning(tmp_path, caplog):
+    """A readable target NC carrying NO resolved-param attrs (a pre-PR-7 build /
+    placeholder) must NOT fabricate a mismatch -- the gate passes -- but it is
+    unverifiable provenance, so the gate WARNS naming the target/NC (I1) so the
+    operator knows to rebuild before a first release."""
+    project = build_release_project(tmp_path)
+    # A real, openable NetCDF with zero resolved-param global attrs.
+    _write_real_target_nc(project, "aet_targets.nc", {"unrelated": "x"})
+    with caplog.at_level(logging.WARNING):
+        publish._preflight_config_product_consistency(project)  # does not raise
+    # The I1 warning is emitted by the gate (publish module), names the target +
+    # NC, and tells the operator to rebuild -- distinct from the rebuild_manifest
+    # placeholder warning that the fixture's plain-bytes NCs also emit.
+    gate_warnings = [
+        r.message
+        for r in caplog.records
+        if r.name == "nhf_spatial_targets.release.publish"
+        and "resolved-param attrs" in r.message
+    ]
+    assert any(
+        "aet" in m and "aet_targets.nc" in m and "Rebuild" in m for m in gate_warnings
+    ), gate_warnings
+
+
 def test_allow_incomplete_sources_bypasses(tmp_path, caplog):
     """``allow_incomplete_sources`` downgrades the source/drift failure to a
     logged warning instead of raising; the warning carries the problem detail

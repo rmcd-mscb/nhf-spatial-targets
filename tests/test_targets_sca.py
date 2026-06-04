@@ -205,6 +205,23 @@ def test_build_output_schema(tmp_path: Path):
         assert ds.attrs["summer_zero_months"] == "7,8"
 
 
+def test_build_year_chunked_stamps_resolved_param_attrs(tmp_path: Path):
+    """End-to-end on the YEAR-CHUNKED path (SCA): the PR-7 resolved-param attrs
+    (range_method, source_keys) survive _common_global_attrs ->
+    base_extra_attrs -> per-year stitch -> stitched final NC. The single-shot
+    path is covered in test_targets_aet; this guards the distinct year-chunked
+    stitch path the triangle gate and manifest projection also read back."""
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_sca_project(tmp_path, period="2005-01-01/2005-01-31")
+    project = load(workdir)
+    build(project)
+    with xr.open_dataset(project.targets_dir() / "sca_targets.nc") as ds:
+        assert ds.attrs["range_method"] == "modis_ci"
+        assert ds.attrs["source_keys"] == "mod10c1_v061"
+
+
 def test_build_daily_time_index(tmp_path: Path):
     """One timestamp per day across the requested period (stitched)."""
     from nhf_spatial_targets.targets.sca import build
