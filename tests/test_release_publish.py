@@ -178,6 +178,88 @@ def test_corrupt_published_target_nc_fatal_even_with_override(tmp_path):
         publish._preflight_provenance_complete(project, allow_incomplete_sources=True)
 
 
+# ---------------------------------------------------------------------------
+# Config <-> product <-> manifest triangle (PR-7 Task 7.3 / #279)
+#
+# config.effective.yml records the resolved intent; the published target NCs
+# record what was actually built (their resolved-param global attrs, persisted
+# by PR-7 Task 7.1, read back into the manifest target step by Task 7.2). When
+# they disagree -- the classic fossil: effective config says period 2000-2010
+# while the NC/manifest say 1979-2024 -- publishing would ship provenance that
+# contradicts the data. This is a correctness inconsistency, fatal and NOT
+# bypassable by --allow-incomplete-sources.
+# ---------------------------------------------------------------------------
+
+
+def _write_real_target_nc(project, basename: str, attrs: dict) -> None:
+    """Overwrite a target NC with a real (openable) NetCDF carrying *attrs*."""
+    import xarray as xr
+
+    xr.Dataset(attrs=attrs).to_netcdf(project.targets_dir() / basename)
+
+
+def test_config_product_consistency_passes_when_aligned(tmp_path):
+    """A target NC whose resolved attrs match config.effective.yml clears the
+    consistency gate."""
+    project = build_release_project(tmp_path)  # effective aet period = 2000/2010
+    _write_real_target_nc(project, "aet_targets.nc", {"period": "2000/2010"})
+    publish._preflight_config_product_consistency(project)  # does not raise
+
+
+def test_config_product_period_mismatch_is_fatal(tmp_path):
+    """A target NC period that contradicts config.effective.yml is fatal."""
+    project = build_release_project(tmp_path)  # effective aet period = 2000/2010
+    _write_real_target_nc(
+        project,
+        "aet_targets.nc",
+        {"period": "1979/2024"},  # disagrees
+    )
+    with pytest.raises(publish.PreflightError, match="aet"):
+        publish._preflight_config_product_consistency(project)
+
+
+def test_config_product_sources_mismatch_is_fatal(tmp_path):
+    """A target NC source_keys list that contradicts config.effective.yml is
+    fatal (list <-> comma-joined-string bridge)."""
+    project = build_release_project(tmp_path)
+    # Give the effective config aet an explicit sources list, then have the NC
+    # disagree. (The fixture's config has no aet.sources, so set one.)
+    import yaml as _yaml
+
+    eff_path = project.workdir / "config.effective.yml"
+    eff = _yaml.safe_load(eff_path.read_text())
+    eff["targets"]["aet"]["sources"] = ["mod16a2_v061", "ssebop"]
+    eff_path.chmod(0o644)  # _write_effective_config stamps it 0o444
+    eff_path.write_text(_yaml.safe_dump(eff))
+    _write_real_target_nc(
+        project,
+        "aet_targets.nc",
+        {"period": "2000/2010", "source_keys": "mod16a2_v061,ssebop,mwbm_climgrid"},
+    )
+    with pytest.raises(publish.PreflightError, match="aet"):
+        publish._preflight_config_product_consistency(project)
+
+
+def test_config_product_mismatch_not_bypassed_by_override(tmp_path):
+    """The consistency failure is a correctness inconsistency, so it is fatal
+    through _preflight_common even with allow_incomplete_sources=True. The
+    manifest is rebuilt after writing the real NC so the upstream provenance /
+    drift gates pass and the consistency check is the gate that fires."""
+    from nhf_spatial_targets.rebuild_manifest import rebuild_manifest
+
+    project = build_release_project(tmp_path)  # effective aet period = 2000/2010
+    _write_real_target_nc(
+        project,
+        "aet_targets.nc",
+        {"period": "1979/2024"},  # disagrees
+    )
+    # Re-project so on-disk manifest == projection (drift gate passes); config.yml
+    # is untouched so the effective-config staleness gate also passes.
+    rebuild_manifest(project)
+    with pytest.raises(publish.PreflightError, match="aet"):
+        publish._preflight_common(project, allow_incomplete_sources=True)
+
+
 def test_allow_incomplete_sources_bypasses(tmp_path, caplog):
     """``allow_incomplete_sources`` downgrades the source/drift failure to a
     logged warning instead of raising; the warning carries the problem detail
