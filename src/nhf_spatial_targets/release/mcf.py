@@ -270,8 +270,9 @@ def build_source_mcf(
     period, bbox, variables) and ``release`` block, plus repo-level
     ``defaults``. ``manifest`` (loaded ``manifest.json``) supplies the
     process steps filtered to ``source_key``. ``distribution_files`` are the
-    staged consolidated NetCDF filenames (passed by PR-E; ``None`` pre-build
-    yields only the upstream landing entry). ``metadata_only`` sources
+    staged consolidated NetCDF filenames (passed by the build orchestrator;
+    ``None`` pre-build yields only the upstream landing entry).
+    ``metadata_only`` sources
     (e.g. daymet) carry only the upstream landing entry regardless.
 
     Parameters
@@ -282,7 +283,8 @@ def build_source_mcf(
         Validated ``catalog/release_defaults.yml`` mapping.
     manifest, distribution_files, identifier, now
         See module docstring. ``identifier`` overrides the deterministic
-        ``urn:usgs:nhf-release:source:<key>`` (PR-E passes the ScienceBase id).
+        ``urn:usgs:nhf-release:source:<key>`` (the build orchestrator passes
+        the ScienceBase id).
     """
     src = catalog.source(source_key)
     release = catalog.release_block(source_key)
@@ -447,7 +449,8 @@ def build_fabric_mcf(
     ``manifest['sources']`` intersected with
     :func:`catalog.publishable_sources` (catalog/manifest-driven, never a
     hard-coded list). ``doi`` is the umbrella DOI children share (``None``
-    pre-mint); ``distribution_files`` are the staged file names (PR-E).
+    pre-mint); ``distribution_files`` are the staged file names (supplied by
+    the build orchestrator).
     """
     release_cfg = config.get("release") or {}
     fab_defaults = defaults.get("fabric", {})

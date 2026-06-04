@@ -11,7 +11,7 @@ an exhaustive registry: adding a new catalog source must not require
 touching them. Spot-check tests assert the load-bearing invariants
 (bbox conversion, publishability filtering, metadata-only handling) so the
 intent is visible without diffing the large golden dicts, and an
-``ISO19139`` render smoke-test protects the shape the PR-D2 emitter consumes.
+``ISO19139`` render smoke-test protects the shape the ISO emitter consumes.
 """
 
 from __future__ import annotations
@@ -34,7 +34,8 @@ FX = Path(__file__).parent / "fixtures" / "release"
 # Injected so metadata.datestamp / dates are byte-stable in the golden.
 NOW = datetime(2026, 5, 28, 12, 0, 0, tzinfo=timezone.utc)
 
-# Canned staged-file lists (PR-E supplies these from the payload stager).
+# Canned staged-file lists (the build orchestrator supplies these from the
+# payload stager).
 SRC_FILES = {
     "era5_land": [
         "monthly/era5_land_monthly_2003.nc",
@@ -165,7 +166,7 @@ def test_source_without_bbox_is_none(defaults, manifest):
     """A source with no access.bbox_nwse gets an honest None MCF bbox.
 
     merra2 is global and subsets at aggregation time, so the catalog carries
-    no bbox for it. (SNODAS used to be the example here, but PR-D2 gave it a
+    no bbox for it. (SNODAS used to be the example here, but it was given a
     catalog CONUS bbox so its FGDC <bounding> is valid; the code-side None
     path is also covered by test_fabric_bbox_absent_is_none.)
     """
@@ -232,7 +233,7 @@ def test_umbrella_unions_child_extents(config, fabric, defaults, manifest):
 
 @pytest.mark.parametrize("kind", ["era5_land", "snodas", "daymet"])
 def test_source_mcf_renders_to_iso(kind, defaults, manifest):
-    """The MCF shape is consumable by the PR-D2 ISO emitter (smoke)."""
+    """The MCF shape is consumable by the ISO emitter (smoke)."""
     built = mcf.build_source_mcf(kind, defaults=defaults, manifest=manifest, now=NOW)
     xml = ISO19139OutputSchema().write(built)
     assert xml.lstrip().startswith("<?xml")

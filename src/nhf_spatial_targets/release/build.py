@@ -9,8 +9,10 @@ self-contained release payload on disk under
 ``<project>/release/build/<scope>/``.
 
 It is **entirely offline**: no ScienceBase client, registry, or network I/O.
-Publishing, the registry, and dry-run are a later phase (PR-E2); the CLI that
-drives this is PR-F. The build is **catalog- + manifest-driven**: source
+Publishing, the registry, and dry-run live in separate modules
+(:mod:`~nhf_spatial_targets.release.publish` /
+:mod:`~nhf_spatial_targets.release.registry`); the CLI that drives this is
+:mod:`~nhf_spatial_targets.cli.release`. The build is **catalog- + manifest-driven**: source
 children flow from :func:`payload.sources_used` (the intersection of
 :func:`catalog.publishable_sources` with the sources the project actually
 aggregated on disk) and fabric participation from the project ``manifest.json``
@@ -38,7 +40,7 @@ Distribution-list decision:
     - **Fabric child:** ``fabric.gpkg`` + every aggregated NC + every target NC
       + ``manifest.json`` + ``README.md`` + ``checksums.csv`` + ``SHA256SUMS``.
       This matches the fgdc-field-map's "every staged file" intent.
-    - **Source child:** the staged consolidated NetCDFs only. The PR-D1
+    - **Source child:** the staged consolidated NetCDFs only. The
       source-distribution builder labels every listed entry "Consolidated
       CF-1.6 NetCDF.", so listing README / checksums there would mislabel them;
       those files are still staged and checksummed, just not enumerated in
@@ -296,8 +298,8 @@ def build_umbrella(
     when ``None`` (a standalone umbrella build), the fabric + source child MCFs
     are rebuilt locally -- a local build unions exactly the children this
     project would produce. The registry-driven cross-project union and DOI
-    refresh are a later phase (PR-E2); any operator-set DOI is read from
-    ``config.release.doi`` here.
+    refresh live in the publish/registry layer, not here; any operator-set DOI
+    is read from ``config.release.doi`` here.
     """
     defaults = load_release_defaults()
     release_cfg = _release_cfg(project)

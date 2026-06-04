@@ -8,7 +8,8 @@ umbrella / source-child / fabric-child item and records the result.
 
 **Dependency injection.** Every ``publish_*`` takes an already-constructed
 :class:`~nhf_spatial_targets.release.sb_client.SbClient`. Resolving credentials
-and building a real session is PR-G's job; here the client is assumed ready, so
+and building a real session is handled by the (not-yet-implemented) credential
+wiring; here the client is assumed ready, so
 the whole module is offline-testable against a mock client (the mock patterns
 in ``tests/test_release_sb_client_offline.py``).
 
@@ -38,7 +39,7 @@ comparison is honest in both directions: an MD5 hex string (32 chars) can
 never equal a SHA-256 (64 chars), so if a remote file ever records a SHA-256
 the local MD5 simply won't match and the file re-uploads -- correct, just not
 skipped. We pass MD5 through the (SHA-256-named) parameter rather than
-extending the merged PR-E2 primitive: the "what checksum does ScienceBase
+extending the ``SbClient`` upload primitive: the "what checksum does ScienceBase
 actually use" knowledge belongs in this orchestration layer.
 
 **Flat ScienceBase namespace.** A staged payload is a nested tree
@@ -161,7 +162,7 @@ class PublishResult:
     def __post_init__(self) -> None:
         # The umbrella is keyless; source/fabric children always carry a key.
         # Same invariant BuildResult guards -- enforced here so a future second
-        # producer (the PR-F CLI / status command) can't construct a mismatch.
+        # producer (the CLI / status command) can't construct a mismatch.
         if (self.scope == "umbrella") != (self.key is None):
             raise ValueError(
                 f"{self.scope!r} key invariant violated: umbrella must have "
@@ -738,8 +739,9 @@ def _preflight_common(
     manifest, so this is not constant-time overall -- it is still fail-fast
     (runs before any build / upload).
 
-    Credential resolvability is intentionally *not* checked here: PR-E3 assumes
-    a ready, injected client (the credential/session wiring is PR-G).
+    Credential resolvability is intentionally *not* checked here: the publish
+    orchestration assumes a ready, injected client (the credential/session
+    wiring is not yet implemented).
     """
     manifest_path = project.manifest_path
     if not manifest_path.exists():
@@ -792,7 +794,7 @@ def _require_umbrella_sb_id(registry_path: Path | None) -> str:
     """Return the umbrella sb_id or raise -- a child can't be parented without it.
 
     The plan's ``--create-umbrella`` affordance (publish the umbrella and a
-    child in one invocation) is a CLI-level composition (PR-F) of
+    child in one invocation) is a CLI-level composition of
     :func:`publish_umbrella` then a child publish; the library keeps the gate
     single-purpose so a child never silently lands under a missing parent.
     """
@@ -1170,7 +1172,7 @@ def publish_fabric_child(
 
 
 # ---------------------------------------------------------------------------
-# Read-only diff (intent vs reality) -- used by dry-run and status (PR-F)
+# Read-only diff (intent vs reality) -- used by dry-run and status
 # ---------------------------------------------------------------------------
 
 DiffScope = Literal["umbrella", "sources", "fabric", "all"]
