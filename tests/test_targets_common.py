@@ -2169,3 +2169,63 @@ def test_prune_orphan_handles_nn_filled_only_companion(tmp_path: Path):
     )
     assert pruned == [2006]
     assert not (tmp_path / "swe_targets_2006_nn_filled.nc").exists()
+
+
+# ---------------------------------------------------------------------------
+# Resolved-param global attrs on target NCs (issue #279, PR-7 Task 7.1)
+#
+# The deterministic manifest projection (rebuild_manifest) reads resolved
+# per-target params back from the published target NC, so those params must be
+# persisted as NC global attrs at write time. _common_global_attrs is the one
+# seam both build paths (single-shot + year-chunked) route through.
+# ---------------------------------------------------------------------------
+
+
+def test_common_global_attrs_carries_resolved_params(tmp_path: Path):
+    """_common_global_attrs adds machine-readable range_method + resolved
+    source keys (alongside the existing period), read from the merged config."""
+    from nhf_spatial_targets.targets import run
+    from nhf_spatial_targets.targets._driver import _common_global_attrs
+
+    workdir = make_minimal_project(tmp_path)
+    # Pin an explicit runoff config so the resolved values are unambiguous.
+    cfg_path = workdir / "config.yml"
+    cfg = yaml.safe_load(cfg_path.read_text())
+    cfg["targets"] = {
+        "runoff": {
+            "sources": ["era5_land", "gldas_noah_v21_monthly"],
+            "range_method": "multi_source_minmax",
+            "period": "2000-01-01/2010-12-31",
+        }
+    }
+    cfg_path.write_text(yaml.safe_dump(cfg))
+    project = load(workdir)
+
+    attrs = _common_global_attrs(project, run.ADAPTER, "2000-01-01/2010-12-31")
+    assert attrs["range_method"] == "multi_source_minmax"
+    # Machine-readable resolved keys, distinct from the human "source"
+    # description the loader adds; comma-joined so it is NC-attr-safe.
+    assert attrs["source_keys"] == "era5_land,gldas_noah_v21_monthly"
+    assert attrs["period"] == "2000-01-01/2010-12-31"
+
+
+def test_common_global_attrs_omits_sources_when_empty(tmp_path: Path):
+    """An empty sources[] list (lists replace wholesale through the defaults
+    merge, so `[]` survives) omits source_keys rather than emitting an empty
+    string -- the truthiness guard, exercised by the one config shape that can
+    actually reach it past the default-merge."""
+    from nhf_spatial_targets.targets import sca
+    from nhf_spatial_targets.targets._driver import _common_global_attrs
+
+    workdir = make_minimal_project(tmp_path)
+    cfg_path = workdir / "config.yml"
+    cfg = yaml.safe_load(cfg_path.read_text())
+    # Explicit empty list survives the wholesale-list merge (unlike None, which
+    # falls through to the default sources); range_method still resolves.
+    cfg["targets"] = {"snow_covered_area": {"range_method": "modis_ci", "sources": []}}
+    cfg_path.write_text(yaml.safe_dump(cfg))
+    project = load(workdir)
+
+    attrs = _common_global_attrs(project, sca.ADAPTER, "2000-01-01/2010-12-31")
+    assert attrs["range_method"] == "modis_ci"
+    assert "source_keys" not in attrs
