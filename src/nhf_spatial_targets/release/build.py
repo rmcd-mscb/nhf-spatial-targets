@@ -52,6 +52,7 @@ Distribution-list decision:
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime
@@ -66,6 +67,8 @@ from nhf_spatial_targets.release._models import (
 )
 from nhf_spatial_targets.release.defaults import load_release_defaults
 from nhf_spatial_targets.workspace import Project
+
+logger = logging.getLogger(__name__)
 
 # release build --scope choices; "fabric" is the default (one fabric child).
 BuildScope = Literal["fabric", "sources", "all"]
@@ -181,6 +184,9 @@ def _render_metadata(stage_dir: Path, mcf_dict: dict, *, kind: ItemKind) -> None
     A pure function of *mcf_dict* (every date is already baked into the MCF),
     so re-rendering an unchanged MCF rewrites byte-identical files.
     """
+    # The CPU-bound pygeometa/template render is the slow step of a build;
+    # announce it so an operator does not read the pause as a hang (#295).
+    logger.info("rendering metadata (fgdc/iso/readme) for %s %r", kind, stage_dir.name)
     (stage_dir / "fgdc.xml").write_text(fgdc.render_fgdc(mcf_dict, kind=kind))
     (stage_dir / "iso.xml").write_text(iso.render_iso(mcf_dict))
     (stage_dir / "README.md").write_text(readme.render_readme(mcf_dict, kind=kind))
@@ -198,6 +204,13 @@ def _finish(
     """
     _render_metadata(stage_dir, mcf_dict, kind=kind)
     entries = checksums.compute_checksums(stage_dir)
+    logger.info(
+        "staged %s %r: %d file(s) -> %s",
+        kind,
+        key or stage_dir.name,
+        len(entries),
+        stage_dir,
+    )
     return BuildResult(
         kind=kind, key=key, stage_dir=stage_dir, mcf=mcf_dict, entries=tuple(entries)
     )
@@ -244,6 +257,7 @@ def build_source_child(
     The distribution list is the staged NetCDFs; see the module docstring for
     why README / checksums are not enumerated there for source children.
     """
+    logger.info("staging source child %r", key)
     defaults = load_release_defaults()
     manifest = _load_manifest(project)
     plan = payload.stage_source_child(project, key, copy=copy)
@@ -267,6 +281,7 @@ def build_fabric_child(
     list is every staged downloadable artifact (the metadata records aside);
     see the module docstring.
     """
+    logger.info("staging fabric child %r", payload.resolve_fabric_label(project))
     defaults = load_release_defaults()
     manifest = _load_manifest(project)
     plan = payload.stage_fabric_child(project, copy=copy)
@@ -301,6 +316,7 @@ def build_umbrella(
     refresh live in the publish/registry layer, not here; any operator-set DOI
     is read from ``config.release.doi`` here.
     """
+    logger.info("staging umbrella")
     defaults = load_release_defaults()
     release_cfg = _release_cfg(project)
     if children is None:
