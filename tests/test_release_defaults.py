@@ -107,3 +107,22 @@ def test_single_blank_leaf_is_reported(tmp_path):
     assert missing == ["umbrella.title_template"]
     with pytest.raises(ValueError, match="umbrella.title_template"):
         require_populated_release_defaults(data)
+
+
+def test_blank_liability_statement_blocks_publish(tmp_path):
+    """A blanked ``distribution.liability_statement`` fails the publish gate.
+
+    Issue #268: FGDC emits a mandatory ``<distliab>`` straight from this field,
+    and ``mp`` rejects an empty one. The gate lives at publish time -- the path
+    is in ``REQUIRED_POPULATED_PATHS`` (added by #274), so an operator who
+    blanks the statement is stopped before any invalid FGDC can ship, rather
+    than at config-load (``validate_release_defaults`` stays shape-only so the
+    scaffold can still build/dry-run). This pins that behavior.
+    """
+    assert "distribution.liability_statement" in REQUIRED_POPULATED_PATHS
+    data = load_release_defaults()
+    data["distribution"] = dict(data["distribution"])
+    data["distribution"]["liability_statement"] = "   \n  "  # whitespace only
+    assert missing_release_defaults(data) == ["distribution.liability_statement"]
+    with pytest.raises(ValueError, match="distribution.liability_statement"):
+        require_populated_release_defaults(data)
