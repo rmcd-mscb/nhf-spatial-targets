@@ -209,13 +209,32 @@ def _looks_like_netcdf(nc: Path) -> bool:
     return any(head.startswith(m) for m in _NETCDF_MAGIC)
 
 
-def _target_nc_params(nc: Path) -> dict:
-    """Best-effort read of resolved-target attrs (``period``, ``sources``).
+# Resolved-target global attrs the projection reads back into the ``target``
+# step's ``params`` (issue #279, PR-7). ``period`` + the legacy human-readable
+# ``sources`` description predate PR-7; ``source_keys`` (machine-readable
+# resolved key list), ``range_method``, ``normalize_period`` (rch/som), and
+# ``ci_threshold`` (sca) are persisted by ``targets._driver._common_global_attrs``
+# / each builder's loader. Each is read only when present, so a target that
+# does not define one (e.g. runoff has no normalize_period) simply omits it.
+_RESOLVED_TARGET_ATTRS: tuple[str, ...] = (
+    "period",
+    "sources",
+    "source_keys",
+    "range_method",
+    "normalize_period",
+    "ci_threshold",
+)
 
-    Reads the ``period`` / ``sources`` global attrs when present. Target
-    writers may not yet persist the full resolved param set, so a missing attr
-    -- or a non-NetCDF placeholder file (no NetCDF/HDF5 magic) -- simply yields
-    ``{}`` with a WARNING; that read is never fatal to the projection.
+
+def _target_nc_params(nc: Path) -> dict:
+    """Best-effort read of the resolved-target attrs into the target step params.
+
+    Reads the resolved per-target global attrs in :data:`_RESOLVED_TARGET_ATTRS`
+    when present (``period``, ``sources``, ``source_keys``, ``range_method``,
+    ``normalize_period``, ``ci_threshold``). Target writers may not persist
+    every param for every target -- a missing attr is simply omitted -- and a
+    non-NetCDF placeholder file (no NetCDF/HDF5 magic) yields ``{}`` with a
+    WARNING; that read is never fatal to the projection.
 
     A file that **does** carry NetCDF/HDF5 magic but cannot be opened is a
     truncated or corrupt *published* target, and this **raises** ``ValueError``
@@ -231,7 +250,7 @@ def _target_nc_params(nc: Path) -> dict:
         import xarray as xr
 
         with xr.open_dataset(nc) as ds:
-            for attr in ("period", "sources"):
+            for attr in _RESOLVED_TARGET_ATTRS:
                 if attr in ds.attrs:
                     value = ds.attrs[attr]
                     # numpy scalars / arrays -> plain Python for JSON stability.

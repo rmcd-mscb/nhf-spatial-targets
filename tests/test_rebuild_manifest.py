@@ -452,6 +452,54 @@ def test_target_nc_params_reads_real_attrs(tmp_path):
     json.dumps(m)
 
 
+def test_target_nc_params_reads_resolved_param_set(tmp_path):
+    """The PR-7 resolved-param attrs (source_keys, range_method,
+    normalize_period, ci_threshold) round-trip into the target step's params,
+    so the published manifest carries the params the build actually used."""
+    import xarray as xr
+
+    from nhf_spatial_targets.rebuild_manifest import _target_nc_params
+
+    nc = tmp_path / "som_targets.nc"
+    xr.Dataset(
+        attrs={
+            "period": "1980-01-01/2024-12-31",
+            "range_method": "normalized_minmax",
+            "source_keys": "merra2,ncep_ncar,nldas_mosaic,nldas_noah",
+            "normalize_period": "1982/2010",
+            "ci_threshold": 0.70,
+        }
+    ).to_netcdf(nc)
+
+    params = _target_nc_params(nc)
+    assert params["period"] == "1980-01-01/2024-12-31"
+    assert params["range_method"] == "normalized_minmax"
+    assert params["source_keys"] == "merra2,ncep_ncar,nldas_mosaic,nldas_noah"
+    assert params["normalize_period"] == "1982/2010"
+    assert params["ci_threshold"] == 0.70
+
+
+def test_target_nc_params_omits_absent_resolved_params(tmp_path):
+    """A target NC carrying only some resolved attrs yields just those keys --
+    absent params are omitted, not None-filled (so a runoff NC with no
+    normalize_period/ci_threshold doesn't fabricate them)."""
+    import xarray as xr
+
+    from nhf_spatial_targets.rebuild_manifest import _target_nc_params
+
+    nc = tmp_path / "runoff_targets.nc"
+    xr.Dataset(
+        attrs={
+            "period": "1979-01-01/2024-12-31",
+            "range_method": "multi_source_minmax",
+            "source_keys": "era5_land,gldas_noah_v21_monthly",
+        }
+    ).to_netcdf(nc)
+
+    params = _target_nc_params(nc)
+    assert set(params) == {"period", "range_method", "source_keys"}
+
+
 def test_target_nc_params_placeholder_is_benign(tmp_path, caplog):
     """A non-NetCDF placeholder (no NetCDF/HDF5 magic) yields {} AND warns.
 
