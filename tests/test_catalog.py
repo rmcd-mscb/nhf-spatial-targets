@@ -635,3 +635,41 @@ def test_release_registry_yml_loads_as_valid_yaml():
     assert data["umbrella"] is None
     assert data["consolidated_sources"] == {}
     assert data["fabrics"] == {}
+
+
+# --- _load caching (issue #291) -------------------------------------------
+
+
+def test_load_is_memoized_returns_same_object():
+    """catalog._load caches per filename so the 1045-line sources.yml is parsed
+    once per process, not re-scanned on every sources()/source()/variables()
+    call. Same filename -> identical object (cache hit)."""
+    from nhf_spatial_targets import catalog as cat
+
+    cat._load.cache_clear()
+    first = cat._load("sources.yml")
+    second = cat._load("sources.yml")
+    assert first is second  # cache hit, not a re-parse
+
+
+def test_load_cache_clear_forces_reparse():
+    """cache_clear() is the escape hatch: after it, _load re-reads (a fresh
+    object), so tests that rewrite a catalog file on disk can opt out."""
+    from nhf_spatial_targets import catalog as cat
+
+    first = cat._load("sources.yml")
+    cat._load.cache_clear()
+    third = cat._load("sources.yml")
+    assert first is not third  # re-parsed after clear
+    assert first == third  # same content
+
+
+def test_load_caches_per_filename():
+    """Different filenames get independent cache entries (no cross-contamination)."""
+    from nhf_spatial_targets import catalog as cat
+
+    s = cat._load("sources.yml")
+    v = cat._load("variables.yml")
+    assert s is not v
+    assert s is cat._load("sources.yml")
+    assert v is cat._load("variables.yml")

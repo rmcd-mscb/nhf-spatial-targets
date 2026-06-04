@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 
 import yaml
@@ -9,8 +10,20 @@ import yaml
 _CATALOG_DIR = Path(__file__).parent.parent.parent / "catalog"
 
 
+@lru_cache(maxsize=None)
 def _load(filename: str) -> dict:
-    """Load a YAML catalog file and return its contents."""
+    """Load a YAML catalog file and return its contents.
+
+    Memoized per filename: the catalog YAMLs (the 1045-line ``sources.yml``,
+    ``variables.yml``, ...) are static, read-only reference data within a
+    process, but every ``sources()`` / ``source()`` / ``variables()`` call used
+    to re-parse the whole file with PyYAML's pure-Python scanner. That cost
+    dominated the release test suite (issue #291) and the live pipeline (which
+    reads the catalog repeatedly per fetch/aggregate/target). Callers must treat
+    the returned dict as read-only (none mutate it today); use
+    ``_load.cache_clear()`` if a test rewrites a catalog file on disk and needs
+    a fresh parse.
+    """
     path = _CATALOG_DIR / filename
     if not path.exists():
         raise FileNotFoundError(
