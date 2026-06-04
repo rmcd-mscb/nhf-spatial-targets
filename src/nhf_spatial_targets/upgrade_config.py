@@ -173,12 +173,13 @@ def check_drift(project_dir: Path) -> list[OptionalConfigFeature]:
 #     operator has not pinned in targets.<t>.sources[].
 
 # Config target key -> catalog/variables.yml top-level key. Currently identity
-# for all six targets: the config schema (defaults.py "targets") and the
-# variable registry (variables.yml) both use the long names (recharge,
-# soil_moisture, snow_covered_area, ...). The rch/som/sca/swe divergence lives
-# only in the targets/ builder module names, NOT in these keys. Kept explicit
-# so a future rename of either side is a one-line change here rather than a
-# silent mis-map; consistency is asserted by
+# for every target: the config schema (defaults.py "targets") and the variable
+# registry (variables.yml) both use the long names (recharge, soil_moisture,
+# snow_covered_area, ...). The rch/som/sca/swe divergence lives only in the
+# targets/ builder module names, NOT in these keys. Kept explicit so a future
+# rename of either side is a one-line change here rather than a silent mis-map;
+# consistency (coverage of DEFAULTS["targets"] + each value resolving in
+# variables()) is asserted by
 # tests/test_upgrade_config.py::test_target_to_variable_mapping_is_consistent.
 _TARGET_TO_VARIABLE: dict[str, str] = {
     "runoff": "runoff",
@@ -236,6 +237,12 @@ def check_available_sources(project_dir: Path) -> dict[str, list[str]]:
     defaults and so cannot fossilize against a newly-added catalog source, so
     reporting them would be noise.
 
+    Eligibility is taken **verbatim** from ``variables.yml`` with no
+    ``superseded_by`` filtering (unlike the loud check in ``validate``). This is
+    correct today because the per-variable ``sources`` lists name only current
+    keys; if a superseded key ever lands in one, this hint would suggest adding
+    a dead source — fix the catalog, not this function.
+
     Raises
     ------
     FileNotFoundError
@@ -253,6 +260,9 @@ def check_available_sources(project_dir: Path) -> dict[str, list[str]]:
         configured = tgt_cfg.get("sources")
         if not isinstance(configured, list):
             continue  # on defaults for sources -> nothing pinned to drift
+        # _TARGET_TO_VARIABLE values are guaranteed to resolve in variables()
+        # by test_target_to_variable_mapping_is_consistent; the guard is purely
+        # defensive against an unsynced future edit.
         var_def = all_vars.get(var_key)
         if var_def is None:
             continue

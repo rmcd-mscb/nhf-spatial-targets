@@ -228,9 +228,12 @@ def test_check_available_sources_lists_omitted_eligible(tmp_path):
 
     _config_with_targets(tmp_path)
     available = check_available_sources(tmp_path)
-    # aet pins only mod16a2_v061; ssebop is eligible per variables.yml.
-    assert "aet" in available
-    assert "ssebop" in available["aet"]
+    # aet eligible per variables.yml = [mod16a2_v061, ssebop, mwbm_climgrid];
+    # config pins only mod16a2_v061, so BOTH remaining eligible sources are
+    # reported, in the eligible-list (defaults-schema) order. Exact-equality
+    # locks the documented order-preserving contract and catches a partial
+    # omission (e.g. dropping mwbm_climgrid).
+    assert available["aet"] == ["ssebop", "mwbm_climgrid"]
     # The pinned key is not reported as "available" (already in use).
     assert "mod16a2_v061" not in available["aet"]
 
@@ -270,3 +273,32 @@ def test_cli_never_mutates_config(tmp_path):
     with pytest.raises(SystemExit):
         app(["upgrade-config", "--project-dir", str(tmp_path)])
     assert cfg.read_bytes() == before
+
+
+def test_cli_exits_one_when_config_missing_in_existing_dir(tmp_path, capsys):
+    """An existing project dir with no config.yml routes through the new check
+    calls and must exit 1 (FileNotFoundError), not 2 (which is dir-not-found)."""
+    from nhf_spatial_targets.cli import app
+
+    tmp_path.mkdir(parents=True, exist_ok=True)  # dir exists; config.yml absent
+    with pytest.raises(SystemExit) as exc:
+        app(["upgrade-config", "--project-dir", str(tmp_path)])
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "upgrade-config failed" in err
+
+
+def test_cli_exits_one_on_malformed_config(tmp_path, capsys):
+    """A syntactically malformed config.yml fails with an actionable message,
+    not a raw YAMLError traceback (the new checks parse YAML; check_drift did
+    not, so this is a guarded regression)."""
+    from nhf_spatial_targets.cli import app
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    # Unclosed bracket -> yaml.ParserError (a yaml.YAMLError subclass).
+    (tmp_path / "config.yml").write_text("targets: [unclosed\n")
+    with pytest.raises(SystemExit) as exc:
+        app(["upgrade-config", "--project-dir", str(tmp_path)])
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "parse config.yml" in err

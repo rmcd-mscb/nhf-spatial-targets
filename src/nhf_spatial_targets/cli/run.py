@@ -343,6 +343,13 @@ def upgrade_config_cmd(
     except FileNotFoundError as e:
         print(f"upgrade-config failed: {e}", file=sys.stderr)
         sys.exit(1)
+    except yaml.YAMLError as e:
+        # check_missing_targets / check_available_sources parse config.yml
+        # (check_drift was text-only). A malformed config must fail with an
+        # actionable message, not a raw traceback -- this command exists to
+        # help the operator fix config drift.
+        print(f"upgrade-config failed to parse config.yml: {e}", file=sys.stderr)
+        sys.exit(1)
 
     # --- Optional-feature stubs (the only signal that drives the exit code) ---
     if not missing:

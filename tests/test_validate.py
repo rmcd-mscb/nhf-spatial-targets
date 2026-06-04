@@ -687,11 +687,37 @@ def test_write_manifest_preserves_identity_on_rerun(tmp_path):
 
 
 def test_check_catalog_consistency_rejects_superseded_target_source():
-    """A superseded key fails with a hint naming the superseded_by replacement."""
+    """A superseded key fails with a hint naming both the offending key and the
+    superseded_by replacement."""
     from nhf_spatial_targets.validate import _check_catalog_consistency
 
     cfg = {"targets": {"aet": {"sources": ["merra_land"]}}}
-    with pytest.raises(ValueError, match="merra2"):
+    with pytest.raises(ValueError, match="merra_land.*merra2"):
+        _check_catalog_consistency(cfg)
+
+
+def test_check_catalog_consistency_checks_non_first_target():
+    """A dangling key in a non-first target is still caught (the loop validates
+    every target, not just the first)."""
+    from nhf_spatial_targets.validate import _check_catalog_consistency
+
+    cfg = {
+        "targets": {
+            "aet": {"sources": ["mod16a2_v061", "ssebop"]},  # clean
+            "runoff": {"sources": ["watergap22a"]},  # superseded, second
+        }
+    }
+    with pytest.raises(ValueError, match="watergap22a.*watergap22d"):
+        _check_catalog_consistency(cfg)
+
+
+def test_check_catalog_consistency_rejects_scalar_sources():
+    """A scalar `sources: ssebop` (forgot the list) fails loud with a message
+    naming the real mistake, not a phantom one-letter source."""
+    from nhf_spatial_targets.validate import _check_catalog_consistency
+
+    cfg = {"targets": {"aet": {"sources": "ssebop"}}}
+    with pytest.raises(ValueError, match="must be a YAML list"):
         _check_catalog_consistency(cfg)
 
 

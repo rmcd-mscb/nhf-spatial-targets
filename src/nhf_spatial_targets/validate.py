@@ -442,8 +442,11 @@ def _check_catalog_consistency(config: dict) -> None:
        source from a ``multi_source_minmax`` bound — a silent under-build. The
        superseded arm reads the replacement straight off the catalog entry
        (``source[...]["superseded_by"]``) so the hint always names the right
-       successor. Disabled targets are validated too: a dangling key is a
-       config error regardless of whether the target runs this time.
+       successor. Because validation runs on the *merged* config, every target
+       is checked against its effective ``sources[]`` — including targets the
+       operator disabled or omitted entirely (which inherit the default
+       sources): a dangling key is a config error regardless of whether the
+       target runs this time.
     """
     from nhf_spatial_targets.catalog import sources, variables
 
@@ -463,7 +466,21 @@ def _check_catalog_consistency(config: dict) -> None:
     for tgt_name, tgt in (config.get("targets") or {}).items():
         if not isinstance(tgt, dict):
             continue
-        for key in tgt.get("sources") or []:
+        raw_sources = tgt.get("sources")
+        if raw_sources is None:
+            continue
+        # A scalar `sources: ssebop` (the common "forgot the list" YAML typo)
+        # would otherwise iterate characters -- failing loud but pointing at a
+        # phantom one-letter source, and silently passing if a one-character
+        # catalog key ever existed. Reject the wrong shape with a message that
+        # names the real mistake.
+        if not isinstance(raw_sources, list):
+            raise ValueError(
+                f"Target '{tgt_name}' config.yml 'sources' must be a YAML list "
+                f"(e.g. 'sources: [ssebop]'); got "
+                f"{type(raw_sources).__name__}: {raw_sources!r}."
+            )
+        for key in raw_sources:
             if key not in all_sources:
                 raise ValueError(
                     f"Target '{tgt_name}' config.yml sources[] references "
