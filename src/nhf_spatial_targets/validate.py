@@ -236,8 +236,8 @@ def validate_workspace(workdir: Path) -> None:
     dir_mode = int(dir_mode_str, 8) if dir_mode_str else None
     _ensure_datastore(datastore, dir_mode)
 
-    # 7. Catalog consistency
-    _check_catalog_consistency()
+    # 7. Catalog consistency (catalog-internal + config targets.*.sources[])
+    _check_catalog_consistency(config)
 
     # Write outputs
     _write_fabric_json(workdir, fabric_meta)
@@ -427,16 +427,72 @@ def _ensure_datastore(datastore: Path, dir_mode: int | None) -> None:
         make_dir(datastore / key, dir_mode=dir_mode)
 
 
-def _check_catalog_consistency() -> None:
+def _check_catalog_consistency(config: dict) -> None:
+    """Validate catalog cross-references and config-declared source keys.
+
+    Two loud checks, each raising ``ValueError`` (which fails ``validate``):
+
+    1. **Catalog-internal:** every source listed under a variable in
+       ``catalog/variables.yml`` must exist in ``catalog/sources.yml``.
+    2. **Config intent (issue #279):** every key in the merged config's
+       ``targets.*.sources[]`` must be a *current* catalog source — present in
+       ``sources.yml`` **and** not carrying ``superseded_by``. A renamed or
+       superseded key (``merra_land`` -> ``merra2``,
+       ``watergap22a`` -> ``watergap22d``) would otherwise silently drop that
+       source from a ``multi_source_minmax`` bound — a silent under-build. The
+       superseded arm reads the replacement straight off the catalog entry
+       (``source[...]["superseded_by"]``) so the hint always names the right
+       successor. Because validation runs on the *merged* config, every target
+       is checked against its effective ``sources[]`` — including targets the
+       operator disabled or omitted entirely (which inherit the default
+       sources): a dangling key is a config error regardless of whether the
+       target runs this time.
+    """
     from nhf_spatial_targets.catalog import sources, variables
 
-    src_keys = set(sources().keys())
+    all_sources = sources()
+    src_keys = set(all_sources)
+
+    # 1. Catalog-internal cross-references: variables.yml -> sources.yml.
     for var_name, var_def in variables().items():
         for src in var_def.get("sources", []):
             if src not in src_keys:
                 raise ValueError(
                     f"Variable '{var_name}' references source '{src}' "
                     f"which does not exist in catalog/sources.yml"
+                )
+
+    # 2. Config intent: targets.*.sources[] must be current catalog sources.
+    for tgt_name, tgt in (config.get("targets") or {}).items():
+        if not isinstance(tgt, dict):
+            continue
+        raw_sources = tgt.get("sources")
+        if raw_sources is None:
+            continue
+        # A scalar `sources: ssebop` (the common "forgot the list" YAML typo)
+        # would otherwise iterate characters -- failing loud but pointing at a
+        # phantom one-letter source, and silently passing if a one-character
+        # catalog key ever existed. Reject the wrong shape with a message that
+        # names the real mistake.
+        if not isinstance(raw_sources, list):
+            raise ValueError(
+                f"Target '{tgt_name}' config.yml 'sources' must be a YAML list "
+                f"(e.g. 'sources: [ssebop]'); got "
+                f"{type(raw_sources).__name__}: {raw_sources!r}."
+            )
+        for key in raw_sources:
+            if key not in all_sources:
+                raise ValueError(
+                    f"Target '{tgt_name}' config.yml sources[] references "
+                    f"'{key}', which is absent from catalog/sources.yml. "
+                    f"Check the source key against catalog/sources.yml."
+                )
+            superseded_by = all_sources[key].get("superseded_by")
+            if superseded_by is not None:
+                raise ValueError(
+                    f"Target '{tgt_name}' config.yml sources[] references "
+                    f"'{key}', which is superseded in catalog/sources.yml. "
+                    f"Did you mean '{superseded_by}' (superseded_by)?"
                 )
 
 

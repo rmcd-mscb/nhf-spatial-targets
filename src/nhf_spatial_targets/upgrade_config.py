@@ -22,6 +22,10 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+import yaml
+
+from nhf_spatial_targets.defaults import DEFAULTS
+
 
 @dataclass(frozen=True)
 class OptionalConfigFeature:
@@ -156,3 +160,114 @@ def check_drift(project_dir: Path) -> list[OptionalConfigFeature]:
     return [
         feat for feat in OPTIONAL_CONFIG_FEATURES if not re.search(feat.detect, text)
     ]
+
+
+# ---------------------------------------------------------------------------
+# Whole-target + new-source hints (issue #279, PR-5)
+# ---------------------------------------------------------------------------
+#
+# Beyond the enumerated optional params above, upgrade-config also surfaces two
+# coarser-grained drifts, both report-only:
+#   - a whole target in the defaults schema that the operator's config omits;
+#   - a catalog source eligible for a target (per variables.yml) that the
+#     operator has not pinned in targets.<t>.sources[].
+
+# Config target key -> catalog/variables.yml top-level key. Currently identity
+# for every target: the config schema (defaults.py "targets") and the variable
+# registry (variables.yml) both use the long names (recharge, soil_moisture,
+# snow_covered_area, ...). The rch/som/sca/swe divergence lives only in the
+# targets/ builder module names, NOT in these keys. Kept explicit so a future
+# rename of either side is a one-line change here rather than a silent mis-map;
+# consistency (coverage of DEFAULTS["targets"] + each value resolving in
+# variables()) is asserted by
+# tests/test_upgrade_config.py::test_target_to_variable_mapping_is_consistent.
+_TARGET_TO_VARIABLE: dict[str, str] = {
+    "runoff": "runoff",
+    "aet": "aet",
+    "recharge": "recharge",
+    "soil_moisture": "soil_moisture",
+    "snow_covered_area": "snow_covered_area",
+    "snow_water_equivalent": "snow_water_equivalent",
+}
+
+
+def _load_user_targets(project_dir: Path) -> dict:
+    """Return the operator's literal ``targets:`` mapping from config.yml.
+
+    Reads the on-disk config verbatim (NOT merged with defaults) so the report
+    reflects what the operator actually wrote. Returns ``{}`` when there is no
+    ``targets:`` mapping. Raises ``FileNotFoundError`` if config.yml is absent
+    (mirrors :func:`check_drift`).
+    """
+    cfg_path = Path(project_dir) / "config.yml"
+    raw = yaml.safe_load(cfg_path.read_text())  # raises FileNotFoundError
+    if not isinstance(raw, dict):
+        return {}
+    targets = raw.get("targets")
+    return targets if isinstance(targets, dict) else {}
+
+
+def check_missing_targets(project_dir: Path) -> list[str]:
+    """Return target keys in the defaults schema absent from the operator config.
+
+    A whole target present in :data:`~nhf_spatial_targets.defaults.DEFAULTS`
+    but missing from the operator's ``config.yml`` ``targets:`` mapping is a
+    report-only hint — the operator may want to add and configure it. Order
+    follows the defaults schema for stable output.
+
+    Raises
+    ------
+    FileNotFoundError
+        If ``<project_dir>/config.yml`` does not exist.
+    """
+    user_targets = _load_user_targets(project_dir)
+    return [t for t in DEFAULTS["targets"] if t not in user_targets]
+
+
+def check_available_sources(project_dir: Path) -> dict[str, list[str]]:
+    """Return, per target, eligible catalog sources not pinned in the config.
+
+    For each target where the operator pinned an explicit ``sources:`` list,
+    report the catalog sources that ``catalog/variables.yml`` lists as eligible
+    for that target's variable but which are absent from the operator's list —
+    i.e. "a catalog source is available for target X that you are not using."
+    A report-only hint, never a failure.
+
+    Targets without an explicit ``sources:`` list are skipped: they track the
+    defaults and so cannot fossilize against a newly-added catalog source, so
+    reporting them would be noise.
+
+    Eligibility is taken **verbatim** from ``variables.yml`` with no
+    ``superseded_by`` filtering (unlike the loud check in ``validate``). This is
+    correct today because the per-variable ``sources`` lists name only current
+    keys; if a superseded key ever lands in one, this hint would suggest adding
+    a dead source — fix the catalog, not this function.
+
+    Raises
+    ------
+    FileNotFoundError
+        If ``<project_dir>/config.yml`` does not exist.
+    """
+    from nhf_spatial_targets.catalog import variables
+
+    user_targets = _load_user_targets(project_dir)
+    all_vars = variables()
+    out: dict[str, list[str]] = {}
+    for tgt_name, var_key in _TARGET_TO_VARIABLE.items():
+        tgt_cfg = user_targets.get(tgt_name)
+        if not isinstance(tgt_cfg, dict):
+            continue
+        configured = tgt_cfg.get("sources")
+        if not isinstance(configured, list):
+            continue  # on defaults for sources -> nothing pinned to drift
+        # _TARGET_TO_VARIABLE values are guaranteed to resolve in variables()
+        # by test_target_to_variable_mapping_is_consistent; the guard is purely
+        # defensive against an unsynced future edit.
+        var_def = all_vars.get(var_key)
+        if var_def is None:
+            continue
+        eligible = var_def.get("sources") or []
+        missing = [s for s in eligible if s not in configured]
+        if missing:
+            out[tgt_name] = missing
+    return out
