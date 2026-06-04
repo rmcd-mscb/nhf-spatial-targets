@@ -33,6 +33,7 @@ build orchestrator.
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 from pathlib import Path
@@ -46,6 +47,8 @@ from nhf_spatial_targets.release._models import (
     UmbrellaPlan,
 )
 from nhf_spatial_targets.workspace import Project
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_fabric_label(project: Project) -> str:
@@ -124,11 +127,26 @@ def sources_used(project: Project) -> list[str]:
 def plan_fabric_child(project: Project) -> FabricChildPlan:
     """Build the :class:`FabricChildPlan` for *project* without staging."""
     aggregated_root = project.aggregated_dir()
+    all_keys = set(catalog.sources())
     aggregated: list[Path] = []
     if aggregated_root.exists():
         for source_dir in sorted(p for p in aggregated_root.iterdir() if p.is_dir()):
-            if not _publishable_agg_dir(source_dir.name):
+            name = source_dir.name
+            if not _publishable_agg_dir(name):
                 continue
+            if name not in all_keys:
+                # Admitted via the derived-variant branch (no catalog key), so
+                # the legal-hold filter never saw it. Names match catalog keys
+                # in the normal pipeline, so this fires only on a typo or a
+                # hand-created dir -- surface it in case it hides held-back
+                # content (e.g. a stray ``watergap_22d``). See issue #260.
+                logger.warning(
+                    "admitting derived-variant aggregated dir %r into the "
+                    "fabric child (no catalog key, so the publishability "
+                    "filter did not gate it); confirm it is not held-back "
+                    "content",
+                    name,
+                )
             aggregated.extend(_nc_files(source_dir))
 
     label = resolve_fabric_label(project)

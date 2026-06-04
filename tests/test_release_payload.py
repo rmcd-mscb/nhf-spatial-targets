@@ -143,6 +143,31 @@ def test_era5_land_sd_variant_kept_in_fabric(tmp_path):
     assert sd.is_symlink()
 
 
+def test_derived_variant_admission_is_warned(tmp_path, caplog):
+    """A non-catalog-key aggregated dir ships, but the admit is logged.
+
+    The legal-hold filter is an exact catalog-key match, so an unknown name
+    (typo / hand-created dir) falls into the derived-variant branch and ships
+    unconditionally. Issue #260: emit a warning so a stray held-back dir is
+    visible in the build log rather than leaking silently.
+    """
+    project = _build_project(tmp_path)
+    with caplog.at_level("WARNING", logger="nhf_spatial_targets.release.payload"):
+        payload.plan_fabric_child(project)
+    warned_names = {r.args[0] for r in caplog.records if r.args}
+    assert "era5_land_sd" in warned_names
+
+
+def test_catalog_key_admission_is_not_warned(tmp_path, caplog):
+    """Publishable catalog-key dirs ship through the gated branch silently."""
+    project = _build_project(tmp_path)
+    with caplog.at_level("WARNING", logger="nhf_spatial_targets.release.payload"):
+        payload.plan_fabric_child(project)
+    warned_names = {r.args[0] for r in caplog.records if r.args}
+    assert "era5_land" not in warned_names
+    assert "daymet" not in warned_names
+
+
 def test_daymet_aggregated_kept_in_fabric(tmp_path):
     """daymet is metadata_only as a source child, but its aggregated NCs
     still ship in fabric children (they are derived products)."""
