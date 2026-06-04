@@ -372,6 +372,35 @@ def test_build_output_schema(tmp_path: Path):
         assert "time_bnds" in ds.variables
 
 
+def test_build_stamps_resolved_param_attrs(tmp_path: Path):
+    """End-to-end: a really-built target NC carries the PR-7 resolved-param
+    attrs (range_method, source_keys, period) through the full
+    _common_global_attrs -> write_bounds_target -> io_nc encoding -> disk path.
+
+    This guards the whole triangle: the consistency gate (7.3) and the manifest
+    projection (7.2) both read these attrs back, so if write_bounds_target ever
+    dropped an extra_global_attrs key the unit tests on _common_global_attrs
+    would still pass while the products silently lost their provenance. Both the
+    unfilled and the nn_filled companion must carry them."""
+    from nhf_spatial_targets.targets.aet import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_aet_project(
+        tmp_path,
+        period="2000-01-01/2000-12-31",
+        sources=["mod16a2_v061", "ssebop"],
+        nn_fill=True,
+    )
+    project = load(workdir)
+    build(project)
+
+    for name in ("aet_targets.nc", "aet_targets_nn_filled.nc"):
+        with xr.open_dataset(project.targets_dir() / name) as ds:
+            assert ds.attrs["range_method"] == "multi_source_minmax", name
+            assert ds.attrs["source_keys"] == "mod16a2_v061,ssebop", name
+            assert ds.attrs["period"] == "2000-01-01/2000-12-31", name
+
+
 def test_build_emits_id_col_sorted_target_ncs(tmp_path: Path):
     """Both unfilled and NN-filled NCs come out sorted ascending by id_col (#93)."""
     from nhf_spatial_targets.targets.aet import build

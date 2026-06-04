@@ -67,14 +67,32 @@ def _common_global_attrs(
     The per-target extras (``source``, ``normalize_period``, etc.)
     are layered on top by the loader's ``extra_attrs`` dict at write
     time.
+
+    Resolved-param attrs (issue #279, PR-7): ``range_method`` and the
+    machine-readable resolved ``source_keys`` are read from the merged target
+    config so the deterministic manifest projection can recover them from the
+    published NC. ``source_keys`` is the comma-joined catalog-key list, distinct
+    from the human-readable ``source`` description the loader adds; the other
+    resolved params already flow through the loader's ``extra_attrs``
+    (``period`` here, ``normalize_period`` for recharge and SOM, ``ci_threshold``
+    for SCA). Both are read defensively with ``.get`` so a sparse config never
+    raises.
     """
-    return {
+    target_cfg = project.target(adapter.config_key)
+    attrs = {
         "references": adapter.references,
         "fabric": project.config["fabric"]["path"],
         "fabric_sha256": project.fabric.get("sha256", ""),
         "period": period_str,
         "area_crs": project.area_crs,
     }
+    range_method = target_cfg.get("range_method")
+    if range_method is not None:
+        attrs["range_method"] = range_method
+    source_keys = target_cfg.get("sources")
+    if source_keys:
+        attrs["source_keys"] = ",".join(source_keys)
+    return attrs
 
 
 def _apply_forced_zero(

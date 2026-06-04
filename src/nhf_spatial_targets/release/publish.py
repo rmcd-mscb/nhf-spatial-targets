@@ -562,6 +562,172 @@ def _preflight_effective_config_current(project: Project) -> None:
         )
 
 
+# The resolved-param attrs persisted on a target NC (PR-7 Task 7.1) and read
+# back into the manifest target step (Task 7.2), mapped to the effective-config
+# key they must agree with. ``source_keys`` (NC, comma-joined string) <->
+# ``sources`` (config, list) is bridged specially below; the rest are compared
+# as-is (the NC ``period`` / ``range_method`` / ``normalize_period`` /
+# ``ci_threshold`` attrs are stamped verbatim from the same config values, so a
+# string/scalar equality is exact for an in-sync project).
+_TRIANGLE_DIRECT_PARAMS: tuple[str, ...] = (
+    "period",
+    "range_method",
+    "normalize_period",
+    "ci_threshold",
+)
+
+
+def _config_product_problems(
+    tgt_name: str, nc_name: str, tgt_cfg: dict, nc_params: dict
+) -> list[str]:
+    """Return the config<->product disagreements for one target NC.
+
+    Compares the resolved params in ``nc_params`` (read back from the NC's
+    global attrs) against the effective-config ``tgt_cfg``. ``normalize_period``
+    is compared against the builder's ``normalize_period or period`` fallback so
+    a target that leaves it unset (stamped with the period value) is not falsely
+    flagged. Other ``_TRIANGLE_DIRECT_PARAMS`` are exact-equality (the NC attrs
+    are stamped verbatim from the same config values). ``sources`` (config list)
+    bridges to ``source_keys`` (NC comma-joined string).
+    """
+    problems: list[str] = []
+    for key in _TRIANGLE_DIRECT_PARAMS:
+        if key not in nc_params:
+            continue
+        if key == "normalize_period":
+            # Mirror rch/som: an unset normalize_period resolves to period.
+            expected = tgt_cfg.get("normalize_period") or tgt_cfg.get("period")
+        else:
+            if key not in tgt_cfg:
+                continue
+            expected = tgt_cfg[key]
+        if expected is None:
+            continue
+        if nc_params[key] != expected:
+            problems.append(
+                f"target '{tgt_name}' ({nc_name}): config.effective.yml "
+                f"{key}={expected!r} but the published NC says {nc_params[key]!r}"
+            )
+
+    # sources (config list) <-> source_keys (NC comma-joined string).
+    cfg_sources = tgt_cfg.get("sources")
+    nc_source_keys = nc_params.get("source_keys")
+    if isinstance(cfg_sources, list) and nc_source_keys is not None:
+        nc_sources = [s for s in str(nc_source_keys).split(",") if s]
+        if nc_sources != cfg_sources:
+            problems.append(
+                f"target '{tgt_name}' ({nc_name}): config.effective.yml "
+                f"sources={cfg_sources!r} but the published NC source_keys say "
+                f"{nc_sources!r}"
+            )
+    return problems
+
+
+def _preflight_config_product_consistency(project: Project) -> None:
+    """Verify config.effective.yml agrees with the published target products.
+
+    The config<->product<->manifest triangle (spec Pillar 6, PR-7). Each target
+    NC records the resolved params it was built with as global attrs (Task 7.1);
+    the deterministic projection reads them back into the ``target`` step (Task
+    7.2). ``config.effective.yml`` records the resolved *intent*. When the two
+    disagree -- the canonical fossil, effective config says ``period:
+    2000-2010`` while the product/manifest say ``1979-2024`` -- publishing would
+    ship provenance that contradicts the data.
+
+    Verify-don't-mutate, and **unconditionally fatal**: like
+    :func:`_preflight_effective_config_current`, there is no
+    ``allow_incomplete_sources`` override. A genuine config/product
+    inconsistency is a correctness error, not an incompleteness, so there is no
+    defensible reason to ship it. The fix is to re-run the build and/or
+    ``validate`` so config, product, and manifest realign.
+
+    Targets are matched to their NC(s) by the ``output_file`` **stem prefix**,
+    not the exact basename: SOM writes ``soil_moisture_targets_monthly.nc`` /
+    ``_annual.nc`` (never the bare ``soil_moisture_targets.nc``), and every
+    target also writes a ``<stem>_nn_filled.nc`` companion -- all carry the same
+    resolved-param attrs, so every product NC for a target is checked. A target
+    NC that carries no resolved-param attrs yet (a placeholder, or a pre-PR-7
+    build) contributes no comparison -- this gate tightens as products are
+    rebuilt under the instrumented writer, it never fabricates a mismatch.
+
+    The ``normalize_period`` comparison mirrors the builder's resolution: when a
+    target leaves ``normalize_period`` unset, rch/som stamp the NC with the
+    *period* value (``normalize_period or period``), so the gate compares the
+    NC against that same fallback rather than against a bare ``None`` (which
+    would falsely block an in-sync SOM build whose default normalize_period is
+    ``None``).
+    """
+    from nhf_spatial_targets.defaults import DEFAULTS
+    from nhf_spatial_targets.rebuild_manifest import _target_nc_params
+
+    eff_path = project.workdir / "config.effective.yml"
+    try:
+        effective = yaml.safe_load(eff_path.read_text()) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        # The staleness gate (_preflight_effective_config_current) runs first and
+        # already turns an absent/unparseable effective config into a clean
+        # PreflightError; guard here too so call-order changes can't crash.
+        raise PreflightError(
+            f"config.effective.yml at {eff_path} is unreadable for the "
+            f"config/product consistency check: {exc}"
+        ) from exc
+
+    default_targets = DEFAULTS.get("targets") or {}
+    eff_targets = effective.get("targets") or {}
+    problems: list[str] = []
+    for tgt_name, tgt_cfg in eff_targets.items():
+        if not isinstance(tgt_cfg, dict):
+            continue
+        # The NC filename comes from the merged effective config when present,
+        # else the code-level DEFAULTS mapping -- the output_file -> target
+        # binding is a stable fact, not provenance, so resolving it from
+        # DEFAULTS is safe even when a thinned effective config omits it.
+        output_file = tgt_cfg.get("output_file") or (
+            default_targets.get(tgt_name, {}).get("output_file")
+        )
+        if not output_file:
+            continue
+        # Match every product NC for this target by stem prefix: the bare
+        # <stem>.nc, SOM's <stem>_monthly/_annual.nc variants, and every
+        # <stem>_nn_filled.nc companion. A target configured but not built (no
+        # matching NC) is a completeness concern owned by
+        # _preflight_provenance_complete, not this consistency gate.
+        stem = Path(output_file).stem
+        for nc in sorted(project.targets_dir().glob(f"{stem}*.nc")):
+            if not nc.is_file():
+                continue
+            nc_params = _target_nc_params(nc)
+            if not nc_params:
+                # A readable NC with no resolved-param attrs is a pre-PR-7 build
+                # (or a placeholder): the gate cannot verify it, so it does NOT
+                # fabricate a mismatch -- but unverifiable provenance on a
+                # publish is worth a loud, named WARNING so the operator knows to
+                # rebuild that product before a first release (issue #279 / I1).
+                logger.warning(
+                    "publish pre-flight: target '%s' product %s carries no "
+                    "resolved-param attrs (a pre-PR-7 build); its config/product "
+                    "consistency cannot be verified. Rebuild this target, then "
+                    "rebuild-manifest, so its provenance is checkable before "
+                    "release.",
+                    tgt_name,
+                    nc.name,
+                )
+                continue
+            problems.extend(
+                _config_product_problems(tgt_name, nc.name, tgt_cfg, nc_params)
+            )
+
+    if problems:
+        joined = "\n  - ".join(problems)
+        raise PreflightError(
+            "publish pre-flight: config.effective.yml disagrees with the "
+            "published target product(s) -- the config/product/manifest "
+            "triangle is inconsistent. Re-run the affected target build (and "
+            f"'nhf-targets validate -d {project.workdir}') so config, product, "
+            f"and manifest realign:\n  - {joined}"
+        )
+
+
 def _preflight_common(
     project: Project, *, allow_incomplete_sources: bool = False
 ) -> None:
@@ -613,6 +779,13 @@ def _preflight_common(
     _preflight_provenance_complete(
         project, allow_incomplete_sources=allow_incomplete_sources
     )
+
+    # The config<->product<->manifest triangle (verify-don't-mutate,
+    # unconditionally fatal -- no override). Runs after the provenance gate so
+    # a corrupt/incomplete manifest is reported first; a genuine config/product
+    # param disagreement is a correctness inconsistency that must never ship,
+    # so allow_incomplete_sources does not reach it.
+    _preflight_config_product_consistency(project)
 
 
 def _require_umbrella_sb_id(registry_path: Path | None) -> str:

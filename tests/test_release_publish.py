@@ -178,6 +178,219 @@ def test_corrupt_published_target_nc_fatal_even_with_override(tmp_path):
         publish._preflight_provenance_complete(project, allow_incomplete_sources=True)
 
 
+# ---------------------------------------------------------------------------
+# Config <-> product <-> manifest triangle (PR-7 Task 7.3 / #279)
+#
+# config.effective.yml records the resolved intent; the published target NCs
+# record what was actually built (their resolved-param global attrs, persisted
+# by PR-7 Task 7.1, read back into the manifest target step by Task 7.2). When
+# they disagree -- the classic fossil: effective config says period 2000-2010
+# while the NC/manifest say 1979-2024 -- publishing would ship provenance that
+# contradicts the data. This is a correctness inconsistency, fatal and NOT
+# bypassable by --allow-incomplete-sources.
+# ---------------------------------------------------------------------------
+
+
+def _write_real_target_nc(project, basename: str, attrs: dict) -> None:
+    """Overwrite a target NC with a real (openable) NetCDF carrying *attrs*."""
+    import xarray as xr
+
+    xr.Dataset(attrs=attrs).to_netcdf(project.targets_dir() / basename)
+
+
+def test_config_product_consistency_passes_when_aligned(tmp_path):
+    """A target NC whose resolved attrs match config.effective.yml clears the
+    consistency gate."""
+    project = build_release_project(tmp_path)  # effective aet period = 2000/2010
+    _write_real_target_nc(project, "aet_targets.nc", {"period": "2000/2010"})
+    publish._preflight_config_product_consistency(project)  # does not raise
+
+
+def test_config_product_period_mismatch_is_fatal(tmp_path):
+    """A target NC period that contradicts config.effective.yml is fatal."""
+    project = build_release_project(tmp_path)  # effective aet period = 2000/2010
+    _write_real_target_nc(
+        project,
+        "aet_targets.nc",
+        {"period": "1979/2024"},  # disagrees
+    )
+    with pytest.raises(publish.PreflightError, match="aet"):
+        publish._preflight_config_product_consistency(project)
+
+
+def test_config_product_sources_mismatch_is_fatal(tmp_path):
+    """A target NC source_keys list that contradicts config.effective.yml is
+    fatal (list <-> comma-joined-string bridge)."""
+    project = build_release_project(tmp_path)
+    # Give the effective config aet an explicit sources list, then have the NC
+    # disagree. (The fixture's config has no aet.sources, so set one.)
+    import yaml as _yaml
+
+    eff_path = project.workdir / "config.effective.yml"
+    eff = _yaml.safe_load(eff_path.read_text())
+    eff["targets"]["aet"]["sources"] = ["mod16a2_v061", "ssebop"]
+    eff_path.chmod(0o644)  # _write_effective_config stamps it 0o444
+    eff_path.write_text(_yaml.safe_dump(eff))
+    _write_real_target_nc(
+        project,
+        "aet_targets.nc",
+        {"period": "2000/2010", "source_keys": "mod16a2_v061,ssebop,mwbm_climgrid"},
+    )
+    with pytest.raises(publish.PreflightError, match="aet"):
+        publish._preflight_config_product_consistency(project)
+
+
+def test_config_product_mismatch_not_bypassed_by_override(tmp_path):
+    """The consistency failure is a correctness inconsistency, so it is fatal
+    through _preflight_common even with allow_incomplete_sources=True. The
+    manifest is rebuilt after writing the real NC so the upstream provenance /
+    drift gates pass and the consistency check is the gate that fires."""
+    from nhf_spatial_targets.rebuild_manifest import rebuild_manifest
+
+    project = build_release_project(tmp_path)  # effective aet period = 2000/2010
+    _write_real_target_nc(
+        project,
+        "aet_targets.nc",
+        {"period": "1979/2024"},  # disagrees
+    )
+    # Re-project so on-disk manifest == projection (drift gate passes); config.yml
+    # is untouched so the effective-config staleness gate also passes.
+    rebuild_manifest(project)
+    # Triangle-specific phrase, robust to gate-ordering churn (a loose "aet"
+    # could match another gate's message).
+    with pytest.raises(publish.PreflightError, match="published target product"):
+        publish._preflight_common(project, allow_incomplete_sources=True)
+
+
+def _add_target_to_effective_config(project, tgt_name, params: dict) -> None:
+    """Merge *params* into config.effective.yml's targets.<tgt_name> (read-only
+    0o444 file written by _write_effective_config -> chmod first)."""
+    import yaml as _yaml
+
+    eff_path = project.workdir / "config.effective.yml"
+    eff = _yaml.safe_load(eff_path.read_text())
+    eff.setdefault("targets", {}).setdefault(tgt_name, {}).update(params)
+    eff_path.chmod(0o644)
+    eff_path.write_text(_yaml.safe_dump(eff))
+
+
+def test_config_product_checks_som_variant_files(tmp_path):
+    """SOM writes soil_moisture_targets_{monthly,annual}.nc (never the bare
+    output_file soil_moisture_targets.nc), so the gate must match a target's
+    NC(s) by stem prefix, not by the exact output_file. A variant NC whose
+    period contradicts the effective config must be caught (C1b)."""
+    project = build_release_project(tmp_path)
+    _add_target_to_effective_config(
+        project,
+        "soil_moisture",
+        {"period": "1982/2010", "output_file": "soil_moisture_targets.nc"},
+    )
+    # The real SOM product is the variant file, not the bare output_file.
+    _write_real_target_nc(
+        project, "soil_moisture_targets_monthly.nc", {"period": "1999/2999"}
+    )
+    with pytest.raises(publish.PreflightError, match="soil_moisture"):
+        publish._preflight_config_product_consistency(project)
+
+
+def test_config_product_som_default_normalize_period_passes(tmp_path):
+    """SOM's loader stamps normalize_period = (config normalize_period OR
+    period); with the default normalize_period=None the NC carries the period
+    string while the effective config still has normalize_period: None. The gate
+    must mirror the same `or period` fallback so an in-sync SOM build is NOT
+    falsely blocked (C1)."""
+    project = build_release_project(tmp_path)
+    _add_target_to_effective_config(
+        project,
+        "soil_moisture",
+        {
+            "period": "1982/2010",
+            "normalize_period": None,  # the default -> loader falls back to period
+            "output_file": "soil_moisture_targets.nc",
+        },
+    )
+    # What the SOM loader actually stamps when normalize_period is unset.
+    _write_real_target_nc(
+        project,
+        "soil_moisture_targets_monthly.nc",
+        {"period": "1982/2010", "normalize_period": "1982/2010"},
+    )
+    # Must NOT raise: normalize_period None in config == period fallback in NC.
+    publish._preflight_config_product_consistency(project)
+
+
+def test_config_product_som_explicit_normalize_period_mismatch_is_fatal(tmp_path):
+    """When the operator DID set normalize_period explicitly, a contradicting NC
+    value is still caught (the fallback only applies when config left it None)."""
+    project = build_release_project(tmp_path)
+    _add_target_to_effective_config(
+        project,
+        "soil_moisture",
+        {
+            "period": "1982/2010",
+            "normalize_period": "1990/2000",  # explicit
+            "output_file": "soil_moisture_targets.nc",
+        },
+    )
+    _write_real_target_nc(
+        project,
+        "soil_moisture_targets_monthly.nc",
+        {"period": "1982/2010", "normalize_period": "1982/2010"},  # disagrees
+    )
+    with pytest.raises(publish.PreflightError, match="normalize_period"):
+        publish._preflight_config_product_consistency(project)
+
+
+@pytest.mark.parametrize(
+    "param,cfg_value,nc_value",
+    [
+        ("range_method", "multi_source_minmax", "normalized_minmax"),
+        ("normalize_period", "1990/2000", "1982/2010"),
+        ("ci_threshold", 0.70, 0.50),
+    ],
+)
+def test_config_product_direct_param_mismatch_is_fatal(
+    tmp_path, param, cfg_value, nc_value
+):
+    """Every _TRIANGLE_DIRECT_PARAMS key is compared, not just period: a
+    range_method / normalize_period / ci_threshold disagreement is each fatal.
+    Uses aet's NC name with an explicit effective-config target so the param is
+    present on both sides (the gate compares only when the key is set)."""
+    project = build_release_project(tmp_path)
+    _add_target_to_effective_config(
+        project, "aet", {"period": "2000/2010", param: cfg_value}
+    )
+    _write_real_target_nc(
+        project, "aet_targets.nc", {"period": "2000/2010", param: nc_value}
+    )
+    with pytest.raises(publish.PreflightError, match=param):
+        publish._preflight_config_product_consistency(project)
+
+
+def test_config_product_attrless_nc_passes_with_warning(tmp_path, caplog):
+    """A readable target NC carrying NO resolved-param attrs (a pre-PR-7 build /
+    placeholder) must NOT fabricate a mismatch -- the gate passes -- but it is
+    unverifiable provenance, so the gate WARNS naming the target/NC (I1) so the
+    operator knows to rebuild before a first release."""
+    project = build_release_project(tmp_path)
+    # A real, openable NetCDF with zero resolved-param global attrs.
+    _write_real_target_nc(project, "aet_targets.nc", {"unrelated": "x"})
+    with caplog.at_level(logging.WARNING):
+        publish._preflight_config_product_consistency(project)  # does not raise
+    # The I1 warning is emitted by the gate (publish module), names the target +
+    # NC, and tells the operator to rebuild -- distinct from the rebuild_manifest
+    # placeholder warning that the fixture's plain-bytes NCs also emit.
+    gate_warnings = [
+        r.message
+        for r in caplog.records
+        if r.name == "nhf_spatial_targets.release.publish"
+        and "resolved-param attrs" in r.message
+    ]
+    assert any(
+        "aet" in m and "aet_targets.nc" in m and "Rebuild" in m for m in gate_warnings
+    ), gate_warnings
+
+
 def test_allow_incomplete_sources_bypasses(tmp_path, caplog):
     """``allow_incomplete_sources`` downgrades the source/drift failure to a
     logged warning instead of raising; the warning carries the problem detail
