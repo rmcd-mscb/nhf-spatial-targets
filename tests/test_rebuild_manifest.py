@@ -452,11 +452,12 @@ def test_target_nc_params_reads_real_attrs(tmp_path):
     json.dumps(m)
 
 
-def test_target_nc_params_warns_on_unreadable(tmp_path, caplog):
-    """A present-but-unreadable target NC yields {} AND logs a warning.
+def test_target_nc_params_placeholder_is_benign(tmp_path, caplog):
+    """A non-NetCDF placeholder (no NetCDF/HDF5 magic) yields {} AND warns.
 
-    Silent {} would lose resolved-param provenance from a corrupt published
-    NC with no trace; the warning is the operator's only signal.
+    Target writers may not yet persist resolved-param attrs, and many fixtures
+    write plain-text placeholder bytes; such a file is NOT a corrupt published
+    artifact -- it degrades to empty params with a warning, never fatally.
     """
     import logging
 
@@ -467,6 +468,29 @@ def test_target_nc_params_warns_on_unreadable(tmp_path, caplog):
     with caplog.at_level(logging.WARNING):
         assert _target_nc_params(bad) == {}
     assert any("aet_targets.nc" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize(
+    "magic",
+    [
+        b"\x89HDF\r\n\x1a\n",  # HDF5 (NetCDF4) magic
+        b"CDF\x01",  # classic NetCDF-1 magic
+        b"CDF\x02",  # 64-bit-offset NetCDF-2 magic
+    ],
+)
+def test_target_nc_params_corrupt_netcdf_is_fatal(tmp_path, magic):
+    """A file carrying NetCDF/HDF5 magic but unopenable is a corrupt published
+    artifact -- it must RAISE (issue #283), not degrade to {}. Otherwise the
+    publish gate green-lights a truncated/corrupt target NC: the projection
+    still records the target step (built from the file's existence), only its
+    params go empty, so both the 'matching step' and the drift checks pass.
+    """
+    from nhf_spatial_targets.rebuild_manifest import _target_nc_params
+
+    corrupt = tmp_path / "aet_targets.nc"
+    corrupt.write_bytes(magic + b"\x00truncated-garbage")
+    with pytest.raises(ValueError, match="truncated or corrupt"):
+        _target_nc_params(corrupt)
 
 
 def test_rebuild_aggregated_dir_wins_union(tmp_path):

@@ -151,6 +151,33 @@ def test_published_target_without_step_raises(tmp_path):
         publish._preflight_provenance_complete(project)
 
 
+def test_corrupt_published_target_nc_is_fatal(tmp_path):
+    """A corrupt/truncated published target NC must fail the gate, not slip it
+    with only a WARNING (issue #283).
+
+    A file carrying NetCDF/HDF5 magic but unopenable used to leave the target
+    step's params empty while the step itself (built from file existence) still
+    matched -- so both the 'matching target step' and drift checks passed and a
+    broken artifact could ship into a DOI. The projection read must now raise.
+    """
+    project = build_release_project(tmp_path)
+    target_nc = project.targets_dir() / "aet_targets.nc"
+    # HDF5 (NetCDF4) magic + garbage: claims to be a NetCDF, won't open.
+    target_nc.write_bytes(b"\x89HDF\r\n\x1a\n" + b"\x00corrupt")
+    with pytest.raises(publish.PreflightError, match="truncated or corrupt"):
+        publish._preflight_provenance_complete(project)
+
+
+def test_corrupt_published_target_nc_fatal_even_with_override(tmp_path):
+    """The corrupt-NC failure is a true read error, not a source/drift problem,
+    so --allow-incomplete-sources must NOT wave it through (issue #283)."""
+    project = build_release_project(tmp_path)
+    target_nc = project.targets_dir() / "aet_targets.nc"
+    target_nc.write_bytes(b"\x89HDF\r\n\x1a\n" + b"\x00corrupt")
+    with pytest.raises(publish.PreflightError, match="truncated or corrupt"):
+        publish._preflight_provenance_complete(project, allow_incomplete_sources=True)
+
+
 def test_allow_incomplete_sources_bypasses(tmp_path, caplog):
     """``allow_incomplete_sources`` downgrades the source/drift failure to a
     logged warning instead of raising; the warning carries the problem detail
