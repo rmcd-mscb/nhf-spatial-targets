@@ -55,6 +55,10 @@ jinja2 = ">=3.1"
 [feature.dev.dependencies]
 pytest = ">=8.0"
 pytest-cov = ">=5.0"
+# pytest-xdist: parallelize the ~1.5k-test suite across CI cores (-n auto).
+# The suite is overwhelmingly independent tmp_path tests, so workers don't
+# contend; ~halves CI wall-clock (issue #289).
+pytest-xdist = ">=3.5"
 ruff = ">=0.4"
 mypy = ">=1.10"
 ipykernel = ">=6.0"
@@ -216,8 +220,13 @@ release-status    = { cmd = "nhf-targets release status",    description = "Diff
 release-auth-test = { cmd = "nhf-targets release auth-test", description = "Check ScienceBase authentication" }
 
 # Development
-test  = { cmd = "pytest tests/ -v -m 'not integration'", description = "Run test suite (excludes integration)" }
-test-quiet = { cmd = "pytest tests/ -q -m 'not integration'", description = "Run test suite quietly (for pre-commit hooks)" }
+# xdist runs N worker processes; without capping BLAS/OMP thread pools each
+# worker would spawn one-thread-per-core (on a 128-thread HPC login node that
+# is N*128 threads -> pthread_create exhaustion). Pin every math backend to a
+# single thread so the only parallelism is across xdist workers. Safe on CI
+# (ubuntu-latest = 4 workers) and on caldera. (issue #289)
+test  = { cmd = "pytest tests/ -n auto --durations=25 -m 'not integration'", description = "Run test suite in parallel (xdist; excludes integration)", env = { OMP_NUM_THREADS = "1", OPENBLAS_NUM_THREADS = "1", MKL_NUM_THREADS = "1", NUMEXPR_NUM_THREADS = "1", VECLIB_MAXIMUM_THREADS = "1" } }
+test-quiet = { cmd = "pytest tests/ -n auto -q -m 'not integration'", description = "Run test suite quietly in parallel (for pre-commit hooks)", env = { OMP_NUM_THREADS = "1", OPENBLAS_NUM_THREADS = "1", MKL_NUM_THREADS = "1", NUMEXPR_NUM_THREADS = "1", VECLIB_MAXIMUM_THREADS = "1" } }
 test-integration = { cmd = "pytest tests/ -v -m integration", description = "Run integration tests only (requires credentials/network)" }
 lint  = { cmd = "ruff check src/ tests/", description = "Lint source" }
 fmt   = { cmd = "ruff format src/ tests/", description = "Format source" }
