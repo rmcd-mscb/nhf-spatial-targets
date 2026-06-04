@@ -184,15 +184,47 @@ def _ncs_in(source_dir: Path) -> list[Path]:
     return sorted((p for p in source_dir.rglob("*.nc") if p.is_file()), key=str)
 
 
+# Leading magic bytes that identify a file as NetCDF/HDF5. Used to tell a
+# genuine-but-corrupt published target NC (must fail loudly -- issue #283) from
+# a benign non-NetCDF placeholder (target writer hasn't persisted attrs yet, or
+# a fixture wrote plain bytes -> degrade to {}).
+#   - HDF5 (NetCDF4):       \x89 H D F \r \n \x1a \n
+#   - classic NetCDF-1:     C D F \x01
+#   - 64-bit-offset NC-2:   C D F \x02
+#   - CDF-5:                C D F \x05
+_NETCDF_MAGIC: tuple[bytes, ...] = (
+    b"\x89HDF\r\n\x1a\n",
+    b"CDF\x01",
+    b"CDF\x02",
+    b"CDF\x05",
+)
+
+
+def _looks_like_netcdf(nc: Path) -> bool:
+    """Return True if *nc*'s leading bytes carry NetCDF/HDF5 magic."""
+    try:
+        head = nc.read_bytes()[:8]
+    except OSError:
+        return False
+    return any(head.startswith(m) for m in _NETCDF_MAGIC)
+
+
 def _target_nc_params(nc: Path) -> dict:
     """Best-effort read of resolved-target attrs (``period``, ``sources``).
 
     Reads the ``period`` / ``sources`` global attrs when present. Target
     writers may not yet persist the full resolved param set, so a missing attr
-    -- or a non-NetCDF placeholder file -- simply yields ``{}``; the read is
-    never fatal to the projection. A present-but-unreadable NC (a truncated or
-    corrupt *published* target) is logged at WARNING so the lost resolved-param
-    provenance is at least visible, rather than vanishing silently.
+    -- or a non-NetCDF placeholder file (no NetCDF/HDF5 magic) -- simply yields
+    ``{}`` with a WARNING; that read is never fatal to the projection.
+
+    A file that **does** carry NetCDF/HDF5 magic but cannot be opened is a
+    truncated or corrupt *published* target, and this **raises** ``ValueError``
+    (issue #283). Returning ``{}`` there would let the publish completeness gate
+    green-light a broken artifact: the projection still records the ``target``
+    step (built from the file's existence; only its params go empty), so both
+    the "matching target step" and the drift checks pass and a corrupt NC could
+    ship into a DOI. Failing loudly is the only safe behaviour for a file that
+    claims to be NetCDF.
     """
     params: dict = {}
     try:
@@ -205,11 +237,18 @@ def _target_nc_params(nc: Path) -> dict:
                     # numpy scalars / arrays -> plain Python for JSON stability.
                     params[attr] = value.tolist() if hasattr(value, "tolist") else value
     except Exception as exc:
+        if _looks_like_netcdf(nc):
+            raise ValueError(
+                f"target NC {nc} carries NetCDF/HDF5 magic but could not be "
+                f"opened ({exc}); it appears truncated or corrupt. Refusing to "
+                f"project an empty-params target step over a broken published "
+                f"artifact. Re-run the target build, then rebuild-manifest."
+            ) from exc
         logger.warning(
             "rebuild-manifest: could not read resolved-target attrs from %s "
-            "(%s); the target step's params will be empty. If this is a "
-            "published target NC and not a placeholder, it may be truncated "
-            "or corrupt.",
+            "(%s); the target step's params will be empty. The file carries no "
+            "NetCDF/HDF5 magic, so it is treated as a non-NetCDF placeholder "
+            "rather than a corrupt published target.",
             nc,
             exc,
         )

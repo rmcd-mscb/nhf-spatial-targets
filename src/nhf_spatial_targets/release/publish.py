@@ -374,7 +374,14 @@ def _preflight_provenance_complete(
     """
     from nhf_spatial_targets.rebuild_manifest import rebuild_manifest
 
-    projection = rebuild_manifest(project, dry_run=True)
+    # A corrupt/truncated published target NC makes the projection raise
+    # (issue #283). Surface it as a fatal PreflightError -- it is a genuine
+    # read failure, NOT a source/drift problem, so it must never be downgraded
+    # by allow_incomplete_sources below.
+    try:
+        projection = rebuild_manifest(project, dry_run=True)
+    except ValueError as exc:
+        raise PreflightError(f"publish pre-flight: {exc}") from exc
     on_disk = read_manifest(project.manifest_path)
 
     rebuild_hint = (
