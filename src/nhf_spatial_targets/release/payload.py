@@ -93,6 +93,7 @@ def _link_or_copy(src: Path, dest: Path, *, copy: bool) -> None:
         shutil.copy2(src, dest)
     else:
         os.symlink(os.path.abspath(src), dest)
+    logger.debug("%s %s -> %s", "copied" if copy else "linked", src, dest)
 
 
 def _copy_file(src: Path, dest: Path) -> None:
@@ -101,6 +102,7 @@ def _copy_file(src: Path, dest: Path) -> None:
     if dest.is_symlink() or dest.exists():
         dest.unlink()
     shutil.copy2(src, dest)
+    logger.debug("copied %s -> %s", src, dest)
 
 
 # ---------------------------------------------------------------------------

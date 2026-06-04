@@ -426,6 +426,62 @@ def test_build_all_unknown_scope_raises(tmp_path):
         build.build_all(project, scope="bogus", now=NOW)  # type: ignore[arg-type]
 
 
+# ---------------------------------------------------------------------------
+# progress logging (#295): phase-level INFO + meaningful -v/DEBUG
+# ---------------------------------------------------------------------------
+
+_BUILD_LOGGER = "nhf_spatial_targets.release.build"
+_PAYLOAD_LOGGER = "nhf_spatial_targets.release.payload"
+
+
+def test_fabric_build_emits_phase_info_lines(tmp_path, caplog):
+    """At INFO the build narrates its phases instead of running silent (#295)."""
+    project = _build_project(tmp_path)
+    with caplog.at_level("INFO", logger=_BUILD_LOGGER):
+        build.build_fabric_child(project, now=NOW)
+    messages = [r.getMessage() for r in caplog.records]
+    # entry line names the item, render line names the slow metadata step,
+    # completion line reports the file count + destination.
+    assert any("staging fabric child 'gfv_test'" in m for m in messages)
+    assert any("rendering metadata (fgdc/iso/readme) for fabric" in m for m in messages)
+    assert any(m.startswith("staged fabric 'gfv_test':") for m in messages)
+
+
+def test_build_is_quiet_at_warning_level(tmp_path, caplog):
+    """The phase lines are INFO, so a default WARNING console stays uncluttered."""
+    project = _build_project(tmp_path)
+    with caplog.at_level("WARNING", logger=_BUILD_LOGGER):
+        build.build_fabric_child(project, now=NOW)
+    assert [r for r in caplog.records if r.levelname == "INFO"] == []
+
+
+def test_verbose_debug_surfaces_per_file_staging(tmp_path, caplog):
+    """`-v`/DEBUG surfaces per-file staging in payload -- previously a no-op (#295).
+
+    The build path had zero debug calls, so ``--verbose`` produced nothing extra
+    for ``release build``. The payload write chokepoints now emit one debug line
+    per staged file.
+    """
+    project = _build_project(tmp_path)
+    with caplog.at_level("DEBUG", logger=_PAYLOAD_LOGGER):
+        build.build_fabric_child(project, now=NOW)
+    debug_msgs = [r.getMessage() for r in caplog.records if r.levelname == "DEBUG"]
+    # fabric.gpkg is symlinked; manifest.json is copied -- both chokepoints fire.
+    assert any("-> " in m and "fabric.gpkg" in m for m in debug_msgs)
+    assert any(m.startswith("copied") and "manifest.json" in m for m in debug_msgs)
+
+
+def test_build_all_narrates_each_child(tmp_path, caplog):
+    """scope=all emits a staging line per child kind (source + umbrella too)."""
+    project = _build_project(tmp_path)
+    with caplog.at_level("INFO", logger=_BUILD_LOGGER):
+        build.build_all(project, scope="all", now=NOW)
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("staging fabric child" in m for m in messages)
+    assert any("staging source child 'era5_land'" in m for m in messages)
+    assert any(m == "staging umbrella" for m in messages)
+
+
 def test_build_all_scope_all_matches_payload_sources_used(tmp_path):
     """The dispatcher is catalog/manifest-driven: the source children it builds
     are exactly payload.sources_used (no hard-coded list)."""
