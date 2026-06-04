@@ -1,4 +1,4 @@
-"""Offline tests for the ``nhf-targets release`` CLI sub-app (PR-F).
+"""Offline tests for the ``nhf-targets release`` CLI sub-app.
 
 These exercise the CLI *wiring* only: help + argument parsing for all seven
 subcommands, the local artifacts ``init`` / ``build`` / ``manifest`` produce,
@@ -7,7 +7,8 @@ and -- for the ScienceBase-touching subcommands -- that the right
 dispatched with the right scope and flags. ScienceBase is never hit: the
 client seam (:func:`cli.release._resolve_client`) and the project loader
 (:func:`cli.release._load_project`) are patched, and the orchestrators are
-patched with recorders. Live ScienceBase verification is PR-G.
+patched with recorders. Live ScienceBase verification is deferred to the
+credential/session-wiring phase (not yet implemented).
 """
 
 from __future__ import annotations

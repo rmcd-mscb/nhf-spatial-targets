@@ -101,7 +101,7 @@ def make_minimal_project(tmp_path, fabric_path: str | None = None):
 
 
 # ---------------------------------------------------------------------------
-# Release publish/dry-run test helpers (PR-E3)
+# Release publish/dry-run test helpers
 # ---------------------------------------------------------------------------
 
 # A populated author list satisfies the publish pre-flight; tests pass

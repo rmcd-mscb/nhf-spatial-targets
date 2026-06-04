@@ -12,7 +12,7 @@ Issue #263: the step-output builders probed a fixed key tuple
 (``consolidated_nc`` / ``consolidated_path`` / ``path``) that never included
 ``daily_path``, so ``step["outputs"]`` came out empty and the consolidate steps
 carried no output sha256 -- undercutting the release checksum/provenance
-feature (PR-C #258).
+feature (#258).
 
 These tests drive each module's ``_update_manifest`` directly with records
 shaped like the live loop produces. They pin its read-and-checksum contract:

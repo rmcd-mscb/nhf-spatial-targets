@@ -1,7 +1,7 @@
 """Thin, retrying wrapper over :class:`sciencebasepy.SbSession`.
 
 This is the only place the rest of the release tooling touches ScienceBase.
-It exposes the handful of operations the publish orchestration (PR-E3) needs
+It exposes the handful of operations the publish orchestration needs
 -- authenticate, look up / create / update an item, find a child by title,
 upload a file with a skip-if-unchanged fast path -- and wraps each underlying
 call in exponential-backoff retry for transient HTTP failures (429 + 5xx) and
@@ -113,7 +113,7 @@ def remote_file_checksum(item: dict | None, filename: str) -> str | None:
     ``SbSession._replace_file``), so a SHA-256 passed to
     :meth:`SbClient.upload_file`'s ``skip_if_sha256_matches`` only matches once
     a SHA-256 is recorded on the remote file -- a responsibility of the publish
-    orchestration (PR-E3). When the recorded checksum is an MD5 that can't
+    orchestration. When the recorded checksum is an MD5 that can't
     match a SHA-256, the file simply re-uploads: correct, just not skipped.
     """
     if not item:

@@ -9,7 +9,7 @@ so the standard ``SourceAdapter`` / ``aggregate_source`` driver
 follow the ssebop precedent: a custom year loop that reuses the
 driver's weight-cache, gdptools, atomic-write, and manifest helpers.
 
-This PR supports the NA region only. ``--region hi`` / ``--region pr``
+Only the NA region is supported; ``--region hi`` / ``--region pr``
 raise ``NotImplementedError`` until a fabric that needs them lands
 (tracked under issue #101).
 """

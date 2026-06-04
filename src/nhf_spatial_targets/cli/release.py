@@ -8,15 +8,15 @@ own -- every subcommand resolves a :class:`~nhf_spatial_targets.workspace.Projec
 (and, where ScienceBase is touched, an
 :class:`~nhf_spatial_targets.release.sb_client.SbClient`) and dispatches.
 
-Two seams are deliberately small so PR-G can fill them in without touching the
-subcommand bodies:
+Two seams are deliberately small so the pending credential/session wiring can
+fill them in without touching the subcommand bodies:
 
 - :func:`_load_project` wraps :func:`nhf_spatial_targets.workspace.load` (a test
   seam; the dispatch tests patch it to return a synthetic project).
-- :func:`_resolve_client` builds the live ``SbClient``. **For PR-F** it resolves
-  a Keycloak token from an explicit ``--token`` or the ``SB_TOKEN`` environment
-  variable via :meth:`SbClient.from_token`. The ``.credentials.yml``
-  ``sciencebase:`` block + ``materialize_sciencebase_token`` wiring is PR-G; a
+- :func:`_resolve_client` builds the live ``SbClient``. It resolves a Keycloak
+  token from an explicit ``--token`` or the ``SB_TOKEN`` environment variable
+  via :meth:`SbClient.from_token`. The ``.credentials.yml`` ``sciencebase:``
+  block + ``materialize_sciencebase_token`` wiring is not yet implemented; a
   clear "no credentials found" error fires until then.
 
 The umbrella's ScienceBase parent (community / folder id) is supplied with the
@@ -24,7 +24,7 @@ The umbrella's ScienceBase parent (community / folder id) is supplied with the
 shared across every project publishing to the same umbrella, it is needed only
 for the rare ``publish --scope umbrella`` / ``--create-umbrella`` path, and a
 per-project config key would both duplicate it and pre-commit a schema before
-PR-G clarifies where ScienceBase deployment settings live.
+the deployment-settings location is decided.
 """
 
 from __future__ import annotations
@@ -70,7 +70,7 @@ _TOKEN_PARAM = Parameter(
     name=["--token"],
     help=(
         "ScienceBase Keycloak token JSON. Falls back to the SB_TOKEN "
-        "environment variable. (.credentials.yml wiring is PR-G.)"
+        "environment variable. (.credentials.yml wiring is not yet implemented.)"
     ),
 )
 _ENV_PARAM = Parameter(
@@ -99,7 +99,7 @@ and `ipds_number` in `release.yml` (this directory) before publishing.
 
 
 # ---------------------------------------------------------------------------
-# Errors + seams (the two PR-G fills in)
+# Errors + seams (the two the pending credential wiring fills in)
 # ---------------------------------------------------------------------------
 
 
@@ -121,9 +121,9 @@ def _load_project(workdir: Path) -> Project:
 def _resolve_client(*, token: str | None = None, env: str | None = None) -> SbClient:
     """Construct an :class:`SbClient` for live ScienceBase operations.
 
-    **PR-F seam.** Resolves a Keycloak token from *token* (the ``--token`` flag)
-    or, failing that, the ``SB_TOKEN`` environment variable, and builds the
-    client via :meth:`SbClient.from_token`. PR-G extends this to read the
+    Resolves a Keycloak token from *token* (the ``--token`` flag) or, failing
+    that, the ``SB_TOKEN`` environment variable, and builds the client via
+    :meth:`SbClient.from_token`. A later phase extends this to read the
     ``sciencebase:`` block from ``.credentials.yml`` (via
     ``materialize_sciencebase_token``); until then a token must be supplied.
 
@@ -141,7 +141,7 @@ def _resolve_client(*, token: str | None = None, env: str | None = None) -> SbCl
         raise ReleaseCliError(
             "no ScienceBase credentials found: pass --token or set the SB_TOKEN "
             "environment variable. (Reading the `sciencebase:` block from "
-            ".credentials.yml lands in PR-G.)"
+            ".credentials.yml is not yet implemented.)"
         )
     try:
         return SbClient.from_token(resolved, env=env)

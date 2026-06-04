@@ -4,7 +4,7 @@ The registry is the **source of truth for what we intend to have published**
 to ScienceBase: the umbrella DOI parent, one entry per consolidated-source
 child, and one entry per fabric child. ScienceBase itself remains the source
 of truth for *what actually exists*; reconciling the two (``diff_local_vs_remote``)
-needs live SB queries and lives in the publish/status layer (PR-E3), not here.
+needs live SB queries and lives in the publish/status layer, not here.
 This module stays pure-local.
 
 Two invariants drive the implementation:
