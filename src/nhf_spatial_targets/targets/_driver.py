@@ -74,8 +74,9 @@ def _common_global_attrs(
     published NC. ``source_keys`` is the comma-joined catalog-key list, distinct
     from the human-readable ``source`` description the loader adds; the other
     resolved params already flow through the loader's ``extra_attrs``
-    (``period`` here, ``normalize_period`` for SOM, ``ci_threshold`` for SCA).
-    Both are read defensively with ``.get`` so a sparse config never raises.
+    (``period`` here, ``normalize_period`` for recharge and SOM, ``ci_threshold``
+    for SCA). Both are read defensively with ``.get`` so a sparse config never
+    raises.
     """
     target_cfg = project.target(adapter.config_key)
     attrs = {

@@ -577,6 +577,52 @@ _TRIANGLE_DIRECT_PARAMS: tuple[str, ...] = (
 )
 
 
+def _config_product_problems(
+    tgt_name: str, nc_name: str, tgt_cfg: dict, nc_params: dict
+) -> list[str]:
+    """Return the config<->product disagreements for one target NC.
+
+    Compares the resolved params in ``nc_params`` (read back from the NC's
+    global attrs) against the effective-config ``tgt_cfg``. ``normalize_period``
+    is compared against the builder's ``normalize_period or period`` fallback so
+    a target that leaves it unset (stamped with the period value) is not falsely
+    flagged. Other ``_TRIANGLE_DIRECT_PARAMS`` are exact-equality (the NC attrs
+    are stamped verbatim from the same config values). ``sources`` (config list)
+    bridges to ``source_keys`` (NC comma-joined string).
+    """
+    problems: list[str] = []
+    for key in _TRIANGLE_DIRECT_PARAMS:
+        if key not in nc_params:
+            continue
+        if key == "normalize_period":
+            # Mirror rch/som: an unset normalize_period resolves to period.
+            expected = tgt_cfg.get("normalize_period") or tgt_cfg.get("period")
+        else:
+            if key not in tgt_cfg:
+                continue
+            expected = tgt_cfg[key]
+        if expected is None:
+            continue
+        if nc_params[key] != expected:
+            problems.append(
+                f"target '{tgt_name}' ({nc_name}): config.effective.yml "
+                f"{key}={expected!r} but the published NC says {nc_params[key]!r}"
+            )
+
+    # sources (config list) <-> source_keys (NC comma-joined string).
+    cfg_sources = tgt_cfg.get("sources")
+    nc_source_keys = nc_params.get("source_keys")
+    if isinstance(cfg_sources, list) and nc_source_keys is not None:
+        nc_sources = [s for s in str(nc_source_keys).split(",") if s]
+        if nc_sources != cfg_sources:
+            problems.append(
+                f"target '{tgt_name}' ({nc_name}): config.effective.yml "
+                f"sources={cfg_sources!r} but the published NC source_keys say "
+                f"{nc_sources!r}"
+            )
+    return problems
+
+
 def _preflight_config_product_consistency(project: Project) -> None:
     """Verify config.effective.yml agrees with the published target products.
 
@@ -595,10 +641,21 @@ def _preflight_config_product_consistency(project: Project) -> None:
     defensible reason to ship it. The fix is to re-run the build and/or
     ``validate`` so config, product, and manifest realign.
 
-    Targets are matched to their NC by ``output_file`` basename. A target NC
-    that carries no resolved-param attrs yet (a placeholder, or a pre-PR-7
+    Targets are matched to their NC(s) by the ``output_file`` **stem prefix**,
+    not the exact basename: SOM writes ``soil_moisture_targets_monthly.nc`` /
+    ``_annual.nc`` (never the bare ``soil_moisture_targets.nc``), and every
+    target also writes a ``<stem>_nn_filled.nc`` companion -- all carry the same
+    resolved-param attrs, so every product NC for a target is checked. A target
+    NC that carries no resolved-param attrs yet (a placeholder, or a pre-PR-7
     build) contributes no comparison -- this gate tightens as products are
     rebuilt under the instrumented writer, it never fabricates a mismatch.
+
+    The ``normalize_period`` comparison mirrors the builder's resolution: when a
+    target leaves ``normalize_period`` unset, rch/som stamp the NC with the
+    *period* value (``normalize_period or period``), so the gate compares the
+    NC against that same fallback rather than against a bare ``None`` (which
+    would falsely block an in-sync SOM build whose default normalize_period is
+    ``None``).
     """
     from nhf_spatial_targets.defaults import DEFAULTS
     from nhf_spatial_targets.rebuild_manifest import _target_nc_params
@@ -630,35 +687,21 @@ def _preflight_config_product_consistency(project: Project) -> None:
         )
         if not output_file:
             continue
-        nc = project.targets_dir() / output_file
-        if not nc.is_file():
-            # A target configured but not built is a completeness concern owned
-            # by _preflight_provenance_complete, not this consistency gate.
-            continue
-        nc_params = _target_nc_params(nc)
-        if not nc_params:
-            continue  # placeholder / pre-PR-7 product: nothing to compare
-
-        for key in _TRIANGLE_DIRECT_PARAMS:
-            if key in nc_params and key in tgt_cfg:
-                if nc_params[key] != tgt_cfg[key]:
-                    problems.append(
-                        f"target '{tgt_name}': config.effective.yml {key}="
-                        f"{tgt_cfg[key]!r} but the published NC says "
-                        f"{nc_params[key]!r}"
-                    )
-
-        # sources (config list) <-> source_keys (NC comma-joined string).
-        cfg_sources = tgt_cfg.get("sources")
-        nc_source_keys = nc_params.get("source_keys")
-        if isinstance(cfg_sources, list) and nc_source_keys is not None:
-            nc_sources = [s for s in str(nc_source_keys).split(",") if s]
-            if nc_sources != cfg_sources:
-                problems.append(
-                    f"target '{tgt_name}': config.effective.yml sources="
-                    f"{cfg_sources!r} but the published NC source_keys say "
-                    f"{nc_sources!r}"
-                )
+        # Match every product NC for this target by stem prefix: the bare
+        # <stem>.nc, SOM's <stem>_monthly/_annual.nc variants, and every
+        # <stem>_nn_filled.nc companion. A target configured but not built (no
+        # matching NC) is a completeness concern owned by
+        # _preflight_provenance_complete, not this consistency gate.
+        stem = Path(output_file).stem
+        for nc in sorted(project.targets_dir().glob(f"{stem}*.nc")):
+            if not nc.is_file():
+                continue
+            nc_params = _target_nc_params(nc)
+            if not nc_params:
+                continue  # placeholder / pre-PR-7 product: nothing to compare
+            problems.extend(
+                _config_product_problems(tgt_name, nc.name, tgt_cfg, nc_params)
+            )
 
     if problems:
         joined = "\n  - ".join(problems)

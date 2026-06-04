@@ -256,8 +256,89 @@ def test_config_product_mismatch_not_bypassed_by_override(tmp_path):
     # Re-project so on-disk manifest == projection (drift gate passes); config.yml
     # is untouched so the effective-config staleness gate also passes.
     rebuild_manifest(project)
-    with pytest.raises(publish.PreflightError, match="aet"):
+    # Triangle-specific phrase, robust to gate-ordering churn (a loose "aet"
+    # could match another gate's message).
+    with pytest.raises(publish.PreflightError, match="published target product"):
         publish._preflight_common(project, allow_incomplete_sources=True)
+
+
+def _add_target_to_effective_config(project, tgt_name, params: dict) -> None:
+    """Merge *params* into config.effective.yml's targets.<tgt_name> (read-only
+    0o444 file written by _write_effective_config -> chmod first)."""
+    import yaml as _yaml
+
+    eff_path = project.workdir / "config.effective.yml"
+    eff = _yaml.safe_load(eff_path.read_text())
+    eff.setdefault("targets", {}).setdefault(tgt_name, {}).update(params)
+    eff_path.chmod(0o644)
+    eff_path.write_text(_yaml.safe_dump(eff))
+
+
+def test_config_product_checks_som_variant_files(tmp_path):
+    """SOM writes soil_moisture_targets_{monthly,annual}.nc (never the bare
+    output_file soil_moisture_targets.nc), so the gate must match a target's
+    NC(s) by stem prefix, not by the exact output_file. A variant NC whose
+    period contradicts the effective config must be caught (C1b)."""
+    project = build_release_project(tmp_path)
+    _add_target_to_effective_config(
+        project,
+        "soil_moisture",
+        {"period": "1982/2010", "output_file": "soil_moisture_targets.nc"},
+    )
+    # The real SOM product is the variant file, not the bare output_file.
+    _write_real_target_nc(
+        project, "soil_moisture_targets_monthly.nc", {"period": "1999/2999"}
+    )
+    with pytest.raises(publish.PreflightError, match="soil_moisture"):
+        publish._preflight_config_product_consistency(project)
+
+
+def test_config_product_som_default_normalize_period_passes(tmp_path):
+    """SOM's loader stamps normalize_period = (config normalize_period OR
+    period); with the default normalize_period=None the NC carries the period
+    string while the effective config still has normalize_period: None. The gate
+    must mirror the same `or period` fallback so an in-sync SOM build is NOT
+    falsely blocked (C1)."""
+    project = build_release_project(tmp_path)
+    _add_target_to_effective_config(
+        project,
+        "soil_moisture",
+        {
+            "period": "1982/2010",
+            "normalize_period": None,  # the default -> loader falls back to period
+            "output_file": "soil_moisture_targets.nc",
+        },
+    )
+    # What the SOM loader actually stamps when normalize_period is unset.
+    _write_real_target_nc(
+        project,
+        "soil_moisture_targets_monthly.nc",
+        {"period": "1982/2010", "normalize_period": "1982/2010"},
+    )
+    # Must NOT raise: normalize_period None in config == period fallback in NC.
+    publish._preflight_config_product_consistency(project)
+
+
+def test_config_product_som_explicit_normalize_period_mismatch_is_fatal(tmp_path):
+    """When the operator DID set normalize_period explicitly, a contradicting NC
+    value is still caught (the fallback only applies when config left it None)."""
+    project = build_release_project(tmp_path)
+    _add_target_to_effective_config(
+        project,
+        "soil_moisture",
+        {
+            "period": "1982/2010",
+            "normalize_period": "1990/2000",  # explicit
+            "output_file": "soil_moisture_targets.nc",
+        },
+    )
+    _write_real_target_nc(
+        project,
+        "soil_moisture_targets_monthly.nc",
+        {"period": "1982/2010", "normalize_period": "1982/2010"},  # disagrees
+    )
+    with pytest.raises(publish.PreflightError, match="normalize_period"):
+        publish._preflight_config_product_consistency(project)
 
 
 def test_allow_incomplete_sources_bypasses(tmp_path, caplog):
