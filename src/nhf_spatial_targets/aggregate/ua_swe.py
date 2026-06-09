@@ -35,18 +35,23 @@ evaluated on the pixel grid, so it is read at agg time, bound into the hooks
 via closure, and stamped on ``snow_covered_fraction`` so the agg NC records
 the threshold that defined it. Changing the threshold invalidates the agg
 NC's ``snow_covered_fraction`` (re-run ``agg ua-swe``); ``swe`` /
-``snow_depth`` are untouched. The ``depth_threshold_mm`` config key is wired
-by PR-D; this module reads it defensively, defaulting to
-``DEFAULT_DEPTH_THRESHOLD_MM`` when absent.
+``snow_depth`` are untouched. This module reads ``depth_threshold_mm``
+defensively (default ``DEFAULT_DEPTH_THRESHOLD_MM``) so a project whose
+``config.yml`` predates the key still aggregates; the key is added to the
+config schema by the later SCA-target work.
 
-The attrs the ``pre_aggregate_hook`` stamps on the synthesized variable do
-not reliably survive gdptools' aggregation, so a closure-bound
-``post_aggregate_hook`` re-asserts them on the HRU-scale result — the same
-pattern ``mod10c1.py`` uses to re-stamp its derived ``valid_area_fraction``.
+gdptools' aggregation does not *guarantee* that a synthesized variable's
+attrs are carried through to the HRU-scale result, so a closure-bound
+``post_aggregate_hook`` re-asserts the CF attrs + ``depth_threshold_mm``
+stamp defensively. (``mod10c1.py`` similarly re-sets attrs in its
+``post_aggregate_hook``, though there as a side-effect of renaming
+``valid_mask`` → ``valid_area_fraction``, not as an attr-survival
+workaround.)
 """
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from pathlib import Path
 
@@ -56,14 +61,18 @@ import yaml
 from nhf_spatial_targets.aggregate._adapter import SourceAdapter
 from nhf_spatial_targets.aggregate._driver import aggregate_source
 
+_logger = logging.getLogger(__name__)
+
 _SOURCE_KEY = "ua_swe"
 _OUTPUT_NAME = "ua_swe_agg.nc"
 _DEPTH_VAR = "snow_depth"
 _SCF_VAR = "snow_covered_fraction"
 
-#: Pixel snow-depth threshold (mm) for the snow-covered binary, used when the
-#: project config carries no ``snow_covered_area.depth_threshold_mm`` (that
-#: key is introduced by PR-D, so this module must read it defensively).
+#: Pixel snow-depth threshold (mm) for the snow-covered binary, used when a
+#: project's ``config.yml`` carries no ``snow_covered_area.depth_threshold_mm``
+#: — so projects whose config predates that key still aggregate. The key is
+#: added to the config schema by the SCA-target work; until then it is always
+#: read defensively.
 DEFAULT_DEPTH_THRESHOLD_MM = 1.0
 
 
@@ -78,11 +87,17 @@ def _scf_cf_attrs() -> dict[str, str]:
 
     for var in catalog.source(_SOURCE_KEY)["variables"]:
         if var.get("name") == _SCF_VAR:
-            return {
-                "long_name": var["long_name"],
-                "units": var["cf_units"],
-                "cell_methods": var["cell_methods"],
-            }
+            try:
+                return {
+                    "long_name": var["long_name"],
+                    "units": var["cf_units"],
+                    "cell_methods": var["cell_methods"],
+                }
+            except KeyError as exc:
+                raise KeyError(
+                    f"{_SOURCE_KEY}: catalog {_SCF_VAR!r} entry is missing "
+                    f"required CF field {exc.args[0]!r}."
+                ) from exc
     raise KeyError(
         f"{_SOURCE_KEY}: catalog has no {_SCF_VAR!r} variable entry; cannot "
         f"stamp CF attrs on the derived snow-covered fraction."
@@ -121,19 +136,32 @@ def make_post_aggregate_hook(
 ) -> Callable[[xr.Dataset], xr.Dataset]:
     """Return a post-aggregate hook that re-stamps ``snow_covered_fraction`` attrs.
 
-    gdptools does not reliably carry a synthesized variable's attrs through
-    aggregation (the same reason ``mod10c1.py`` re-stamps its derived
-    ``valid_area_fraction`` post-aggregation), so re-assert the CF attrs and
-    the ``depth_threshold_mm`` provenance stamp on the HRU-scale result.
+    gdptools' aggregation does not *guarantee* a synthesized variable's attrs
+    survive to the HRU-scale result, so re-assert the CF attrs and the
+    ``depth_threshold_mm`` provenance stamp defensively. (``mod10c1.py`` also
+    re-sets attrs in its post-aggregate hook, but there as part of renaming
+    ``valid_mask`` → ``valid_area_fraction``.)
+
+    Raises ``KeyError`` if ``snow_covered_fraction`` is absent from the
+    aggregated dataset: the pre-hook synthesizes it unconditionally and the
+    driver aggregates every declared variable, so its absence means the
+    pre-aggregate/driver contract was violated — failing loud prevents writing
+    an agg NC with an unstamped fraction that silently reports success.
     """
     cf_attrs = _scf_cf_attrs()
 
     def _hook(year_ds: xr.Dataset) -> xr.Dataset:
-        if _SCF_VAR in year_ds.data_vars:
-            year_ds[_SCF_VAR].attrs = {
-                **cf_attrs,
-                "depth_threshold_mm": float(depth_threshold_mm),
-            }
+        if _SCF_VAR not in year_ds.data_vars:
+            raise KeyError(
+                f"{_SOURCE_KEY}: post_aggregate_hook expected aggregated "
+                f"{_SCF_VAR!r} (synthesized in the pre-hook and declared in "
+                f"adapter.variables), found {list(year_ds.data_vars)}. The "
+                f"pre-aggregate/driver contract was violated."
+            )
+        year_ds[_SCF_VAR].attrs = {
+            **cf_attrs,
+            "depth_threshold_mm": float(depth_threshold_mm),
+        }
         return year_ds
 
     return _hook
@@ -171,14 +199,32 @@ ADAPTER = build_adapter()
 def _resolve_depth_threshold_mm(workdir: Path) -> float:
     """Read ``snow_covered_area.depth_threshold_mm`` from the project config.
 
-    Defaults to ``DEFAULT_DEPTH_THRESHOLD_MM`` when absent — the config key is
-    wired by PR-D, so PR-B must not assume it exists.
+    Defaults to ``DEFAULT_DEPTH_THRESHOLD_MM`` when the key is absent, so a
+    project whose ``config.yml`` predates the key still aggregates rather than
+    failing. (The key is added to the config schema by the SCA-target work.)
+
+    Logs the resolved threshold at INFO and whether it came from config or the
+    default, so an operator who *believes* they set it but mis-typed or
+    mis-placed the key (it silently falls back to the default, which then gets
+    stamped onto the output as authoritative) can see the fallback in the run
+    log. Strict unknown-key rejection belongs in the config-schema work.
     """
     from nhf_spatial_targets.defaults import apply_defaults
 
     cfg = apply_defaults(yaml.safe_load((Path(workdir) / "config.yml").read_text()))
     sca_cfg = (cfg.get("targets") or {}).get("snow_covered_area") or {}
-    return float(sca_cfg.get("depth_threshold_mm", DEFAULT_DEPTH_THRESHOLD_MM))
+    if "depth_threshold_mm" in sca_cfg:
+        threshold = float(sca_cfg["depth_threshold_mm"])
+        origin = "config snow_covered_area.depth_threshold_mm"
+    else:
+        threshold = DEFAULT_DEPTH_THRESHOLD_MM
+        origin = "module default (snow_covered_area.depth_threshold_mm unset)"
+    _logger.info(
+        "ua_swe: snow_covered_fraction depth threshold = %.3f mm (%s)",
+        threshold,
+        origin,
+    )
+    return threshold
 
 
 def aggregate_ua_swe(

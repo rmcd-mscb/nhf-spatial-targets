@@ -161,6 +161,17 @@ def test_post_aggregate_hook_restamps_attrs():
     assert out["snow_covered_fraction"].attrs["units"] == "1"
 
 
+def test_post_aggregate_hook_raises_when_fraction_absent():
+    """Absent snow_covered_fraction means the pre-hook/driver contract was
+    violated; fail loud rather than silently writing an unstamped fraction."""
+    hru = xr.Dataset(
+        {"swe": (["nhm_id"], [1.0, 2.0])},
+        coords={"nhm_id": [1, 2]},
+    )
+    with pytest.raises(KeyError, match="snow_covered_fraction"):
+        make_post_aggregate_hook(1.0)(hru)
+
+
 def test_aggregate_ua_swe_reads_default_threshold(tmp_path, monkeypatch):
     """No depth_threshold_mm in config -> default 1.0 bound into the hook."""
     (tmp_path / "config.yml").write_text("fabric:\n  path: /x\n  id_col: nhm_id\n")
