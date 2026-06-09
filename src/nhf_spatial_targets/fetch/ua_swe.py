@@ -663,7 +663,7 @@ def _update_manifest(
     workdir: Path,
     period: str,
     meta: dict,
-    wy_records: list[dict],
+    cy_records: list[dict],
     archive_url: str,
     mask_record: dict | None,
 ) -> None:
@@ -671,7 +671,7 @@ def _update_manifest(
 
     Read-merge-write semantics so concurrent worker invocations cannot
     clobber each other (mirrors the SNODAS pattern). Records for the
-    same water year overwrite earlier entries on later calls.
+    same calendar year overwrite earlier entries on later calls.
     """
     ws = _load_project(workdir)
     manifest_path = ws.manifest_path
@@ -694,10 +694,12 @@ def _update_manifest(
         manifest.setdefault("sources", {})
         manifest.setdefault("steps", [])
         entry = manifest["sources"].get(_SOURCE_KEY, {})
-        existing_by_wy = {int(y["water_year"]): y for y in entry.get("water_years", [])}
-        for rec in wy_records:
-            existing_by_wy[int(rec["water_year"])] = rec
-        merged_wys = [existing_by_wy[w] for w in sorted(existing_by_wy)]
+        existing_by_cy = {
+            int(y["calendar_year"]): y for y in entry.get("calendar_years", [])
+        }
+        for rec in cy_records:
+            existing_by_cy[int(rec["calendar_year"])] = rec
+        merged_cys = [existing_by_cy[c] for c in sorted(existing_by_cy)]
         access = meta["access"]
         entry.update(
             {
@@ -708,7 +710,7 @@ def _update_manifest(
                 "license": meta.get("license", "public domain (NASA NSIDC)"),
                 "period": period,
                 "variables": [v["name"] for v in meta["variables"]],
-                "water_years": merged_wys,
+                "calendar_years": merged_cys,
                 "fetched_by": f"nhf_spatial_targets {__version__}",
             }
         )
@@ -725,13 +727,13 @@ def _update_manifest(
 
         # Each record stores the consolidated NC under ``daily_path`` (set
         # from the consolidator's return value on both the fresh and the
-        # mtime-idempotent skip path), so a skipped-but-present WY still
+        # mtime-idempotent skip path), so a skipped-but-present CY still
         # contributes its output checksum to the consolidate step. (#263)
-        step_outputs: list[OutputFileEntry] = []
-        for rec in wy_records:
-            nc = rec.get("daily_path")
-            if nc and Path(nc).exists():
-                step_outputs.append(output_file_entry(Path(nc)))
+        step_outputs: list[OutputFileEntry] = [
+            output_file_entry(Path(rec["daily_path"]))
+            for rec in cy_records
+            if rec.get("daily_path") and Path(rec["daily_path"]).exists()
+        ]
         manifest["steps"].append(
             build_step_record(
                 kind="consolidate",
@@ -739,7 +741,7 @@ def _update_manifest(
                 outputs=step_outputs,
                 params={
                     "period": period,
-                    "water_years": [int(rec["water_year"]) for rec in wy_records],
+                    "calendar_years": [int(r["calendar_year"]) for r in cy_records],
                     "archive_url": archive_url,
                 },
                 command=f"fetch {_SOURCE_KEY.replace('_', '-')}",
@@ -767,8 +769,8 @@ def _update_manifest(
     else:
         _do_update()
     logger.info(
-        "ua_swe: updated manifest.json for water years %s",
-        [r["water_year"] for r in wy_records],
+        "ua_swe: updated manifest.json for calendar years %s",
+        [r["calendar_year"] for r in cy_records],
     )
 
 
@@ -777,12 +779,12 @@ def _update_manifest(
 # ---------------------------------------------------------------------------
 
 
-def _assign_worker_water_years(
-    all_wys: list[int],
+def _assign_worker_calendar_years(
+    all_cys: list[int],
     worker_index: int,
     n_workers: int,
 ) -> list[int]:
-    """Round-robin slice of ``all_wys`` for one worker.
+    """Round-robin slice of ``all_cys`` for one worker.
 
     Mirrors :func:`snodas._assign_worker_years`. Slicing the full list
     (not a remaining-work set) keeps each worker's assignment
@@ -795,7 +797,7 @@ def _assign_worker_water_years(
         raise ValueError(
             f"worker_index must be in [0, {n_workers}); got {worker_index}"
         )
-    return list(all_wys[worker_index::n_workers])
+    return list(all_cys[worker_index::n_workers])
 
 
 # ---------------------------------------------------------------------------
@@ -810,14 +812,16 @@ def fetch_ua_swe(
     worker_index: int = 0,
     n_workers: int = 1,
 ) -> dict:
-    """Download UA SWE per-WY NCs and consolidate to CF NetCDFs.
+    """Download UA SWE per-WY NCs and consolidate to CF calendar-year NetCDFs.
 
-    Two-phase per water year: (1) stream
-    ``4km_SWE_Depth_WY<YYYY>_v01.nc`` from the NSIDC HTTPS archive into
-    ``<datastore>/ua_swe/raw/`` via the earthaccess auth session.
-    (2) Decode, rename, pre-project to EPSG:5070, and write a
-    CF-compliant per-WY NC at
-    ``<datastore>/ua_swe/daily/ua_swe_daily_WY<YYYY>.nc``. The CONUS
+    Two-phase per calendar year: (1) stream both adjacent WY raw NCs
+    (``4km_SWE_Depth_WY<YYYY>_v01.nc`` and ``WY<YYYY+1>_v01.nc``) from
+    the NSIDC HTTPS archive into ``<datastore>/ua_swe/raw/`` via the
+    earthaccess auth session — idempotently, so adjacent CYs that share
+    a WY file do not re-download it. (2) Consolidate: decode, rename,
+    pre-project to EPSG:5070, stitch Jan-Sep from WY X with Oct-Dec from
+    WY X+1, and write a CF-compliant calendar-year NC at
+    ``<datastore>/ua_swe/daily/ua_swe_daily_<YYYY>.nc``. The CONUS
     water/ice mask (``SWE_Mask_v01.nc``) is downloaded once at the
     datastore root and reused across runs.
 
@@ -826,17 +830,17 @@ def fetch_ua_swe(
     workdir : Path
         Project directory.
     period : str
-        Calendar-year window ``"YYYY/YYYY"`` (inclusive). The actual WY
-        files needed are CY and CY+1 for each requested calendar year;
-        the fetcher resolves the union internally. Validated against
-        the catalog's ``period``.
+        Calendar-year window ``"YYYY/YYYY"`` (inclusive). Validated
+        against the catalog's ``period``. Edge calendar years whose
+        WY X+1 falls outside the published range are silently dropped
+        (they cannot be fully assembled).
     worker_index, n_workers : int
-        Round-robin water-year sharding for parallel workers.
+        Round-robin calendar-year sharding for parallel workers.
 
     Returns
     -------
     dict
-        Provenance summary with the per-WY records appended.
+        Provenance summary with the per-CY records appended.
 
     Raises
     ------
@@ -865,20 +869,26 @@ def fetch_ua_swe(
                 f"({data_lo}-{data_hi}, from catalog "
                 f"`sources.yml[{_SOURCE_KEY}].period`). Adjust --period."
             )
-    # Resolve calendar years to the water-year files that contain them.
-    # For each WY needed, also clamp to the publisher's available WY
-    # range. WY 1982 is the earliest published; WY 2023 the latest.
-    candidate_wys = _calendar_years_to_water_years(requested_cys)
+    # A full calendar year X needs WY X (Jan-Sep) AND WY X+1 (Oct-Dec),
+    # both within the published WY range [publisher_wy_lo, publisher_wy_hi].
+    # => X >= publisher_wy_lo and X+1 <= publisher_wy_hi.
     publisher_wy_lo = data_lo + 1  # WY 1982 for catalog "1981/2023"
     publisher_wy_hi = data_hi  # WY 2023
-    wys = [w for w in candidate_wys if publisher_wy_lo <= w <= publisher_wy_hi]
-    if not wys:
-        logger.warning(
-            "ua_swe: requested calendar years %s map to no published water "
-            "years in [%d, %d]; nothing to fetch.",
-            requested_cys,
+    publishable_cys = [
+        cy
+        for cy in requested_cys
+        if cy >= publisher_wy_lo and (cy + 1) <= publisher_wy_hi
+    ]
+    dropped = sorted(set(requested_cys) - set(publishable_cys))
+    if dropped:
+        logger.info(
+            "ua_swe: dropping partial-edge calendar years %s (need both WY X "
+            "and WY X+1 in [%d, %d]); full coverage is %d-%d.",
+            dropped,
             publisher_wy_lo,
             publisher_wy_hi,
+            publisher_wy_lo,
+            publisher_wy_hi - 1,
         )
 
     raw_dir = ws.raw_dir(_SOURCE_KEY) / "raw"
@@ -910,10 +920,12 @@ def fetch_ua_swe(
         }
         logger.info("ua_swe: CONUS mask status=%s (%s)", mask_status, mask_path)
 
-    assigned = _assign_worker_water_years(wys, worker_index, n_workers)
-    if not assigned:
+    assigned_cys = _assign_worker_calendar_years(
+        publishable_cys, worker_index, n_workers
+    )
+    if not assigned_cys:
         logger.info(
-            "ua_swe: worker %d/%d has no water years to process for period %s",
+            "ua_swe: worker %d/%d has no calendar years to process for period %s",
             worker_index,
             n_workers,
             period,
@@ -924,63 +936,44 @@ def fetch_ua_swe(
             "archive_url": archive_url,
             "worker_index": worker_index,
             "n_workers": n_workers,
-            "water_years": [],
-            "fetched_at": now_utc,
+            "calendar_years": [],
             "mask": mask_record,
         }
 
-    wy_records: list[dict] = []
-    for wy in assigned:
-        url = _wy_url(archive_url, wy)
-        raw_path = raw_dir / _WY_FILENAME_TEMPLATE.format(wy=wy)
-        status = _download_file(session, url, raw_path)
+    cy_records: list[dict] = []
+    for cy in assigned_cys:
+        wy_status: dict[int, str] = {}
+        for wy in (cy, cy + 1):
+            url = _wy_url(archive_url, wy)
+            raw_path = raw_dir / _WY_FILENAME_TEMPLATE.format(wy=wy)
+            wy_status[wy] = _download_file(session, url, raw_path)
         rec: dict = {
-            "water_year": wy,
-            "url": url,
-            "raw_path": str(raw_path),
-            "status": status,
+            "calendar_year": cy,
+            "water_years": [cy, cy + 1],
+            "wy_status": wy_status,
             "downloaded_utc": now_utc,
         }
-        if status in ("downloaded", "already_present"):
-            # Data-level failures are recorded and continue; programming
-            # errors are not caught.
+        if all(s in ("downloaded", "already_present") for s in wy_status.values()):
             try:
-                daily_path = consolidate_water_year_ua_swe(wy, raw_path, daily_dir)
+                daily_path = consolidate_calendar_year_ua_swe(cy, raw_dir, daily_dir)
                 rec["daily_path"] = str(daily_path)
                 rec["consolidated_utc"] = datetime.now(timezone.utc).isoformat()
-            except (ValueError, FileNotFoundError, OSError, RuntimeError) as exc:
-                logger.warning("ua_swe: consolidation failed for WY %d: %s", wy, exc)
+            except (FileNotFoundError, ValueError, OSError, RuntimeError) as exc:
+                logger.warning("ua_swe: CY %d consolidation failed: %s", cy, exc)
                 rec["consolidate_error"] = str(exc)
-        elif status == "missing_404":
+        else:
             logger.warning(
-                "ua_swe: WY %d returned 404 at %s; skipping consolidation. "
-                "Confirm the catalog `archive_url` and the v01 filename "
-                "convention if this persists.",
-                wy,
-                url,
+                "ua_swe: CY %d skipped — WY download status %s", cy, wy_status
             )
-        else:  # "error"
-            logger.warning(
-                "ua_swe: WY %d download failed (%s); skipping consolidation.",
-                wy,
-                status,
-            )
-        wy_records.append(rec)
-        logger.info(
-            "ua_swe: WY %d — status=%s%s",
-            wy,
-            status,
-            (f", daily={Path(rec['daily_path']).name}" if "daily_path" in rec else ""),
-        )
+        cy_records.append(rec)
 
-    _update_manifest(workdir, period, meta, wy_records, archive_url, mask_record)
+    _update_manifest(workdir, period, meta, cy_records, archive_url, mask_record)
     return {
         "source_key": _SOURCE_KEY,
         "period": period,
         "archive_url": archive_url,
         "worker_index": worker_index,
         "n_workers": n_workers,
-        "water_years": wy_records,
-        "fetched_at": now_utc,
+        "calendar_years": cy_records,
         "mask": mask_record,
     }
