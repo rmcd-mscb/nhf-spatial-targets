@@ -80,8 +80,11 @@ The command:
 1. Logs in to NASA EDL via `earthaccess.login(strategy='netrc')`.
 2. Reads the publisher window from `sources.yml[ua_swe].period` and
    rejects out-of-range years.
-3. Pre-filters water years against the existing manifest — WYs already
-   present on disk with non-zero size are skipped on re-runs.
+3. For each water-year file, skips the download on re-runs if the file
+   already exists on disk with size ≥ 10 MiB (`_MIN_VALID_NC_BYTES` in
+   `fetch/ua_swe.py`). The `manifest.json` is read only at the end of a
+   run (by `_update_manifest`) to record provenance — it is **not** used
+   to pre-filter downloads.
 4. For each pending WY, constructs the URL
    `<archive_url>/4km_SWE_Depth_WY<YYYY>_v01.nc` and streams it into
    `<datastore>/ua_swe/raw/4km_SWE_Depth_WY<YYYY>_v01.nc`.

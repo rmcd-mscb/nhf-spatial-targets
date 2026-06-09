@@ -1031,7 +1031,7 @@ sources:
     release:
       # Explicit decision (not inherited defaults) for a newly added source.
       # NSIDC-0719 is a NASA-distributed public product (NSIDC DAAC); the
-      # consolidated per-water-year NCs (~3.8 GB total across 42 files) are
+      # consolidated per-calendar-year NCs (~3.8 GB total across 41 files, CY 1982-2022) are
       # small enough to ship and are redistributable as a USGS-derivative
       # consolidated-source child — same posture as snodas / margulis_wus_sr
       # (also NSIDC public-domain). NOT metadata_only: unlike daymet (4.6 TB

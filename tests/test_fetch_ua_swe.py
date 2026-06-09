@@ -21,6 +21,8 @@ import pytest
 import xarray as xr
 import yaml
 
+import logging
+
 from nhf_spatial_targets.fetch.ua_swe import (
     _CONSOLIDATED_FILENAME_TEMPLATE,
     _WY_FILENAME_TEMPLATE,
@@ -1035,6 +1037,11 @@ def test_fetch_ua_swe_consolidates_by_calendar_year(
 
     cy_years = {r["calendar_year"] for r in result["calendar_years"]}
     assert cy_years == {2000, 2001}
+    assert (
+        result["n_consolidated"] == 2
+        and result["n_failed"] == 0
+        and result["n_skipped"] == 0
+    )
 
 
 def test_fetch_ua_swe_drops_partial_edge_years(
@@ -1095,6 +1102,158 @@ def test_manifest_records_calendar_years(tmp_path: Path, monkeypatch, small_min_
     assert any("ua_swe_daily_2000.nc" in p for p in output_paths), (
         f"CY 2000 NC not in step outputs: {output_paths}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Change D: short-year completeness warning
+# ---------------------------------------------------------------------------
+
+
+def test_consolidate_calendar_year_warns_on_short_year(tmp_path: Path, caplog):
+    """Assembling a CY from sparse raws (fewer than 365/366 days) emits WARNING.
+
+    The sparse fixtures produced by _build_cy_raw_fixtures contain only 4
+    boundary dates (Jan 1, Sep 30, Oct 1, Dec 31), far fewer than 365/366
+    days, so the assembled dataset is short.  The consolidator must emit a
+    WARNING containing 'expected' and 'daily steps' — and the NC must still
+    be written (warning, not raise).
+    """
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    daily = tmp_path / "daily"
+
+    _build_cy_raw_fixtures(raw_dir, 2001)  # non-leap: expected 365
+
+    with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.fetch.ua_swe"):
+        out = consolidate_calendar_year_ua_swe(2001, raw_dir, daily)
+
+    # NC must still be written
+    assert out.exists(), (
+        "consolidated NC must be written even when a warning is emitted"
+    )
+
+    # Warning must mention the day-count discrepancy
+    warning_messages = [
+        r.message for r in caplog.records if r.levelno == logging.WARNING
+    ]
+    assert any(
+        "expected" in str(m) and "daily steps" in str(m) for m in warning_messages
+    ), f"Expected short-year warning not found; got: {warning_messages}"
+
+
+# ---------------------------------------------------------------------------
+# Change G: download-failed → CY-skipped branch
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_ua_swe_skips_cy_when_wy_download_fails(
+    tmp_path: Path, monkeypatch, small_min_bytes
+):
+    """A CY is skipped (no daily_path, no consolidate_error) when one of its
+    WY downloads fails with 'missing_404'.
+
+    Period 2010/2011 covers publishable CYs [2010, 2011].
+    - CY 2010 needs WY 2010 and WY 2011.
+    - CY 2011 needs WY 2011 and WY 2012.
+    Injecting a missing_404 for WY 2011 means:
+    - CY 2010 is skipped (wy_status has missing_404 for WY 2011).
+    - CY 2011 is skipped (wy_status has missing_404 for WY 2011).
+    So n_skipped >= 1 and no daily NC for any affected CY.
+    """
+    workdir = _make_project(tmp_path)
+
+    monkeypatch.setattr("nhf_spatial_targets.fetch.ua_swe._MIN_VALID_NC_BYTES", 1024)
+
+    # Build boundary timestamps for all WYs that will be attempted (except WY 2011).
+    # CYs 2010 and 2011 both need WY 2011 which will be injected as missing_404.
+    wy_timestamps: dict[int, list] = {
+        2010: [pd.Timestamp("2010-01-01"), pd.Timestamp("2010-09-30")],
+        2011: None,  # sentinel: this WY returns missing_404
+        2012: [pd.Timestamp("2011-10-01"), pd.Timestamp("2011-12-31")],
+    }
+
+    def _fake_download(session, url, out_path, **kwargs):
+        m = re.search(r"4km_SWE_Depth_WY(\d{4})_v01\.nc$", url)
+        if m:
+            wy = int(m.group(1))
+            if wy_timestamps.get(wy) is None:
+                # Simulate a 404 for WY 2011
+                return "missing_404"
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            if not out_path.exists():
+                _make_sparse_wy_raw_nc(out_path, wy_timestamps[wy])
+            return "downloaded"
+        if "SWE_Mask_v01.nc" in url:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_bytes(_MASK_PAD_BODY)
+            return "downloaded"
+        return "missing_404"
+
+    class _DummySession:
+        def get(self, url, **kwargs):
+            raise AssertionError("_DummySession.get should not be called")
+
+    monkeypatch.setattr(
+        "nhf_spatial_targets.fetch.ua_swe._earthaccess_session",
+        lambda: _DummySession(),
+    )
+    monkeypatch.setattr(
+        "nhf_spatial_targets.fetch.ua_swe._download_file",
+        _fake_download,
+    )
+
+    result = fetch_ua_swe(
+        workdir=workdir, period="2010/2011", worker_index=0, n_workers=1
+    )
+
+    daily_dir = workdir / "datastore" / "ua_swe" / "daily"
+
+    # Both CYs need WY 2011 → both skipped
+    for rec in result["calendar_years"]:
+        cy = rec["calendar_year"]
+        assert "daily_path" not in rec, f"CY {cy} should be skipped, not consolidated"
+        assert "consolidate_error" not in rec, (
+            f"CY {cy} skip must be a download-skip (no consolidate_error), got: {rec}"
+        )
+        assert "missing_404" in str(rec["wy_status"].values()), (
+            f"CY {cy} wy_status must show the missing_404: {rec['wy_status']}"
+        )
+        assert not (daily_dir / f"ua_swe_daily_{cy}.nc").exists(), (
+            f"ua_swe_daily_{cy}.nc must not exist for a skipped CY"
+        )
+
+    assert result["n_skipped"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# Change H: multi-worker partition end-to-end
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_ua_swe_worker_sharding_partitions_calendar_years(
+    tmp_path: Path, monkeypatch, small_min_bytes
+):
+    """Worker round-robin: with n_workers=2 and period 2010/2011, worker 0
+    processes CY 2010 and worker 1 processes CY 2011 (publishable CYs in
+    round-robin order [2010, 2011][i::2]).
+    """
+    workdir = _make_project(tmp_path)
+
+    # Both CYs need WY 2010, 2011, 2012 — stub all of them.
+    _cy_stub_session(monkeypatch, calendar_years=[2010, 2011], min_bytes_patch=False)
+
+    result_w0 = fetch_ua_swe(
+        workdir=workdir, period="2010/2011", worker_index=0, n_workers=2
+    )
+    result_w1 = fetch_ua_swe(
+        workdir=workdir, period="2010/2011", worker_index=1, n_workers=2
+    )
+
+    cys_w0 = {r["calendar_year"] for r in result_w0["calendar_years"]}
+    cys_w1 = {r["calendar_year"] for r in result_w1["calendar_years"]}
+
+    assert cys_w0 == {2010}, f"Worker 0 should get CY 2010 only, got {cys_w0}"
+    assert cys_w1 == {2011}, f"Worker 1 should get CY 2011 only, got {cys_w1}"
 
 
 # ---------------------------------------------------------------------------

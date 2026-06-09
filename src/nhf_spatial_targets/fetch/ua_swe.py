@@ -468,6 +468,14 @@ def consolidate_calendar_year_ua_swe(
     FileNotFoundError
         If either ``4km_SWE_Depth_WY{X}_v01.nc`` or
         ``4km_SWE_Depth_WY{X+1}_v01.nc`` is absent in *raw_dir*.
+
+    Notes
+    -----
+    A non-fatal WARNING is emitted when the assembled dataset contains
+    fewer daily steps than expected (365 or 366 for leap years). This
+    indicates a truncated download or a publisher gap in one of the
+    contributing raws; the consolidated NC is still written so callers
+    can inspect and decide whether to re-fetch.
     """
     daily_dir.mkdir(parents=True, exist_ok=True)
     out_path = daily_dir / _CONSOLIDATED_FILENAME_TEMPLATE.format(year=calendar_year)
@@ -501,6 +509,18 @@ def consolidate_calendar_year_ua_swe(
     # Slicing to CY X gives Oct 1 – Dec 31 of X.
     oct_dec = _calendar_year_slice(ds_x1, calendar_year)
     ds_cy = xr.concat([jan_sep, oct_dec], dim="time").sortby("time")
+
+    expected_days = 366 if pd.Timestamp(f"{calendar_year}-12-31").is_leap_year else 365
+    actual_days = int(ds_cy.sizes["time"])
+    if actual_days < expected_days:
+        logger.warning(
+            "ua_swe: assembled CY %d has %d daily steps, expected %d — a "
+            "contributing water-year raw is short (truncated download or a "
+            "publisher gap). The consolidated NC will have missing days.",
+            calendar_year,
+            actual_days,
+            expected_days,
+        )
 
     ds_out = apply_cf_metadata(
         ds_cy, _SOURCE_KEY, time_step="daily", coord_type="projected"
@@ -734,9 +754,11 @@ def fetch_ua_swe(
         Project directory.
     period : str
         Calendar-year window ``"YYYY/YYYY"`` (inclusive). Validated
-        against the catalog's ``period``. Edge calendar years whose
-        WY X+1 falls outside the published range are silently dropped
-        (they cannot be fully assembled).
+        against the catalog's ``period``. Calendar years requiring a
+        water-year file outside the published archive are dropped with
+        an INFO log — specifically **CY 1981** (needs WY 1981, before
+        the archive) and **CY 2023** (needs WY 2024, after the archive)
+        — so full coverage is CY 1982–2022.
     worker_index, n_workers : int
         Round-robin calendar-year sharding for parallel workers.
 
@@ -862,8 +884,13 @@ def fetch_ua_swe(
                 rec["daily_path"] = str(daily_path)
                 rec["consolidated_utc"] = datetime.now(timezone.utc).isoformat()
             except (FileNotFoundError, ValueError, OSError, RuntimeError) as exc:
-                logger.warning("ua_swe: CY %d consolidation failed: %s", cy, exc)
-                rec["consolidate_error"] = str(exc)
+                logger.warning(
+                    "ua_swe: CY %d consolidation failed (%s): %s",
+                    cy,
+                    type(exc).__name__,
+                    exc,
+                )
+                rec["consolidate_error"] = repr(exc)
         else:
             logger.warning(
                 "ua_swe: CY %d skipped — WY download status %s", cy, wy_status
@@ -871,6 +898,25 @@ def fetch_ua_swe(
         cy_records.append(rec)
 
     _update_manifest(workdir, period, meta, cy_records, archive_url, mask_record)
+
+    n_consolidated = sum(1 for r in cy_records if r.get("daily_path"))
+    n_failed = sum(1 for r in cy_records if r.get("consolidate_error"))
+    n_skipped = sum(
+        1
+        for r in cy_records
+        if not r.get("daily_path") and not r.get("consolidate_error")
+    )
+    if n_failed or n_skipped:
+        logger.warning(
+            "ua_swe: worker %d/%d — %d consolidated, %d failed, %d skipped "
+            "(inspect per-CY consolidate_error / wy_status in the summary).",
+            worker_index,
+            n_workers,
+            n_consolidated,
+            n_failed,
+            n_skipped,
+        )
+
     return {
         "source_key": _SOURCE_KEY,
         "period": period,
@@ -879,4 +925,7 @@ def fetch_ua_swe(
         "n_workers": n_workers,
         "calendar_years": cy_records,
         "mask": mask_record,
+        "n_consolidated": n_consolidated,
+        "n_failed": n_failed,
+        "n_skipped": n_skipped,
     }
