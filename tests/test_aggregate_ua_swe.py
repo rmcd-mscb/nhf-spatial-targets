@@ -143,7 +143,7 @@ def test_custom_threshold_closure_flips_binary_and_stamp():
         coords={"time": times, "y": [0.0], "x": [0.0, 4000.0]},
     )
     out = build_adapter(5.0).pre_aggregate_hook(ds)["snow_covered_fraction"]
-    vals = out.isel(time=0).values
+    vals = out.isel(time=0).values.ravel()
     assert vals[0] == 0.0  # 3 > 5 is False
     assert vals[1] == 1.0  # 10 > 5 is True
     assert out.attrs["depth_threshold_mm"] == 5.0
