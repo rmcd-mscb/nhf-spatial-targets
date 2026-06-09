@@ -271,13 +271,33 @@ def _download_file(
 # ---------------------------------------------------------------------------
 
 
-def _reproject_wy_to_dataset(wy: int, raw_path: Path) -> xr.Dataset:
-    """Decode + pre-project one raw WY NC to an EPSG:5070 (time, y, x) dataset.
+def _reproject_wy_to_dataset(wy: int, raw_path: Path, calendar_year: int) -> xr.Dataset:
+    """Decode + scan + window + pre-project one raw WY NC to an EPSG:5070 dataset.
+
+    Only the portion of the water year that overlaps *calendar_year* is
+    reprojected. A WY raw contributes at most Jan 1 – Sep 30 (when
+    ``wy == calendar_year``) or Oct 1 – Dec 31 (when
+    ``wy == calendar_year + 1``) to a given calendar year, so the raw
+    time axis is sliced to the CY window **before** the per-day reproject
+    loop (issue #298). EPSG:5070 reprojection is the dominant cost on this
+    path (CRS is a first-order runtime driver), so windowing the reproject
+    roughly halves the per-calendar-year reproject work versus reprojecting
+    the full water year and discarding the non-overlapping months
+    afterward; each shared WY day is then reprojected once rather than
+    once per adjacent calendar year. Mirrors ``fetch/margulis_wus_sr.py``,
+    which slices each tile to the CY window before its expensive mosaic
+    (and likewise guards against a zero-day window).
+
+    The integer-sentinel integrity check (see ``Raises``) deliberately
+    scans the **full** water year *before* windowing — it is a per-day
+    ``nanmin``, not a reproject, so it is cheap, and scanning the whole
+    raw keeps the format-change tripwire at full coverage rather than only
+    over the days this calendar year happens to consume.
 
     Returns a dataset with ``swe`` / ``snow_depth`` (float32, native units),
-    a decoded daily ``time`` axis (Oct 1 of WY-1 .. Sep 30 of WY), and
-    projected ``y`` / ``x`` metre coords. CF metadata is NOT applied here —
-    the caller applies it once after any stitching.
+    a decoded daily ``time`` axis restricted to the *calendar_year* window,
+    and projected ``y`` / ``x`` metre coords. CF metadata is NOT applied
+    here — the caller applies it once after any stitching.
 
     Parameters
     ----------
@@ -286,46 +306,59 @@ def _reproject_wy_to_dataset(wy: int, raw_path: Path) -> xr.Dataset:
     raw_path : Path
         Source raw NC, e.g.
         ``<datastore>/ua_swe/raw/4km_SWE_Depth_WY1982_v01.nc``.
+    calendar_year : int
+        Target calendar year; the raw time axis is sliced to
+        ``[Jan 1, Dec 31]`` of this year before reprojection.
 
     Returns
     -------
     xr.Dataset
         Dataset with ``swe`` / ``snow_depth`` on ``(time, y, x)`` in
-        EPSG:5070 (NAD83 / CONUS Albers Equal Area) at 4 km resolution.
+        EPSG:5070 (NAD83 / CONUS Albers Equal Area) at 4 km resolution,
+        covering only the *calendar_year* overlap of the water year.
 
     Raises
     ------
     FileNotFoundError
         If *raw_path* does not exist.
     ValueError
-        If any variable contains values below -1.0, indicating a possible
-        integer-sentinel format change.
+        If any variable — anywhere in the full water year — contains values
+        below -1.0, indicating a possible integer-sentinel format change;
+        or if the raw's time axis does not overlap *calendar_year* at all
+        (an empty window: typically a truncated download or a raw missing
+        the months it should contribute).
     """
     if not raw_path.exists():
         raise FileNotFoundError(f"ua_swe raw NC not found: {raw_path}")
 
     # Per-day reproject pattern: keep peak memory bounded for environments
-    # without a per-job SLURM allocation (login node cgroups, etc.). For a
-    # 365-day WY on a 621x1405 source and ~1500x900 EPSG:5070 destination,
-    # peak working set stays at a few hundred MB instead of the ~10 GB the
-    # whole-year reproject can demand.
+    # without a per-job SLURM allocation (login node cgroups, etc.). The
+    # time axis is windowed to the calendar year below (issue #298), so the
+    # reproject loop spans only the ~3 or ~9 contributing months; on a
+    # 621x1405 source and ~1500x900 EPSG:5070 destination, reprojecting one
+    # day at a time keeps the working set at a few hundred MB rather than
+    # materialising the whole windowed stack at once.
     ds_raw = xr.open_dataset(raw_path, decode_times=False)
     try:
         # Decode time axis manually (the source omits the `time:units`
         # attribute, so xarray cannot auto-decode).
         time_days = ds_raw["time"].values.astype("float64")
         times = _SRC_TIME_EPOCH + pd.to_timedelta(time_days, unit="D")
-        n_time = ds_raw.sizes["time"]
+        ds_raw = ds_raw.assign_coords(time=("time", times.values))
 
-        # Defensive: a real format change to integer sentinels (e.g.
-        # -9999 added in a future v02) must fail loudly rather than
-        # silently producing nonsense aggregates. Use chunked min across
-        # time so we never materialise the full year in memory just to
-        # check.
+        # Defensive integrity tripwire: a real format change to integer
+        # sentinels (e.g. -9999 added in a future v02) must fail loudly
+        # rather than silently producing nonsense aggregates. Scan the
+        # FULL water year here, *before* windowing — it is a per-day
+        # nanmin (cheap; not a reproject), and scanning the whole raw keeps
+        # the tripwire at full coverage instead of only the days this
+        # calendar year consumes (so a sentinel in an archive-boundary WY's
+        # non-consumed months is still caught). Step one day at a time so
+        # we never materialise the full year in memory just to check.
         for vname in (_NATIVE_SWE_VAR, _NATIVE_DEPTH_VAR):
             v = ds_raw[vname]
             running_min = np.inf
-            for t in range(n_time):
+            for t in range(ds_raw.sizes["time"]):
                 slab = v.isel(time=t).values
                 m = np.nanmin(slab)
                 if np.isfinite(m) and m < running_min:
@@ -338,6 +371,37 @@ def _reproject_wy_to_dataset(wy: int, raw_path: Path) -> xr.Dataset:
                     f"NC and update fetch/ua_swe.py before consolidating "
                     f"further."
                 )
+
+        # Sort by time before slicing. `_calendar_year_slice` uses
+        # label-based `.sel(time=slice(...))`, which raises *KeyError* on a
+        # non-monotonic DatetimeIndex — and KeyError is outside the caller's
+        # `except (FileNotFoundError, ValueError, OSError, RuntimeError)`
+        # tuple, so a scrambled/duplicate-timestamped raw would crash the
+        # whole worker run rather than be recorded per-CY. Real NSIDC-0719
+        # raws are monotonic; this is cheap defense in depth (and the final
+        # consolidated NC is `sortby`-ed regardless).
+        ds_raw = ds_raw.sortby("time")
+        # Window to the target calendar year *before* the expensive per-day
+        # reproject loop so only the months that actually land in this CY
+        # pay the EPSG:5070 reprojection cost (issue #298).
+        ds_raw = _calendar_year_slice(ds_raw, calendar_year)
+        n_time = ds_raw.sizes["time"]
+        if n_time == 0:
+            # An empty window means the raw's time axis doesn't reach the CY
+            # it was opened for — a truncated download or a raw missing its
+            # contributing months. Fail with a domain-specific message (the
+            # caller catches ValueError and records it per-CY) rather than
+            # letting the empty `xr.concat` below raise a cryptic "must
+            # supply at least one object to concatenate". Mirrors the
+            # zero-day guard in fetch/margulis_wus_sr.py.
+            contrib = "Jan 1 – Sep 30" if wy == calendar_year else "Oct 1 – Dec 31"
+            raise ValueError(
+                f"ua_swe WY {wy} raw {raw_path.name} contributed 0 days to "
+                f"calendar year {calendar_year} (expected its {contrib} "
+                f"window); the raw may be truncated or missing months. "
+                f"Re-fetch and inspect the raw NC."
+            )
+        times = ds_raw["time"].values
 
         # Reproject one day at a time. Each day is a small 2-D array
         # (~3.5 MB raw), so reprojection is cheap. The resulting
@@ -500,14 +564,15 @@ def consolidate_calendar_year_ua_swe(
         )
         return out_path
 
-    ds_x = _reproject_wy_to_dataset(calendar_year, raw_x)
-    ds_x1 = _reproject_wy_to_dataset(calendar_year + 1, raw_x1)
-    # WY X (4km_SWE_Depth_WY{X}_v01.nc) runs Oct (X-1) – Sep X.
-    # Slicing to CY X gives Jan 1 – Sep 30 of X.
-    jan_sep = _calendar_year_slice(ds_x, calendar_year)
-    # WY X+1 (4km_SWE_Depth_WY{X+1}_v01.nc) runs Oct X – Sep (X+1).
-    # Slicing to CY X gives Oct 1 – Dec 31 of X.
-    oct_dec = _calendar_year_slice(ds_x1, calendar_year)
+    # The CY-window slice now happens *inside* _reproject_wy_to_dataset
+    # (issue #298), so each WY raw is reprojected only over the days it
+    # contributes to this calendar year:
+    #   - WY X (4km_SWE_Depth_WY{X}_v01.nc) runs Oct (X-1) – Sep X;
+    #     sliced to CY X it yields Jan 1 – Sep 30 of X.
+    #   - WY X+1 (4km_SWE_Depth_WY{X+1}_v01.nc) runs Oct X – Sep (X+1);
+    #     sliced to CY X it yields Oct 1 – Dec 31 of X.
+    jan_sep = _reproject_wy_to_dataset(calendar_year, raw_x, calendar_year)
+    oct_dec = _reproject_wy_to_dataset(calendar_year + 1, raw_x1, calendar_year)
     ds_cy = xr.concat([jan_sep, oct_dec], dim="time").sortby("time")
 
     expected_days = 366 if pd.Timestamp(f"{calendar_year}-12-31").is_leap_year else 365
