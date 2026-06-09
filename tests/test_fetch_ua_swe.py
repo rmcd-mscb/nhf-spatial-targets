@@ -164,6 +164,7 @@ def _make_sparse_wy_raw_nc(
     *,
     n_lat: int = 2,
     n_lon: int = 2,
+    inject_negative_index: int | None = None,
 ) -> None:
     """Write a synthetic raw WY NC with exactly *timestamps* as the time axis.
 
@@ -172,6 +173,11 @@ def _make_sparse_wy_raw_nc(
     arbitrary set of timestamps.  This lets calendar-year tests write only
     the minimal boundary dates needed to exercise the seam logic without
     triggering a full-WY (365–366 day) reproject loop.
+
+    When *inject_negative_index* is given, an integer-sentinel value
+    (-9999) is stamped at that time index of ``SWE`` so tests can place a
+    bad value on a specific day (e.g. one outside the target calendar-year
+    window) to exercise the windowed negative-value defense.
 
     The layout is identical to the real NSIDC-0719 files: float32 days
     since 1900-01-01, no ``units`` attr, NAD83 lat/lon CRS.
@@ -187,6 +193,8 @@ def _make_sparse_wy_raw_nc(
     rng = np.random.default_rng(seed=42)
     swe = rng.uniform(0.0, 500.0, size=(n_time, n_lat, n_lon)).astype("float32")
     depth = rng.uniform(0.0, 2000.0, size=(n_time, n_lat, n_lon)).astype("float32")
+    if inject_negative_index is not None:
+        swe[inject_negative_index, 0, 0] = -9999.0
 
     ds = xr.Dataset(
         data_vars={
@@ -397,21 +405,50 @@ class TestUrlConstruction:
 
 class TestReprojWyToDataset:
     def test_negative_value_defense(self, tmp_path: Path):
-        """Sentinel < -1.0 in any variable raises ValueError."""
+        """Sentinel < -1.0 inside the CY window raises ValueError.
+
+        The synthetic WY1982 raw starts Oct 1 1981 (the negative sentinel
+        is injected at the first time step), so the defense only fires
+        when the requested calendar-year window covers that day — here
+        CY 1981. (Days outside the window are sliced off before the
+        scan; they get validated when their own calendar year is built.)
+        """
         raw_path = tmp_path / "4km_SWE_Depth_WY1982_v01.nc"
         _make_synthetic_raw_nc(raw_path, wy=1982, inject_negative=True)
 
         with pytest.raises(ValueError, match="integer sentinel"):
-            _reproject_wy_to_dataset(1982, raw_path)
+            _reproject_wy_to_dataset(1982, raw_path, 1981)
+
+    def test_negative_outside_window_not_scanned(self, tmp_path: Path):
+        """A sentinel outside the CY window is sliced off, so no raise.
+
+        The WY1982 raw here carries a -9999 sentinel on Oct 1 1981 (CY
+        1981) and a clean value on Jan 1 1982 (CY 1982). Requesting CY
+        1982 windows the Oct 1981 day out *before* the scan, so the
+        defense correctly does not fire — it would fire when CY 1981 is
+        built. This pins the windowed-scan semantics (issue #298).
+        """
+        raw_path = tmp_path / "4km_SWE_Depth_WY1982_v01.nc"
+        _make_sparse_wy_raw_nc(
+            raw_path,
+            [pd.Timestamp("1981-10-01"), pd.Timestamp("1982-01-01")],
+            inject_negative_index=0,  # the Oct 1 1981 day (CY 1981)
+        )
+
+        # No raise: the only negative day (Oct 1 1981) is not in CY 1982.
+        ds = _reproject_wy_to_dataset(1982, raw_path, 1982)
+        assert "swe" in ds.data_vars
+        t = pd.DatetimeIndex(ds["time"].values)
+        assert list(t) == [pd.Timestamp("1982-01-01")]
 
     def test_missing_raw_path(self, tmp_path: Path):
         """FileNotFoundError is raised for a non-existent raw path."""
         with pytest.raises(FileNotFoundError, match="raw NC not found"):
-            _reproject_wy_to_dataset(1982, tmp_path / "does-not-exist.nc")
+            _reproject_wy_to_dataset(1982, tmp_path / "does-not-exist.nc", 1982)
 
 
 def test_reproject_wy_to_dataset_shape_and_vars(tmp_path: Path):
-    """Characterization test for the extracted helper (issue #237).
+    """Characterization test for the extracted helper (issues #237, #298).
 
     Verifies that :func:`_reproject_wy_to_dataset`:
 
@@ -419,23 +456,37 @@ def test_reproject_wy_to_dataset_shape_and_vars(tmp_path: Path):
       ``DEPTH``).
     - Reprojects spatial dims to ``(y, x)`` in EPSG:5070, dropping ``lat``
       / ``lon``.
-    - Preserves the decoded time axis length and decodes the first
-      timestamp correctly (Oct 1 of WY-1).
+    - Slices the raw time axis to the requested calendar-year window
+      **before** reprojecting (issue #298): a WY2000 raw spanning Oct 1999
+      – Sep 2000 yields only the Jan–Sep 2000 days when CY 2000 is asked
+      for; the Oct–Dec 1999 days are dropped (never reprojected), so they
+      neither incur reproject cost nor appear in the output.
     - Does NOT apply CF metadata (no ``Conventions`` attr expected here).
     """
     raw = tmp_path / "4km_SWE_Depth_WY2000_v01.nc"
-    # WY2000: Oct 1 1999 → Sep 30 2000 — use n_time=5 for speed.
-    _make_synthetic_raw_nc(raw, wy=2000, n_time=5)
+    # WY2000 raw spans Oct 1999 → Sep 2000; mix out-of-window (1999) and
+    # in-window (CY 2000) boundary days so the slice is observable.
+    _make_sparse_wy_raw_nc(
+        raw,
+        [
+            pd.Timestamp("1999-10-01"),  # out of CY 2000 window
+            pd.Timestamp("1999-12-31"),  # out of CY 2000 window
+            pd.Timestamp("2000-01-01"),  # in window
+            pd.Timestamp("2000-09-30"),  # in window
+        ],
+    )
 
-    ds = _reproject_wy_to_dataset(2000, raw)
+    ds = _reproject_wy_to_dataset(2000, raw, 2000)
 
     assert set(ds.data_vars) == {"swe", "snow_depth"}
     assert ds["swe"].dims == ("time", "y", "x")
     assert ds["snow_depth"].dims == ("time", "y", "x")
     assert "x" in ds.coords and "y" in ds.coords
     assert "lat" not in ds.dims and "lon" not in ds.dims
-    assert ds.sizes["time"] == 5
-    assert pd.Timestamp(ds["time"].values[0]) == pd.Timestamp("1999-10-01")
+    # Only the in-window (CY 2000) days survive; the Oct–Dec 1999 days
+    # were sliced off before the per-day reproject loop.
+    t = pd.DatetimeIndex(ds["time"].values)
+    assert list(t) == [pd.Timestamp("2000-01-01"), pd.Timestamp("2000-09-30")]
     # CF metadata NOT applied at this stage — no Conventions attr expected.
     assert "Conventions" not in ds.attrs
 
