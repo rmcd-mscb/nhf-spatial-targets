@@ -286,64 +286,38 @@ def _download_file(
 # ---------------------------------------------------------------------------
 
 
-def consolidate_water_year_ua_swe(wy: int, raw_path: Path, daily_dir: Path) -> Path:
-    """Consolidate a per-WY raw NC into a CF-1.6 pre-projected daily NC.
+def _reproject_wy_to_dataset(wy: int, raw_path: Path) -> xr.Dataset:
+    """Decode + pre-project one raw WY NC to an EPSG:5070 (time, y, x) dataset.
 
-    Steps:
-
-    1. Open the raw file with ``decode_times=False`` (the source omits
-       the ``time:units`` attribute, so xarray cannot auto-decode).
-    2. Decode the ``time`` float32 axis as days since
-       :data:`_SRC_TIME_EPOCH` (= 1900-01-01) into ``pd.Timestamp``.
-    3. Build a new :class:`xr.Dataset` containing only the reprojected
-       ``swe`` / ``snow_depth`` variables — the source's ``time_str``
-       provenance variable and inline ``crs`` scalar are left behind by
-       construction (not via ``drop_vars``); :func:`apply_cf_metadata`
-       in step 7 writes a fresh grid-mapping ancillary.
-    4. Rename ``SWE`` → ``swe``, ``DEPTH`` → ``snow_depth`` to match the
-       catalog ``variables`` block.
-    5. Attach the source CRS (NAD83 / EPSG:4269) via rioxarray.
-    6. Reproject both 3-D variables to EPSG:5070 (NAD83 / CONUS Albers)
-       at 4-km resolution using nearest-neighbour resampling
-       (preserves NaN fill).
-    7. Apply CF-1.6 metadata via
-       :func:`fetch.consolidate.apply_cf_metadata` (sets variable
-       ``units`` / ``long_name`` / ``cell_methods`` from the catalog
-       and emits the EPSG:5070 grid-mapping ancillary).
-    8. Atomic write via ``.nc.tmp`` rename.
-
-    Idempotency: if the output NC exists and is newer than the raw NC,
-    the rebuild is skipped.
+    Returns a dataset with ``swe`` / ``snow_depth`` (float32, native units),
+    a decoded daily ``time`` axis (Oct 1 of WY-1 .. Sep 30 of WY), and
+    projected ``y`` / ``x`` metre coords. CF metadata is NOT applied here —
+    the caller applies it once after any stitching.
 
     Parameters
     ----------
     wy : int
-        Water year. The output filename embeds this label.
+        Water year label embedded in error messages.
     raw_path : Path
-        Source raw NC, e.g. ``<datastore>/ua_swe/raw/4km_SWE_Depth_WY1982_v01.nc``.
-    daily_dir : Path
-        Output directory; the file is written as
-        ``ua_swe_daily_WY<wy>.nc`` inside.
+        Source raw NC, e.g.
+        ``<datastore>/ua_swe/raw/4km_SWE_Depth_WY1982_v01.nc``.
 
     Returns
     -------
-    Path
-        Path to the consolidated NC.
+    xr.Dataset
+        Dataset with ``swe`` / ``snow_depth`` on ``(time, y, x)`` in
+        EPSG:5070 (NAD83 / CONUS Albers Equal Area) at 4 km resolution.
+
+    Raises
+    ------
+    FileNotFoundError
+        If *raw_path* does not exist.
+    ValueError
+        If any variable contains values below -1.0, indicating a possible
+        integer-sentinel format change.
     """
     if not raw_path.exists():
         raise FileNotFoundError(f"ua_swe raw NC not found: {raw_path}")
-    daily_dir.mkdir(parents=True, exist_ok=True)
-    out_path = daily_dir / _CONSOLIDATED_FILENAME_TEMPLATE.format(wy=wy)
-
-    # Mtime-based idempotency. A rebuild is forced only when the raw
-    # NC is newer than the consolidated output (e.g. after re-download).
-    if out_path.exists() and out_path.stat().st_mtime >= raw_path.stat().st_mtime:
-        logger.info(
-            "ua_swe: WY %d already consolidated and current (%s); skipping.",
-            wy,
-            out_path.name,
-        )
-        return out_path
 
     # Per-day reproject pattern: keep peak memory bounded for environments
     # without a per-job SLURM allocation (login node cgroups, etc.). For a
@@ -460,6 +434,67 @@ def consolidate_water_year_ua_swe(wy: int, raw_path: Path, daily_dir: Path) -> P
         )
     finally:
         ds_raw.close()
+    return ds_reproj
+
+
+def consolidate_water_year_ua_swe(wy: int, raw_path: Path, daily_dir: Path) -> Path:
+    """Consolidate a per-WY raw NC into a CF-1.6 pre-projected daily NC.
+
+    Steps:
+
+    1. Open the raw file with ``decode_times=False`` (the source omits
+       the ``time:units`` attribute, so xarray cannot auto-decode).
+    2. Decode the ``time`` float32 axis as days since
+       :data:`_SRC_TIME_EPOCH` (= 1900-01-01) into ``pd.Timestamp``.
+    3. Build a new :class:`xr.Dataset` containing only the reprojected
+       ``swe`` / ``snow_depth`` variables — the source's ``time_str``
+       provenance variable and inline ``crs`` scalar are left behind by
+       construction (not via ``drop_vars``); :func:`apply_cf_metadata`
+       in step 7 writes a fresh grid-mapping ancillary.
+    4. Rename ``SWE`` → ``swe``, ``DEPTH`` → ``snow_depth`` to match the
+       catalog ``variables`` block.
+    5. Attach the source CRS (NAD83 / EPSG:4269) via rioxarray.
+    6. Reproject both 3-D variables to EPSG:5070 (NAD83 / CONUS Albers)
+       at 4-km resolution using nearest-neighbour resampling
+       (preserves NaN fill).
+    7. Apply CF-1.6 metadata via
+       :func:`fetch.consolidate.apply_cf_metadata` (sets variable
+       ``units`` / ``long_name`` / ``cell_methods`` from the catalog
+       and emits the EPSG:5070 grid-mapping ancillary).
+    8. Atomic write via ``.nc.tmp`` rename.
+
+    Idempotency: if the output NC exists and is newer than the raw NC,
+    the rebuild is skipped.
+
+    Parameters
+    ----------
+    wy : int
+        Water year. The output filename embeds this label.
+    raw_path : Path
+        Source raw NC, e.g. ``<datastore>/ua_swe/raw/4km_SWE_Depth_WY1982_v01.nc``.
+    daily_dir : Path
+        Output directory; the file is written as
+        ``ua_swe_daily_WY<wy>.nc`` inside.
+
+    Returns
+    -------
+    Path
+        Path to the consolidated NC.
+    """
+    daily_dir.mkdir(parents=True, exist_ok=True)
+    out_path = daily_dir / _CONSOLIDATED_FILENAME_TEMPLATE.format(wy=wy)
+
+    # Mtime-based idempotency. A rebuild is forced only when the raw
+    # NC is newer than the consolidated output (e.g. after re-download).
+    if out_path.exists() and out_path.stat().st_mtime >= raw_path.stat().st_mtime:
+        logger.info(
+            "ua_swe: WY %d already consolidated and current (%s); skipping.",
+            wy,
+            out_path.name,
+        )
+        return out_path
+
+    ds_reproj = _reproject_wy_to_dataset(wy, raw_path)
 
     # Step 7: catalog-driven CF-1.6 metadata. `coord_type="projected"`
     # keeps the (y, x) dims as metres and emits the projected grid

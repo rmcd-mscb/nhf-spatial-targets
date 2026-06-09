@@ -27,6 +27,7 @@ from nhf_spatial_targets.fetch.ua_swe import (
     _download_file,
     _earthaccess_session,
     _mask_url,
+    _reproject_wy_to_dataset,
     _wy_url,
     consolidate_water_year_ua_swe,
     fetch_ua_swe,
@@ -458,6 +459,41 @@ class TestConsolidateWaterYear:
             consolidate_water_year_ua_swe(
                 1982, tmp_path / "does-not-exist.nc", daily_dir
             )
+
+
+# ---------------------------------------------------------------------------
+# _reproject_wy_to_dataset
+# ---------------------------------------------------------------------------
+
+
+def test_reproject_wy_to_dataset_shape_and_vars(tmp_path: Path):
+    """Characterization test for the extracted helper (issue #237).
+
+    Verifies that :func:`_reproject_wy_to_dataset`:
+
+    - Returns ``swe`` and ``snow_depth`` (renamed from native ``SWE`` /
+      ``DEPTH``).
+    - Reprojects spatial dims to ``(y, x)`` in EPSG:5070, dropping ``lat``
+      / ``lon``.
+    - Preserves the decoded time axis length and decodes the first
+      timestamp correctly (Oct 1 of WY-1).
+    - Does NOT apply CF metadata (no ``Conventions`` attr expected here).
+    """
+    raw = tmp_path / "4km_SWE_Depth_WY2000_v01.nc"
+    # WY2000: Oct 1 1999 → Sep 30 2000 — use n_time=5 for speed.
+    _make_synthetic_raw_nc(raw, wy=2000, n_time=5)
+
+    ds = _reproject_wy_to_dataset(2000, raw)
+
+    assert set(ds.data_vars) == {"swe", "snow_depth"}
+    assert ds["swe"].dims == ("time", "y", "x")
+    assert ds["snow_depth"].dims == ("time", "y", "x")
+    assert "x" in ds.coords and "y" in ds.coords
+    assert "lat" not in ds.dims and "lon" not in ds.dims
+    assert ds.sizes["time"] == 5
+    assert pd.Timestamp(ds["time"].values[0]) == pd.Timestamp("1999-10-01")
+    # CF metadata NOT applied at this stage — no Conventions attr expected.
+    assert "Conventions" not in ds.attrs
 
 
 # ---------------------------------------------------------------------------
