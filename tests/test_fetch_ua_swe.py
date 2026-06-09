@@ -22,6 +22,7 @@ import xarray as xr
 import yaml
 
 from nhf_spatial_targets.fetch.ua_swe import (
+    _WY_FILENAME_TEMPLATE,
     _assign_worker_water_years,
     _calendar_years_to_water_years,
     _download_file,
@@ -29,6 +30,7 @@ from nhf_spatial_targets.fetch.ua_swe import (
     _mask_url,
     _reproject_wy_to_dataset,
     _wy_url,
+    consolidate_calendar_year_ua_swe,
     consolidate_water_year_ua_swe,
     fetch_ua_swe,
 )
@@ -110,6 +112,80 @@ def _make_synthetic_raw_nc(
     depth.ravel()[flat_idx] = np.nan
     if inject_negative:
         swe[0, 0, 0] = -9999.0
+
+    ds = xr.Dataset(
+        data_vars={
+            "SWE": (
+                ("time", "lat", "lon"),
+                swe,
+                {
+                    "long_name": "Snow Water Equivalent",
+                    "grid_mapping": "crs",
+                    "units": "millimeters h20",
+                },
+            ),
+            "DEPTH": (
+                ("time", "lat", "lon"),
+                depth,
+                {
+                    "long_name": "Snow Depth",
+                    "grid_mapping": "crs",
+                    "units": "millimeters snow thickness",
+                },
+            ),
+            "crs": (
+                (),
+                b" ",
+                {
+                    "grid_mapping_name": "latitude_longitude",
+                    "long_name": "CRS definition",
+                    "spatial_ref": (
+                        'GEOGCS["NAD83",DATUM["North_American_Datum_1983",'
+                        'SPHEROID["GRS 1980",6378137,298.257222101]],'
+                        'PRIMEM["Greenwich",0],UNIT["degree",0.01745329251994328],'
+                        'AUTHORITY["EPSG","4269"]]'
+                    ),
+                },
+            ),
+        },
+        coords={
+            "time": (("time",), days_since_epoch),
+            "lat": (("lat",), lat),
+            "lon": (("lon",), lon),
+        },
+    )
+    ds.to_netcdf(path)
+
+
+def _make_sparse_wy_raw_nc(
+    path: Path,
+    timestamps: list[pd.Timestamp],
+    *,
+    n_lat: int = 2,
+    n_lon: int = 2,
+) -> None:
+    """Write a synthetic raw WY NC with exactly *timestamps* as the time axis.
+
+    Unlike :func:`_make_synthetic_raw_nc` (which always starts from Oct 1
+    of WY-1 and writes ``n_time`` sequential days), this helper accepts an
+    arbitrary set of timestamps.  This lets calendar-year tests write only
+    the minimal boundary dates needed to exercise the seam logic without
+    triggering a full-WY (365–366 day) reproject loop.
+
+    The layout is identical to the real NSIDC-0719 files: float32 days
+    since 1900-01-01, no ``units`` attr, NAD83 lat/lon CRS.
+    """
+    epoch = pd.Timestamp("1900-01-01")
+    days_since_epoch = np.array(
+        [(ts - epoch).days for ts in timestamps],
+        dtype="float32",
+    )
+    n_time = len(timestamps)
+    lat = np.linspace(30.0, 35.0, n_lat, dtype="float32")
+    lon = np.linspace(-110.0, -100.0, n_lon, dtype="float32")
+    rng = np.random.default_rng(seed=42)
+    swe = rng.uniform(0.0, 500.0, size=(n_time, n_lat, n_lon)).astype("float32")
+    depth = rng.uniform(0.0, 2000.0, size=(n_time, n_lat, n_lon)).astype("float32")
 
     ds = xr.Dataset(
         data_vars={
@@ -815,6 +891,138 @@ class TestFetchUaSweWorkerGate:
 
         assert not any("SWE_Mask_v01.nc" in u for u in calls["urls"])
         assert result["mask"] is None
+
+
+# ---------------------------------------------------------------------------
+# consolidate_calendar_year_ua_swe  (issue #237)
+# ---------------------------------------------------------------------------
+
+
+def _build_cy_raw_fixtures(raw_dir: Path, calendar_year: int) -> None:
+    """Write the two adjacent WY raw NCs needed to assemble one calendar year.
+
+    Uses :func:`_make_sparse_wy_raw_nc` with only boundary dates to keep
+    per-test reproject runtime low (4 days × 2 files = 8 reprojections).
+
+    Calendar year *X* is assembled from:
+    - WY *X* (``4km_SWE_Depth_WY{X}_v01.nc``): Jan 1 and Sep 30 of CY X
+    - WY *X+1* (``4km_SWE_Depth_WY{X+1}_v01.nc``): Oct 1 and Dec 31 of CY X
+    """
+    cy = calendar_year
+    # WY X = the file named WY{cy}; it runs Oct 1 (cy-1) – Sep 30 (cy).
+    # We only need the Jan-Sep portion that falls in CY cy.
+    wy_x_path = raw_dir / _WY_FILENAME_TEMPLATE.format(wy=cy)
+    _make_sparse_wy_raw_nc(
+        wy_x_path,
+        [
+            pd.Timestamp(f"{cy}-01-01"),
+            pd.Timestamp(f"{cy}-09-30"),
+        ],
+    )
+    # WY X+1 = the file named WY{cy+1}; it runs Oct 1 (cy) – Sep 30 (cy+1).
+    # We only need the Oct-Dec portion that falls in CY cy.
+    wy_x1_path = raw_dir / _WY_FILENAME_TEMPLATE.format(wy=cy + 1)
+    _make_sparse_wy_raw_nc(
+        wy_x1_path,
+        [
+            pd.Timestamp(f"{cy}-10-01"),
+            pd.Timestamp(f"{cy}-12-31"),
+        ],
+    )
+
+
+def test_consolidate_calendar_year_spans_jan_to_dec(tmp_path: Path):
+    """CY output covers Jan 1 – Dec 31, seamlessly stitched from WY X and WY X+1."""
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    daily = tmp_path / "daily"
+
+    _build_cy_raw_fixtures(raw_dir, 2000)
+
+    out = consolidate_calendar_year_ua_swe(2000, raw_dir, daily)
+
+    assert out.name == "ua_swe_daily_2000.nc"
+
+    with xr.open_dataset(out) as ds:
+        t = pd.DatetimeIndex(ds["time"].values)
+
+        # Full Jan-Dec span
+        assert t.min() == pd.Timestamp("2000-01-01")
+        assert t.max() == pd.Timestamp("2000-12-31")
+
+        # Monotonically increasing, no duplicates
+        assert t.is_monotonic_increasing
+        assert t.is_unique
+        # The fixture writes exactly 4 boundary dates: Jan 1, Sep 30, Oct 1, Dec 31.
+        # The WY→WY seam (Sep 30 → Oct 1) must be exactly 1 day — no gap or dup.
+        sep30 = pd.Timestamp("2000-09-30")
+        oct01 = pd.Timestamp("2000-10-01")
+        assert sep30 in t, "Sep 30 must be in the output (from WY X)"
+        assert oct01 in t, "Oct 1 must be in the output (from WY X+1)"
+        seam_gap = t[t.get_loc(oct01)] - t[t.get_loc(sep30)]
+        assert seam_gap == pd.Timedelta(days=1), (
+            f"Seam gap must be exactly 1 day (Sep 30 → Oct 1), got {seam_gap}"
+        )
+
+        # CF-1.6 compliance: Conventions attr + key variable attrs
+        assert ds.attrs.get("Conventions") == "CF-1.6"
+        assert ds["swe"].attrs.get("units"), "swe must have a units attr"
+        assert ds["snow_depth"].attrs.get("units"), "snow_depth must have a units attr"
+
+        # Projected coords survive concat
+        assert "x" in ds.coords and "y" in ds.coords
+        assert "lat" not in ds.dims and "lon" not in ds.dims
+
+
+def test_consolidate_calendar_year_boundary_raises(tmp_path: Path):
+    """Archive boundary: WY X+1 absent → FileNotFoundError (no partial CY)."""
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    daily = tmp_path / "daily"
+
+    # Write only WY 2023 (the file named 4km_SWE_Depth_WY2023_v01.nc);
+    # WY 2024 is absent, simulating the end-of-archive boundary.
+    wy2023_path = raw_dir / _WY_FILENAME_TEMPLATE.format(wy=2023)
+    _make_sparse_wy_raw_nc(
+        wy2023_path,
+        [pd.Timestamp("2023-01-01"), pd.Timestamp("2023-09-30")],
+    )
+
+    with pytest.raises(FileNotFoundError):
+        consolidate_calendar_year_ua_swe(2023, raw_dir, daily)
+
+
+def test_consolidate_calendar_year_missing_wy_x_raises(tmp_path: Path):
+    """Raise FileNotFoundError when WY X itself is missing."""
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    daily = tmp_path / "daily"
+
+    # Write only WY 2001 (needed for Oct-Dec of CY 2000); WY 2000 absent.
+    wy2001_path = raw_dir / _WY_FILENAME_TEMPLATE.format(wy=2001)
+    _make_sparse_wy_raw_nc(
+        wy2001_path,
+        [pd.Timestamp("2000-10-01"), pd.Timestamp("2000-12-31")],
+    )
+
+    with pytest.raises(FileNotFoundError):
+        consolidate_calendar_year_ua_swe(2000, raw_dir, daily)
+
+
+def test_consolidate_calendar_year_idempotent(tmp_path: Path):
+    """Calling twice returns the same path; second call skips (mtime-idempotent)."""
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    daily = tmp_path / "daily"
+
+    _build_cy_raw_fixtures(raw_dir, 2000)
+
+    out1 = consolidate_calendar_year_ua_swe(2000, raw_dir, daily)
+    mtime1 = out1.stat().st_mtime
+
+    out2 = consolidate_calendar_year_ua_swe(2000, raw_dir, daily)
+    assert out2 == out1
+    assert out2.stat().st_mtime == pytest.approx(mtime1, abs=1e-3)
 
 
 # ---------------------------------------------------------------------------

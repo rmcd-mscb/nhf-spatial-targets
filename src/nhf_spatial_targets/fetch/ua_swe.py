@@ -516,6 +516,99 @@ def consolidate_water_year_ua_swe(wy: int, raw_path: Path, daily_dir: Path) -> P
     return out_path
 
 
+def _calendar_year_slice(ds: xr.Dataset, calendar_year: int) -> xr.Dataset:
+    """Slice a decoded WY dataset to whichever portion overlaps the calendar year."""
+    return ds.sel(
+        time=slice(
+            pd.Timestamp(f"{calendar_year}-01-01"),
+            pd.Timestamp(f"{calendar_year}-12-31"),
+        )
+    )
+
+
+def consolidate_calendar_year_ua_swe(
+    calendar_year: int, raw_dir: Path, daily_dir: Path
+) -> Path:
+    """Re-window two adjacent WY raws into one CF-1.6 calendar-year NC.
+
+    Calendar year *X* = [Jan 1 – Sep 30 of X] from WY *X*
+    (``4km_SWE_Depth_WY{X}_v01.nc``, which runs Oct *X-1* – Sep *X*)
+    joined with [Oct 1 – Dec 31 of X] from WY *X+1*. Both raws must be
+    present; a missing WY *X+1* (e.g. the archive boundary at CY 2023)
+    raises ``FileNotFoundError`` so the caller can skip partial edge years.
+
+    Mirrors ``fetch/margulis_wus_sr.py:consolidate_calendar_year_margulis_wus_sr``.
+    Output: ``<daily_dir>/ua_swe_daily_<calendar_year>.nc`` (EPSG:5070).
+    Mtime-idempotent against both contributing raws.
+
+    Parameters
+    ----------
+    calendar_year : int
+        Calendar year to assemble (e.g. 2000).
+    raw_dir : Path
+        Directory containing the raw per-WY NCs (e.g.
+        ``<datastore>/ua_swe/raw/``).
+    daily_dir : Path
+        Output directory; the file is written as
+        ``ua_swe_daily_<calendar_year>.nc`` inside.
+
+    Returns
+    -------
+    Path
+        Path to the consolidated calendar-year NC.
+
+    Raises
+    ------
+    FileNotFoundError
+        If either ``4km_SWE_Depth_WY{X}_v01.nc`` or
+        ``4km_SWE_Depth_WY{X+1}_v01.nc`` is absent in *raw_dir*.
+    """
+    daily_dir.mkdir(parents=True, exist_ok=True)
+    out_path = daily_dir / f"ua_swe_daily_{calendar_year}.nc"
+
+    raw_x = raw_dir / _WY_FILENAME_TEMPLATE.format(wy=calendar_year)
+    raw_x1 = raw_dir / _WY_FILENAME_TEMPLATE.format(wy=calendar_year + 1)
+    for p in (raw_x, raw_x1):
+        if not p.exists():
+            raise FileNotFoundError(
+                f"ua_swe: calendar year {calendar_year} needs both "
+                f"{raw_x.name} and {raw_x1.name}; missing {p.name}. "
+                f"(Archive-boundary calendar years are dropped.)"
+            )
+
+    # Mtime-idempotency against the newer of the two contributing raws.
+    newest_raw = max(raw_x.stat().st_mtime, raw_x1.stat().st_mtime)
+    if out_path.exists() and out_path.stat().st_mtime >= newest_raw:
+        logger.info(
+            "ua_swe: CY %d already consolidated and current (%s); skipping.",
+            calendar_year,
+            out_path.name,
+        )
+        return out_path
+
+    ds_x = _reproject_wy_to_dataset(calendar_year, raw_x)
+    ds_x1 = _reproject_wy_to_dataset(calendar_year + 1, raw_x1)
+    try:
+        # WY X (4km_SWE_Depth_WY{X}_v01.nc) runs Oct (X-1) – Sep X.
+        # Slicing to CY X gives Jan 1 – Sep 30 of X.
+        jan_sep = _calendar_year_slice(ds_x, calendar_year)
+        # WY X+1 (4km_SWE_Depth_WY{X+1}_v01.nc) runs Oct X – Sep (X+1).
+        # Slicing to CY X gives Oct 1 – Dec 31 of X.
+        oct_dec = _calendar_year_slice(ds_x1, calendar_year)
+        ds_cy = xr.concat([jan_sep, oct_dec], dim="time").sortby("time")
+    finally:
+        ds_x.close()
+        ds_x1.close()
+
+    ds_out = apply_cf_metadata(
+        ds_cy, _SOURCE_KEY, time_step="daily", coord_type="projected"
+    )
+    _atomic_write_dataset(
+        ds_out, out_path, encoding=_build_consolidated_encoding(ds_out)
+    )
+    return out_path
+
+
 def _build_consolidated_encoding(ds: xr.Dataset) -> dict:
     """Hand-rolled encoding for the consolidated NC (issue #158 workaround).
 
