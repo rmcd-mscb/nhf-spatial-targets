@@ -372,6 +372,15 @@ def _reproject_wy_to_dataset(wy: int, raw_path: Path, calendar_year: int) -> xr.
                     f"further."
                 )
 
+        # Sort by time before slicing. `_calendar_year_slice` uses
+        # label-based `.sel(time=slice(...))`, which raises *KeyError* on a
+        # non-monotonic DatetimeIndex — and KeyError is outside the caller's
+        # `except (FileNotFoundError, ValueError, OSError, RuntimeError)`
+        # tuple, so a scrambled/duplicate-timestamped raw would crash the
+        # whole worker run rather than be recorded per-CY. Real NSIDC-0719
+        # raws are monotonic; this is cheap defense in depth (and the final
+        # consolidated NC is `sortby`-ed regardless).
+        ds_raw = ds_raw.sortby("time")
         # Window to the target calendar year *before* the expensive per-day
         # reproject loop so only the months that actually land in this CY
         # pay the EPSG:5070 reprojection cost (issue #298).

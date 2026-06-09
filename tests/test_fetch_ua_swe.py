@@ -232,6 +232,90 @@ def _make_sparse_wy_raw_nc(
     ds.to_netcdf(path)
 
 
+def _make_dated_wy_raw_nc(
+    path: Path,
+    timestamps: list[pd.Timestamp],
+    *,
+    n_lat: int = 4,
+    n_lon: int = 5,
+) -> None:
+    """Write a raw WY NC whose values are a deterministic function of each
+    day's *date* (not of array position or a global RNG).
+
+    Equivalence tests need a fixture where a given calendar day carries the
+    same field regardless of how many other days surround it in the source
+    raw. :func:`_make_sparse_wy_raw_nc` cannot do this — its values come
+    from a position-seeded RNG over the whole ``(time, lat, lon)`` array, so
+    adding out-of-window days shifts every in-window day's values. Here each
+    day ``i`` is ``base_ramp + offset(date_i)``, with a fixed 2-D spatial
+    ramp (so reprojection does real, non-degenerate work) plus a per-date
+    scalar offset, making a day's field identical across fixtures that
+    differ only in which surrounding days they include.
+    """
+    epoch = pd.Timestamp("1900-01-01")
+    days_since_epoch = np.array(
+        [(ts - epoch).days for ts in timestamps], dtype="float32"
+    )
+    n_time = len(timestamps)
+    lat = np.linspace(30.0, 35.0, n_lat, dtype="float32")
+    lon = np.linspace(-110.0, -100.0, n_lon, dtype="float32")
+    yy, xx = np.meshgrid(
+        np.arange(n_lat, dtype="float32"),
+        np.arange(n_lon, dtype="float32"),
+        indexing="ij",
+    )
+    base = yy * 10.0 + xx  # fixed spatial ramp, identical across calls
+    swe = np.empty((n_time, n_lat, n_lon), dtype="float32")
+    depth = np.empty((n_time, n_lat, n_lon), dtype="float32")
+    for i, ts in enumerate(timestamps):
+        offset = float((ts - epoch).days % 100)  # deterministic per date
+        swe[i] = base + offset
+        depth[i] = base * 2.0 + offset
+
+    ds = xr.Dataset(
+        data_vars={
+            "SWE": (
+                ("time", "lat", "lon"),
+                swe,
+                {
+                    "long_name": "Snow Water Equivalent",
+                    "grid_mapping": "crs",
+                    "units": "millimeters h20",
+                },
+            ),
+            "DEPTH": (
+                ("time", "lat", "lon"),
+                depth,
+                {
+                    "long_name": "Snow Depth",
+                    "grid_mapping": "crs",
+                    "units": "millimeters snow thickness",
+                },
+            ),
+            "crs": (
+                (),
+                b" ",
+                {
+                    "grid_mapping_name": "latitude_longitude",
+                    "long_name": "CRS definition",
+                    "spatial_ref": (
+                        'GEOGCS["NAD83",DATUM["North_American_Datum_1983",'
+                        'SPHEROID["GRS 1980",6378137,298.257222101]],'
+                        'PRIMEM["Greenwich",0],UNIT["degree",0.01745329251994328],'
+                        'AUTHORITY["EPSG","4269"]]'
+                    ),
+                },
+            ),
+        },
+        coords={
+            "time": (("time",), days_since_epoch),
+            "lat": (("lat",), lat),
+            "lon": (("lon",), lon),
+        },
+    )
+    ds.to_netcdf(path)
+
+
 def _make_synthetic_raw_nc_bytes(wy: int, **kwargs) -> bytes:
     """Build a synthetic raw NC and return its bytes (for fake-session bodies)."""
     with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
@@ -446,6 +530,32 @@ class TestReprojWyToDataset:
 
         with pytest.raises(ValueError, match="contributed 0 days"):
             _reproject_wy_to_dataset(2000, raw_path, 2000)
+
+    def test_nonmonotonic_raw_is_sorted_before_slice(self, tmp_path: Path):
+        """A scrambled time axis is sorted before slicing — no KeyError crash.
+
+        `_calendar_year_slice` uses label-based `.sel(time=slice(...))`,
+        which raises KeyError on a non-monotonic DatetimeIndex. KeyError is
+        outside the caller's `except` tuple, so without the defensive
+        `sortby("time")` a scrambled raw would crash a whole worker run
+        rather than be recorded per-CY. The function sorts first, so the
+        out-of-order raw windows cleanly to the in-window days.
+        """
+        raw = tmp_path / "4km_SWE_Depth_WY2000_v01.nc"
+        # Deliberately out-of-order, with an out-of-window day interleaved.
+        _make_sparse_wy_raw_nc(
+            raw,
+            [
+                pd.Timestamp("2000-09-30"),
+                pd.Timestamp("1999-12-31"),  # out of CY 2000 window
+                pd.Timestamp("2000-01-01"),
+            ],
+        )
+
+        ds = _reproject_wy_to_dataset(2000, raw, 2000)
+        t = pd.DatetimeIndex(ds["time"].values)
+        assert t.is_monotonic_increasing
+        assert list(t) == [pd.Timestamp("2000-01-01"), pd.Timestamp("2000-09-30")]
 
     def test_missing_raw_path(self, tmp_path: Path):
         """FileNotFoundError is raised for a non-existent raw path."""
@@ -1000,6 +1110,78 @@ def test_consolidate_calendar_year_spans_jan_to_dec(tmp_path: Path):
         # Projected coords survive concat
         assert "x" in ds.coords and "y" in ds.coords
         assert "lat" not in ds.dims and "lon" not in ds.dims
+
+
+def test_consolidate_invariant_to_out_of_window_days(tmp_path: Path):
+    """No-behavior-change pin (issue #298): out-of-window source days must
+    not change the consolidated calendar-year output.
+
+    Slicing before vs after the reproject changes which day seeds the
+    locked destination grid (day 0 of the reproject loop is now the first
+    *in-window* day, not Oct 1 of WY-1). If that seed — or an off-by-one in
+    the window bounds — ever influenced the projected ``(y, x)`` grid or the
+    values, consolidating a CY from raws padded with extra out-of-window
+    days would differ from consolidating the same CY from raws containing
+    only the in-window days. This asserts the two are bit-identical (time
+    axis, projected coords, and both variables, NaN-aware).
+
+    Uses :func:`_make_dated_wy_raw_nc` so a given calendar day carries the
+    same field in both fixtures regardless of the surrounding days.
+    """
+    cy = 2000
+
+    # Minimal: only the in-window days.
+    raw_min = tmp_path / "raw_min"
+    raw_min.mkdir()
+    _make_dated_wy_raw_nc(
+        raw_min / _WY_FILENAME_TEMPLATE.format(wy=cy),
+        [pd.Timestamp(f"{cy}-01-01"), pd.Timestamp(f"{cy}-09-30")],
+    )
+    _make_dated_wy_raw_nc(
+        raw_min / _WY_FILENAME_TEMPLATE.format(wy=cy + 1),
+        [pd.Timestamp(f"{cy}-10-01"), pd.Timestamp(f"{cy}-12-31")],
+    )
+    out_min = consolidate_calendar_year_ua_swe(cy, raw_min, tmp_path / "daily_min")
+
+    # Padded: same in-window days + extra out-of-window head/tail days that
+    # the in-function slice (issue #298) must drop before reprojecting.
+    raw_pad = tmp_path / "raw_pad"
+    raw_pad.mkdir()
+    _make_dated_wy_raw_nc(
+        raw_pad / _WY_FILENAME_TEMPLATE.format(wy=cy),
+        [
+            pd.Timestamp(f"{cy - 1}-10-01"),  # out-of-window head
+            pd.Timestamp(f"{cy - 1}-12-31"),  # out-of-window head
+            pd.Timestamp(f"{cy}-01-01"),  # in-window (same field as raw_min)
+            pd.Timestamp(f"{cy}-09-30"),  # in-window
+        ],
+    )
+    _make_dated_wy_raw_nc(
+        raw_pad / _WY_FILENAME_TEMPLATE.format(wy=cy + 1),
+        [
+            pd.Timestamp(f"{cy}-10-01"),  # in-window
+            pd.Timestamp(f"{cy}-12-31"),  # in-window
+            pd.Timestamp(f"{cy + 1}-01-01"),  # out-of-window tail
+            pd.Timestamp(f"{cy + 1}-03-01"),  # out-of-window tail
+        ],
+    )
+    out_pad = consolidate_calendar_year_ua_swe(cy, raw_pad, tmp_path / "daily_pad")
+
+    with xr.open_dataset(out_min) as ds_min, xr.open_dataset(out_pad) as ds_pad:
+        # Identical time axis — only in-window days survive in both.
+        assert np.array_equal(ds_min["time"].values, ds_pad["time"].values)
+        # Identical projected grid — the day-0 seed did not shift it.
+        assert np.array_equal(ds_min["x"].values, ds_pad["x"].values)
+        assert np.array_equal(ds_min["y"].values, ds_pad["y"].values)
+        # Identical values for both variables (NaN-aware).
+        for v in ("swe", "snow_depth"):
+            a = ds_min[v].values
+            b = ds_pad[v].values
+            assert a.shape == b.shape, f"{v} shape differs: {a.shape} vs {b.shape}"
+            assert np.array_equal(a, b, equal_nan=True), (
+                f"{v} values differ between minimal and padded raws — "
+                f"out-of-window days perturbed the consolidated output"
+            )
 
 
 def test_consolidate_calendar_year_boundary_raises(tmp_path: Path):
