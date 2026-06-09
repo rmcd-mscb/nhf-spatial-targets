@@ -799,6 +799,101 @@ def test_emit_banner_download_errors_returns_true():
     assert rc is True
 
 
+# ---- fetch all command -----------------------------------------------------
+
+# Every fetcher `fetch all` imports and dispatches, keyed by the patch target
+# (the module each is imported from inside fetch_all_cmd).
+_FETCH_ALL_TARGETS = (
+    "nhf_spatial_targets.fetch.era5_land.fetch_era5_land",
+    "nhf_spatial_targets.fetch.gldas.fetch_gldas",
+    "nhf_spatial_targets.fetch.merra2.fetch_merra2",
+    "nhf_spatial_targets.fetch.nldas.fetch_nldas_mosaic",
+    "nhf_spatial_targets.fetch.nldas.fetch_nldas_noah",
+    "nhf_spatial_targets.fetch.ncep_ncar.fetch_ncep_ncar",
+    "nhf_spatial_targets.fetch.modis.fetch_mod16a2",
+    "nhf_spatial_targets.fetch.modis.fetch_mod10c1",
+    "nhf_spatial_targets.fetch.pangaea.fetch_watergap22d",
+    "nhf_spatial_targets.fetch.reitz2017.fetch_reitz2017",
+    "nhf_spatial_targets.fetch.mwbm_climgrid.fetch_mwbm_climgrid",
+    "nhf_spatial_targets.fetch.daymet.fetch_daymet",
+    "nhf_spatial_targets.fetch.snodas.fetch_snodas",
+    "nhf_spatial_targets.fetch.margulis_wus_sr.fetch_margulis_wus_sr",
+    "nhf_spatial_targets.fetch.ua_swe.fetch_ua_swe",
+)
+
+
+def _patch_all_fetchers(stack, overrides=None):
+    """Patch every `fetch all` fetcher to return a clean ({}) summary.
+
+    overrides maps a target string to the summary that source should return
+    instead. Returns nothing — callers assert via exit code / captured output.
+    """
+    overrides = overrides or {}
+    for target in _FETCH_ALL_TARGETS:
+        mock = stack.enter_context(patch(target))
+        mock.return_value = overrides.get(target, {})
+
+
+def test_fetch_all_clean_run_exits_0(tmp_path):
+    """Every source returns a clean summary → no partial, exit 0."""
+    from contextlib import ExitStack
+
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    with ExitStack() as stack:
+        _patch_all_fetchers(stack)
+        # _run re-raises only non-zero SystemExit; clean return == exit 0.
+        _run("fetch", "all", "--project-dir", str(workdir), "--period", "2010/2011")
+
+
+def test_fetch_all_partial_source_exits_3(tmp_path, capsys):
+    """One source reporting genuine failures → exit 3 and named in the banner."""
+    from contextlib import ExitStack
+
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    overrides = {
+        "nhf_spatial_targets.fetch.snodas.fetch_snodas": {
+            "n_consolidated": 5,
+            "n_failed": 2,
+            "n_skipped": 0,
+            "n_errors": 0,
+        }
+    }
+    with ExitStack() as stack:
+        _patch_all_fetchers(stack, overrides)
+        with pytest.raises(SystemExit) as exc:
+            _run(
+                "fetch",
+                "all",
+                "--project-dir",
+                str(workdir),
+                "--period",
+                "2010/2011",
+            )
+    assert exc.value.code == 3
+    assert "snodas" in capsys.readouterr().out
+
+
+def test_fetch_all_skip_only_source_exits_0(tmp_path):
+    """A source with only skips (expected archive gaps) does not fail `fetch all`."""
+    from contextlib import ExitStack
+
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    overrides = {
+        "nhf_spatial_targets.fetch.snodas.fetch_snodas": {
+            "n_consolidated": 18,
+            "n_failed": 0,
+            "n_skipped": 3,
+            "n_errors": 0,
+        }
+    }
+    with ExitStack() as stack:
+        _patch_all_fetchers(stack, overrides)
+        _run("fetch", "all", "--project-dir", str(workdir), "--period", "2010/2011")
+
+
 # ---- agg ssebop command ----------------------------------------------------
 
 

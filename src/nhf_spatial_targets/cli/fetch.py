@@ -64,9 +64,10 @@ def _emit_fetch_banner(console, display_name: str, summary: object) -> bool:
     if n_errors:
         parts.append(f"{n_errors} download errors")
     console.print(
-        f"[yellow]{display_name}: {', '.join(parts)} — inspect per-record "
-        f"consolidate_error / wy_status / n_errors in the JSON summary below "
-        f"(also recorded in manifest.json).[/yellow]"
+        f"[yellow]{display_name}: {', '.join(parts)} — inspect the per-record "
+        f"diagnostics (consolidate_error / wy_status / n_errors, "
+        f"source-dependent) in the JSON summary below (also recorded in "
+        f"manifest.json).[/yellow]"
     )
     return bool(n_failed or n_errors)
 

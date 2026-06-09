@@ -863,6 +863,10 @@ def fetch_ua_swe(
             "n_workers": n_workers,
             "calendar_years": [],
             "mask": mask_record,
+            "n_consolidated": 0,
+            "n_failed": 0,
+            "n_skipped": 0,
+            "n_errors": 0,
         }
 
     cy_records: list[dict] = []
@@ -892,29 +896,55 @@ def fetch_ua_swe(
                 )
                 rec["consolidate_error"] = repr(exc)
         else:
-            logger.warning(
-                "ua_swe: CY %d skipped — WY download status %s", cy, wy_status
-            )
+            # A WY that returned "error" (transient HTTP/connection/short-read
+            # failure — see _download_file) is NOT a benign archive gap: it
+            # silently drops the whole calendar year from the target build.
+            # Record it as n_errors so the CLI elevates the run to a non-zero
+            # exit, mirroring snodas. Only an all-404 CY (every WY genuinely
+            # absent upstream) stays a benign skip.
+            n_dl_errors = sum(1 for s in wy_status.values() if s == "error")
+            if n_dl_errors:
+                rec["n_errors"] = n_dl_errors
+                logger.warning(
+                    "ua_swe: CY %d has %d failed WY download(s) — status %s",
+                    cy,
+                    n_dl_errors,
+                    wy_status,
+                )
+            else:
+                logger.warning(
+                    "ua_swe: CY %d skipped — WY download status %s (archive gap)",
+                    cy,
+                    wy_status,
+                )
         cy_records.append(rec)
 
     _update_manifest(workdir, period, meta, cy_records, archive_url, mask_record)
 
     n_consolidated = sum(1 for r in cy_records if r.get("daily_path"))
     n_failed = sum(1 for r in cy_records if r.get("consolidate_error"))
+    n_errors = sum(int(r.get("n_errors", 0)) for r in cy_records)
+    # A CY counts as skipped only when it is a genuine all-404 archive gap:
+    # no daily NC, no consolidation error, AND no download errors (those are
+    # tallied in n_errors above and must not be laundered into a benign skip).
     n_skipped = sum(
         1
         for r in cy_records
-        if not r.get("daily_path") and not r.get("consolidate_error")
+        if not r.get("daily_path")
+        and not r.get("consolidate_error")
+        and not r.get("n_errors")
     )
-    if n_failed or n_skipped:
+    if n_failed or n_skipped or n_errors:
         logger.warning(
-            "ua_swe: worker %d/%d — %d consolidated, %d failed, %d skipped "
-            "(inspect per-CY consolidate_error / wy_status in the summary).",
+            "ua_swe: worker %d/%d — %d consolidated, %d failed, %d skipped, "
+            "%d download errors (inspect per-CY consolidate_error / wy_status / "
+            "n_errors in the summary).",
             worker_index,
             n_workers,
             n_consolidated,
             n_failed,
             n_skipped,
+            n_errors,
         )
 
     return {
@@ -928,4 +958,5 @@ def fetch_ua_swe(
         "n_consolidated": n_consolidated,
         "n_failed": n_failed,
         "n_skipped": n_skipped,
+        "n_errors": n_errors,
     }

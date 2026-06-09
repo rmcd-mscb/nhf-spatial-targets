@@ -471,6 +471,34 @@ def test_short_read_with_content_length_mismatch_recorded_as_error(
     assert leftovers == []
 
 
+def test_fetch_snodas_summary_rollup_drives_partial_exit(tmp_path, monkeypatch):
+    """Producer-contract test: a real fetch_snodas run emits the top-level
+    n_* rollup keys that the CLI helper reads, and the helper elevates a run
+    with download errors to a non-zero exit (issue #299 review).
+
+    Guards the producer (_build_summary) <-> consumer (_emit_fetch_banner)
+    contract against a key rename on either side — the per-key unit tests
+    share names by convention, not by an exercised seam.
+    """
+    import io
+
+    from rich.console import Console
+
+    from nhf_spatial_targets.cli.fetch import _emit_fetch_banner
+
+    workdir = _make_project(tmp_path)
+    short_resp = _FakeResponse(200, body=b"\x00" * 10, content_length=1000)
+    _stub_session(monkeypatch, responder=lambda url: short_resp)
+    summary = fetch_snodas(workdir=workdir, period="2020/2020")
+
+    for key in ("n_consolidated", "n_failed", "n_skipped", "n_errors"):
+        assert key in summary, f"summary missing rollup key {key!r}"
+    assert summary["n_errors"] == 366
+
+    console = Console(file=io.StringIO(), width=200, force_terminal=False)
+    assert _emit_fetch_banner(console, "SNODAS", summary) is True
+
+
 def test_no_content_length_small_body_recorded_as_error(tmp_path, monkeypatch):
     """Server omits Content-Length AND the body is below the size floor.
 
