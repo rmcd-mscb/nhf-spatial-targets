@@ -11,7 +11,64 @@ from cyclopts import App, Parameter
 
 _logger = logging.getLogger(__name__)
 
+# Exit code for a run that completed but produced incomplete data — some
+# years / calendar-years failed to consolidate or hit download errors while
+# the rest succeeded (issue #299). Distinct from 1 (hard error) and 2 (bad
+# invocation) so SLURM array jobs and scripts can treat "partial" separately
+# from a clean failure. Reserved for *genuine* trouble (n_failed / n_errors);
+# skip-only runs (expected archive gaps) stay exit 0 — see _emit_fetch_banner.
+EXIT_PARTIAL = 3
+
 fetch_app = App(name="fetch", help="Download source datasets into a project datastore.")
+
+
+def _emit_fetch_banner(console, display_name: str, summary: object) -> bool:
+    """Print a green-success / yellow-partial banner for one fetch result.
+
+    Reads the optional ``n_consolidated`` / ``n_failed`` / ``n_skipped`` /
+    ``n_errors`` rollup that the per-year / per-calendar-year fetchers
+    (``ua_swe``, ``snodas``) attach to their summary dict. Fetchers that
+    download in a single shot omit the rollup, so the banner stays green for
+    them and this helper is safe to call uniformly across every command.
+
+    A run is *partial* whenever any of ``n_failed`` / ``n_skipped`` /
+    ``n_errors`` is non-zero — the banner turns yellow in that case so the
+    operator does not read an unconditional green "downloaded" line over an
+    incomplete datastore. Only *genuine* trouble (``n_failed`` or
+    ``n_errors``) is treated as actionable: that is what this function
+    returns, and what the caller maps to :data:`EXIT_PARTIAL`. Skip-only
+    runs (e.g. expected SNODAS archive day-gaps, all-404 years) stay green
+    on exit code but still surface as a yellow banner.
+
+    Returns
+    -------
+    bool
+        ``True`` when the run carries genuine failures (``n_failed`` or
+        ``n_errors`` > 0) and the caller should exit :data:`EXIT_PARTIAL`.
+    """
+    rollup = summary if isinstance(summary, dict) else {}
+    n_failed = int(rollup.get("n_failed", 0) or 0)
+    n_skipped = int(rollup.get("n_skipped", 0) or 0)
+    n_errors = int(rollup.get("n_errors", 0) or 0)
+
+    if not (n_failed or n_skipped or n_errors):
+        console.print(f"[green]{display_name}: downloaded to datastore[/green]")
+        return False
+
+    n_consolidated = int(rollup.get("n_consolidated", 0) or 0)
+    parts = [f"{n_consolidated} consolidated"]
+    if n_failed:
+        parts.append(f"{n_failed} failed")
+    if n_skipped:
+        parts.append(f"{n_skipped} skipped")
+    if n_errors:
+        parts.append(f"{n_errors} download errors")
+    console.print(
+        f"[yellow]{display_name}: {', '.join(parts)} — inspect per-record "
+        f"consolidate_error / wy_status / n_errors in the JSON summary below "
+        f"(also recorded in manifest.json).[/yellow]"
+    )
+    return bool(n_failed or n_errors)
 
 
 @fetch_app.command(name="all")
@@ -80,6 +137,7 @@ def fetch_all_cmd(
     ]
 
     results = {}
+    partial_sources: list[str] = []
     for name, source_key, fetch_fn in sources:
         console.print(f"\n[bold]{'─' * 60}[/bold]")
 
@@ -106,7 +164,8 @@ def fetch_all_cmd(
         try:
             result = fetch_fn(workdir=workdir, period=clamped)
             results[name] = result
-            console.print(f"[green]{name}: downloaded to datastore[/green]")
+            if _emit_fetch_banner(console, name, result):
+                partial_sources.append(name)
         except FileNotFoundError as exc:
             # Manual-placement / operator-staged sources can legitimately
             # be missing on a freshly-bootstrapped project — skip them
@@ -136,6 +195,15 @@ def fetch_all_cmd(
                 file=sys.stderr,
             )
             sys.exit(1)
+
+    if partial_sources:
+        console.print(
+            f"\n[bold yellow]{len(results)} sources fetched, but "
+            f"{len(partial_sources)} produced incomplete data: "
+            f"{', '.join(partial_sources)}. Inspect each source's JSON "
+            f"summary / manifest.json and re-run the affected fetch.[/bold yellow]"
+        )
+        sys.exit(EXIT_PARTIAL)
 
     console.print(
         f"\n[bold green]All {len(results)} sources fetched successfully.[/bold green]"
@@ -864,8 +932,10 @@ def fetch_snodas_cmd(
         )
         sys.exit(1)
 
-    console.print("[green]SNODAS: downloaded to datastore[/green]")
+    partial = _emit_fetch_banner(console, "SNODAS", result)
     console.print(json_mod.dumps(result, indent=2))
+    if partial:
+        sys.exit(EXIT_PARTIAL)
 
 
 @fetch_app.command(name="margulis-wus-sr")
@@ -991,5 +1061,7 @@ def fetch_ua_swe_cmd(
         )
         sys.exit(1)
 
-    console.print("[green]UA SWE: downloaded to datastore[/green]")
+    partial = _emit_fetch_banner(console, "UA SWE", result)
     console.print(json_mod.dumps(result, indent=2))
+    if partial:
+        sys.exit(EXIT_PARTIAL)

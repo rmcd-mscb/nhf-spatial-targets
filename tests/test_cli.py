@@ -645,6 +645,160 @@ def test_fetch_margulis_wus_sr_nonexistent_project_dir(tmp_path):
         )
 
 
+# ---- fetch ua-swe command --------------------------------------------------
+
+
+@patch("nhf_spatial_targets.fetch.ua_swe.fetch_ua_swe")
+def test_fetch_ua_swe_calls_fetch(mock_fetch, tmp_path):
+    """CLI wires every flag to fetch_ua_swe()."""
+    mock_fetch.return_value = {"n_consolidated": 2, "n_failed": 0, "n_skipped": 0}
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    _run(
+        "fetch",
+        "ua-swe",
+        "--project-dir",
+        str(workdir),
+        "--period",
+        "2010/2011",
+        "--worker-index",
+        "0",
+        "--n-workers",
+        "1",
+    )
+    mock_fetch.assert_called_once_with(
+        workdir=workdir,
+        period="2010/2011",
+        worker_index=0,
+        n_workers=1,
+    )
+
+
+def test_fetch_ua_swe_nonexistent_project_dir(tmp_path):
+    with pytest.raises(SystemExit, match="2"):
+        _run(
+            "fetch",
+            "ua-swe",
+            "--project-dir",
+            str(tmp_path / "missing"),
+            "--period",
+            "2010/2011",
+        )
+
+
+@patch("nhf_spatial_targets.fetch.ua_swe.fetch_ua_swe")
+def test_fetch_ua_swe_partial_failure_exits_3(mock_fetch, tmp_path):
+    """Consolidation failures (n_failed > 0) exit EXIT_PARTIAL (3) (issue #299)."""
+    mock_fetch.return_value = {"n_consolidated": 30, "n_failed": 8, "n_skipped": 2}
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    with pytest.raises(SystemExit) as exc:
+        _run(
+            "fetch",
+            "ua-swe",
+            "--project-dir",
+            str(workdir),
+            "--period",
+            "2010/2011",
+        )
+    assert exc.value.code == 3
+
+
+@patch("nhf_spatial_targets.fetch.ua_swe.fetch_ua_swe")
+def test_fetch_ua_swe_skip_only_exits_0(mock_fetch, tmp_path):
+    """Skip-only runs (no failures/errors) stay exit 0 — expected gaps don't fail."""
+    mock_fetch.return_value = {"n_consolidated": 38, "n_failed": 0, "n_skipped": 2}
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    # _run re-raises only non-zero SystemExit; a clean return = exit 0.
+    _run(
+        "fetch",
+        "ua-swe",
+        "--project-dir",
+        str(workdir),
+        "--period",
+        "2010/2011",
+    )
+
+
+@patch("nhf_spatial_targets.fetch.snodas.fetch_snodas")
+def test_fetch_snodas_download_errors_exit_3(mock_fetch, tmp_path):
+    """SNODAS download errors (n_errors > 0) exit EXIT_PARTIAL (3) (issue #299)."""
+    mock_fetch.return_value = {
+        "years": [],
+        "n_consolidated": 18,
+        "n_failed": 1,
+        "n_skipped": 0,
+        "n_errors": 3,
+    }
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    with pytest.raises(SystemExit) as exc:
+        _run(
+            "fetch",
+            "snodas",
+            "--project-dir",
+            str(workdir),
+            "--period",
+            "2020/2020",
+        )
+    assert exc.value.code == 3
+
+
+# ---- _emit_fetch_banner helper ---------------------------------------------
+
+
+def _banner(summary):
+    """Run _emit_fetch_banner against a wide StringIO console; return (text, rc)."""
+    import io
+
+    from rich.console import Console
+
+    from nhf_spatial_targets.cli.fetch import _emit_fetch_banner
+
+    console = Console(file=io.StringIO(), width=200, force_terminal=False)
+    rc = _emit_fetch_banner(console, "SRC", summary)
+    return console.file.getvalue(), rc
+
+
+def test_emit_banner_full_success_is_green_returns_false():
+    text, rc = _banner({"n_consolidated": 40, "n_failed": 0, "n_skipped": 0})
+    assert rc is False
+    assert "downloaded to datastore" in text
+
+
+def test_emit_banner_no_rollup_treated_as_success():
+    """Single-shot fetchers omit the n_* rollup — banner stays green."""
+    text, rc = _banner({"files": []})
+    assert rc is False
+    assert "downloaded to datastore" in text
+
+
+def test_emit_banner_non_dict_summary_is_success():
+    _text, rc = _banner(None)
+    assert rc is False
+
+
+def test_emit_banner_failures_yellow_returns_true():
+    text, rc = _banner({"n_consolidated": 30, "n_failed": 8, "n_skipped": 2})
+    assert rc is True
+    assert "8 failed" in text
+    assert "2 skipped" in text
+    assert "downloaded to datastore" not in text
+
+
+def test_emit_banner_skip_only_yellow_returns_false():
+    """Skip-only is incomplete (yellow) but not actionable (exit 0)."""
+    text, rc = _banner({"n_consolidated": 38, "n_failed": 0, "n_skipped": 2})
+    assert rc is False
+    assert "2 skipped" in text
+
+
+def test_emit_banner_download_errors_returns_true():
+    _text, rc = _banner({"n_consolidated": 18, "n_errors": 3})
+    assert rc is True
+
+
 # ---- agg ssebop command ----------------------------------------------------
 
 

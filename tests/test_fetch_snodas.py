@@ -654,6 +654,41 @@ def test_manifest_records_archive_url_and_metadata(tmp_path, monkeypatch):
     )
 
 
+def test_build_summary_rolls_up_partial_outcomes():
+    """_build_summary aggregates per-year outcomes into the n_* rollup (#299).
+
+    n_consolidated/n_failed/n_skipped count years; n_errors sums the
+    per-year download-error counts (404 day-gaps are excluded upstream by
+    _fetch_year, so they never reach n_errors).
+    """
+    from nhf_spatial_targets.fetch.snodas import _build_summary
+
+    meta = {
+        "access": {"url": "https://example.com/snodas"},
+        "doi": "10.0000/snodas",
+        "variables": [{"name": "swe"}],
+    }
+    year_records = [
+        {"year": 2010, "daily_path": "/d/2010.nc", "n_errors": 0},
+        {"year": 2011, "consolidate_error": "corrupt tar", "n_errors": 0},
+        {"year": 2012, "n_granules": 0, "n_errors": 0},  # no granules -> skipped
+        {"year": 2013, "daily_path": "/d/2013.nc", "n_errors": 5},  # ok + dl errs
+    ]
+    summary = _build_summary(
+        meta,
+        "2010/2013",
+        "https://archive",
+        0,
+        1,
+        year_records,
+        "2026-01-01T00:00:00+00:00",
+    )
+    assert summary["n_consolidated"] == 2
+    assert summary["n_failed"] == 1
+    assert summary["n_skipped"] == 1
+    assert summary["n_errors"] == 5
+
+
 def test_manifest_accumulates_years_across_calls(tmp_path, monkeypatch):
     workdir = _make_project(tmp_path)
     _stub_session(monkeypatch)
