@@ -164,7 +164,6 @@ def _make_sparse_wy_raw_nc(
     *,
     n_lat: int = 2,
     n_lon: int = 2,
-    inject_negative_index: int | None = None,
 ) -> None:
     """Write a synthetic raw WY NC with exactly *timestamps* as the time axis.
 
@@ -173,11 +172,6 @@ def _make_sparse_wy_raw_nc(
     arbitrary set of timestamps.  This lets calendar-year tests write only
     the minimal boundary dates needed to exercise the seam logic without
     triggering a full-WY (365–366 day) reproject loop.
-
-    When *inject_negative_index* is given, an integer-sentinel value
-    (-9999) is stamped at that time index of ``SWE`` so tests can place a
-    bad value on a specific day (e.g. one outside the target calendar-year
-    window) to exercise the windowed negative-value defense.
 
     The layout is identical to the real NSIDC-0719 files: float32 days
     since 1900-01-01, no ``units`` attr, NAD83 lat/lon CRS.
@@ -193,8 +187,6 @@ def _make_sparse_wy_raw_nc(
     rng = np.random.default_rng(seed=42)
     swe = rng.uniform(0.0, 500.0, size=(n_time, n_lat, n_lon)).astype("float32")
     depth = rng.uniform(0.0, 2000.0, size=(n_time, n_lat, n_lon)).astype("float32")
-    if inject_negative_index is not None:
-        swe[inject_negative_index, 0, 0] = -9999.0
 
     ds = xr.Dataset(
         data_vars={
@@ -405,13 +397,11 @@ class TestUrlConstruction:
 
 class TestReprojWyToDataset:
     def test_negative_value_defense(self, tmp_path: Path):
-        """Sentinel < -1.0 inside the CY window raises ValueError.
+        """Sentinel < -1.0 inside the requested CY window raises ValueError.
 
         The synthetic WY1982 raw starts Oct 1 1981 (the negative sentinel
-        is injected at the first time step), so the defense only fires
-        when the requested calendar-year window covers that day — here
-        CY 1981. (Days outside the window are sliced off before the
-        scan; they get validated when their own calendar year is built.)
+        is injected at the first time step), which lies inside the CY 1981
+        window — so the defense fires for CY 1981.
         """
         raw_path = tmp_path / "4km_SWE_Depth_WY1982_v01.nc"
         _make_synthetic_raw_nc(raw_path, wy=1982, inject_negative=True)
@@ -419,27 +409,43 @@ class TestReprojWyToDataset:
         with pytest.raises(ValueError, match="integer sentinel"):
             _reproject_wy_to_dataset(1982, raw_path, 1981)
 
-    def test_negative_outside_window_not_scanned(self, tmp_path: Path):
-        """A sentinel outside the CY window is sliced off, so no raise.
+    def test_negative_outside_window_still_caught(self, tmp_path: Path):
+        """Full-coverage tripwire: a sentinel OUTSIDE the CY window still raises.
 
-        The WY1982 raw here carries a -9999 sentinel on Oct 1 1981 (CY
-        1981) and a clean value on Jan 1 1982 (CY 1982). Requesting CY
-        1982 windows the Oct 1981 day out *before* the scan, so the
-        defense correctly does not fire — it would fire when CY 1981 is
-        built. This pins the windowed-scan semantics (issue #298).
+        The integrity scan runs over the **full** water year *before* the
+        calendar-year slice (issue #298 fixup), so a future integer
+        sentinel is caught even on days this calendar year never consumes —
+        including the archive-boundary months (Oct–Dec 1981, Jan–Sep 2023)
+        that no built calendar year would otherwise scan. Here the bad day
+        (Oct 1 1981) lies outside the requested CY 1982 window, yet is
+        still flagged.
         """
         raw_path = tmp_path / "4km_SWE_Depth_WY1982_v01.nc"
+        _make_synthetic_raw_nc(raw_path, wy=1982, inject_negative=True)
+
+        with pytest.raises(ValueError, match="integer sentinel"):
+            _reproject_wy_to_dataset(1982, raw_path, 1982)
+
+    def test_empty_window_raises_descriptive(self, tmp_path: Path):
+        """A raw whose time axis misses the CY window raises a domain-specific error.
+
+        With the slice now ahead of the reproject loop (issue #298), an
+        empty calendar-year window would otherwise fall through to
+        ``xr.concat([], dim="time")`` and surface a cryptic "must supply at
+        least one object to concatenate". The zero-day guard converts that
+        into a message naming the WY, the raw, and the expected
+        contribution window (mirrors ``fetch/margulis_wus_sr.py``).
+        """
+        raw_path = tmp_path / "4km_SWE_Depth_WY2000_v01.nc"
+        # WY2000 raw carrying only its Oct–Dec 1999 head; requesting CY 2000
+        # (window Jan 1 – Dec 31 2000) overlaps none of it → empty window.
         _make_sparse_wy_raw_nc(
             raw_path,
-            [pd.Timestamp("1981-10-01"), pd.Timestamp("1982-01-01")],
-            inject_negative_index=0,  # the Oct 1 1981 day (CY 1981)
+            [pd.Timestamp("1999-10-01"), pd.Timestamp("1999-12-31")],
         )
 
-        # No raise: the only negative day (Oct 1 1981) is not in CY 1982.
-        ds = _reproject_wy_to_dataset(1982, raw_path, 1982)
-        assert "swe" in ds.data_vars
-        t = pd.DatetimeIndex(ds["time"].values)
-        assert list(t) == [pd.Timestamp("1982-01-01")]
+        with pytest.raises(ValueError, match="contributed 0 days"):
+            _reproject_wy_to_dataset(2000, raw_path, 2000)
 
     def test_missing_raw_path(self, tmp_path: Path):
         """FileNotFoundError is raised for a non-existent raw path."""
@@ -913,19 +919,30 @@ def _build_cy_raw_fixtures(raw_dir: Path, calendar_year: int) -> None:
     """Write the two adjacent WY raw NCs needed to assemble one calendar year.
 
     Uses :func:`_make_sparse_wy_raw_nc` with only boundary dates to keep
-    per-test reproject runtime low (4 days × 2 files = 8 reprojections).
+    per-test reproject runtime low.
 
     Calendar year *X* is assembled from:
     - WY *X* (``4km_SWE_Depth_WY{X}_v01.nc``): Jan 1 and Sep 30 of CY X
     - WY *X+1* (``4km_SWE_Depth_WY{X+1}_v01.nc``): Oct 1 and Dec 31 of CY X
+
+    The WY *X* file also carries its real Oct–Dec (X-1) head (the months
+    that belong to the *previous* calendar year), so the consolidator-level
+    tests exercise the in-function calendar-year slice (issue #298)
+    actually *dropping* out-of-window days — not just passing through data
+    that is already in-window. This guards against an off-by-one in the
+    ``[Jan 1, Dec 31]`` window bounds that would let a wrong-year December
+    day bleed across the WY→WY seam.
     """
     cy = calendar_year
     # WY X = the file named WY{cy}; it runs Oct 1 (cy-1) – Sep 30 (cy).
-    # We only need the Jan-Sep portion that falls in CY cy.
+    # The Oct–Dec (cy-1) head belongs to CY cy-1 and must be sliced off when
+    # assembling CY cy; only the Jan–Sep portion falls in CY cy.
     wy_x_path = raw_dir / _WY_FILENAME_TEMPLATE.format(wy=cy)
     _make_sparse_wy_raw_nc(
         wy_x_path,
         [
+            pd.Timestamp(f"{cy - 1}-10-01"),  # out-of-window head (CY cy-1)
+            pd.Timestamp(f"{cy - 1}-12-31"),  # out-of-window head (CY cy-1)
             pd.Timestamp(f"{cy}-01-01"),
             pd.Timestamp(f"{cy}-09-30"),
         ],
