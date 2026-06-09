@@ -205,3 +205,30 @@ def test_aggregate_ua_swe_reads_custom_threshold(tmp_path, monkeypatch):
     scf = captured["adapter"].pre_aggregate_hook(ds)["snow_covered_fraction"]
     assert scf.isel(time=0).values[0] == 0.0  # 3 > 5 False
     assert scf.attrs["depth_threshold_mm"] == 5.0
+
+
+def test_aggregate_ua_swe_is_callable_with_period_kwarg():
+    """The CLI dispatcher forwards --period via kwargs; the function must
+    accept it for the _run_tier_agg(period=...) path."""
+    import inspect
+
+    sig = inspect.signature(aggregate_ua_swe)
+    assert "period" in sig.parameters
+    # Default None so omitting --period aggregates every year on disk.
+    assert sig.parameters["period"].default is None
+
+
+def test_cli_exposes_aggregate_ua_swe():
+    """The agg CLI resolves aggregators via the cli package namespace, so
+    aggregate_ua_swe must be importable from it and listed in __all__."""
+    from nhf_spatial_targets import cli
+
+    assert cli.aggregate_ua_swe is aggregate_ua_swe
+    assert "aggregate_ua_swe" in cli.__all__
+
+
+def test_cli_registers_agg_ua_swe():
+    """``nhf-targets agg ua-swe`` must be wired in the agg sub-app."""
+    from nhf_spatial_targets.cli.agg import agg_ua_swe_cmd
+
+    assert callable(agg_ua_swe_cmd)

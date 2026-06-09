@@ -47,6 +47,7 @@ from nhf_spatial_targets.aggregate.nldas_mosaic import aggregate_nldas_mosaic
 from nhf_spatial_targets.aggregate.nldas_noah import aggregate_nldas_noah
 from nhf_spatial_targets.aggregate.reitz2017 import aggregate_reitz2017
 from nhf_spatial_targets.aggregate.snodas import aggregate_snodas
+from nhf_spatial_targets.aggregate.ua_swe import aggregate_ua_swe
 from nhf_spatial_targets.aggregate.watergap22d import aggregate_watergap22d
 
 app = App(
@@ -126,5 +127,6 @@ __all__ = [
     "aggregate_nldas_noah",
     "aggregate_reitz2017",
     "aggregate_snodas",
+    "aggregate_ua_swe",
     "aggregate_watergap22d",
 ]
