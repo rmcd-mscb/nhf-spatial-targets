@@ -125,7 +125,7 @@ Each year file carries:
 | --- | --- | --- | --- |
 | `swe` | float32 | `kg m-2` | `time: point` |
 | `snow_depth` | float32 | `mm` | `time: point` |
-| `crs` | int (scalar) | — | EPSG:5070 WGS84/CONUS Albers grid mapping |
+| `crs` | int (scalar) | — | EPSG:5070 NAD83/CONUS Albers grid mapping |
 
 Global attributes: `Conventions=CF-1.6`, `title`, `institution`,
 `source`, `references`, `frequency=day`.
