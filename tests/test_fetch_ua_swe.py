@@ -22,6 +22,7 @@ import xarray as xr
 import yaml
 
 from nhf_spatial_targets.fetch.ua_swe import (
+    _CY_CONSOLIDATED_FILENAME_TEMPLATE,
     _WY_FILENAME_TEMPLATE,
     _assign_worker_water_years,
     _calendar_years_to_water_years,
@@ -941,7 +942,7 @@ def test_consolidate_calendar_year_spans_jan_to_dec(tmp_path: Path):
 
     out = consolidate_calendar_year_ua_swe(2000, raw_dir, daily)
 
-    assert out.name == "ua_swe_daily_2000.nc"
+    assert out.name == _CY_CONSOLIDATED_FILENAME_TEMPLATE.format(year=2000)
 
     with xr.open_dataset(out) as ds:
         t = pd.DatetimeIndex(ds["time"].values)
@@ -966,7 +967,7 @@ def test_consolidate_calendar_year_spans_jan_to_dec(tmp_path: Path):
 
         # CF-1.6 compliance: Conventions attr + key variable attrs
         assert ds.attrs.get("Conventions") == "CF-1.6"
-        assert ds["swe"].attrs.get("units"), "swe must have a units attr"
+        assert ds["swe"].attrs["units"] == "kg m-2"
         assert ds["snow_depth"].attrs.get("units"), "snow_depth must have a units attr"
 
         # Projected coords survive concat
