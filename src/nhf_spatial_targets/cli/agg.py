@@ -513,6 +513,37 @@ def agg_snodas_cmd(
     )
 
 
+@agg_app.command(name="ua-swe")
+def agg_ua_swe_cmd(
+    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    batch_size: Annotated[int | None, _AGG_BATCH_SIZE_PARAM] = None,
+    worker_index: Annotated[int, _AGG_WORKER_INDEX_PARAM] = 0,
+    n_workers: Annotated[int, _AGG_N_WORKERS_PARAM] = 1,
+    period: Annotated[
+        str | None,
+        Parameter(
+            name=["--period", "-p"],
+            help=(
+                "Optional 'YYYY/YYYY' clip applied at agg time. UA SWE "
+                "consolidated NCs span calendar years 1982-2022; pass e.g. "
+                "'2000/2010' to restrict aggregation. Omit to aggregate every "
+                "year present in the datastore."
+            ),
+        ),
+    ] = None,
+):
+    """Aggregate UA daily SWE / snow-depth / snow-covered-fraction to HRU polygons."""
+    _run_tier_agg(
+        _resolve_agg_fn("aggregate_ua_swe"),
+        "UA SWE",
+        workdir,
+        batch_size,
+        period=period,
+        worker_index=worker_index,
+        n_workers=n_workers,
+    )
+
+
 @agg_app.command(name="era5-land-sd")
 def agg_era5_land_sd_cmd(
     workdir: Annotated[Path, Parameter(name=["--project-dir"])],
@@ -645,6 +676,7 @@ def agg_all_cmd(
         ("mod16a2", _resolve_agg_fn("aggregate_mod16a2")),
         ("mod10c1", _resolve_agg_fn("aggregate_mod10c1")),
         ("snodas", _resolve_agg_fn("aggregate_snodas")),
+        ("ua-swe", _resolve_agg_fn("aggregate_ua_swe")),
         ("mwbm-climgrid", _resolve_agg_fn("aggregate_mwbm_climgrid")),
         ("era5-land-sd", _resolve_agg_fn("aggregate_era5_land_sd")),
         ("margulis-wus-sr", _resolve_agg_fn("aggregate_margulis_wus_sr")),
