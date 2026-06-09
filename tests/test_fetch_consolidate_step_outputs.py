@@ -101,18 +101,18 @@ def test_ua_swe_consolidate_step_records_output_checksums(tmp_path: Path) -> Non
     workdir = _make_project(tmp_path)
     daily_dir = workdir / "datastore" / "ua_swe" / "daily"
     ncs = [
-        _write_tiny_nc(daily_dir / "ua_swe_daily_WY2010.nc"),
-        _write_tiny_nc(daily_dir / "ua_swe_daily_WY2011.nc"),
+        _write_tiny_nc(daily_dir / "ua_swe_daily_2010.nc"),
+        _write_tiny_nc(daily_dir / "ua_swe_daily_2011.nc"),
     ]
-    wy_records = [
-        {"water_year": 2010, "status": "downloaded", "daily_path": str(ncs[0])},
-        {"water_year": 2011, "status": "downloaded", "daily_path": str(ncs[1])},
+    cy_records = [
+        {"calendar_year": 2010, "status": "downloaded", "daily_path": str(ncs[0])},
+        {"calendar_year": 2011, "status": "downloaded", "daily_path": str(ncs[1])},
     ]
     ua_swe._update_manifest(
         workdir,
         "2010/2010",
         catalog.source("ua_swe"),
-        wy_records,
+        cy_records,
         "https://example.org/archive",
         None,
     )
@@ -167,21 +167,21 @@ def test_ua_swe_consolidate_step_omits_records_without_existing_nc(
 ) -> None:
     workdir = _make_project(tmp_path)
     daily_dir = workdir / "datastore" / "ua_swe" / "daily"
-    present = _write_tiny_nc(daily_dir / "ua_swe_daily_WY2010.nc")
-    wy_records = [
-        {"water_year": 2010, "status": "downloaded", "daily_path": str(present)},
-        {"water_year": 2011, "status": "missing_404"},  # no daily_path
+    present = _write_tiny_nc(daily_dir / "ua_swe_daily_2010.nc")
+    cy_records = [
+        {"calendar_year": 2010, "status": "downloaded", "daily_path": str(present)},
+        {"calendar_year": 2011, "status": "missing_404"},  # no daily_path
         {  # daily_path recorded but file never written / since vanished
-            "water_year": 2012,
+            "calendar_year": 2012,
             "status": "downloaded",
-            "daily_path": str(daily_dir / "ua_swe_daily_WY2012.nc"),
+            "daily_path": str(daily_dir / "ua_swe_daily_2012.nc"),
         },
     ]
     ua_swe._update_manifest(
         workdir,
         "2010/2012",
         catalog.source("ua_swe"),
-        wy_records,
+        cy_records,
         "https://example.org/archive",
         None,
     )

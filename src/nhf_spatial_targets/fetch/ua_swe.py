@@ -24,18 +24,20 @@ for HTTPS-archive products have been granule-less stubs (issue #107
 documented this for SNODAS/G02158); the deterministic-URL approach
 sidesteps the question entirely.
 
-After download, :func:`consolidate_water_year_ua_swe` decodes time,
-renames the native ``SWE`` / ``DEPTH`` variables to the pipeline's
-``swe`` / ``snow_depth`` (matching ``catalog/sources.yml``), and
-**reprojects from NAD83 lat-lon to EPSG:5070 (NAD83 / CONUS Albers
-Equal Area) at 4000 m using nearest-neighbour resampling**, mirroring
-the SNODAS pre-projection (issue #121) so the aggregator's
-``WEIGHT_GEN_CRS`` matches and gdptools' weight generation does not
-need to reproject the source grid at all. Output is a single per-WY
-CF-1.6 NetCDF at
-``<datastore>/ua_swe/daily/ua_swe_daily_WY<YYYY>.nc``. Raw downloaded
-NCs are preserved under ``<datastore>/ua_swe/raw/`` for provenance and
-to enable re-decode after a catalog metadata change.
+After download, :func:`consolidate_calendar_year_ua_swe` assembles each
+calendar year from two adjacent WY raws — [Jan 1 – Sep 30] from
+WY *X* and [Oct 1 – Dec 31] from WY *X+1* — then renames the native
+``SWE`` / ``DEPTH`` variables to ``swe`` / ``snow_depth`` (matching
+``catalog/sources.yml``) and **reprojects from NAD83 lat-lon to
+EPSG:5070 (NAD83 / CONUS Albers Equal Area) at 4000 m using
+nearest-neighbour resampling**, mirroring the SNODAS pre-projection
+(issue #121) so the aggregator's ``WEIGHT_GEN_CRS`` matches and
+gdptools' weight generation does not need to reproject the source grid
+at all. Output is a single per-calendar-year CF-1.6 NetCDF at
+``<datastore>/ua_swe/daily/ua_swe_daily_<YYYY>.nc`` (full coverage
+1982–2022). Raw downloaded NCs are preserved under
+``<datastore>/ua_swe/raw/`` for provenance and to enable re-decode
+after a catalog metadata change.
 
 Backwards-compat note: ``catalog/sources.yml[ua_swe].period`` is the
 calendar-year range ``1981/2023`` for compatibility with
@@ -94,7 +96,8 @@ _MIN_VALID_NC_BYTES = 10 * 1024 * 1024  # 10 MiB
 # Filenames are deterministic at the NSIDC archive root.
 _WY_FILENAME_TEMPLATE = "4km_SWE_Depth_WY{wy}_v01.nc"
 _MASK_FILENAME = "SWE_Mask_v01.nc"
-_CONSOLIDATED_FILENAME_TEMPLATE = "ua_swe_daily_WY{wy}.nc"
+# Canonical calendar-year consolidated output: bare year, no "WY" prefix.
+_CONSOLIDATED_FILENAME_TEMPLATE = "ua_swe_daily_{year}.nc"
 
 # Source-side variable names; renamed at consolidate time to match the
 # lowercase pipeline convention (and the catalog `variables` block).
@@ -121,24 +124,6 @@ _DST_RESOLUTION_M = 4000.0
 # ---------------------------------------------------------------------------
 # Period helpers
 # ---------------------------------------------------------------------------
-
-
-def _calendar_years_to_water_years(years: list[int]) -> list[int]:
-    """Map calendar years to the set of water years whose files contain them.
-
-    Water year ``Y`` runs from ``Oct 1, Y-1`` through ``Sep 30, Y``. A
-    calendar year ``C`` therefore touches:
-
-    - WY ``C`` (covers Jan-Sep of CY ``C``)
-    - WY ``C+1`` (covers Oct-Dec of CY ``C``)
-
-    The returned list is sorted and deduplicated.
-    """
-    touched: set[int] = set()
-    for cy in years:
-        touched.add(cy)  # Jan-Sep of CY lives in WY = CY
-        touched.add(cy + 1)  # Oct-Dec of CY lives in WY = CY+1
-    return sorted(touched)
 
 
 def _wy_url(archive_url: str, wy: int) -> str:
@@ -286,64 +271,38 @@ def _download_file(
 # ---------------------------------------------------------------------------
 
 
-def consolidate_water_year_ua_swe(wy: int, raw_path: Path, daily_dir: Path) -> Path:
-    """Consolidate a per-WY raw NC into a CF-1.6 pre-projected daily NC.
+def _reproject_wy_to_dataset(wy: int, raw_path: Path) -> xr.Dataset:
+    """Decode + pre-project one raw WY NC to an EPSG:5070 (time, y, x) dataset.
 
-    Steps:
-
-    1. Open the raw file with ``decode_times=False`` (the source omits
-       the ``time:units`` attribute, so xarray cannot auto-decode).
-    2. Decode the ``time`` float32 axis as days since
-       :data:`_SRC_TIME_EPOCH` (= 1900-01-01) into ``pd.Timestamp``.
-    3. Build a new :class:`xr.Dataset` containing only the reprojected
-       ``swe`` / ``snow_depth`` variables — the source's ``time_str``
-       provenance variable and inline ``crs`` scalar are left behind by
-       construction (not via ``drop_vars``); :func:`apply_cf_metadata`
-       in step 7 writes a fresh grid-mapping ancillary.
-    4. Rename ``SWE`` → ``swe``, ``DEPTH`` → ``snow_depth`` to match the
-       catalog ``variables`` block.
-    5. Attach the source CRS (NAD83 / EPSG:4269) via rioxarray.
-    6. Reproject both 3-D variables to EPSG:5070 (NAD83 / CONUS Albers)
-       at 4-km resolution using nearest-neighbour resampling
-       (preserves NaN fill).
-    7. Apply CF-1.6 metadata via
-       :func:`fetch.consolidate.apply_cf_metadata` (sets variable
-       ``units`` / ``long_name`` / ``cell_methods`` from the catalog
-       and emits the EPSG:5070 grid-mapping ancillary).
-    8. Atomic write via ``.nc.tmp`` rename.
-
-    Idempotency: if the output NC exists and is newer than the raw NC,
-    the rebuild is skipped.
+    Returns a dataset with ``swe`` / ``snow_depth`` (float32, native units),
+    a decoded daily ``time`` axis (Oct 1 of WY-1 .. Sep 30 of WY), and
+    projected ``y`` / ``x`` metre coords. CF metadata is NOT applied here —
+    the caller applies it once after any stitching.
 
     Parameters
     ----------
     wy : int
-        Water year. The output filename embeds this label.
+        Water year label embedded in error messages.
     raw_path : Path
-        Source raw NC, e.g. ``<datastore>/ua_swe/raw/4km_SWE_Depth_WY1982_v01.nc``.
-    daily_dir : Path
-        Output directory; the file is written as
-        ``ua_swe_daily_WY<wy>.nc`` inside.
+        Source raw NC, e.g.
+        ``<datastore>/ua_swe/raw/4km_SWE_Depth_WY1982_v01.nc``.
 
     Returns
     -------
-    Path
-        Path to the consolidated NC.
+    xr.Dataset
+        Dataset with ``swe`` / ``snow_depth`` on ``(time, y, x)`` in
+        EPSG:5070 (NAD83 / CONUS Albers Equal Area) at 4 km resolution.
+
+    Raises
+    ------
+    FileNotFoundError
+        If *raw_path* does not exist.
+    ValueError
+        If any variable contains values below -1.0, indicating a possible
+        integer-sentinel format change.
     """
     if not raw_path.exists():
         raise FileNotFoundError(f"ua_swe raw NC not found: {raw_path}")
-    daily_dir.mkdir(parents=True, exist_ok=True)
-    out_path = daily_dir / _CONSOLIDATED_FILENAME_TEMPLATE.format(wy=wy)
-
-    # Mtime-based idempotency. A rebuild is forced only when the raw
-    # NC is newer than the consolidated output (e.g. after re-download).
-    if out_path.exists() and out_path.stat().st_mtime >= raw_path.stat().st_mtime:
-        logger.info(
-            "ua_swe: WY %d already consolidated and current (%s); skipping.",
-            wy,
-            out_path.name,
-        )
-        return out_path
 
     # Per-day reproject pattern: keep peak memory bounded for environments
     # without a per-job SLURM allocation (login node cgroups, etc.). For a
@@ -460,24 +419,115 @@ def consolidate_water_year_ua_swe(wy: int, raw_path: Path, daily_dir: Path) -> P
         )
     finally:
         ds_raw.close()
+    return ds_reproj
 
-    # Step 7: catalog-driven CF-1.6 metadata. `coord_type="projected"`
-    # keeps the (y, x) dims as metres and emits the projected grid
-    # mapping into the `crs` ancillary.
-    ds_out = apply_cf_metadata(
-        ds_reproj,
-        _SOURCE_KEY,
-        time_step="daily",
-        coord_type="projected",
+
+def _calendar_year_slice(ds: xr.Dataset, calendar_year: int) -> xr.Dataset:
+    """Slice a decoded WY dataset to whichever portion overlaps the calendar year."""
+    return ds.sel(
+        time=slice(
+            pd.Timestamp(f"{calendar_year}-01-01"),
+            pd.Timestamp(f"{calendar_year}-12-31"),
+        )
     )
 
-    # Step 8: atomic write with explicit encoding (build_encoding(
-    # layer="consolidated") is the issue #158 seam and currently
-    # raises). Encoding mirrors the SNODAS consolidator: zlib 4, time
-    # pinned to days since 1970-01-01 in a proleptic_gregorian
-    # calendar so downstream tools agree on the epoch.
-    encoding = _build_consolidated_encoding(ds_out)
-    _atomic_write_dataset(ds_out, out_path, encoding=encoding)
+
+def consolidate_calendar_year_ua_swe(
+    calendar_year: int, raw_dir: Path, daily_dir: Path
+) -> Path:
+    """Re-window two adjacent WY raws into one CF-1.6 calendar-year NC.
+
+    Calendar year *X* = [Jan 1 – Sep 30 of X] from WY *X*
+    (``4km_SWE_Depth_WY{X}_v01.nc``, which runs Oct *X-1* – Sep *X*)
+    joined with [Oct 1 – Dec 31 of X] from WY *X+1*. Both raws must be
+    present; a missing WY *X+1* (e.g. the archive boundary at CY 2023)
+    raises ``FileNotFoundError`` so the caller can skip partial edge years.
+
+    Mirrors ``fetch/margulis_wus_sr.py:consolidate_calendar_year_margulis_wus_sr``.
+    Output: ``<daily_dir>/ua_swe_daily_<calendar_year>.nc`` (EPSG:5070).
+    Mtime-idempotent against both contributing raws.
+
+    Parameters
+    ----------
+    calendar_year : int
+        Calendar year to assemble (e.g. 2000).
+    raw_dir : Path
+        Directory containing the raw per-WY NCs (e.g.
+        ``<datastore>/ua_swe/raw/``).
+    daily_dir : Path
+        Output directory; the file is written as
+        ``ua_swe_daily_<calendar_year>.nc`` inside.
+
+    Returns
+    -------
+    Path
+        Path to the consolidated calendar-year NC.
+
+    Raises
+    ------
+    FileNotFoundError
+        If either ``4km_SWE_Depth_WY{X}_v01.nc`` or
+        ``4km_SWE_Depth_WY{X+1}_v01.nc`` is absent in *raw_dir*.
+
+    Notes
+    -----
+    A non-fatal WARNING is emitted when the assembled dataset contains
+    fewer daily steps than expected (365 or 366 for leap years). This
+    indicates a truncated download or a publisher gap in one of the
+    contributing raws; the consolidated NC is still written so callers
+    can inspect and decide whether to re-fetch.
+    """
+    daily_dir.mkdir(parents=True, exist_ok=True)
+    out_path = daily_dir / _CONSOLIDATED_FILENAME_TEMPLATE.format(year=calendar_year)
+
+    raw_x = raw_dir / _WY_FILENAME_TEMPLATE.format(wy=calendar_year)
+    raw_x1 = raw_dir / _WY_FILENAME_TEMPLATE.format(wy=calendar_year + 1)
+    for p in (raw_x, raw_x1):
+        if not p.exists():
+            raise FileNotFoundError(
+                f"ua_swe: calendar year {calendar_year} needs both "
+                f"{raw_x.name} and {raw_x1.name}; missing {p.name}. "
+                f"(Archive-boundary calendar years are dropped.)"
+            )
+
+    # Mtime-idempotency against the newer of the two contributing raws.
+    newest_raw = max(raw_x.stat().st_mtime, raw_x1.stat().st_mtime)
+    if out_path.exists() and out_path.stat().st_mtime >= newest_raw:
+        logger.info(
+            "ua_swe: CY %d already consolidated and current (%s); skipping.",
+            calendar_year,
+            out_path.name,
+        )
+        return out_path
+
+    ds_x = _reproject_wy_to_dataset(calendar_year, raw_x)
+    ds_x1 = _reproject_wy_to_dataset(calendar_year + 1, raw_x1)
+    # WY X (4km_SWE_Depth_WY{X}_v01.nc) runs Oct (X-1) – Sep X.
+    # Slicing to CY X gives Jan 1 – Sep 30 of X.
+    jan_sep = _calendar_year_slice(ds_x, calendar_year)
+    # WY X+1 (4km_SWE_Depth_WY{X+1}_v01.nc) runs Oct X – Sep (X+1).
+    # Slicing to CY X gives Oct 1 – Dec 31 of X.
+    oct_dec = _calendar_year_slice(ds_x1, calendar_year)
+    ds_cy = xr.concat([jan_sep, oct_dec], dim="time").sortby("time")
+
+    expected_days = 366 if pd.Timestamp(f"{calendar_year}-12-31").is_leap_year else 365
+    actual_days = int(ds_cy.sizes["time"])
+    if actual_days < expected_days:
+        logger.warning(
+            "ua_swe: assembled CY %d has %d daily steps, expected %d — a "
+            "contributing water-year raw is short (truncated download or a "
+            "publisher gap). The consolidated NC will have missing days.",
+            calendar_year,
+            actual_days,
+            expected_days,
+        )
+
+    ds_out = apply_cf_metadata(
+        ds_cy, _SOURCE_KEY, time_step="daily", coord_type="projected"
+    )
+    _atomic_write_dataset(
+        ds_out, out_path, encoding=_build_consolidated_encoding(ds_out)
+    )
     return out_path
 
 
@@ -536,7 +586,7 @@ def _update_manifest(
     workdir: Path,
     period: str,
     meta: dict,
-    wy_records: list[dict],
+    cy_records: list[dict],
     archive_url: str,
     mask_record: dict | None,
 ) -> None:
@@ -544,7 +594,7 @@ def _update_manifest(
 
     Read-merge-write semantics so concurrent worker invocations cannot
     clobber each other (mirrors the SNODAS pattern). Records for the
-    same water year overwrite earlier entries on later calls.
+    same calendar year overwrite earlier entries on later calls.
     """
     ws = _load_project(workdir)
     manifest_path = ws.manifest_path
@@ -567,10 +617,12 @@ def _update_manifest(
         manifest.setdefault("sources", {})
         manifest.setdefault("steps", [])
         entry = manifest["sources"].get(_SOURCE_KEY, {})
-        existing_by_wy = {int(y["water_year"]): y for y in entry.get("water_years", [])}
-        for rec in wy_records:
-            existing_by_wy[int(rec["water_year"])] = rec
-        merged_wys = [existing_by_wy[w] for w in sorted(existing_by_wy)]
+        existing_by_cy = {
+            int(y["calendar_year"]): y for y in entry.get("calendar_years", [])
+        }
+        for rec in cy_records:
+            existing_by_cy[int(rec["calendar_year"])] = rec
+        merged_cys = [existing_by_cy[c] for c in sorted(existing_by_cy)]
         access = meta["access"]
         entry.update(
             {
@@ -581,7 +633,7 @@ def _update_manifest(
                 "license": meta.get("license", "public domain (NASA NSIDC)"),
                 "period": period,
                 "variables": [v["name"] for v in meta["variables"]],
-                "water_years": merged_wys,
+                "calendar_years": merged_cys,
                 "fetched_by": f"nhf_spatial_targets {__version__}",
             }
         )
@@ -598,13 +650,13 @@ def _update_manifest(
 
         # Each record stores the consolidated NC under ``daily_path`` (set
         # from the consolidator's return value on both the fresh and the
-        # mtime-idempotent skip path), so a skipped-but-present WY still
+        # mtime-idempotent skip path), so a skipped-but-present CY still
         # contributes its output checksum to the consolidate step. (#263)
-        step_outputs: list[OutputFileEntry] = []
-        for rec in wy_records:
-            nc = rec.get("daily_path")
-            if nc and Path(nc).exists():
-                step_outputs.append(output_file_entry(Path(nc)))
+        step_outputs: list[OutputFileEntry] = [
+            output_file_entry(Path(rec["daily_path"]))
+            for rec in cy_records
+            if rec.get("daily_path") and Path(rec["daily_path"]).exists()
+        ]
         manifest["steps"].append(
             build_step_record(
                 kind="consolidate",
@@ -612,7 +664,7 @@ def _update_manifest(
                 outputs=step_outputs,
                 params={
                     "period": period,
-                    "water_years": [int(rec["water_year"]) for rec in wy_records],
+                    "calendar_years": [int(r["calendar_year"]) for r in cy_records],
                     "archive_url": archive_url,
                 },
                 command=f"fetch {_SOURCE_KEY.replace('_', '-')}",
@@ -640,8 +692,8 @@ def _update_manifest(
     else:
         _do_update()
     logger.info(
-        "ua_swe: updated manifest.json for water years %s",
-        [r["water_year"] for r in wy_records],
+        "ua_swe: updated manifest.json for calendar years %s",
+        [r["calendar_year"] for r in cy_records],
     )
 
 
@@ -650,12 +702,12 @@ def _update_manifest(
 # ---------------------------------------------------------------------------
 
 
-def _assign_worker_water_years(
-    all_wys: list[int],
+def _assign_worker_calendar_years(
+    all_cys: list[int],
     worker_index: int,
     n_workers: int,
 ) -> list[int]:
-    """Round-robin slice of ``all_wys`` for one worker.
+    """Round-robin slice of ``all_cys`` for one worker.
 
     Mirrors :func:`snodas._assign_worker_years`. Slicing the full list
     (not a remaining-work set) keeps each worker's assignment
@@ -668,7 +720,7 @@ def _assign_worker_water_years(
         raise ValueError(
             f"worker_index must be in [0, {n_workers}); got {worker_index}"
         )
-    return list(all_wys[worker_index::n_workers])
+    return list(all_cys[worker_index::n_workers])
 
 
 # ---------------------------------------------------------------------------
@@ -683,14 +735,16 @@ def fetch_ua_swe(
     worker_index: int = 0,
     n_workers: int = 1,
 ) -> dict:
-    """Download UA SWE per-WY NCs and consolidate to CF NetCDFs.
+    """Download UA SWE per-WY NCs and consolidate to CF calendar-year NetCDFs.
 
-    Two-phase per water year: (1) stream
-    ``4km_SWE_Depth_WY<YYYY>_v01.nc`` from the NSIDC HTTPS archive into
-    ``<datastore>/ua_swe/raw/`` via the earthaccess auth session.
-    (2) Decode, rename, pre-project to EPSG:5070, and write a
-    CF-compliant per-WY NC at
-    ``<datastore>/ua_swe/daily/ua_swe_daily_WY<YYYY>.nc``. The CONUS
+    Two-phase per calendar year: (1) stream both adjacent WY raw NCs
+    (``4km_SWE_Depth_WY<YYYY>_v01.nc`` and ``WY<YYYY+1>_v01.nc``) from
+    the NSIDC HTTPS archive into ``<datastore>/ua_swe/raw/`` via the
+    earthaccess auth session — idempotently, so adjacent CYs that share
+    a WY file do not re-download it. (2) Consolidate: decode, rename,
+    pre-project to EPSG:5070, stitch Jan-Sep from WY X with Oct-Dec from
+    WY X+1, and write a CF-compliant calendar-year NC at
+    ``<datastore>/ua_swe/daily/ua_swe_daily_<YYYY>.nc``. The CONUS
     water/ice mask (``SWE_Mask_v01.nc``) is downloaded once at the
     datastore root and reused across runs.
 
@@ -699,17 +753,19 @@ def fetch_ua_swe(
     workdir : Path
         Project directory.
     period : str
-        Calendar-year window ``"YYYY/YYYY"`` (inclusive). The actual WY
-        files needed are CY and CY+1 for each requested calendar year;
-        the fetcher resolves the union internally. Validated against
-        the catalog's ``period``.
+        Calendar-year window ``"YYYY/YYYY"`` (inclusive). Validated
+        against the catalog's ``period``. Calendar years requiring a
+        water-year file outside the published archive are dropped with
+        an INFO log — specifically **CY 1981** (needs WY 1981, before
+        the archive) and **CY 2023** (needs WY 2024, after the archive)
+        — so full coverage is CY 1982–2022.
     worker_index, n_workers : int
-        Round-robin water-year sharding for parallel workers.
+        Round-robin calendar-year sharding for parallel workers.
 
     Returns
     -------
     dict
-        Provenance summary with the per-WY records appended.
+        Provenance summary with the per-CY records appended.
 
     Raises
     ------
@@ -738,20 +794,26 @@ def fetch_ua_swe(
                 f"({data_lo}-{data_hi}, from catalog "
                 f"`sources.yml[{_SOURCE_KEY}].period`). Adjust --period."
             )
-    # Resolve calendar years to the water-year files that contain them.
-    # For each WY needed, also clamp to the publisher's available WY
-    # range. WY 1982 is the earliest published; WY 2023 the latest.
-    candidate_wys = _calendar_years_to_water_years(requested_cys)
+    # A full calendar year X needs WY X (Jan-Sep) AND WY X+1 (Oct-Dec),
+    # both within the published WY range [publisher_wy_lo, publisher_wy_hi].
+    # => X >= publisher_wy_lo and X+1 <= publisher_wy_hi.
     publisher_wy_lo = data_lo + 1  # WY 1982 for catalog "1981/2023"
     publisher_wy_hi = data_hi  # WY 2023
-    wys = [w for w in candidate_wys if publisher_wy_lo <= w <= publisher_wy_hi]
-    if not wys:
-        logger.warning(
-            "ua_swe: requested calendar years %s map to no published water "
-            "years in [%d, %d]; nothing to fetch.",
-            requested_cys,
+    publishable_cys = [
+        cy
+        for cy in requested_cys
+        if cy >= publisher_wy_lo and (cy + 1) <= publisher_wy_hi
+    ]
+    dropped = sorted(set(requested_cys) - set(publishable_cys))
+    if dropped:
+        logger.info(
+            "ua_swe: dropping partial-edge calendar years %s (need both WY X "
+            "and WY X+1 in [%d, %d]); full coverage is %d-%d.",
+            dropped,
             publisher_wy_lo,
             publisher_wy_hi,
+            publisher_wy_lo,
+            publisher_wy_hi - 1,
         )
 
     raw_dir = ws.raw_dir(_SOURCE_KEY) / "raw"
@@ -783,10 +845,12 @@ def fetch_ua_swe(
         }
         logger.info("ua_swe: CONUS mask status=%s (%s)", mask_status, mask_path)
 
-    assigned = _assign_worker_water_years(wys, worker_index, n_workers)
-    if not assigned:
+    assigned_cys = _assign_worker_calendar_years(
+        publishable_cys, worker_index, n_workers
+    )
+    if not assigned_cys:
         logger.info(
-            "ua_swe: worker %d/%d has no water years to process for period %s",
+            "ua_swe: worker %d/%d has no calendar years to process for period %s",
             worker_index,
             n_workers,
             period,
@@ -797,63 +861,71 @@ def fetch_ua_swe(
             "archive_url": archive_url,
             "worker_index": worker_index,
             "n_workers": n_workers,
-            "water_years": [],
-            "fetched_at": now_utc,
+            "calendar_years": [],
             "mask": mask_record,
         }
 
-    wy_records: list[dict] = []
-    for wy in assigned:
-        url = _wy_url(archive_url, wy)
-        raw_path = raw_dir / _WY_FILENAME_TEMPLATE.format(wy=wy)
-        status = _download_file(session, url, raw_path)
+    cy_records: list[dict] = []
+    for cy in assigned_cys:
+        wy_status: dict[int, str] = {}
+        for wy in (cy, cy + 1):
+            url = _wy_url(archive_url, wy)
+            raw_path = raw_dir / _WY_FILENAME_TEMPLATE.format(wy=wy)
+            wy_status[wy] = _download_file(session, url, raw_path)
         rec: dict = {
-            "water_year": wy,
-            "url": url,
-            "raw_path": str(raw_path),
-            "status": status,
+            "calendar_year": cy,
+            "water_years": [cy, cy + 1],
+            "wy_status": wy_status,
             "downloaded_utc": now_utc,
         }
-        if status in ("downloaded", "already_present"):
-            # Data-level failures are recorded and continue; programming
-            # errors are not caught.
+        if all(s in ("downloaded", "already_present") for s in wy_status.values()):
             try:
-                daily_path = consolidate_water_year_ua_swe(wy, raw_path, daily_dir)
+                daily_path = consolidate_calendar_year_ua_swe(cy, raw_dir, daily_dir)
                 rec["daily_path"] = str(daily_path)
                 rec["consolidated_utc"] = datetime.now(timezone.utc).isoformat()
-            except (ValueError, FileNotFoundError, OSError, RuntimeError) as exc:
-                logger.warning("ua_swe: consolidation failed for WY %d: %s", wy, exc)
-                rec["consolidate_error"] = str(exc)
-        elif status == "missing_404":
+            except (FileNotFoundError, ValueError, OSError, RuntimeError) as exc:
+                logger.warning(
+                    "ua_swe: CY %d consolidation failed (%s): %s",
+                    cy,
+                    type(exc).__name__,
+                    exc,
+                )
+                rec["consolidate_error"] = repr(exc)
+        else:
             logger.warning(
-                "ua_swe: WY %d returned 404 at %s; skipping consolidation. "
-                "Confirm the catalog `archive_url` and the v01 filename "
-                "convention if this persists.",
-                wy,
-                url,
+                "ua_swe: CY %d skipped — WY download status %s", cy, wy_status
             )
-        else:  # "error"
-            logger.warning(
-                "ua_swe: WY %d download failed (%s); skipping consolidation.",
-                wy,
-                status,
-            )
-        wy_records.append(rec)
-        logger.info(
-            "ua_swe: WY %d — status=%s%s",
-            wy,
-            status,
-            (f", daily={Path(rec['daily_path']).name}" if "daily_path" in rec else ""),
+        cy_records.append(rec)
+
+    _update_manifest(workdir, period, meta, cy_records, archive_url, mask_record)
+
+    n_consolidated = sum(1 for r in cy_records if r.get("daily_path"))
+    n_failed = sum(1 for r in cy_records if r.get("consolidate_error"))
+    n_skipped = sum(
+        1
+        for r in cy_records
+        if not r.get("daily_path") and not r.get("consolidate_error")
+    )
+    if n_failed or n_skipped:
+        logger.warning(
+            "ua_swe: worker %d/%d — %d consolidated, %d failed, %d skipped "
+            "(inspect per-CY consolidate_error / wy_status in the summary).",
+            worker_index,
+            n_workers,
+            n_consolidated,
+            n_failed,
+            n_skipped,
         )
 
-    _update_manifest(workdir, period, meta, wy_records, archive_url, mask_record)
     return {
         "source_key": _SOURCE_KEY,
         "period": period,
         "archive_url": archive_url,
         "worker_index": worker_index,
         "n_workers": n_workers,
-        "water_years": wy_records,
-        "fetched_at": now_utc,
+        "calendar_years": cy_records,
         "mask": mask_record,
+        "n_consolidated": n_consolidated,
+        "n_failed": n_failed,
+        "n_skipped": n_skipped,
     }

@@ -21,14 +21,18 @@ import pytest
 import xarray as xr
 import yaml
 
+import logging
+
 from nhf_spatial_targets.fetch.ua_swe import (
-    _assign_worker_water_years,
-    _calendar_years_to_water_years,
+    _CONSOLIDATED_FILENAME_TEMPLATE,
+    _WY_FILENAME_TEMPLATE,
+    _assign_worker_calendar_years,
     _download_file,
     _earthaccess_session,
     _mask_url,
+    _reproject_wy_to_dataset,
     _wy_url,
-    consolidate_water_year_ua_swe,
+    consolidate_calendar_year_ua_swe,
     fetch_ua_swe,
 )
 
@@ -109,6 +113,80 @@ def _make_synthetic_raw_nc(
     depth.ravel()[flat_idx] = np.nan
     if inject_negative:
         swe[0, 0, 0] = -9999.0
+
+    ds = xr.Dataset(
+        data_vars={
+            "SWE": (
+                ("time", "lat", "lon"),
+                swe,
+                {
+                    "long_name": "Snow Water Equivalent",
+                    "grid_mapping": "crs",
+                    "units": "millimeters h20",
+                },
+            ),
+            "DEPTH": (
+                ("time", "lat", "lon"),
+                depth,
+                {
+                    "long_name": "Snow Depth",
+                    "grid_mapping": "crs",
+                    "units": "millimeters snow thickness",
+                },
+            ),
+            "crs": (
+                (),
+                b" ",
+                {
+                    "grid_mapping_name": "latitude_longitude",
+                    "long_name": "CRS definition",
+                    "spatial_ref": (
+                        'GEOGCS["NAD83",DATUM["North_American_Datum_1983",'
+                        'SPHEROID["GRS 1980",6378137,298.257222101]],'
+                        'PRIMEM["Greenwich",0],UNIT["degree",0.01745329251994328],'
+                        'AUTHORITY["EPSG","4269"]]'
+                    ),
+                },
+            ),
+        },
+        coords={
+            "time": (("time",), days_since_epoch),
+            "lat": (("lat",), lat),
+            "lon": (("lon",), lon),
+        },
+    )
+    ds.to_netcdf(path)
+
+
+def _make_sparse_wy_raw_nc(
+    path: Path,
+    timestamps: list[pd.Timestamp],
+    *,
+    n_lat: int = 2,
+    n_lon: int = 2,
+) -> None:
+    """Write a synthetic raw WY NC with exactly *timestamps* as the time axis.
+
+    Unlike :func:`_make_synthetic_raw_nc` (which always starts from Oct 1
+    of WY-1 and writes ``n_time`` sequential days), this helper accepts an
+    arbitrary set of timestamps.  This lets calendar-year tests write only
+    the minimal boundary dates needed to exercise the seam logic without
+    triggering a full-WY (365–366 day) reproject loop.
+
+    The layout is identical to the real NSIDC-0719 files: float32 days
+    since 1900-01-01, no ``units`` attr, NAD83 lat/lon CRS.
+    """
+    epoch = pd.Timestamp("1900-01-01")
+    days_since_epoch = np.array(
+        [(ts - epoch).days for ts in timestamps],
+        dtype="float32",
+    )
+    n_time = len(timestamps)
+    lat = np.linspace(30.0, 35.0, n_lat, dtype="float32")
+    lon = np.linspace(-110.0, -100.0, n_lon, dtype="float32")
+    rng = np.random.default_rng(seed=42)
+    swe = rng.uniform(0.0, 500.0, size=(n_time, n_lat, n_lon)).astype("float32")
+    depth = rng.uniform(0.0, 2000.0, size=(n_time, n_lat, n_lon)).astype("float32")
 
     ds = xr.Dataset(
         data_vars={
@@ -279,47 +357,26 @@ def small_min_bytes(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-class TestCalendarYearsToWaterYears:
-    def test_single_year(self):
-        # CY 1990 touches WY 1990 (Jan-Sep) and WY 1991 (Oct-Dec).
-        assert _calendar_years_to_water_years([1990]) == [1990, 1991]
-
-    def test_multi_year_dedupes(self):
-        # CY 1990, 1991 touches WYs {1990, 1991, 1991, 1992} → {1990, 1991, 1992}.
-        assert _calendar_years_to_water_years([1990, 1991]) == [1990, 1991, 1992]
-
-    def test_empty(self):
-        assert _calendar_years_to_water_years([]) == []
-
-    def test_sorted_output(self):
-        assert _calendar_years_to_water_years([1995, 1990]) == [
-            1990,
-            1991,
-            1995,
-            1996,
-        ]
-
-
-class TestAssignWorkerWaterYears:
+class TestAssignWorkerCalendarYears:
     def test_single_worker(self):
-        assert _assign_worker_water_years([1982, 1983, 1984], 0, 1) == [
+        assert _assign_worker_calendar_years([1982, 1983, 1984], 0, 1) == [
             1982,
             1983,
             1984,
         ]
 
     def test_round_robin(self):
-        wys = [1982, 1983, 1984, 1985, 1986]
-        assert _assign_worker_water_years(wys, 0, 2) == [1982, 1984, 1986]
-        assert _assign_worker_water_years(wys, 1, 2) == [1983, 1985]
+        cys = [1982, 1983, 1984, 1985, 1986]
+        assert _assign_worker_calendar_years(cys, 0, 2) == [1982, 1984, 1986]
+        assert _assign_worker_calendar_years(cys, 1, 2) == [1983, 1985]
 
     def test_worker_index_out_of_range(self):
         with pytest.raises(ValueError, match="worker_index"):
-            _assign_worker_water_years([1982], 2, 2)
+            _assign_worker_calendar_years([1982], 2, 2)
 
     def test_negative_n_workers(self):
         with pytest.raises(ValueError, match="n_workers"):
-            _assign_worker_water_years([1982], 0, 0)
+            _assign_worker_calendar_years([1982], 0, 0)
 
 
 class TestUrlConstruction:
@@ -334,130 +391,53 @@ class TestUrlConstruction:
 
 
 # ---------------------------------------------------------------------------
-# consolidate_water_year_ua_swe
+# _reproject_wy_to_dataset
 # ---------------------------------------------------------------------------
 
 
-class TestConsolidateWaterYear:
-    def test_happy_path(self, tmp_path: Path):
-        raw_dir = tmp_path / "raw"
-        raw_dir.mkdir()
-        daily_dir = tmp_path / "daily"
-        raw_path = raw_dir / "4km_SWE_Depth_WY1982_v01.nc"
-        _make_synthetic_raw_nc(raw_path, wy=1982)
-
-        out_path = consolidate_water_year_ua_swe(1982, raw_path, daily_dir)
-        assert out_path.exists()
-        assert out_path.name == "ua_swe_daily_WY1982.nc"
-
-        with xr.open_dataset(out_path) as ds:
-            # Variable rename
-            assert "swe" in ds.data_vars
-            assert "snow_depth" in ds.data_vars
-            assert "SWE" not in ds.data_vars
-            assert "DEPTH" not in ds.data_vars
-
-            # CF-1.6 compliance
-            assert ds.attrs.get("Conventions") == "CF-1.6"
-
-            # Catalog-driven units
-            assert ds["swe"].attrs["units"] == "kg m-2"
-            assert ds["snow_depth"].attrs["units"] == "mm"
-            assert ds["swe"].attrs["grid_mapping"] == "crs"
-
-            # Time decoded as real timestamps, not floats
-            assert np.issubdtype(ds["time"].dtype, np.datetime64)
-            # The synthetic raw started at 1981-10-01 (WY 1982 day 1).
-            assert pd.Timestamp(ds["time"].values[0]) == pd.Timestamp("1981-10-01")
-
-            # Reprojected to EPSG:5070 — spatial dims are (y, x), not (lat, lon)
-            assert "y" in ds.dims
-            assert "x" in ds.dims
-            assert "lat" not in ds.dims
-            assert "lon" not in ds.dims
-
-            # CRS ancillary carries the full Albers projection metadata
-            # (CLAUDE.md requires the CF-1.6 attribute set on every
-            # pipeline-written NC; assert the projection-specific bits
-            # not covered by the generic `Conventions` check).
-            crs = ds["crs"]
-            assert crs.attrs.get("grid_mapping_name") == "albers_conical_equal_area"
-            assert "crs_wkt" in crs.attrs
-            assert crs.attrs.get("longitude_of_central_meridian") == pytest.approx(
-                -96.0
-            )
-            assert crs.attrs.get("latitude_of_projection_origin") == pytest.approx(23.0)
-            # standard_parallel for Albers is a 2-element array
-            sp = np.asarray(crs.attrs.get("standard_parallel"))
-            assert sp.shape == (2,)
-            assert sp[0] == pytest.approx(29.5)
-            assert sp[1] == pytest.approx(45.5)
-
-            # Projected coordinate variables carry the CF-required attrs
-            for coord_name, axis in (("x", "X"), ("y", "Y")):
-                ca = ds[coord_name]
-                assert (
-                    ca.attrs.get("standard_name")
-                    == f"projection_{coord_name}_coordinate"
-                )
-                assert ca.attrs.get("units") == "m"
-                assert ca.attrs.get("axis") == axis
-
-            # Time coord carries the CF-required attrs
-            assert ds["time"].attrs.get("standard_name") == "time"
-            assert ds["time"].attrs.get("axis") == "T"
-
-    def test_mtime_idempotent_skip(self, tmp_path: Path):
-        raw_dir = tmp_path / "raw"
-        raw_dir.mkdir()
-        daily_dir = tmp_path / "daily"
-        raw_path = raw_dir / "4km_SWE_Depth_WY1982_v01.nc"
-        _make_synthetic_raw_nc(raw_path, wy=1982)
-
-        # First call: build.
-        out_path = consolidate_water_year_ua_swe(1982, raw_path, daily_dir)
-        first_mtime = out_path.stat().st_mtime
-
-        # Second call: should skip (raw_path mtime <= out_path mtime).
-        out_path2 = consolidate_water_year_ua_swe(1982, raw_path, daily_dir)
-        assert out_path2 == out_path
-        assert out_path2.stat().st_mtime == pytest.approx(first_mtime, abs=1e-3)
-
-    def test_rebuild_on_newer_raw(self, tmp_path: Path):
-        raw_dir = tmp_path / "raw"
-        raw_dir.mkdir()
-        daily_dir = tmp_path / "daily"
-        raw_path = raw_dir / "4km_SWE_Depth_WY1982_v01.nc"
-        _make_synthetic_raw_nc(raw_path, wy=1982)
-
-        out_path = consolidate_water_year_ua_swe(1982, raw_path, daily_dir)
-        first_mtime = out_path.stat().st_mtime
-
-        # Touch raw to a strictly later mtime.
-        new_mtime = first_mtime + 100
-        import os
-
-        os.utime(raw_path, (new_mtime, new_mtime))
-
-        out_path2 = consolidate_water_year_ua_swe(1982, raw_path, daily_dir)
-        assert out_path2.stat().st_mtime > first_mtime
-
+class TestReprojWyToDataset:
     def test_negative_value_defense(self, tmp_path: Path):
-        raw_dir = tmp_path / "raw"
-        raw_dir.mkdir()
-        daily_dir = tmp_path / "daily"
-        raw_path = raw_dir / "4km_SWE_Depth_WY1982_v01.nc"
+        """Sentinel < -1.0 in any variable raises ValueError."""
+        raw_path = tmp_path / "4km_SWE_Depth_WY1982_v01.nc"
         _make_synthetic_raw_nc(raw_path, wy=1982, inject_negative=True)
 
         with pytest.raises(ValueError, match="integer sentinel"):
-            consolidate_water_year_ua_swe(1982, raw_path, daily_dir)
+            _reproject_wy_to_dataset(1982, raw_path)
 
     def test_missing_raw_path(self, tmp_path: Path):
-        daily_dir = tmp_path / "daily"
+        """FileNotFoundError is raised for a non-existent raw path."""
         with pytest.raises(FileNotFoundError, match="raw NC not found"):
-            consolidate_water_year_ua_swe(
-                1982, tmp_path / "does-not-exist.nc", daily_dir
-            )
+            _reproject_wy_to_dataset(1982, tmp_path / "does-not-exist.nc")
+
+
+def test_reproject_wy_to_dataset_shape_and_vars(tmp_path: Path):
+    """Characterization test for the extracted helper (issue #237).
+
+    Verifies that :func:`_reproject_wy_to_dataset`:
+
+    - Returns ``swe`` and ``snow_depth`` (renamed from native ``SWE`` /
+      ``DEPTH``).
+    - Reprojects spatial dims to ``(y, x)`` in EPSG:5070, dropping ``lat``
+      / ``lon``.
+    - Preserves the decoded time axis length and decodes the first
+      timestamp correctly (Oct 1 of WY-1).
+    - Does NOT apply CF metadata (no ``Conventions`` attr expected here).
+    """
+    raw = tmp_path / "4km_SWE_Depth_WY2000_v01.nc"
+    # WY2000: Oct 1 1999 → Sep 30 2000 — use n_time=5 for speed.
+    _make_synthetic_raw_nc(raw, wy=2000, n_time=5)
+
+    ds = _reproject_wy_to_dataset(2000, raw)
+
+    assert set(ds.data_vars) == {"swe", "snow_depth"}
+    assert ds["swe"].dims == ("time", "y", "x")
+    assert ds["snow_depth"].dims == ("time", "y", "x")
+    assert "x" in ds.coords and "y" in ds.coords
+    assert "lat" not in ds.dims and "lon" not in ds.dims
+    assert ds.sizes["time"] == 5
+    assert pd.Timestamp(ds["time"].values[0]) == pd.Timestamp("1999-10-01")
+    # CF metadata NOT applied at this stage — no Conventions attr expected.
+    assert "Conventions" not in ds.attrs
 
 
 # ---------------------------------------------------------------------------
@@ -629,50 +609,136 @@ class TestEarthaccessSession:
 # ---------------------------------------------------------------------------
 
 
+def _cy_stub_session(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    calendar_years: list[int],
+    min_bytes_patch: bool = True,
+) -> dict[str, list]:
+    """Stub session + optional min-bytes patch for calendar-year fetch tests.
+
+    For each CY in *calendar_years*, writes sparse boundary-date raw NCs
+    for both WY cy and WY cy+1 so ``consolidate_calendar_year_ua_swe``
+    succeeds. The stub monkeypatches ``_download_file`` directly (rather
+    than ``_earthaccess_session``) to write files at the expected paths
+    and return ``"downloaded"``.  This approach avoids the
+    ``_synthetic_responder``'s n_time=3-days-from-Oct-1 layout, which
+    does not contain Jan–Sep data that the CY consolidator needs.
+
+    Returns a call-log dict ``{"wy_paths": [...], "mask_downloaded": bool}``.
+    """
+    if min_bytes_patch:
+        monkeypatch.setattr(
+            "nhf_spatial_targets.fetch.ua_swe._MIN_VALID_NC_BYTES", 1024
+        )
+
+    log: dict[str, list | bool] = {"wy_paths": [], "mask_downloaded": False}
+
+    # Build a map from WY → boundary timestamps (deferred write to download time).
+    # Each CY needs WY=cy (Jan-Sep dates) and WY=cy+1 (Oct-Dec dates).
+    wy_timestamps: dict[int, list] = {}
+    for cy in calendar_years:
+        # WY cy: needs Jan 1 and Sep 30 of cy (Jan-Sep portion of CY cy).
+        wy_timestamps.setdefault(cy, [])
+        wy_timestamps[cy].extend(
+            [
+                pd.Timestamp(f"{cy}-01-01"),
+                pd.Timestamp(f"{cy}-09-30"),
+            ]
+        )
+        # WY cy+1: needs Oct 1 and Dec 31 of cy (Oct-Dec portion of CY cy).
+        wy_timestamps.setdefault(cy + 1, [])
+        wy_timestamps[cy + 1].extend(
+            [
+                pd.Timestamp(f"{cy}-10-01"),
+                pd.Timestamp(f"{cy}-12-31"),
+            ]
+        )
+    # Deduplicate timestamps per WY.
+    wy_timestamps = {wy: sorted(set(ts)) for wy, ts in wy_timestamps.items()}
+
+    def _fake_download(session, url, out_path, **kwargs):
+        m = re.search(r"4km_SWE_Depth_WY(\d{4})_v01\.nc$", url)
+        if m:
+            wy = int(m.group(1))
+            log["wy_paths"].append(str(out_path))
+            if not out_path.exists():
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                ts = wy_timestamps.get(wy)
+                if ts:
+                    _make_sparse_wy_raw_nc(out_path, ts)
+                else:
+                    _make_synthetic_raw_nc(out_path, wy, n_time=3)
+            return "downloaded"
+        if "SWE_Mask_v01.nc" in url:
+            log["mask_downloaded"] = True
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_bytes(_MASK_PAD_BODY)
+            return "downloaded"
+        return "missing_404"
+
+    # Also stub the session so _earthaccess_session() doesn't try earthaccess.
+    class _DummySession:
+        def get(self, url, **kwargs):
+            raise AssertionError(
+                "_DummySession.get should not be called; _download_file is patched"
+            )
+
+    monkeypatch.setattr(
+        "nhf_spatial_targets.fetch.ua_swe._earthaccess_session",
+        lambda: _DummySession(),
+    )
+    monkeypatch.setattr(
+        "nhf_spatial_targets.fetch.ua_swe._download_file",
+        _fake_download,
+    )
+    return log
+
+
 class TestFetchUaSweDriver:
     """End-to-end fetcher tests with a stubbed Earthdata session.
 
-    These cover the integration of: catalog→WY mapping (CY→WY+1),
-    publisher-window clamping, worker-0 mask gate, per-WY download +
-    consolidate loop, and the manifest read-merge-write contract.
+    These cover the integration of: publisher-window clamping,
+    worker-0 mask gate, per-CY download + consolidate loop, and the
+    manifest read-merge-write contract.
     """
 
     def test_period_2010_fetches_wy_2010_and_2011(
         self, tmp_path: Path, monkeypatch, small_min_bytes
     ):
         workdir = _make_project(tmp_path)
-        calls = _stub_session(monkeypatch)
+        log = _cy_stub_session(
+            monkeypatch, calendar_years=[2010], min_bytes_patch=False
+        )
 
         result = fetch_ua_swe(
             workdir=workdir, period="2010/2010", worker_index=0, n_workers=1
         )
 
-        # CY 2010 touches WY 2010 (Jan-Sep) and WY 2011 (Oct-Dec).
-        wy_urls = [u for u in calls["urls"] if "4km_SWE_Depth_WY" in u]
-        assert any("WY2010_v01.nc" in u for u in wy_urls)
-        assert any("WY2011_v01.nc" in u for u in wy_urls)
-        assert len(wy_urls) == 2
+        # CY 2010 needs WY 2010 (Jan-Sep) and WY 2011 (Oct-Dec).
+        downloaded_wys = {int(p.split("WY")[1].split("_")[0]) for p in log["wy_paths"]}
+        assert 2010 in downloaded_wys
+        assert 2011 in downloaded_wys
 
         # Worker 0 always fetches the mask.
-        assert any("SWE_Mask_v01.nc" in u for u in calls["urls"])
+        assert log["mask_downloaded"]
 
-        # Each WY downloaded successfully and was consolidated.
-        assert len(result["water_years"]) == 2
-        for rec in result["water_years"]:
-            assert rec["status"] == "downloaded"
-            assert "daily_path" in rec, f"WY {rec['water_year']} missing daily_path"
+        # Result carries one CY record with a consolidated output.
+        assert len(result["calendar_years"]) == 1
+        rec = result["calendar_years"][0]
+        assert rec["calendar_year"] == 2010
+        assert "daily_path" in rec, "CY 2010 missing daily_path"
 
     def test_consolidated_ncs_land_on_disk(
         self, tmp_path: Path, monkeypatch, small_min_bytes
     ):
         workdir = _make_project(tmp_path)
-        _stub_session(monkeypatch)
+        _cy_stub_session(monkeypatch, calendar_years=[2010], min_bytes_patch=False)
 
         fetch_ua_swe(workdir=workdir, period="2010/2010")
 
         daily_dir = workdir / "datastore" / "ua_swe" / "daily"
-        assert (daily_dir / "ua_swe_daily_WY2010.nc").exists()
-        assert (daily_dir / "ua_swe_daily_WY2011.nc").exists()
+        assert (daily_dir / "ua_swe_daily_2010.nc").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -690,7 +756,7 @@ class TestFetchUaSweManifest:
         self, tmp_path: Path, monkeypatch, small_min_bytes
     ):
         workdir = _make_project(tmp_path)
-        # Pre-seed manifest with an unrelated source and an older ua_swe WY.
+        # Pre-seed manifest with an unrelated source and an older ua_swe CY.
         (workdir / "manifest.json").write_text(
             json.dumps(
                 {
@@ -702,8 +768,8 @@ class TestFetchUaSweManifest:
                         },
                         "ua_swe": {
                             "source_key": "ua_swe",
-                            "water_years": [
-                                {"water_year": 1982, "status": "pre-existing"}
+                            "calendar_years": [
+                                {"calendar_year": 1982, "status": "pre-existing"}
                             ],
                         },
                     },
@@ -712,7 +778,7 @@ class TestFetchUaSweManifest:
             )
         )
 
-        _stub_session(monkeypatch)
+        _cy_stub_session(monkeypatch, calendar_years=[2010], min_bytes_patch=False)
         fetch_ua_swe(workdir=workdir, period="2010/2010")
 
         manifest = json.loads((workdir / "manifest.json").read_text())
@@ -724,14 +790,16 @@ class TestFetchUaSweManifest:
             {"year": 2010, "n_granules": 365}
         ]
 
-        # ua_swe: WY 1982 preserved + new WY 2010 + WY 2011 added, sorted.
-        ua_swe_wys = manifest["sources"]["ua_swe"]["water_years"]
-        years_in_manifest = [r["water_year"] for r in ua_swe_wys]
-        assert years_in_manifest == [1982, 2010, 2011]
+        # ua_swe: CY 1982 preserved + new CY 2010 added, sorted.
+        ua_swe_cys = manifest["sources"]["ua_swe"]["calendar_years"]
+        years_in_manifest = [r["calendar_year"] for r in ua_swe_cys]
+        assert years_in_manifest == [1982, 2010]
         # The pre-existing 1982 entry retains its `status` field
-        # (only WYs touched by this run get overwritten).
-        wy1982 = next(r for r in ua_swe_wys if r["water_year"] == 1982)
-        assert wy1982["status"] == "pre-existing"
+        # (only CYs touched by this run get overwritten).
+        cy1982 = next(r for r in ua_swe_cys if r["calendar_year"] == 1982)
+        assert cy1982["status"] == "pre-existing"
+        # No legacy water_years key on the ua_swe source entry.
+        assert "water_years" not in manifest["sources"]["ua_swe"]
 
     def test_corrupt_manifest_raises_valuerror(
         self, tmp_path: Path, monkeypatch, small_min_bytes
@@ -739,7 +807,7 @@ class TestFetchUaSweManifest:
         workdir = _make_project(tmp_path)
         (workdir / "manifest.json").write_text("{not valid json")
 
-        _stub_session(monkeypatch)
+        _cy_stub_session(monkeypatch, calendar_years=[2010], min_bytes_patch=False)
         with pytest.raises(ValueError, match="corrupt"):
             fetch_ua_swe(workdir=workdir, period="2010/2010")
 
@@ -757,13 +825,15 @@ class TestFetchUaSweWorkerGate:
         self, tmp_path: Path, monkeypatch, small_min_bytes
     ):
         workdir = _make_project(tmp_path)
-        calls = _stub_session(monkeypatch)
-
-        result = fetch_ua_swe(
-            workdir=workdir, period="2010/2010", worker_index=0, n_workers=2
+        log = _cy_stub_session(
+            monkeypatch, calendar_years=[2010, 2011], min_bytes_patch=False
         )
 
-        assert any("SWE_Mask_v01.nc" in u for u in calls["urls"])
+        result = fetch_ua_swe(
+            workdir=workdir, period="2010/2011", worker_index=0, n_workers=2
+        )
+
+        assert log["mask_downloaded"]
         assert result["mask"] is not None
         assert result["mask"]["status"] == "downloaded"
 
@@ -771,14 +841,419 @@ class TestFetchUaSweWorkerGate:
         self, tmp_path: Path, monkeypatch, small_min_bytes
     ):
         workdir = _make_project(tmp_path)
-        calls = _stub_session(monkeypatch)
-
-        result = fetch_ua_swe(
-            workdir=workdir, period="2010/2010", worker_index=1, n_workers=2
+        log = _cy_stub_session(
+            monkeypatch, calendar_years=[2010, 2011], min_bytes_patch=False
         )
 
-        assert not any("SWE_Mask_v01.nc" in u for u in calls["urls"])
+        result = fetch_ua_swe(
+            workdir=workdir, period="2010/2011", worker_index=1, n_workers=2
+        )
+
+        assert not log["mask_downloaded"]
         assert result["mask"] is None
+
+
+# ---------------------------------------------------------------------------
+# consolidate_calendar_year_ua_swe  (issue #237)
+# ---------------------------------------------------------------------------
+
+
+def _build_cy_raw_fixtures(raw_dir: Path, calendar_year: int) -> None:
+    """Write the two adjacent WY raw NCs needed to assemble one calendar year.
+
+    Uses :func:`_make_sparse_wy_raw_nc` with only boundary dates to keep
+    per-test reproject runtime low (4 days × 2 files = 8 reprojections).
+
+    Calendar year *X* is assembled from:
+    - WY *X* (``4km_SWE_Depth_WY{X}_v01.nc``): Jan 1 and Sep 30 of CY X
+    - WY *X+1* (``4km_SWE_Depth_WY{X+1}_v01.nc``): Oct 1 and Dec 31 of CY X
+    """
+    cy = calendar_year
+    # WY X = the file named WY{cy}; it runs Oct 1 (cy-1) – Sep 30 (cy).
+    # We only need the Jan-Sep portion that falls in CY cy.
+    wy_x_path = raw_dir / _WY_FILENAME_TEMPLATE.format(wy=cy)
+    _make_sparse_wy_raw_nc(
+        wy_x_path,
+        [
+            pd.Timestamp(f"{cy}-01-01"),
+            pd.Timestamp(f"{cy}-09-30"),
+        ],
+    )
+    # WY X+1 = the file named WY{cy+1}; it runs Oct 1 (cy) – Sep 30 (cy+1).
+    # We only need the Oct-Dec portion that falls in CY cy.
+    wy_x1_path = raw_dir / _WY_FILENAME_TEMPLATE.format(wy=cy + 1)
+    _make_sparse_wy_raw_nc(
+        wy_x1_path,
+        [
+            pd.Timestamp(f"{cy}-10-01"),
+            pd.Timestamp(f"{cy}-12-31"),
+        ],
+    )
+
+
+def test_consolidate_calendar_year_spans_jan_to_dec(tmp_path: Path):
+    """CY output covers Jan 1 – Dec 31, seamlessly stitched from WY X and WY X+1."""
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    daily = tmp_path / "daily"
+
+    _build_cy_raw_fixtures(raw_dir, 2000)
+
+    out = consolidate_calendar_year_ua_swe(2000, raw_dir, daily)
+
+    assert out.name == _CONSOLIDATED_FILENAME_TEMPLATE.format(year=2000)
+
+    with xr.open_dataset(out) as ds:
+        t = pd.DatetimeIndex(ds["time"].values)
+
+        # Full Jan-Dec span
+        assert t.min() == pd.Timestamp("2000-01-01")
+        assert t.max() == pd.Timestamp("2000-12-31")
+
+        # Monotonically increasing, no duplicates
+        assert t.is_monotonic_increasing
+        assert t.is_unique
+        # The fixture writes exactly 4 boundary dates: Jan 1, Sep 30, Oct 1, Dec 31.
+        # The WY→WY seam (Sep 30 → Oct 1) must be exactly 1 day — no gap or dup.
+        sep30 = pd.Timestamp("2000-09-30")
+        oct01 = pd.Timestamp("2000-10-01")
+        assert sep30 in t, "Sep 30 must be in the output (from WY X)"
+        assert oct01 in t, "Oct 1 must be in the output (from WY X+1)"
+        seam_gap = t[t.get_loc(oct01)] - t[t.get_loc(sep30)]
+        assert seam_gap == pd.Timedelta(days=1), (
+            f"Seam gap must be exactly 1 day (Sep 30 → Oct 1), got {seam_gap}"
+        )
+
+        # CF-1.6 compliance: Conventions attr + key variable attrs
+        assert ds.attrs.get("Conventions") == "CF-1.6"
+        assert ds["swe"].attrs["units"] == "kg m-2"
+        assert ds["snow_depth"].attrs.get("units"), "snow_depth must have a units attr"
+
+        # Projected coords survive concat
+        assert "x" in ds.coords and "y" in ds.coords
+        assert "lat" not in ds.dims and "lon" not in ds.dims
+
+
+def test_consolidate_calendar_year_boundary_raises(tmp_path: Path):
+    """Archive boundary: WY X+1 absent → FileNotFoundError (no partial CY)."""
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    daily = tmp_path / "daily"
+
+    # Write only WY 2023 (the file named 4km_SWE_Depth_WY2023_v01.nc);
+    # WY 2024 is absent, simulating the end-of-archive boundary.
+    wy2023_path = raw_dir / _WY_FILENAME_TEMPLATE.format(wy=2023)
+    _make_sparse_wy_raw_nc(
+        wy2023_path,
+        [pd.Timestamp("2023-01-01"), pd.Timestamp("2023-09-30")],
+    )
+
+    with pytest.raises(FileNotFoundError):
+        consolidate_calendar_year_ua_swe(2023, raw_dir, daily)
+
+
+def test_consolidate_calendar_year_missing_wy_x_raises(tmp_path: Path):
+    """Raise FileNotFoundError when WY X itself is missing."""
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    daily = tmp_path / "daily"
+
+    # Write only WY 2001 (needed for Oct-Dec of CY 2000); WY 2000 absent.
+    wy2001_path = raw_dir / _WY_FILENAME_TEMPLATE.format(wy=2001)
+    _make_sparse_wy_raw_nc(
+        wy2001_path,
+        [pd.Timestamp("2000-10-01"), pd.Timestamp("2000-12-31")],
+    )
+
+    with pytest.raises(FileNotFoundError):
+        consolidate_calendar_year_ua_swe(2000, raw_dir, daily)
+
+
+def test_consolidate_calendar_year_idempotent(tmp_path: Path):
+    """Calling twice returns the same path; second call skips (mtime-idempotent)."""
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    daily = tmp_path / "daily"
+
+    _build_cy_raw_fixtures(raw_dir, 2000)
+
+    out1 = consolidate_calendar_year_ua_swe(2000, raw_dir, daily)
+    mtime1 = out1.stat().st_mtime
+
+    out2 = consolidate_calendar_year_ua_swe(2000, raw_dir, daily)
+    assert out2 == out1
+    assert out2.stat().st_mtime == pytest.approx(mtime1, abs=1e-3)
+
+
+def test_consolidate_calendar_year_rebuild_on_newer_raw(tmp_path: Path):
+    """Staleness branch: output is rebuilt when either raw is newer than the output.
+
+    Mirrors :meth:`TestConsolidateWaterYear.test_rebuild_on_newer_raw` for
+    the calendar-year path.  The idempotency check compares ``out.st_mtime``
+    against ``max(raw_x.st_mtime, raw_x1.st_mtime)``; touching one of the
+    raws to a strictly later time than the output must trigger a rebuild.
+    """
+    import os
+
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    daily = tmp_path / "daily"
+
+    _build_cy_raw_fixtures(raw_dir, 2000)
+
+    # First call: build and record the output mtime.
+    out = consolidate_calendar_year_ua_swe(2000, raw_dir, daily)
+    first_mtime = out.stat().st_mtime
+
+    # Touch WY 2001 (raw_x1) to a strictly later mtime.
+    raw_x1 = raw_dir / _WY_FILENAME_TEMPLATE.format(wy=2001)
+    t = first_mtime + 10
+    os.utime(raw_x1, (t, t))
+
+    # Second call: staleness detected → output rebuilt (mtime advanced).
+    out2 = consolidate_calendar_year_ua_swe(2000, raw_dir, daily)
+    assert out2.stat().st_mtime > first_mtime
+
+
+# ---------------------------------------------------------------------------
+# fetch_ua_swe calendar-year flow (Tasks 4 + 5 — issue #237)
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_ua_swe_consolidates_by_calendar_year(
+    tmp_path: Path, monkeypatch, small_min_bytes
+):
+    """fetch_ua_swe produces per-CY NCs keyed by calendar year (not WY)."""
+    workdir = _make_project(tmp_path)
+    _cy_stub_session(monkeypatch, calendar_years=[2000, 2001], min_bytes_patch=False)
+
+    result = fetch_ua_swe(
+        workdir=workdir, period="2000/2001", worker_index=0, n_workers=1
+    )
+
+    daily_dir = workdir / "datastore" / "ua_swe" / "daily"
+    assert (daily_dir / "ua_swe_daily_2000.nc").exists(), "CY 2000 NC missing"
+    assert (daily_dir / "ua_swe_daily_2001.nc").exists(), "CY 2001 NC missing"
+
+    cy_years = {r["calendar_year"] for r in result["calendar_years"]}
+    assert cy_years == {2000, 2001}
+    assert (
+        result["n_consolidated"] == 2
+        and result["n_failed"] == 0
+        and result["n_skipped"] == 0
+    )
+
+
+def test_fetch_ua_swe_drops_partial_edge_years(
+    tmp_path: Path, monkeypatch, small_min_bytes
+):
+    """CY that needs WY X+1 beyond publisher_wy_hi is silently dropped.
+
+    The catalog publishes WY 1982-2023 (catalog period "1981/2023").
+    publisher_wy_hi = 2023.  CY 2023 would need WY 2024, which is
+    outside the published range → dropped. CY 2022 (needs WY 2023) is
+    kept.
+    """
+    workdir = _make_project(tmp_path)
+    # Only CY 2022 is publishable; CY 2023 needs WY 2024 (outside window).
+    _cy_stub_session(monkeypatch, calendar_years=[2022], min_bytes_patch=False)
+
+    result = fetch_ua_swe(
+        workdir=workdir, period="2022/2023", worker_index=0, n_workers=1
+    )
+
+    cy_years = {r["calendar_year"] for r in result["calendar_years"]}
+    assert 2022 in cy_years, "CY 2022 should be produced"
+    assert 2023 not in cy_years, "CY 2023 should be dropped (needs WY 2024)"
+
+
+def test_manifest_records_calendar_years(tmp_path: Path, monkeypatch, small_min_bytes):
+    """After fetch, manifest carries calendar_years (not water_years) + consolidate step."""
+    workdir = _make_project(tmp_path)
+    _cy_stub_session(monkeypatch, calendar_years=[2000], min_bytes_patch=False)
+
+    fetch_ua_swe(workdir=workdir, period="2000/2000", worker_index=0, n_workers=1)
+
+    manifest = json.loads((workdir / "manifest.json").read_text())
+    ua = manifest["sources"]["ua_swe"]
+
+    # calendar_years key present with the expected CY record.
+    assert "calendar_years" in ua, "manifest must have calendar_years key"
+    cy_entries = ua["calendar_years"]
+    assert len(cy_entries) >= 1
+    cy_keys = {r["calendar_year"] for r in cy_entries}
+    assert 2000 in cy_keys
+
+    # No legacy water_years key on the source entry.
+    assert "water_years" not in ua, "manifest must NOT have legacy water_years key"
+
+    # A consolidate step with calendar_years param and outputs pointing at CY NC.
+    consolidate_steps = [
+        s
+        for s in manifest.get("steps", [])
+        if s.get("kind") == "consolidate" and s.get("source_key") == "ua_swe"
+    ]
+    assert consolidate_steps, "at least one consolidate step for ua_swe"
+    step = consolidate_steps[-1]
+    assert "calendar_years" in step["params"], "step params must have calendar_years"
+    assert 2000 in step["params"]["calendar_years"]
+    # The step outputs include the CY 2000 NC path.
+    output_paths = [o["path"] for o in step.get("outputs", [])]
+    assert any("ua_swe_daily_2000.nc" in p for p in output_paths), (
+        f"CY 2000 NC not in step outputs: {output_paths}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Change D: short-year completeness warning
+# ---------------------------------------------------------------------------
+
+
+def test_consolidate_calendar_year_warns_on_short_year(tmp_path: Path, caplog):
+    """Assembling a CY from sparse raws (fewer than 365/366 days) emits WARNING.
+
+    The sparse fixtures produced by _build_cy_raw_fixtures contain only 4
+    boundary dates (Jan 1, Sep 30, Oct 1, Dec 31), far fewer than 365/366
+    days, so the assembled dataset is short.  The consolidator must emit a
+    WARNING containing 'expected' and 'daily steps' — and the NC must still
+    be written (warning, not raise).
+    """
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    daily = tmp_path / "daily"
+
+    _build_cy_raw_fixtures(raw_dir, 2001)  # non-leap: expected 365
+
+    with caplog.at_level(logging.WARNING, logger="nhf_spatial_targets.fetch.ua_swe"):
+        out = consolidate_calendar_year_ua_swe(2001, raw_dir, daily)
+
+    # NC must still be written
+    assert out.exists(), (
+        "consolidated NC must be written even when a warning is emitted"
+    )
+
+    # Warning must mention the day-count discrepancy
+    warning_messages = [
+        r.message for r in caplog.records if r.levelno == logging.WARNING
+    ]
+    assert any(
+        "expected" in str(m) and "daily steps" in str(m) for m in warning_messages
+    ), f"Expected short-year warning not found; got: {warning_messages}"
+
+
+# ---------------------------------------------------------------------------
+# Change G: download-failed → CY-skipped branch
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_ua_swe_skips_cy_when_wy_download_fails(
+    tmp_path: Path, monkeypatch, small_min_bytes
+):
+    """A CY is skipped (no daily_path, no consolidate_error) when one of its
+    WY downloads fails with 'missing_404'.
+
+    Period 2010/2011 covers publishable CYs [2010, 2011].
+    - CY 2010 needs WY 2010 and WY 2011.
+    - CY 2011 needs WY 2011 and WY 2012.
+    Injecting a missing_404 for WY 2011 means:
+    - CY 2010 is skipped (wy_status has missing_404 for WY 2011).
+    - CY 2011 is skipped (wy_status has missing_404 for WY 2011).
+    So n_skipped >= 1 and no daily NC for any affected CY.
+    """
+    workdir = _make_project(tmp_path)
+
+    monkeypatch.setattr("nhf_spatial_targets.fetch.ua_swe._MIN_VALID_NC_BYTES", 1024)
+
+    # Build boundary timestamps for all WYs that will be attempted (except WY 2011).
+    # CYs 2010 and 2011 both need WY 2011 which will be injected as missing_404.
+    wy_timestamps: dict[int, list] = {
+        2010: [pd.Timestamp("2010-01-01"), pd.Timestamp("2010-09-30")],
+        2011: None,  # sentinel: this WY returns missing_404
+        2012: [pd.Timestamp("2011-10-01"), pd.Timestamp("2011-12-31")],
+    }
+
+    def _fake_download(session, url, out_path, **kwargs):
+        m = re.search(r"4km_SWE_Depth_WY(\d{4})_v01\.nc$", url)
+        if m:
+            wy = int(m.group(1))
+            if wy_timestamps.get(wy) is None:
+                # Simulate a 404 for WY 2011
+                return "missing_404"
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            if not out_path.exists():
+                _make_sparse_wy_raw_nc(out_path, wy_timestamps[wy])
+            return "downloaded"
+        if "SWE_Mask_v01.nc" in url:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_bytes(_MASK_PAD_BODY)
+            return "downloaded"
+        return "missing_404"
+
+    class _DummySession:
+        def get(self, url, **kwargs):
+            raise AssertionError("_DummySession.get should not be called")
+
+    monkeypatch.setattr(
+        "nhf_spatial_targets.fetch.ua_swe._earthaccess_session",
+        lambda: _DummySession(),
+    )
+    monkeypatch.setattr(
+        "nhf_spatial_targets.fetch.ua_swe._download_file",
+        _fake_download,
+    )
+
+    result = fetch_ua_swe(
+        workdir=workdir, period="2010/2011", worker_index=0, n_workers=1
+    )
+
+    daily_dir = workdir / "datastore" / "ua_swe" / "daily"
+
+    # Both CYs need WY 2011 → both skipped
+    for rec in result["calendar_years"]:
+        cy = rec["calendar_year"]
+        assert "daily_path" not in rec, f"CY {cy} should be skipped, not consolidated"
+        assert "consolidate_error" not in rec, (
+            f"CY {cy} skip must be a download-skip (no consolidate_error), got: {rec}"
+        )
+        assert "missing_404" in str(rec["wy_status"].values()), (
+            f"CY {cy} wy_status must show the missing_404: {rec['wy_status']}"
+        )
+        assert not (daily_dir / f"ua_swe_daily_{cy}.nc").exists(), (
+            f"ua_swe_daily_{cy}.nc must not exist for a skipped CY"
+        )
+
+    assert result["n_skipped"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# Change H: multi-worker partition end-to-end
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_ua_swe_worker_sharding_partitions_calendar_years(
+    tmp_path: Path, monkeypatch, small_min_bytes
+):
+    """Worker round-robin: with n_workers=2 and period 2010/2011, worker 0
+    processes CY 2010 and worker 1 processes CY 2011 (publishable CYs in
+    round-robin order [2010, 2011][i::2]).
+    """
+    workdir = _make_project(tmp_path)
+
+    # Both CYs need WY 2010, 2011, 2012 — stub all of them.
+    _cy_stub_session(monkeypatch, calendar_years=[2010, 2011], min_bytes_patch=False)
+
+    result_w0 = fetch_ua_swe(
+        workdir=workdir, period="2010/2011", worker_index=0, n_workers=2
+    )
+    result_w1 = fetch_ua_swe(
+        workdir=workdir, period="2010/2011", worker_index=1, n_workers=2
+    )
+
+    cys_w0 = {r["calendar_year"] for r in result_w0["calendar_years"]}
+    cys_w1 = {r["calendar_year"] for r in result_w1["calendar_years"]}
+
+    assert cys_w0 == {2010}, f"Worker 0 should get CY 2010 only, got {cys_w0}"
+    assert cys_w1 == {2011}, f"Worker 1 should get CY 2011 only, got {cys_w1}"
 
 
 # ---------------------------------------------------------------------------
@@ -788,7 +1263,7 @@ class TestFetchUaSweWorkerGate:
 
 @pytest.mark.integration
 def test_fetch_one_water_year_live(tmp_path: Path):
-    """Live download of one WY from NSIDC and consolidate.
+    """Live download of one CY from NSIDC and consolidate.
 
     Requires Earthdata Login credentials in ~/.netrc (run
     ``nhf-targets materialize-credentials`` first). Skipped by default;
@@ -797,11 +1272,11 @@ def test_fetch_one_water_year_live(tmp_path: Path):
     workdir = _make_project(tmp_path)
     result = fetch_ua_swe(
         workdir=workdir,
-        period="2010/2010",  # touches WY 2010 + WY 2011
+        period="2010/2010",  # CY 2010: needs WY 2010 + WY 2011
         worker_index=0,
         n_workers=1,
     )
     assert result["source_key"] == "ua_swe"
-    assert len(result["water_years"]) >= 1
-    # At least one WY should have consolidated successfully.
-    assert any("daily_path" in rec for rec in result["water_years"])
+    assert len(result["calendar_years"]) >= 1
+    # At least one CY should have consolidated successfully.
+    assert any("daily_path" in rec for rec in result["calendar_years"])

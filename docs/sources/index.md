@@ -1,6 +1,6 @@
 # Sources
 
-This pipeline ingests **15 active gridded sources**, plus one (SSEBop) accessed remotely via STAC at aggregation time without a local fetch. Each source has its own operator notes covering access pathway, authentication quirks, on-disk layout, known gaps, and HPC tuning observations.
+This pipeline ingests **16 active gridded sources**, plus one (SSEBop) accessed remotely via STAC at aggregation time without a local fetch. Each source has its own operator notes covering access pathway, authentication quirks, on-disk layout, known gaps, and HPC tuning observations.
 
 ## Source-by-target map
 
@@ -10,8 +10,8 @@ This pipeline ingests **15 active gridded sources**, plus one (SSEBop) accessed 
 | AET | [MOD16A2 v061](mod16a2_v061.md) · [SSEBop](ssebop.md) · [MWBM ClimGrid](mwbm_climgrid.md) |
 | Recharge | [Reitz 2017](reitz2017.md) · [WaterGAP 2.2d](watergap22d.md) · [ERA5-Land](era5_land.md) |
 | Soil moisture | [MERRA-2](merra2.md) · [NCEP/NCAR](ncep_ncar.md) · [NLDAS-MOSAIC](nldas_mosaic.md) · [NLDAS-NOAH](nldas_noah.md) |
-| Snow cover (SCA) | [MOD10C1 v061](mod10c1_v061.md) |
-| SWE | [Daymet](daymet.md) · [SNODAS](snodas.md) · [ERA5-Land](era5_land.md) · [Margulis WUS-SR](margulis_wus_sr.md) |
+| Snow cover (SCA) | [MOD10C1 v061](mod10c1_v061.md) · [UA SWE](ua_swe.md) |
+| SWE | [Daymet](daymet.md) · [SNODAS](snodas.md) · [ERA5-Land](era5_land.md) · [Margulis WUS-SR](margulis_wus_sr.md) · [UA SWE](ua_swe.md) |
 
 ## Per-source docs
 
