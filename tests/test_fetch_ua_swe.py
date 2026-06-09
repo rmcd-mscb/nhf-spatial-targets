@@ -1025,6 +1025,36 @@ def test_consolidate_calendar_year_idempotent(tmp_path: Path):
     assert out2.stat().st_mtime == pytest.approx(mtime1, abs=1e-3)
 
 
+def test_consolidate_calendar_year_rebuild_on_newer_raw(tmp_path: Path):
+    """Staleness branch: output is rebuilt when either raw is newer than the output.
+
+    Mirrors :meth:`TestConsolidateWaterYear.test_rebuild_on_newer_raw` for
+    the calendar-year path.  The idempotency check compares ``out.st_mtime``
+    against ``max(raw_x.st_mtime, raw_x1.st_mtime)``; touching one of the
+    raws to a strictly later time than the output must trigger a rebuild.
+    """
+    import os
+
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    daily = tmp_path / "daily"
+
+    _build_cy_raw_fixtures(raw_dir, 2000)
+
+    # First call: build and record the output mtime.
+    out = consolidate_calendar_year_ua_swe(2000, raw_dir, daily)
+    first_mtime = out.stat().st_mtime
+
+    # Touch WY 2001 (raw_x1) to a strictly later mtime.
+    raw_x1 = raw_dir / _WY_FILENAME_TEMPLATE.format(wy=2001)
+    t = first_mtime + 10
+    os.utime(raw_x1, (t, t))
+
+    # Second call: staleness detected → output rebuilt (mtime advanced).
+    out2 = consolidate_calendar_year_ua_swe(2000, raw_dir, daily)
+    assert out2.stat().st_mtime > first_mtime
+
+
 # ---------------------------------------------------------------------------
 # Integration (skipped by default; opt-in via -m integration)
 # ---------------------------------------------------------------------------

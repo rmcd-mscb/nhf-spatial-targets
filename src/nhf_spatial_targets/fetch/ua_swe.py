@@ -587,18 +587,20 @@ def consolidate_calendar_year_ua_swe(
         return out_path
 
     ds_x = _reproject_wy_to_dataset(calendar_year, raw_x)
-    ds_x1 = _reproject_wy_to_dataset(calendar_year + 1, raw_x1)
     try:
-        # WY X (4km_SWE_Depth_WY{X}_v01.nc) runs Oct (X-1) – Sep X.
-        # Slicing to CY X gives Jan 1 – Sep 30 of X.
-        jan_sep = _calendar_year_slice(ds_x, calendar_year)
-        # WY X+1 (4km_SWE_Depth_WY{X+1}_v01.nc) runs Oct X – Sep (X+1).
-        # Slicing to CY X gives Oct 1 – Dec 31 of X.
-        oct_dec = _calendar_year_slice(ds_x1, calendar_year)
-        ds_cy = xr.concat([jan_sep, oct_dec], dim="time").sortby("time")
+        ds_x1 = _reproject_wy_to_dataset(calendar_year + 1, raw_x1)
+        try:
+            # WY X (4km_SWE_Depth_WY{X}_v01.nc) runs Oct (X-1) – Sep X.
+            # Slicing to CY X gives Jan 1 – Sep 30 of X.
+            jan_sep = _calendar_year_slice(ds_x, calendar_year)
+            # WY X+1 (4km_SWE_Depth_WY{X+1}_v01.nc) runs Oct X – Sep (X+1).
+            # Slicing to CY X gives Oct 1 – Dec 31 of X.
+            oct_dec = _calendar_year_slice(ds_x1, calendar_year)
+            ds_cy = xr.concat([jan_sep, oct_dec], dim="time").sortby("time")
+        finally:
+            ds_x1.close()
     finally:
         ds_x.close()
-        ds_x1.close()
 
     ds_out = apply_cf_metadata(
         ds_cy, _SOURCE_KEY, time_step="daily", coord_type="projected"
