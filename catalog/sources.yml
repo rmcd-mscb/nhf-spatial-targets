@@ -956,6 +956,12 @@ sources:
         and gdptools skips reprojection during weight generation
         (~5-8x weight-gen speedup measured for SNODAS). Nearest-
         neighbour resampling preserves NaN fill without bleed.
+        Consolidation re-windows the per-WY raws into one CF-1.6
+        calendar-year NetCDF per calendar year named
+        `ua_swe_daily_<YYYY>.nc` under `<datastore>/ua_swe/daily/`
+        (full coverage CY 1982–2022; partial edge years 1981 and 2023
+        are dropped), assembled from the Jan–Sep portion of WY X and
+        the Oct–Dec portion of WY X+1 — mirrors `margulis_wus_sr`.
     variables:
       - name: swe
         long_name: snow water equivalent
