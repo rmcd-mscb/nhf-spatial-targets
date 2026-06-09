@@ -22,17 +22,15 @@ import xarray as xr
 import yaml
 
 from nhf_spatial_targets.fetch.ua_swe import (
-    _CY_CONSOLIDATED_FILENAME_TEMPLATE,
+    _CONSOLIDATED_FILENAME_TEMPLATE,
     _WY_FILENAME_TEMPLATE,
     _assign_worker_calendar_years,
-    _calendar_years_to_water_years,
     _download_file,
     _earthaccess_session,
     _mask_url,
     _reproject_wy_to_dataset,
     _wy_url,
     consolidate_calendar_year_ua_swe,
-    consolidate_water_year_ua_swe,
     fetch_ua_swe,
 )
 
@@ -357,27 +355,6 @@ def small_min_bytes(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-class TestCalendarYearsToWaterYears:
-    def test_single_year(self):
-        # CY 1990 touches WY 1990 (Jan-Sep) and WY 1991 (Oct-Dec).
-        assert _calendar_years_to_water_years([1990]) == [1990, 1991]
-
-    def test_multi_year_dedupes(self):
-        # CY 1990, 1991 touches WYs {1990, 1991, 1991, 1992} → {1990, 1991, 1992}.
-        assert _calendar_years_to_water_years([1990, 1991]) == [1990, 1991, 1992]
-
-    def test_empty(self):
-        assert _calendar_years_to_water_years([]) == []
-
-    def test_sorted_output(self):
-        assert _calendar_years_to_water_years([1995, 1990]) == [
-            1990,
-            1991,
-            1995,
-            1996,
-        ]
-
-
 class TestAssignWorkerCalendarYears:
     def test_single_worker(self):
         assert _assign_worker_calendar_years([1982, 1983, 1984], 0, 1) == [
@@ -412,135 +389,23 @@ class TestUrlConstruction:
 
 
 # ---------------------------------------------------------------------------
-# consolidate_water_year_ua_swe
+# _reproject_wy_to_dataset
 # ---------------------------------------------------------------------------
 
 
-class TestConsolidateWaterYear:
-    def test_happy_path(self, tmp_path: Path):
-        raw_dir = tmp_path / "raw"
-        raw_dir.mkdir()
-        daily_dir = tmp_path / "daily"
-        raw_path = raw_dir / "4km_SWE_Depth_WY1982_v01.nc"
-        _make_synthetic_raw_nc(raw_path, wy=1982)
-
-        out_path = consolidate_water_year_ua_swe(1982, raw_path, daily_dir)
-        assert out_path.exists()
-        assert out_path.name == "ua_swe_daily_WY1982.nc"
-
-        with xr.open_dataset(out_path) as ds:
-            # Variable rename
-            assert "swe" in ds.data_vars
-            assert "snow_depth" in ds.data_vars
-            assert "SWE" not in ds.data_vars
-            assert "DEPTH" not in ds.data_vars
-
-            # CF-1.6 compliance
-            assert ds.attrs.get("Conventions") == "CF-1.6"
-
-            # Catalog-driven units
-            assert ds["swe"].attrs["units"] == "kg m-2"
-            assert ds["snow_depth"].attrs["units"] == "mm"
-            assert ds["swe"].attrs["grid_mapping"] == "crs"
-
-            # Time decoded as real timestamps, not floats
-            assert np.issubdtype(ds["time"].dtype, np.datetime64)
-            # The synthetic raw started at 1981-10-01 (WY 1982 day 1).
-            assert pd.Timestamp(ds["time"].values[0]) == pd.Timestamp("1981-10-01")
-
-            # Reprojected to EPSG:5070 — spatial dims are (y, x), not (lat, lon)
-            assert "y" in ds.dims
-            assert "x" in ds.dims
-            assert "lat" not in ds.dims
-            assert "lon" not in ds.dims
-
-            # CRS ancillary carries the full Albers projection metadata
-            # (CLAUDE.md requires the CF-1.6 attribute set on every
-            # pipeline-written NC; assert the projection-specific bits
-            # not covered by the generic `Conventions` check).
-            crs = ds["crs"]
-            assert crs.attrs.get("grid_mapping_name") == "albers_conical_equal_area"
-            assert "crs_wkt" in crs.attrs
-            assert crs.attrs.get("longitude_of_central_meridian") == pytest.approx(
-                -96.0
-            )
-            assert crs.attrs.get("latitude_of_projection_origin") == pytest.approx(23.0)
-            # standard_parallel for Albers is a 2-element array
-            sp = np.asarray(crs.attrs.get("standard_parallel"))
-            assert sp.shape == (2,)
-            assert sp[0] == pytest.approx(29.5)
-            assert sp[1] == pytest.approx(45.5)
-
-            # Projected coordinate variables carry the CF-required attrs
-            for coord_name, axis in (("x", "X"), ("y", "Y")):
-                ca = ds[coord_name]
-                assert (
-                    ca.attrs.get("standard_name")
-                    == f"projection_{coord_name}_coordinate"
-                )
-                assert ca.attrs.get("units") == "m"
-                assert ca.attrs.get("axis") == axis
-
-            # Time coord carries the CF-required attrs
-            assert ds["time"].attrs.get("standard_name") == "time"
-            assert ds["time"].attrs.get("axis") == "T"
-
-    def test_mtime_idempotent_skip(self, tmp_path: Path):
-        raw_dir = tmp_path / "raw"
-        raw_dir.mkdir()
-        daily_dir = tmp_path / "daily"
-        raw_path = raw_dir / "4km_SWE_Depth_WY1982_v01.nc"
-        _make_synthetic_raw_nc(raw_path, wy=1982)
-
-        # First call: build.
-        out_path = consolidate_water_year_ua_swe(1982, raw_path, daily_dir)
-        first_mtime = out_path.stat().st_mtime
-
-        # Second call: should skip (raw_path mtime <= out_path mtime).
-        out_path2 = consolidate_water_year_ua_swe(1982, raw_path, daily_dir)
-        assert out_path2 == out_path
-        assert out_path2.stat().st_mtime == pytest.approx(first_mtime, abs=1e-3)
-
-    def test_rebuild_on_newer_raw(self, tmp_path: Path):
-        raw_dir = tmp_path / "raw"
-        raw_dir.mkdir()
-        daily_dir = tmp_path / "daily"
-        raw_path = raw_dir / "4km_SWE_Depth_WY1982_v01.nc"
-        _make_synthetic_raw_nc(raw_path, wy=1982)
-
-        out_path = consolidate_water_year_ua_swe(1982, raw_path, daily_dir)
-        first_mtime = out_path.stat().st_mtime
-
-        # Touch raw to a strictly later mtime.
-        new_mtime = first_mtime + 100
-        import os
-
-        os.utime(raw_path, (new_mtime, new_mtime))
-
-        out_path2 = consolidate_water_year_ua_swe(1982, raw_path, daily_dir)
-        assert out_path2.stat().st_mtime > first_mtime
-
+class TestReprojWyToDataset:
     def test_negative_value_defense(self, tmp_path: Path):
-        raw_dir = tmp_path / "raw"
-        raw_dir.mkdir()
-        daily_dir = tmp_path / "daily"
-        raw_path = raw_dir / "4km_SWE_Depth_WY1982_v01.nc"
+        """Sentinel < -1.0 in any variable raises ValueError."""
+        raw_path = tmp_path / "4km_SWE_Depth_WY1982_v01.nc"
         _make_synthetic_raw_nc(raw_path, wy=1982, inject_negative=True)
 
         with pytest.raises(ValueError, match="integer sentinel"):
-            consolidate_water_year_ua_swe(1982, raw_path, daily_dir)
+            _reproject_wy_to_dataset(1982, raw_path)
 
     def test_missing_raw_path(self, tmp_path: Path):
-        daily_dir = tmp_path / "daily"
+        """FileNotFoundError is raised for a non-existent raw path."""
         with pytest.raises(FileNotFoundError, match="raw NC not found"):
-            consolidate_water_year_ua_swe(
-                1982, tmp_path / "does-not-exist.nc", daily_dir
-            )
-
-
-# ---------------------------------------------------------------------------
-# _reproject_wy_to_dataset
-# ---------------------------------------------------------------------------
+            _reproject_wy_to_dataset(1982, tmp_path / "does-not-exist.nc")
 
 
 def test_reproject_wy_to_dataset_shape_and_vars(tmp_path: Path):
@@ -758,7 +623,7 @@ def _cy_stub_session(
     ``_synthetic_responder``'s n_time=3-days-from-Oct-1 layout, which
     does not contain Jan–Sep data that the CY consolidator needs.
 
-    Returns a call-log dict ``{"cy_downloaded": [...], "mask_downloaded": bool}``.
+    Returns a call-log dict ``{"wy_paths": [...], "mask_downloaded": bool}``.
     """
     if min_bytes_patch:
         monkeypatch.setattr(
@@ -1034,7 +899,7 @@ def test_consolidate_calendar_year_spans_jan_to_dec(tmp_path: Path):
 
     out = consolidate_calendar_year_ua_swe(2000, raw_dir, daily)
 
-    assert out.name == _CY_CONSOLIDATED_FILENAME_TEMPLATE.format(year=2000)
+    assert out.name == _CONSOLIDATED_FILENAME_TEMPLATE.format(year=2000)
 
     with xr.open_dataset(out) as ds:
         t = pd.DatetimeIndex(ds["time"].values)

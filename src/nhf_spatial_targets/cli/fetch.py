@@ -948,10 +948,10 @@ def fetch_ua_swe_cmd(
 ):
     """Download UA daily 4-km SWE + snow depth (NSIDC-0719) from NSIDC.
 
-    One NetCDF per water year is fetched from the NSIDC HTTPS archive
-    via the earthaccess auth session, then consolidated into a CF-1.6
-    daily NC pre-projected to EPSG:5070 at
-    ``<datastore>/ua_swe/daily/ua_swe_daily_WY<YYYY>.nc``. Raw downloads
+    Per-WY NCs are fetched from the NSIDC HTTPS archive via the
+    earthaccess auth session, then assembled into CF-1.6 calendar-year
+    NCs pre-projected to EPSG:5070 at
+    ``<datastore>/ua_swe/daily/ua_swe_daily_<YYYY>.nc``. Raw downloads
     are preserved under ``<datastore>/ua_swe/raw/``.
     """
     import json as json_mod
