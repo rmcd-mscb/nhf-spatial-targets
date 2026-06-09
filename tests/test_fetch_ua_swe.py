@@ -1475,6 +1475,78 @@ def test_fetch_ua_swe_skips_cy_when_wy_download_fails(
     assert result["n_skipped"] >= 1
 
 
+def test_fetch_ua_swe_wy_download_error_counts_as_n_errors(
+    tmp_path: Path, monkeypatch, small_min_bytes
+):
+    """A WY that returns 'error' (transient failure, not a 404 archive gap)
+    must be tallied in ``n_errors`` — NOT laundered into a benign ``n_skipped``
+    — so the CLI elevates the run to a non-zero exit (issue #299 review).
+
+    Period 2010/2011 covers publishable CYs [2010, 2011]; both need WY 2011,
+    which is injected as 'error'. So each affected CY carries ``n_errors`` and
+    none is counted as skipped.
+    """
+    workdir = _make_project(tmp_path)
+
+    monkeypatch.setattr("nhf_spatial_targets.fetch.ua_swe._MIN_VALID_NC_BYTES", 1024)
+
+    wy_timestamps: dict[int, list] = {
+        2010: [pd.Timestamp("2010-01-01"), pd.Timestamp("2010-09-30")],
+        2011: None,  # sentinel: this WY returns "error"
+        2012: [pd.Timestamp("2011-10-01"), pd.Timestamp("2011-12-31")],
+    }
+
+    def _fake_download(session, url, out_path, **kwargs):
+        m = re.search(r"4km_SWE_Depth_WY(\d{4})_v01\.nc$", url)
+        if m:
+            wy = int(m.group(1))
+            if wy_timestamps.get(wy) is None:
+                return "error"  # transient failure, not a 404
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            if not out_path.exists():
+                _make_sparse_wy_raw_nc(out_path, wy_timestamps[wy])
+            return "downloaded"
+        if "SWE_Mask_v01.nc" in url:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_bytes(_MASK_PAD_BODY)
+            return "downloaded"
+        return "missing_404"
+
+    class _DummySession:
+        def get(self, url, **kwargs):
+            raise AssertionError("_DummySession.get should not be called")
+
+    monkeypatch.setattr(
+        "nhf_spatial_targets.fetch.ua_swe._earthaccess_session",
+        lambda: _DummySession(),
+    )
+    monkeypatch.setattr(
+        "nhf_spatial_targets.fetch.ua_swe._download_file",
+        _fake_download,
+    )
+
+    result = fetch_ua_swe(
+        workdir=workdir, period="2010/2011", worker_index=0, n_workers=1
+    )
+
+    # Download errors are surfaced, not hidden as skips.
+    assert result["n_errors"] >= 1
+    assert result["n_skipped"] == 0
+    for rec in result["calendar_years"]:
+        assert "daily_path" not in rec
+        assert rec.get("n_errors", 0) >= 1
+
+    # The CLI helper must classify this as actionable (-> non-zero exit).
+    import io
+
+    from rich.console import Console
+
+    from nhf_spatial_targets.cli.fetch import _emit_fetch_banner
+
+    console = Console(file=io.StringIO(), width=200, force_terminal=False)
+    assert _emit_fetch_banner(console, "UA SWE", result) is True
+
+
 # ---------------------------------------------------------------------------
 # Change H: multi-worker partition end-to-end
 # ---------------------------------------------------------------------------

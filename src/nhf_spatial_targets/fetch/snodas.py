@@ -1088,9 +1088,22 @@ def fetch_snodas(
         year_records.append(rec)
 
     _update_manifest(workdir, period, meta, year_records, archive_url)
-    return _build_summary(
+    summary = _build_summary(
         meta, period, archive_url, worker_index, n_workers, year_records, now_utc
     )
+    if summary["n_failed"] or summary["n_skipped"] or summary["n_errors"]:
+        logger.warning(
+            "snodas: worker %d/%d — %d consolidated, %d failed, %d skipped, "
+            "%d download errors (inspect per-year consolidate_error / n_errors "
+            "in the summary).",
+            worker_index,
+            n_workers,
+            summary["n_consolidated"],
+            summary["n_failed"],
+            summary["n_skipped"],
+            summary["n_errors"],
+        )
+    return summary
 
 
 def _fetch_year(session, archive_url: str, year: int, year_dir: Path) -> dict:
@@ -1153,6 +1166,21 @@ def _build_summary(
     now_utc: str,
 ) -> dict:
     access = meta["access"]
+    # Aggregate per-year outcomes into the same n_* rollup ua_swe emits, so
+    # the fetch CLI can apply one uniform partial-failure rule (issue #299).
+    #   n_consolidated — years that produced a daily NC
+    #   n_failed       — years whose consolidation raised (consolidate_error)
+    #   n_skipped      — years with no granules on disk (nothing to consolidate)
+    #   n_errors       — cumulative per-day download errors across all years
+    #                    (404 day-gaps are expected and excluded by _fetch_year)
+    n_consolidated = sum(1 for r in year_records if r.get("daily_path"))
+    n_failed = sum(1 for r in year_records if r.get("consolidate_error"))
+    n_skipped = sum(
+        1
+        for r in year_records
+        if not r.get("daily_path") and not r.get("consolidate_error")
+    )
+    n_errors = sum(int(r.get("n_errors", 0)) for r in year_records)
     return {
         "source_key": _SOURCE_KEY,
         "access_url": access["url"],
@@ -1165,6 +1193,10 @@ def _build_summary(
         "n_workers": n_workers,
         "years": year_records,
         "download_timestamp": now_utc,
+        "n_consolidated": n_consolidated,
+        "n_failed": n_failed,
+        "n_skipped": n_skipped,
+        "n_errors": n_errors,
     }
 
 
