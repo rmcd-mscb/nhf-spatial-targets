@@ -25,7 +25,7 @@ sbatch slurm/project_gfv2/agg_all_gfv2.slurm
 
 # 2. Aggregate the two companion sources the array excludes.
 PROJECT_DIR=$GFV2 sbatch slurm/shared/agg_ssebop.slurm
-PROJECT_DIR=$GFV2 sbatch slurm/shared/agg_daymet.slurm   # edit --region (na) inside if needed
+PROJECT_DIR=$GFV2 sbatch slurm/shared/agg_daymet.slurm   # REGION defaults to na (CONUS); override via REGION= for HI/PR
 
 # 3. Build all six implemented targets (runoff/aet/rch/som/sca/swe).
 #    Submit after the aggregations above have completed.
@@ -70,8 +70,10 @@ rechunk command is fabric-independent).
 ## Notes
 
 - `PROJECT_DIR` defaults to `gfv2-spatial-targets` in the `project_gfv2/`
-  wrappers; the `shared/` scripts also default to gfv2, so they need no
-  `PROJECT_DIR` override here (OR does — see `slurm/project_or/README.md`).
+  wrappers, so those need no override. The standalone `shared/` scripts
+  (`agg_ssebop`, `agg_daymet`) **require** `PROJECT_DIR` (`${PROJECT_DIR:?}`
+  aborts if unset — no gfv2 default), which is why the steps above pass
+  `PROJECT_DIR=$GFV2` explicitly.
 - `REPO_DIR` auto-resolves from the submit directory (`$SLURM_SUBMIT_DIR`, not
   `$BASH_SOURCE` — sbatch spool-copies the script, issue #174). Override it to
   run a worktree/branch checkout.

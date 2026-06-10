@@ -3,12 +3,15 @@
 This directory holds the SLURM pieces that do **not** depend on which fabric you
 are building. Two kinds of file live here:
 
-1. **Standalone `.slurm` scripts** — submitted directly with `sbatch`, but they
-   default to the gfv2 project, so pass `PROJECT_DIR=$OTHER` to point them at
-   another fabric (e.g. `PROJECT_DIR=$OR sbatch slurm/shared/agg_ssebop.slurm`).
-   These cover the aggregators and fetchers that the per-fabric `agg_all_*`
-   array deliberately excludes (SSEBop's remote STAC, Daymet's `--region` +
-   staged zarr) plus the single-source fetchers.
+1. **Standalone `.slurm` scripts** — submitted directly with `sbatch`. Unlike
+   the per-fabric wrappers, these **require** `PROJECT_DIR` (`${PROJECT_DIR:?}`
+   aborts if unset — there is no gfv2 default) and default `REPO_DIR` to the
+   hardcoded caldera repo path, so always pass `PROJECT_DIR` explicitly (e.g.
+   `PROJECT_DIR=$OR sbatch slurm/shared/agg_ssebop.slurm`). These cover the
+   aggregators and fetchers that the per-fabric `agg_all_*` array deliberately
+   excludes (SSEBop's remote STAC, Daymet's `--region` + staged zarr), the
+   standalone single-source aggregators (`agg_snodas`, `agg_ua_swe`), the
+   single-source fetchers, and the `inspect_*` figure scripts.
 
 2. **`*.body.sh` shared bodies** — **NOT submitted directly.** Each is `source`d
    by a thin per-fabric wrapper (`slurm/project_<fabric>/<verb>_<fabric>.slurm`)
@@ -44,11 +47,16 @@ slurm/
   their `#SBATCH` headers; keep it when copying a command.
 - **Submit from the repo root** so `logs/` resolves there (`mkdir -p logs`
   first).
-- **`REPO_DIR`** auto-resolves from `$SLURM_SUBMIT_DIR` (the submit cwd), not
-  `$BASH_SOURCE` — sbatch spool-copies the script before running it (issue
-  #174). Override `REPO_DIR` to run a worktree/branch checkout.
-- **`PROJECT_DIR`** defaults to gfv2 in `shared/` scripts; pass it explicitly
-  for any other fabric.
+- **`REPO_DIR`** is resolved one of two ways, depending on the script:
+  - *Per-fabric wrappers* (`project_*/*.slurm`) auto-resolve it from
+    `$SLURM_SUBMIT_DIR` (the submit cwd), not `$BASH_SOURCE` — sbatch
+    spool-copies the script before running it (issue #174).
+  - *Standalone `shared/*.slurm` scripts* default it to the hardcoded caldera
+    repo path (`/caldera/.../nhf-spatial-targets`).
+  Either way, override `REPO_DIR` to run a worktree/branch checkout.
+- **`PROJECT_DIR`** is **required** in the standalone `shared/*.slurm` scripts
+  (`${PROJECT_DIR:?}` aborts if unset); only the per-fabric wrappers default it
+  (to gfv2 / or). Always pass it when submitting a `shared/` script directly.
 
 ## Per-fabric submit order
 
