@@ -11,7 +11,8 @@ matching the PRMS ``pkwater_equiv`` PUNIT):
   - UA SWE (NSIDC-0719) ``swe``  (kg m⁻² ≡ mm water-eq, daily; CONUS 1982–2022)
 
 UA SWE (NSIDC-0719, the University of Arizona daily 4-km product) reaches
-back to **water year 1982**, far earlier than SNODAS (2003+), so it widens
+back to **1982** (calendar years 1982–2022, re-windowed at consolidate
+from water years 1982–2023), far earlier than SNODAS (2003+), so it widens
 the pre-2003 SWE bound where the other CONUS sources are thin — the
 original motivation for adding it (#237). Because the combine is NaN-aware
 min/max over the *union* of sources (see below), a source contributes only

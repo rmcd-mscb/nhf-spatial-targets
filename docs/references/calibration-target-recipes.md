@@ -506,13 +506,14 @@ provenance.
 
 The catalog default `period: "2003/present"` is a historical default,
 not a hard constraint — the combine is a NaN-aware **union**, so a bound
-is defined wherever ≥1 source is finite. With ua_swe (WY1982–2022) added,
-non-Oregon fabrics now carry a 4-source bound from 2003 onward (daymet
-1980+, era5_land sd 1979+, snodas 2003+, ua_swe WY1982–2022) and a
-3-source bound (daymet, era5_land, ua_swe) back to 1982 — so projects
-targeting the pre-2003 record can push `period` to 1982 without the bound
-going all-NaN. Oregon additionally adds margulis (1985–2020) within its
-WUS footprint.
+is defined wherever ≥1 source is finite. With ua_swe (CY1982–2022, the
+calendar-year consolidated product re-windowed from water years
+1982–2023) added, non-Oregon fabrics now carry a 4-source bound from
+2003 onward (daymet 1980+, era5_land sd 1979+, snodas 2003+, ua_swe
+CY1982–2022) and a 3-source bound (daymet, era5_land, ua_swe) back to
+1982 — so projects targeting the pre-2003 record can push `period` to
+1982 without the bound going all-NaN. Oregon additionally adds margulis
+(WY1985–2021) within its WUS footprint.
 
 **Memory considerations on multi-year full-fabric builds**
 
@@ -542,8 +543,10 @@ regardless of period length. For gfv2 (~361 k HRUs):
   time): ~10 GB peak (independent of source count — bounds are already
   combined) → also fits in `--mem=32G`.
 - **A 46-year × 4-source full-fabric SWE build fits in `--mem=32G`**
-  (bump to `--mem=48G` for headroom on the OR fabric's 5-source build),
-  where the single-shot pattern would have needed >575 GB.
+  (the OR fabric's 5-source build is ≈ ~25 GB by the same linear
+  scaling, so it also fits 32G; `--mem=48G` is optional extra headroom,
+  not a requirement), where the single-shot pattern would have needed
+  >575 GB.
 
 **Idempotent recovery from OOM mid-period.** `_build_year` skips any
 year whose intermediates already exist on disk. If a build dies

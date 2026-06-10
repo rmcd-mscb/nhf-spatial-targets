@@ -202,6 +202,20 @@ def test_margulis_metres_to_mm():
     assert out.attrs["units"] == "mm"
 
 
+def test_ua_swe_to_mm_passthrough():
+    """ua_swe `swe` is kg/m² ≡ mm — identity, NOT a ×1000 metres conversion."""
+    from nhf_spatial_targets.targets.swe import ua_swe_to_mm
+
+    da = xr.DataArray(
+        np.array([[40.0, 300.0]], dtype=np.float32),
+        dims=("time", "nhm_id"),
+        coords={"time": pd.DatetimeIndex(["2003-12-15"]), "nhm_id": [1, 2]},
+    )
+    out = ua_swe_to_mm(da)
+    np.testing.assert_array_equal(out.values, da.values)
+    assert out.attrs["units"] == "mm"
+
+
 def test_mm_to_inches_linear():
     from nhf_spatial_targets.targets.swe import mm_to_inches
 
@@ -423,6 +437,34 @@ def test_build_ua_swe_participates_in_envelope_and_count(tmp_path: Path):
         np.testing.assert_allclose(ds["lower_bound"].values, 50.0 / 25.4, rtol=1e-5)
         np.testing.assert_allclose(ds["upper_bound"].values, 300.0 / 25.4, rtol=1e-5)
         assert (ds["n_sources"].values == 4).all()
+        assert "UA SWE" in ds.attrs["source"]
+
+
+def test_build_oregon_five_source_envelope_with_ua_swe(tmp_path: Path):
+    """OR fabric with all five sources → n_sources=5, full production envelope.
+
+    This is the shape the regenerated FGDC/MCF release fixtures advertise:
+    daymet=50, snodas=80, era5=100, margulis=200, ua_swe=300 (mm/inches
+    ordered). Both fabric-scoped Margulis and CONUS ua_swe contribute, so
+    the source attr must name both and the count must reach 5.
+    """
+    from nhf_spatial_targets.targets.swe import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_swe_project(
+        tmp_path,
+        period="2003-12-15/2003-12-15",
+        sources=["daymet", "snodas", "era5_land", "margulis_wus_sr", "ua_swe"],
+        fabric_token="or",
+        nn_fill=False,
+    )
+    project = load(workdir)
+    build(project)
+    with xr.open_dataset(project.targets_dir() / "swe_targets.nc") as ds:
+        np.testing.assert_allclose(ds["lower_bound"].values, 50.0 / 25.4, rtol=1e-5)
+        np.testing.assert_allclose(ds["upper_bound"].values, 300.0 / 25.4, rtol=1e-5)
+        assert (ds["n_sources"].values == 5).all()
+        assert "Margulis" in ds.attrs["source"]
         assert "UA SWE" in ds.attrs["source"]
 
 

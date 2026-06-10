@@ -22,7 +22,8 @@ UA SWE) at target-build time; raw downloads remain reusable across any project
 sharing the datastore.
 
 ² UA Daily 4-km SWE (NSIDC-0719; Broxton, Zeng & Dawson 2019) is CONUS-wide,
-WY 1982–2022, and is the only SWE source reaching before SNODAS's 2003 start —
+calendar years 1982–2022 (re-windowed at consolidate from water years
+1982–2023), and is the only SWE source reaching before SNODAS's 2003 start —
 it widens the pre-2003 bound (#237). (NSIDC-0719 is the UA Broxton product, *not*
 Margulis — the older mislabel is corrected in `catalog/sources.yml`.)
 
@@ -34,7 +35,7 @@ sequence; pass `--target <key>` (or `pixi run run-<x>`) to build one. SCA's
 bound formula follows `PRMSobjfun.f90:calcSCA` verbatim (PR #210); SWE uses
 NaN-aware multi-source min/max across 4 (gfv2) or 5 (OR) sources via the
 `fabric_scope` mechanism on Margulis WUS-SR (PR #101/#135), with UA SWE
-(NSIDC-0719) extending the bound back to WY1982 (PR #237).
+(NSIDC-0719) extending the bound back to 1982 (PR #237).
 
 ## Quick Start
 
