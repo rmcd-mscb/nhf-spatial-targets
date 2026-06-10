@@ -105,6 +105,7 @@ nav:
   - Home: index.md
   - Getting started:
       - Quick start: getting-started.md
+      - Maintaining an existing project: maintenance.md
   - Architecture:
       - Transformation pipeline: architecture/transformation-pipeline.md
       - NetCDF encoding policy: architecture/nc-encoding-policy.md

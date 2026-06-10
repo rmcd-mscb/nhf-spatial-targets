@@ -169,6 +169,16 @@ run-som    = { cmd = "nhf-targets run --target soil_moisture" }
 run-sca    = { cmd = "nhf-targets run --target snow_covered_area" }
 run-swe    = { cmd = "nhf-targets run --target snow_water_equivalent" }
 
+# Existing-project catch-up / maintenance — pass --project-dir as extra arg.
+# See docs/maintenance.md for the catch-up sequences (new config key / source /
+# manifest field) and the validate-after-config-edit ordering rule.
+# upgrade-* are report-only (exit non-zero on drift); rebuild-manifest/rechunk
+# regenerate derived artifacts (both accept --dry-run).
+upgrade-config   = { cmd = "nhf-targets upgrade-config",   description = "Report optional-config features missing from a project's config.yml (report-only)" }
+upgrade-manifest = { cmd = "nhf-targets upgrade-manifest", description = "Report whether manifest.json predates the current schema (report-only)" }
+rebuild-manifest = { cmd = "nhf-targets rebuild-manifest", description = "Regenerate manifest.json as a deterministic projection of on-disk artifacts" }
+rechunk          = { cmd = "nhf-targets rechunk",          description = "Backfill aggregated/target NCs to the chunked+compressed layout (#165)" }
+
 # Fetch source data
 fetch-era5-land = { cmd = "nhf-targets fetch era5-land", description = "Download ERA5-Land data into a project datastore" }
 fetch-gldas = { cmd = "nhf-targets fetch gldas", description = "Download GLDAS-2 runoff data into a project datastore" }
