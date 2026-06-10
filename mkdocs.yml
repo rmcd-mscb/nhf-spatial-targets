@@ -140,6 +140,7 @@ nav:
       - Lessons learned: references/lessons-learned.md
   - Data release:
       - Overview: data_release/README.md
+      - Command walkthrough: data_release/walkthrough.md
       - USGS data release process: data_release/usgs-process.md
       - FGDC field map: data_release/fgdc-field-map.md
       - sciencebasepy notes: data_release/sciencebasepy-notes.md
@@ -151,6 +152,13 @@ nav:
       - Source adapter: api/aggregate-adapter.md
       - Target adapter: api/targets-adapter.md
       - Target driver: api/targets-driver.md
+      - Validate: api/validate.md
+      - Rebuild manifest: api/rebuild-manifest.md
+      - Lineage: api/lineage.md
+      - Upgrade config: api/upgrade-config.md
+      - Rechunk: api/rechunk.md
+      - Consolidate (CF metadata): api/consolidate.md
+      - Release package: api/release.md
   - Contributing:
       - Contributing guide: contributing.md
       - Conventions: conventions.md
