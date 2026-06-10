@@ -13,12 +13,19 @@ Builds the baseline calibration targets documented in [Hay and others (2022), US
 | Recharge | `recharge` | Reitz 2017 + WaterGAP 2.2d + ERA5-Land (`ssro`) | Normalized min/max (2000–2009) | Annual |
 | Soil Moisture | `soil_rechr` | MERRA-2 + NCEP/NCAR + NLDAS-MOSAIC + NLDAS-NOAH | Normalized min/max (per calendar month) | Monthly + Annual |
 | Snow Cover | `snowcov_area` | MOD10C1 v061 | MODIS CI bounds (CI > 70%) | Daily |
-| SWE | `pkwater_equiv` | Daymet + SNODAS + ERA5-Land (`sd`) + Margulis WUS-SR¹ | NaN-aware multi-source min/max | Daily |
+| SWE | `pkwater_equiv` | Daymet + SNODAS + ERA5-Land (`sd`) + UA SWE² + Margulis WUS-SR¹ | NaN-aware multi-source min/max | Daily |
 
-¹ Margulis Western US Snow Reanalysis (NSIDC-0719) is **fabric-scoped to Oregon**
+¹ Margulis Western US Snow Reanalysis is **fabric-scoped to Oregon**
 via `catalog/sources.yml` → `margulis_wus_sr.fabric_scope`. Non-Oregon projects
-reduce the SWE bound to the remaining three sources at target-build time; raw
-downloads remain reusable across any project sharing the datastore.
+reduce the SWE bound to the remaining four sources (Daymet, SNODAS, ERA5-Land,
+UA SWE) at target-build time; raw downloads remain reusable across any project
+sharing the datastore.
+
+² UA Daily 4-km SWE (NSIDC-0719; Broxton, Zeng & Dawson 2019) is CONUS-wide,
+calendar years 1982–2022 (re-windowed at consolidate from water years
+1982–2023), and is the only SWE source reaching before SNODAS's 2003 start —
+it widens the pre-2003 bound (#237). (NSIDC-0719 is the UA Broxton product, *not*
+Margulis — the older mislabel is corrected in `catalog/sources.yml`.)
 
 All six target builders are implemented. Each writes a per-HRU per-time
 `(lower_bound, upper_bound)` NetCDF to `<project>/targets/` along with an
@@ -26,8 +33,9 @@ optional `_nn_filled.nc` companion that fills NaN HRUs from up to 10 nearest
 finite neighbours. The `nhf-targets run` driver builds all enabled targets in
 sequence; pass `--target <key>` (or `pixi run run-<x>`) to build one. SCA's
 bound formula follows `PRMSobjfun.f90:calcSCA` verbatim (PR #210); SWE uses
-NaN-aware multi-source min/max across 3 (gfv2) or 4 (OR) sources via the
-`fabric_scope` mechanism on Margulis WUS-SR (PR #101/#135).
+NaN-aware multi-source min/max across 4 (gfv2) or 5 (OR) sources via the
+`fabric_scope` mechanism on Margulis WUS-SR (PR #101/#135), with UA SWE
+(NSIDC-0719) extending the bound back to 1982 (PR #237).
 
 ## Quick Start
 

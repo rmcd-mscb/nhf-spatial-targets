@@ -123,7 +123,13 @@ DEFAULTS: dict = {
         },
         "snow_water_equivalent": {
             "enabled": True,
-            "sources": ["daymet", "snodas", "era5_land", "margulis_wus_sr"],
+            "sources": [
+                "daymet",
+                "snodas",
+                "era5_land",
+                "margulis_wus_sr",
+                "ua_swe",
+            ],
             "time_step": "daily",
             "period": None,
             "prms_variable": "pkwater_equiv",

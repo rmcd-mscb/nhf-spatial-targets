@@ -1,6 +1,6 @@
-"""Build SWE calibration targets from Daymet + SNODAS + ERA5-Land sd + Margulis.
+"""Build SWE targets from Daymet + SNODAS + ERA5-Land sd + Margulis + UA SWE.
 
-Up to four daily-cadence sources contribute to per-HRU per-day bounds in
+Up to five daily-cadence sources contribute to per-HRU per-day bounds in
 ``inches`` (per ``catalog/variables.yml`` → ``snow_water_equivalent.units``,
 matching the PRMS ``pkwater_equiv`` PUNIT):
 
@@ -8,6 +8,16 @@ matching the PRMS ``pkwater_equiv`` PUNIT):
   - SNODAS ``swe``             (kg m⁻² ≡ mm water-eq, daily)
   - ERA5-Land ``sd``           (m water-eq, daily — instantaneous snapshot)
   - Margulis WUS-SR ``SWE``    (m water-eq, daily — Oregon fabric only)
+  - UA SWE (NSIDC-0719) ``swe``  (kg m⁻² ≡ mm water-eq, daily; CONUS 1982–2022)
+
+UA SWE (NSIDC-0719, the University of Arizona daily 4-km product) reaches
+back to **1982** (calendar years 1982–2022, re-windowed at consolidate
+from water years 1982–2023), far earlier than SNODAS (2003+), so it widens
+the pre-2003 SWE bound where the other CONUS sources are thin — the
+original motivation for adding it (#237). Because the combine is NaN-aware
+min/max over the *union* of sources (see below), a source contributes only
+in the years its coverage spans; ``snow_water_equivalent.period`` may run
+earlier than 2003 without making the bound all-NaN.
 
 Per-source pipeline (every shim ends in mm; the target then converts
 mm → inches in a single linear step):
@@ -16,6 +26,7 @@ mm → inches in a single linear step):
   - snodas: identity (already mm)
   - era5_land sd: × 1000 (m → mm)
   - margulis_wus_sr SWE: × 1000 (m → mm)
+  - ua_swe swe: identity (already mm, kg m⁻² ≡ mm)
 
 After mm conversion, sources are stacked on a ``source`` dim and reduced
 with NaN-aware min/max so a bound is defined whenever ≥1 source is finite
@@ -32,8 +43,9 @@ whose ``fabric_scope`` does not include that token (with a clear log
 line). Projects whose ``fabric.token`` is unset behave as if the token
 were "(unset)" — which means any source carrying ``fabric_scope`` is
 skipped. This is the safe default for non-Oregon fabrics that
-accidentally inherit the four-source SWE default from
-``defaults.py``.
+accidentally inherit the five-source SWE default from
+``defaults.py`` (which drops to four — daymet, snodas, era5_land,
+ua_swe — once the OR-only Margulis is filtered out).
 
 If ``snow_water_equivalent.nn_fill`` is True (default), a second file
 ``<output>_nn_filled.nc`` is written with bound NaNs filled by the
@@ -127,6 +139,14 @@ def margulis_to_mm(da: xr.DataArray) -> xr.DataArray:
     return out
 
 
+def ua_swe_to_mm(da: xr.DataArray) -> xr.DataArray:
+    """UA SWE ``swe`` is already mm (kg m⁻² ≡ mm water-eq) — pass through."""
+    out = da.copy()
+    out.attrs = dict(da.attrs)
+    out.attrs["units"] = "mm"
+    return out
+
+
 # Per-source registry. The ERA5-Land sd shim has ``source_key="era5_land_sd"``
 # (the on-disk storage key, matching aggregate/era5_land.py:ADAPTER_SD's
 # output dir under <project>/data/aggregated/era5_land_sd/) but
@@ -161,6 +181,13 @@ SHIMS: tuple[SourceShim, ...] = (
         description="Margulis WUS-SR SWE (m → mm, daily; OR fabric only)",
         to_common_units=margulis_to_mm,
         expected_cf_units="m",
+    ),
+    SourceShim(
+        source_key="ua_swe",
+        aggregated_var="swe",
+        description="UA SWE NSIDC-0719 (kg/m² ≡ mm, daily; CONUS 1982–2022)",
+        to_common_units=ua_swe_to_mm,
+        expected_cf_units="kg m-2",
     ),
 )
 

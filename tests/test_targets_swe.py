@@ -75,13 +75,15 @@ def _make_swe_project(
     write_snodas: bool = True,
     write_era5_sd: bool = True,
     write_margulis: bool = True,
+    write_ua_swe: bool = True,
     # All in their native units; the builder converts to inches at the
     # tail end. Constants chosen so multi-source min/max comes back
-    # ordered (daymet < snodas < era5 < margulis in inches).
+    # ordered (daymet < snodas < era5 < margulis < ua_swe in inches).
     daymet_value_mm: float = 50.0,  # 50 mm ≈ 1.97 in
     snodas_value_mm: float = 80.0,  # 80 mm ≈ 3.15 in
     era5_sd_value_m: float = 0.1,  # 100 mm ≈ 3.94 in
     margulis_value_m: float = 0.2,  # 200 mm ≈ 7.87 in
+    ua_swe_value_mm: float = 300.0,  # 300 mm ≈ 11.81 in (kg m-2 ≡ mm)
 ) -> Path:
     """Build a project skeleton with synthetic fabric + per-year aggregated NCs."""
     if sources is None:
@@ -127,6 +129,7 @@ def _make_swe_project(
         ("snodas", write_snodas, snodas_value_mm),
         ("era5_land", write_era5_sd, era5_sd_value_m),
         ("margulis_wus_sr", write_margulis, margulis_value_m),
+        ("ua_swe", write_ua_swe, ua_swe_value_mm),
     )
     for src_label, do_write, value in per_source_writes:
         if not do_write or src_label not in sources:
@@ -196,6 +199,20 @@ def test_margulis_metres_to_mm():
     )
     out = margulis_to_mm(da)
     np.testing.assert_allclose(out.values, [[500.0]], rtol=1e-6)
+    assert out.attrs["units"] == "mm"
+
+
+def test_ua_swe_to_mm_passthrough():
+    """ua_swe `swe` is kg/m² ≡ mm — identity, NOT a ×1000 metres conversion."""
+    from nhf_spatial_targets.targets.swe import ua_swe_to_mm
+
+    da = xr.DataArray(
+        np.array([[40.0, 300.0]], dtype=np.float32),
+        dims=("time", "nhm_id"),
+        coords={"time": pd.DatetimeIndex(["2003-12-15"]), "nhm_id": [1, 2]},
+    )
+    out = ua_swe_to_mm(da)
+    np.testing.assert_array_equal(out.values, da.values)
     assert out.attrs["units"] == "mm"
 
 
@@ -394,6 +411,61 @@ def test_build_unit_chain_min_max_ordered(tmp_path: Path):
         np.testing.assert_allclose(ds["lower_bound"].values, 50.0 / 25.4, rtol=1e-5)
         np.testing.assert_allclose(ds["upper_bound"].values, 200.0 / 25.4, rtol=1e-5)
         assert (ds["n_sources"].values == 4).all()
+
+
+def test_build_ua_swe_participates_in_envelope_and_count(tmp_path: Path):
+    """ua_swe (kg/m² ≡ mm, identity-to-mm) joins the min/max envelope (#237 PR-C).
+
+    Non-OR fabric (token unset) so Margulis is excluded; sources are
+    daymet=50mm, snodas=80mm, era5=100mm, ua_swe=300mm. ua_swe is the new
+    maximum, so the upper bound must move to 300/25.4 in, n_sources must
+    count it (4), and its description must appear in the source attr.
+    """
+    from nhf_spatial_targets.targets.swe import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_swe_project(
+        tmp_path,
+        period="2003-12-15/2003-12-15",
+        sources=["daymet", "snodas", "era5_land", "ua_swe"],
+        fabric_token=None,
+        nn_fill=False,
+    )
+    project = load(workdir)
+    build(project)
+    with xr.open_dataset(project.targets_dir() / "swe_targets.nc") as ds:
+        np.testing.assert_allclose(ds["lower_bound"].values, 50.0 / 25.4, rtol=1e-5)
+        np.testing.assert_allclose(ds["upper_bound"].values, 300.0 / 25.4, rtol=1e-5)
+        assert (ds["n_sources"].values == 4).all()
+        assert "UA SWE" in ds.attrs["source"]
+
+
+def test_build_oregon_five_source_envelope_with_ua_swe(tmp_path: Path):
+    """OR fabric with all five sources → n_sources=5, full production envelope.
+
+    This is the shape the regenerated FGDC/MCF release fixtures advertise:
+    daymet=50, snodas=80, era5=100, margulis=200, ua_swe=300 (mm/inches
+    ordered). Both fabric-scoped Margulis and CONUS ua_swe contribute, so
+    the source attr must name both and the count must reach 5.
+    """
+    from nhf_spatial_targets.targets.swe import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_swe_project(
+        tmp_path,
+        period="2003-12-15/2003-12-15",
+        sources=["daymet", "snodas", "era5_land", "margulis_wus_sr", "ua_swe"],
+        fabric_token="or",
+        nn_fill=False,
+    )
+    project = load(workdir)
+    build(project)
+    with xr.open_dataset(project.targets_dir() / "swe_targets.nc") as ds:
+        np.testing.assert_allclose(ds["lower_bound"].values, 50.0 / 25.4, rtol=1e-5)
+        np.testing.assert_allclose(ds["upper_bound"].values, 300.0 / 25.4, rtol=1e-5)
+        assert (ds["n_sources"].values == 5).all()
+        assert "Margulis" in ds.attrs["source"]
+        assert "UA SWE" in ds.attrs["source"]
 
 
 def test_build_oregon_includes_margulis_in_source_attr(tmp_path: Path):

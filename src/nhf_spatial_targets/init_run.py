@@ -137,7 +137,8 @@ targets:
       - daymet
       - snodas
       - era5_land
-      - margulis_wus_sr
+      - margulis_wus_sr   # Oregon fabric only (fabric_scope)
+      - ua_swe            # UA NSIDC-0719, CONUS, extends bound to 1982 (CY 1982-2022)
     time_step: daily
     period: "2003-01-01/2010-12-31"
     prms_variable: pkwater_equiv

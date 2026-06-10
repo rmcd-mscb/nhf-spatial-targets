@@ -488,7 +488,9 @@ honoured — sources whose `fabrics` list does not contain the project
 token are silently dropped (with a clear log line). A missing project
 token causes every fabric-scoped source to be dropped, which is the
 safe default for non-Oregon projects that accidentally inherit the
-four-source SWE default from `defaults.py`. Typos like
+five-source SWE default from `defaults.py` (which reduces to four —
+daymet, snodas, era5_land, ua_swe — once OR-only Margulis is dropped).
+Typos like
 `fabric.token: oregon` (instead of `or`) raise rather than silently
 filtering, validated against `catalog.FABRIC_SCOPE_TOKENS`.
 
@@ -502,11 +504,16 @@ provenance.
 
 **Time window choice**
 
-The catalog default `period: "2003/present"` is SNODAS-limited (the
-SNODAS archive begins 2003-09-30). Non-Oregon fabrics use a 3-source
-bound — daymet (1980+) ∩ era5_land sd (1979+) ∩ snodas (2003+) =
-2003-10 onward. Oregon adds margulis (1985-2020) so the 4-source
-intersection caps at 2020.
+The catalog default `period: "2003/present"` is a historical default,
+not a hard constraint — the combine is a NaN-aware **union**, so a bound
+is defined wherever ≥1 source is finite. With ua_swe (CY1982–2022, the
+calendar-year consolidated product re-windowed from water years
+1982–2023) added, non-Oregon fabrics now carry a 4-source bound from
+2003 onward (daymet 1980+, era5_land sd 1979+, snodas 2003+, ua_swe
+CY1982–2022) and a 3-source bound (daymet, era5_land, ua_swe) back to
+1982 — so projects targeting the pre-2003 record can push `period` to
+1982 without the bound going all-NaN. Oregon additionally adds margulis
+(WY1985–2021) within its WUS footprint.
 
 **Memory considerations on multi-year full-fabric builds**
 
@@ -527,12 +534,19 @@ annual targets use. The build loops one calendar year at a time:
 Peak memory therefore stays bounded by one year's worth of data
 regardless of period length. For gfv2 (~361 k HRUs):
 
-- Per-year build × 3 sources: ~15 GB peak → fits in `--mem=32G`.
+- Per-year build: peak memory scales roughly linearly with the number
+  of contributing sources (each source is one (time, hru) array of the
+  same year). The pre-ua_swe 3-source measurement was ~15 GB; the
+  4-source gfv2 default (daymet, snodas, era5_land, ua_swe) is therefore
+  ~20 GB peak → still fits in `--mem=32G`.
 - Stitch (lazy open_mfdataset + streamed to_netcdf, one year at a
-  time): ~10 GB peak → also fits in `--mem=32G`.
-- **A 46-year × 3-source full-fabric SWE build fits comfortably in
-  `--mem=32G`**, where the single-shot pattern would have needed
-  ~575 GB.
+  time): ~10 GB peak (independent of source count — bounds are already
+  combined) → also fits in `--mem=32G`.
+- **A 46-year × 4-source full-fabric SWE build fits in `--mem=32G`**
+  (the OR fabric's 5-source build is ≈ ~25 GB by the same linear
+  scaling, so it also fits 32G; `--mem=48G` is optional extra headroom,
+  not a requirement), where the single-shot pattern would have needed
+  >575 GB.
 
 **Idempotent recovery from OOM mid-period.** `_build_year` skips any
 year whose intermediates already exist on disk. If a build dies
