@@ -152,10 +152,10 @@ variables:
     prms_variable: snowcov_area
     description: >
       Daily fractional snow-covered area. Two-source NaN-aware bound: the
-      MOD10C1 CI-bounded interval (only days with confidence interval > 70%)
+      MOD10C1 CI-bounded interval (only days with confidence interval ≥ 70%)
       combined with the ua_swe depth-derived snow-covered fraction. ua_swe
-      reaches back to WY 1982, widening the pre-2003 bound where MOD10C1
-      (2000+) is the only other source.
+      reaches back to WY 1982, widening the pre-2000 bound where MOD10C1
+      (2000+) is the other source.
     prms_reference: "TM 6-B7 (Markstrom et al. 2015)"
     time_step: daily
     period: "2000/2010"

@@ -368,8 +368,10 @@ See `docs/references/known-gaps-resolved.md` for resolved items.
 **Still open:**
 - *(none currently — the SCA CI-bounds formula gap closed 2026-05-24 when the
   PRMSobjfun source landed in [`docs/references/PRMSobjfun.f90`](docs/references/PRMSobjfun.f90);
-  formula is in `calcSCA` lines 1052-1061 and `targets/sca.py` can be promoted
-  from stub to implementation. See [`docs/references/prmsobjfun-summary.md`](docs/references/prmsobjfun-summary.md).)*
+  formula is in `calcSCA` lines 1052-1061 and `targets/sca.py` now implements it,
+  extended to a two-source bound with ua_swe in #237. See
+  [`docs/references/prmsobjfun-summary.md`](docs/references/prmsobjfun-summary.md)
+  and [`known-gaps-resolved.md`](docs/references/known-gaps-resolved.md).)*
 
 ## Testing
 

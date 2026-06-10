@@ -27,8 +27,8 @@ finite-contribution diagnostic. Two sources are registered today:
   snow_covered_fraction`` (an already-[0, 1] per-HRU fraction from the
   ua_swe aggregated NC, the depth-thresholded binary area-weighted to the
   fabric). No CI gate — ua_swe's fraction is physical, not confidence-
-  weighted. ua_swe reaches back to WY 1982, widening the pre-2003 bound
-  where MOD10C1 (2000+) is the only other source.
+  weighted. ua_swe reaches back to WY 1982, widening the pre-2000 bound
+  where MOD10C1 (2000+) is the other source.
 
 **July/August forced-zero (calcSCA).** Summer is forced to
 ``(lower, upper) = (0, 0)``, gated by ``forced_zero_combined`` (default
@@ -121,18 +121,32 @@ def _warn_low_valid_coverage(year: int, frac_valid: float, ci_threshold: float) 
 class _SourceInterval:
     """One source's per-(HRU, day) bound interval for a calendar year.
 
-    ``lower`` / ``upper`` are the source's ``[lower, upper]`` bound (NaN
-    where the source contributes nothing at that cell). ``summer_valid`` is
-    the per-cell mask of where this source triggers the calcSCA July/August
-    forced-zero (mod10c1: CI-passing cells; ua_swe: every observed cell).
-    The source is *finite* — and counts toward ``n_sources`` — exactly where
-    ``lower`` is non-NaN.
+    ``lower`` / ``upper`` are the source's ``[lower, upper]`` bound, NaN
+    together where the source contributes nothing at that cell. The source is
+    *finite* — and counts toward ``n_sources`` — exactly where ``lower`` is
+    non-NaN; the combine (:func:`_combine_intervals`) and ``frac_valid`` both
+    derive that count from ``lower`` alone, so ``upper`` MUST be NaN wherever
+    ``lower`` is. ``forces_summer_zero`` is the per-cell mask of where this
+    source triggers the calcSCA July/August forced-zero (mod10c1: CI-passing
+    cells; ua_swe: every observed cell) — a seasonal *rule*, carried alongside
+    the bound because it shares the same (time, id_col) grid.
+
+    All three fields must share dims; ``__post_init__`` asserts that cheaply
+    (dims only — no ``.compute()``, so the dask graph stays lazy) to catch a
+    loader wiring the wrong array at the construction boundary.
     """
 
     lower: xr.DataArray
     upper: xr.DataArray
-    summer_valid: xr.DataArray
-    label: str
+    forces_summer_zero: xr.DataArray
+
+    def __post_init__(self) -> None:
+        if not (self.upper.dims == self.lower.dims == self.forces_summer_zero.dims):
+            raise ValueError(
+                f"_SourceInterval fields must share dims; got lower={self.lower.dims}, "
+                f"upper={self.upper.dims}, "
+                f"forces_summer_zero={self.forces_summer_zero.dims}."
+            )
 
 
 def _load_mod10c1_interval(
@@ -160,9 +174,7 @@ def _load_mod10c1_interval(
     ci_passing = ci >= ci_threshold
     lower = xr.where(ci_passing, ci * sca_obs, np.nan)
     upper = xr.where(ci_passing, lower + (1.0 - ci), np.nan)
-    return _SourceInterval(
-        lower=lower, upper=upper, summer_valid=ci_passing, label=_MOD10C1_KEY
-    )
+    return _SourceInterval(lower=lower, upper=upper, forces_summer_zero=ci_passing)
 
 
 def _load_ua_swe_interval(
@@ -178,18 +190,16 @@ def _load_ua_swe_interval(
 
     ``v`` is the already-[0, 1] per-HRU snow-covered fraction (the depth-
     thresholded binary area-weighted to the fabric in ``aggregate/ua_swe``);
-    no scaling and no CI gate — ua_swe is physical. ``summer_valid`` is
-    every finite cell, so under ``forced_zero_combined=True`` ua_swe's
-    summer cells are forced to zero alongside mod10c1's.
+    no scaling and no CI gate — ua_swe is physical. ``forces_summer_zero`` is
+    every finite cell, so under ``forced_zero_combined=True`` ua_swe's summer
+    cells are forced to zero alongside mod10c1's.
     """
     scf = read_aggregated_source(
         project, _UA_SWE_KEY, _SCF_VAR, period, {**_DAY_CHUNKS, id_col: -1}
     )
     check_hru_coords(scf, fabric_hru_ids, id_col, _UA_SWE_KEY)
     v = reindex_to_day_start(scf, year_master_idx)
-    return _SourceInterval(
-        lower=v, upper=v, summer_valid=v.notnull(), label=_UA_SWE_KEY
-    )
+    return _SourceInterval(lower=v, upper=v, forces_summer_zero=v.notnull())
 
 
 #: source key -> interval loader. ``build`` validates every configured
@@ -206,10 +216,10 @@ def _combine_intervals(
 ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray]:
     """NaN-aware union of per-source intervals.
 
-    Returns ``(lower, upper, n_sources, summer_valid)`` where ``lower`` is
-    the per-cell min of source lowers, ``upper`` the max of source uppers,
+    Returns ``(lower, upper, n_sources, forces_summer_zero)`` where ``lower``
+    is the per-cell min of source lowers, ``upper`` the max of source uppers,
     ``n_sources`` the int8 count of finite contributions, and
-    ``summer_valid`` the OR of the sources' forced-zero validity masks.
+    ``forces_summer_zero`` the OR of the sources' summer-forced-zero masks.
 
     When ``min_sources_for_bound >= 2`` the combined bound is masked to NaN
     wherever ``n_sources < min_sources_for_bound`` (guaranteeing a
@@ -224,18 +234,19 @@ def _combine_intervals(
         [intervals[k].upper for k in keys], dim=xr.Variable("source", keys)
     )
     summer = xr.concat(
-        [intervals[k].summer_valid for k in keys], dim=xr.Variable("source", keys)
+        [intervals[k].forces_summer_zero for k in keys],
+        dim=xr.Variable("source", keys),
     )
     lower = lowers.min(dim="source", skipna=True)
     upper = uppers.max(dim="source", skipna=True)
     n_sources = lowers.notnull().sum(dim="source").astype(np.int8)
-    summer_valid = summer.any(dim="source")
+    forces_summer_zero = summer.any(dim="source")
 
     if min_sources_for_bound >= 2:
         has_width = n_sources >= min_sources_for_bound
         lower = lower.where(has_width)
         upper = upper.where(has_width)
-    return lower, upper, n_sources, summer_valid
+    return lower, upper, n_sources, forces_summer_zero
 
 
 # ---------------------------------------------------------------------------
@@ -265,8 +276,8 @@ def _load_sca_year(
     **Forced-zero / combine coupling.** ``forced_zero_combined`` (default
     True) gates how summer is zeroed *without* any driver or adapter change:
 
-    - ``True`` — the returned ``valid`` mask is ``summer_valid`` (every cell
-      any source observes, AND ≥ ``min_sources_for_bound`` finite), so the
+    - ``True`` — the returned ``valid`` mask is ``forces_summer_zero`` (every
+      cell any source observes, AND ≥ ``min_sources_for_bound`` finite), so the
       driver zeros the *combined* bound in Jul/Aug. For a mod10c1-only,
       ``min=1`` config this is ``ci >= ci_threshold`` — byte-identical to the
       single-source build.
@@ -317,15 +328,14 @@ def _load_sca_year(
     in_summer = xr.DataArray(in_summer, coords={"time": year_master_idx}, dims="time")
     if not forced_zero_combined and _MOD10C1_KEY in intervals:
         iv = intervals[_MOD10C1_KEY]
-        zero_here = in_summer & iv.summer_valid
+        zero_here = in_summer & iv.forces_summer_zero
         intervals[_MOD10C1_KEY] = _SourceInterval(
             lower=xr.where(zero_here, 0.0, iv.lower),
             upper=xr.where(zero_here, 0.0, iv.upper),
-            summer_valid=iv.summer_valid,
-            label=iv.label,
+            forces_summer_zero=iv.forces_summer_zero,
         )
 
-    lower, upper, n_sources, summer_valid = _combine_intervals(
+    lower, upper, n_sources, forces_summer_zero = _combine_intervals(
         intervals, min_sources_for_bound=min_sources
     )
 
@@ -333,7 +343,7 @@ def _load_sca_year(
     # min-sources width mask too (min>=2) so a NaN'd narrow cell is never
     # un-masked back to zero. For forced_zero_combined=False, drive `valid`
     # False in summer so the driver no-ops there (mod10c1 already pre-zeroed).
-    valid = summer_valid
+    valid = forces_summer_zero
     if min_sources >= 2:
         valid = valid & (n_sources >= min_sources)
     if not forced_zero_combined:

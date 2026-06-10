@@ -119,10 +119,11 @@ for RUN/AET, individual source values too. The Fortran optimizer
 **This repo extends the report (#237).** TM 6-B10 used MOD10C1 alone. Here SCA is
 a **two-source** bound: the MOD10C1 calcSCA CI-interval combined with UA SWE's
 depth-derived `snow_covered_fraction` (reaching back to WY 1982, widening the
-pre-2003 bound). Two config knobs tune the combine —
-`snow_covered_area.forced_zero_combined` (Jul/Aug forced-zero scope) and
-`min_sources_for_bound` (zero-width-bound policy); the mod10c1-only path is
-preserved at the defaults.
+pre-2000 bound where MOD10C1 (2000+) is the other source). Two config knobs tune
+the combine — `snow_covered_area.forced_zero_combined` (Jul/Aug forced-zero
+scope) and `min_sources_for_bound` (zero-width-bound policy); an explicit
+mod10c1-only config still builds the single-source bound byte-for-byte (the
+default `sources` is now two-source).
 
 **Builder:** `src/nhf_spatial_targets/targets/sca.py` · **catalog:** `variables.yml → snow_covered_area`
 

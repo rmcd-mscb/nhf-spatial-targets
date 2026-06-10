@@ -1503,3 +1503,79 @@ def test_min_sources_for_bound_two_keeps_two_source_cell(tmp_path: Path):
         np.testing.assert_allclose(ds["lower_bound"].values, 0.50, rtol=1e-5)
         np.testing.assert_allclose(ds["upper_bound"].values, 0.64, rtol=1e-5)
         assert (ds["n_sources"].values == 2).all()
+
+
+def test_two_source_combine_widens_upper_bound(tmp_path: Path):
+    """ua_swe above mod10c1's upper drives the `nanmax` side: mod10c1
+    [0.54, 0.64] ∪ ua_swe [0.80, 0.80] -> [0.54, 0.80] (locks the upper-widen
+    direction the other two-source tests don't exercise)."""
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_sca_project(
+        tmp_path,
+        period="2005-03-15/2005-03-15",
+        sources=("mod10c1_v061", "ua_swe"),
+        snow_native=60.0,
+        ci_native=90.0,
+        ua_swe_scf=0.80,
+    )
+    project = load(workdir)
+    build(project)
+    with _open_sca(project) as ds:
+        np.testing.assert_allclose(ds["lower_bound"].values, 0.54, rtol=1e-5)
+        np.testing.assert_allclose(ds["upper_bound"].values, 0.80, rtol=1e-5)
+        assert (ds["n_sources"].values == 2).all()
+
+
+def test_min_sources_two_in_july_single_source_stays_nan(tmp_path: Path):
+    """The load-bearing coupling: under min_sources_for_bound=2, a single-source
+    JULY cell must stay NaN, NOT be forced to (0, 0). The combine NaNs the narrow
+    bound and the loader gates the forced-zero `valid` by (n_sources >= min), so
+    the driver can't un-mask it. A regression dropping that gate would force the
+    cell to 0 and this test would catch it."""
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_sca_project(
+        tmp_path,
+        period="2005-07-15/2005-07-15",  # summer: forced-zero is in play
+        sources=("mod10c1_v061", "ua_swe"),
+        snow_native=60.0,
+        ci_native=90.0,
+        ua_swe_scf=np.nan,  # only mod10c1 finite -> n_sources=1 < min=2
+        min_sources_for_bound=2,
+    )
+    project = load(workdir)
+    build(project)
+    with _open_sca(project) as ds:
+        assert np.isnan(ds["lower_bound"].values).all()
+        assert np.isnan(ds["upper_bound"].values).all()
+        assert (ds["n_sources"].values == 1).all()
+
+
+def test_resolved_combine_knobs_stamped_on_nc(tmp_path: Path):
+    """The resolved forced_zero_combined / min_sources_for_bound knobs survive
+    the per-year-stitch path onto the final NC as global attrs (the manifest
+    projection and config/product triangle gate read attrs back)."""
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_sca_project(
+        tmp_path,
+        period="2005-03-15/2005-03-15",
+        sources=("mod10c1_v061", "ua_swe"),
+        snow_native=60.0,
+        ci_native=90.0,
+        ua_swe_scf=0.5,
+        forced_zero_combined=False,  # non-default so the stamp is unambiguous
+        min_sources_for_bound=2,
+    )
+    project = load(workdir)
+    build(project)
+    with _open_sca(project) as ds:
+        assert ds.attrs["forced_zero_combined"] == "False"
+        assert int(ds.attrs["min_sources_for_bound"]) == 2
+        assert ds.attrs["source_keys"] == "mod10c1_v061,ua_swe"
+        # both sources finite -> min=2 keeps the bound
+        np.testing.assert_allclose(ds["lower_bound"].values, 0.50, rtol=1e-5)
