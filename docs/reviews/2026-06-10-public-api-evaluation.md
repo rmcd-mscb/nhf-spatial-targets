@@ -159,6 +159,18 @@ recipe):**
     (#8); the `maintenance` sub-app / verb-rename question (#6 + §3 road-not-taken).
     These are breaking or near-breaking; batch them behind a deprecation note.
 
+> **Note on numbering:** the `#N` references in this document are this report's
+> internal *finding* IDs (§2 tables), not GitHub issues. The GitHub tracking
+> numbers are listed below.
+
+**Follow-up tracking.** Tier-1 closed in PR #313 (tracking issue #312). The roadmap
+and CLI-grammar tiers are filed as: operator catch-up guide + maintenance-verb
+wrappers → issue #314; `config/pipeline.yml` reconciliation → issue #315;
+`slurm/project_gfv2/` README + `slurm/shared/` index → issue #316; mkdocs API
+reference + release user docs → issue #317; onboarding required-key markers +
+`validate` NASA-cred note → issue #318; CLI grammar consistency + maintenance-verb
+structure → issue #319.
+
 ---
 
 ## Appendix: one refuted claim
