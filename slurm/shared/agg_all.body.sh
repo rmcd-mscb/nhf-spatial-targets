@@ -4,7 +4,8 @@
 # PROJECT_DIR + REPO_DIR. Keeping the task array + dispatch here means the two
 # fabrics differ only in their wrapper's PROJECT_DIR default.
 #
-# Submits one SLURM array task per aggregation source (14 total). SSEBop is the
+# Submits one SLURM array task per aggregation source (15 total, indices 0–14).
+# SSEBop is the
 # remote-STAC aggregator and has its own script (slurm/shared/agg_ssebop.slurm).
 # Daymet has its own script too (slurm/shared/agg_daymet.slurm) because it
 # requires a --region argument plus an operator-staged zarr root.

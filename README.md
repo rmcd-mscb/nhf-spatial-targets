@@ -93,6 +93,7 @@ pixi run fetch-mod10c1         -- --project-dir /data/gfv11-targets --period 200
 pixi run fetch-mwbm-climgrid   -- --project-dir /data/gfv11-targets               # manual stage required
 pixi run fetch-daymet          -- --project-dir /data/gfv11-targets               # manual stage required
 pixi run fetch-snodas          -- --project-dir /data/gfv11-targets --period 2003/2024
+pixi run fetch-ua-swe          -- --project-dir /data/gfv11-targets --period 1981/2023  # SWE + SCA source
 pixi run fetch-margulis-wus-sr -- --project-dir /data/gfv11-targets --period 1985/2021  # OR fabric only
 
 # 7. Aggregate sources to the HRU fabric
@@ -271,7 +272,15 @@ SLURM scripts live under `slurm/`: fabric-independent ones in `slurm/shared/`,
 fabric-specific wrappers in `slurm/project_<fabric>/`. Fetch is
 fabric-independent (the datastore is shared):
 
-- [`slurm/shared/fetch_all.slurm`](slurm/shared/fetch_all.slurm) — 14-element array, one task per source (general case)
+> **On the USGS `caldera` cluster, every `sbatch` must specify `--account=impd`.**
+> The `default` account has `MaxSubmit=0` and rejects every submission with
+> `AssocMaxSubmitJobLimit`. The committed `slurm/project_*/` scripts already carry
+> `#SBATCH --account=impd`; when submitting a `slurm/shared/*` script (or any script
+> whose header you have edited), pass it explicitly:
+> `sbatch --account=impd slurm/shared/fetch_all.slurm`. On a non-caldera cluster,
+> substitute or drop `--account` as your scheduler requires.
+
+- [`slurm/shared/fetch_all.slurm`](slurm/shared/fetch_all.slurm) — 15-element array (indices 0–14), one task per source (general case)
 - [`slurm/shared/fetch_era5_land.slurm`](slurm/shared/fetch_era5_land.slurm) — sharded array (default 4 workers) for ERA5-Land specifically; respects CDS per-user throttling
 - [`slurm/shared/fetch_snodas.slurm`](slurm/shared/fetch_snodas.slurm) — sharded array (default 4 workers) for SNODAS; per-day idempotent
 - [`slurm/project_or/fetch_margulis_wus_sr.slurm`](slurm/project_or/fetch_margulis_wus_sr.slurm) — single task; Oregon-scoped (raw downloads still datastore-shared), no sharding yet
@@ -326,7 +335,7 @@ Array index → source mapping (`slurm/shared/fetch_all.slurm`):
 | 13 | Margulis WUS-SR | 1985/2021 | NSIDC-0719 via earthaccess; OR-fabric only |
 | 14 | UA SWE | 1981/2023 | NSIDC-0719 UA Broxton; SWE + SCA source (CY1982–2022 on disk) |
 
-Most fetch routines are network I/O-bound; the general script allocates 1 CPU and 128 GB RAM per task with a 24-hour wall-clock limit. Per-source scripts (`slurm/shared/fetch_era5_land.slurm`, `slurm/shared/fetch_snodas.slurm`, `slurm/project_or/fetch_margulis_wus_sr.slurm`) tune memory and concurrency for their workload — notably SNODAS uses only 8 GB because PR #110's dask-streaming consolidator bounds peak RSS. Override `PROJECT_DIR` and `REPO_DIR` via environment before submission. SLURM directives (`--account`, `--partition`) at the top of each script may need adjustment for your cluster.
+Most fetch routines are network I/O-bound; the general script allocates 1 CPU and 128 GB RAM per task with a 24-hour wall-clock limit. Per-source scripts (`slurm/shared/fetch_era5_land.slurm`, `slurm/shared/fetch_snodas.slurm`, `slurm/project_or/fetch_margulis_wus_sr.slurm`) tune memory and concurrency for their workload — notably SNODAS uses only 8 GB because PR #110's dask-streaming consolidator bounds peak RSS. Override `PROJECT_DIR` and `REPO_DIR` via environment before submission. SLURM directives (`--account`, `--partition`) at the top of each script may need adjustment for your cluster — on caldera, `--account=impd` is mandatory (see the callout above).
 
 ### Running Aggregation: PC vs HPC
 
@@ -351,11 +360,11 @@ Each aggregator writes one or more NetCDFs to `<project>/data/aggregated/<source
 
 #### On HPC (SLURM)
 
-The 14-source aggregation array is a per-fabric wrapper that sources a shared
+The 15-source aggregation array is a per-fabric wrapper that sources a shared
 body (`slurm/shared/agg_all.body.sh`); SSEBop and Daymet stay separate (remote
 STAC / region-arg). Only `PROJECT_DIR` differs between fabrics:
 
-- [`slurm/project_gfv2/agg_all_gfv2.slurm`](slurm/project_gfv2/agg_all_gfv2.slurm) / [`slurm/project_or/agg_all_or.slurm`](slurm/project_or/agg_all_or.slurm) — 14-element array for local-NC aggregators
+- [`slurm/project_gfv2/agg_all_gfv2.slurm`](slurm/project_gfv2/agg_all_gfv2.slurm) / [`slurm/project_or/agg_all_or.slurm`](slurm/project_or/agg_all_or.slurm) — 15-element array (indices 0–14) for local-NC aggregators
 - [`slurm/shared/agg_ssebop.slurm`](slurm/shared/agg_ssebop.slurm) — single job for SSEBop (remote STAC)
 - [`slurm/shared/agg_daymet.slurm`](slurm/shared/agg_daymet.slurm) — single job for Daymet (local zarr, per-region)
 - [`slurm/shared/agg_snodas.slurm`](slurm/shared/agg_snodas.slurm) — optional sharded (4-worker) SNODAS aggregator; SNODAS is otherwise array index 10, so use this only to parallelize that one source
@@ -643,8 +652,8 @@ Pixi supports **linux-64**, **osx-arm64**, and **win-64** (see `pixi.toml`).
 | **AET target builder** (multi-source min/max; PR #126/#127) | Done |
 | **Recharge target builder** (`normalized_minmax`, 2-source; PR #133/#134) | Done |
 | **Soil moisture target builder** (`normalized_minmax`, monthly + annual; PR #133/#134) | Done |
-| **SCA target builder** (CI-bounded single-source MOD10C1 v061 per `PRMSobjfun.f90:calcSCA`; PR #210/#212, year-chunk fingerprinting #213/#214, finish workflow #217) | Done |
-| **SWE target builder** (4-source NaN-aware, OR-scoped Margulis via `fabric_scope`; PR #101/#135) | Done |
+| **SCA target builder** (CI-bounded two-source MOD10C1 v061 ∪ UA SWE per `PRMSobjfun.f90:calcSCA`; PR #210/#212, year-chunk fingerprinting #213/#214, finish workflow #217, two-source #237) | Done |
+| **SWE target builder** (4-source gfv2 / 5-source OR NaN-aware, OR-scoped Margulis via `fabric_scope`, UA SWE extending to 1982; PR #101/#135, #237) | Done |
 | Margulis WUS-SR per-WY granule consolidation | Done (PR #101/#135) |
 
 ## Known Gaps

@@ -126,6 +126,7 @@ nav:
       - Daymet: sources/daymet.md
       - SNODAS: sources/snodas.md
       - Margulis WUS-SR: sources/margulis_wus_sr.md
+      - UA SWE: sources/ua_swe.md
       - SSEBop: sources/ssebop.md
   - References:
       - TM 6-B10 crib sheet: references/tm6b10-summary.md
@@ -136,6 +137,11 @@ nav:
       - Known gaps resolved: references/known-gaps-resolved.md
       - Target period coverage: references/target-period-coverage.md
       - Lessons learned: references/lessons-learned.md
+  - Data release:
+      - Overview: data_release/README.md
+      - USGS data release process: data_release/usgs-process.md
+      - FGDC field map: data_release/fgdc-field-map.md
+      - sciencebasepy notes: data_release/sciencebasepy-notes.md
   - API reference:
       - Overview: api/index.md
       - Catalog: api/catalog.md
