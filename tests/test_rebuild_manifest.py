@@ -659,12 +659,42 @@ def test_read_scf_threshold_stamp_no_scf_var_is_none(tmp_path):
     assert read_scf_threshold_stamp(nc) is None
 
 
-def test_read_scf_threshold_stamp_unreadable_is_none(tmp_path):
+def test_read_scf_threshold_stamp_non_netcdf_placeholder_is_none(tmp_path):
     from nhf_spatial_targets.rebuild_manifest import read_scf_threshold_stamp
 
     nc = tmp_path / "ua_swe_1982_agg.nc"
-    nc.write_bytes(b"not a netcdf")
+    nc.write_bytes(b"not a netcdf")  # no NetCDF/HDF5 magic -> placeholder
     assert read_scf_threshold_stamp(nc) is None  # warns + degrades, never raises
+
+
+def test_read_scf_threshold_stamp_corrupt_netcdf_magic_raises(tmp_path):
+    """A file that CLAIMS to be NetCDF (HDF5 magic) but cannot be opened is a
+    corrupt artifact, not an absent stamp -> raise (issue #283 precedent), so a
+    broken agg NC cannot ship with its threshold provenance silently dropped."""
+    from nhf_spatial_targets.rebuild_manifest import read_scf_threshold_stamp
+
+    nc = tmp_path / "ua_swe_1982_agg.nc"
+    # HDF5 magic header + garbage body: _looks_like_netcdf() is True, but
+    # xarray cannot open it.
+    nc.write_bytes(b"\x89HDF\r\n\x1a\n" + b"\x00garbage")
+    with pytest.raises(ValueError, match="truncated or corrupt"):
+        read_scf_threshold_stamp(nc)
+
+
+def test_read_scf_threshold_stamp_malformed_attr_raises(tmp_path):
+    """A depth_threshold_mm attr that is present but not a float scalar (a
+    non-numeric string) is a corrupt stamp, not an absent one -> raise."""
+    from nhf_spatial_targets.rebuild_manifest import read_scf_threshold_stamp
+
+    nc = tmp_path / "ua_swe_1982_agg.nc"
+    ds = xr.Dataset(
+        {"snow_covered_fraction": (("nhm_id",), np.array([0.0, 0.5, 1.0]))},
+        coords={"nhm_id": [1, 2, 3]},
+    )
+    ds["snow_covered_fraction"].attrs["depth_threshold_mm"] = "not-a-number"
+    ds.to_netcdf(nc)
+    with pytest.raises(ValueError, match="not a float scalar"):
+        read_scf_threshold_stamp(nc)
 
 
 def test_aggregate_nc_params_only_for_ua_swe(tmp_path):
@@ -682,12 +712,27 @@ def test_aggregate_nc_params_reads_first_stamped_deterministically(tmp_path):
     from nhf_spatial_targets.rebuild_manifest import _aggregate_nc_params
 
     # ncs are pre-sorted by the caller; the first carrying a stamp wins.
+    # Distinct values so this genuinely proves "first", not "any".
     first = tmp_path / "ua_swe_1982_agg.nc"
     second = tmp_path / "ua_swe_1983_agg.nc"
     _write_ua_swe_agg_nc(first, threshold=1.0)
-    _write_ua_swe_agg_nc(second, threshold=1.0)
+    _write_ua_swe_agg_nc(second, threshold=2.0)
     assert _aggregate_nc_params("ua_swe", [first, second]) == {
         "depth_threshold_mm": 1.0
+    }
+
+
+def test_aggregate_nc_params_skips_unstamped_first(tmp_path):
+    """When the first NC has no stamp, the loop continues to the next NC that
+    does (read_scf_threshold_stamp returns None on the unstamped one)."""
+    from nhf_spatial_targets.rebuild_manifest import _aggregate_nc_params
+
+    first = tmp_path / "ua_swe_1982_agg.nc"
+    second = tmp_path / "ua_swe_1983_agg.nc"
+    _write_ua_swe_agg_nc(first, threshold=None)  # scf var, no stamp
+    _write_ua_swe_agg_nc(second, threshold=2.0)
+    assert _aggregate_nc_params("ua_swe", [first, second]) == {
+        "depth_threshold_mm": 2.0
     }
 
 

@@ -891,10 +891,56 @@ def test_ua_swe_threshold_default_mismatch_is_fatal(tmp_path):
 
 
 def test_ua_swe_threshold_missing_stamp_is_fatal(tmp_path):
-    """A ua_swe agg NC with no depth_threshold_mm stamp (a pre-PR-B build) is
-    un-verifiable provenance -> fatal, not a silent pass."""
+    """A ua_swe agg NC with no depth_threshold_mm stamp (aggregated before
+    stamping existed) is un-verifiable provenance -> fatal, not a silent pass."""
     project = build_release_project(tmp_path)
     _write_ua_swe_agg_nc(project, threshold=None)  # scf var, no stamp
     _set_config_threshold(project, 1.0)
     with pytest.raises(publish.PreflightError, match="carries no"):
         publish._preflight_ua_swe_threshold_current(project)
+
+
+def test_ua_swe_threshold_isclose_tolerates_float_noise(tmp_path):
+    """The gate compares with math.isclose, so a threshold differing only by
+    floating-point noise passes -- a regression to bare `==` would fail here."""
+    project = build_release_project(tmp_path)
+    _write_ua_swe_agg_nc(project, threshold=1.0)
+    # Equal under isclose (rel_tol 1e-9) but NOT under ==.
+    _set_config_threshold(project, 1.0000000001)
+    publish._preflight_ua_swe_threshold_current(project)  # does not raise
+
+
+def test_ua_swe_threshold_effective_config_unreadable_is_fatal(tmp_path):
+    """An unreadable config.effective.yml when the gate runs -> clean
+    PreflightError (defensive; the effective-config staleness gate normally
+    catches this first, but a call-order change must not crash this gate)."""
+    project = build_release_project(tmp_path)
+    _write_ua_swe_agg_nc(project, threshold=1.0)
+    eff = project.workdir / "config.effective.yml"
+    eff.chmod(0o644)
+    eff.write_text("{ : : not valid yaml")
+    with pytest.raises(publish.PreflightError, match="unreadable"):
+        publish._preflight_ua_swe_threshold_current(project)
+
+
+def test_ua_swe_threshold_mismatch_blocks_real_publish(tmp_path):
+    """End-to-end: a stale ua_swe depth threshold aborts a real publish_*()
+    through _preflight_common BEFORE any ScienceBase mutation -- proving the gate
+    is wired in, not just callable in isolation."""
+    from nhf_spatial_targets.rebuild_manifest import rebuild_manifest
+
+    project = build_release_project(tmp_path)
+    reg = _registry(tmp_path)
+    _seed_umbrella(reg)
+    session = FakeSbSession()
+    _write_ua_swe_agg_nc(project, threshold=1.0)
+    # Rebuild so the on-disk manifest carries the ua_swe aggregate step (the
+    # provenance / drift gates pass); config.yml is untouched so the
+    # effective-config staleness gate also passes.
+    rebuild_manifest(project)
+    _set_config_threshold(project, 25.0)  # edited threshold, didn't re-aggregate
+    with pytest.raises(publish.PreflightError, match="no longer matches config"):
+        publish.publish_fabric_child(
+            project, make_sb_client(session), registry_path=reg, now=NOW
+        )
+    assert session.created == []  # nothing published -- gate fired fail-fast

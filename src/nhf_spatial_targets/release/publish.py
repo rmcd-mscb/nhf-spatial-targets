@@ -760,10 +760,17 @@ def _preflight_ua_swe_threshold_current(project: Project) -> None:
     Stale / un-verifiable (any of) -> :class:`PreflightError`:
 
     - an agg NC carries no ``snow_covered_fraction`` ``depth_threshold_mm`` stamp
-      (a pre-PR-B build) or is unreadable -- provenance that cannot be verified,
+      (aggregated before depth-threshold stamping existed) -- provenance that
+      cannot be verified,
     - a stamped threshold != the config-resolved
-      ``targets.snow_covered_area.depth_threshold_mm`` (default
+      ``targets.snow_covered_area.depth_threshold_mm`` (read from the
+      staleness-gated ``config.effective.yml``; default
       :data:`~nhf_spatial_targets.aggregate.ua_swe.DEFAULT_DEPTH_THRESHOLD_MM`).
+
+    A *corrupt* agg NC (NetCDF magic but unopenable, or a malformed stamp) raises
+    from :func:`read_scf_threshold_stamp` and is caught earlier, at the
+    ``_preflight_provenance_complete`` projection boundary -- so this gate only
+    ever sees a healthy or genuinely-unstamped file.
     """
     import math
 
@@ -809,8 +816,8 @@ def _preflight_ua_swe_threshold_current(project: Project) -> None:
         if stamped is None:
             problems.append(
                 f"{nc.name} carries no snow_covered_fraction "
-                f"depth_threshold_mm stamp (a pre-PR-B build) or is unreadable; "
-                f"its threshold provenance cannot be verified"
+                f"depth_threshold_mm stamp (aggregated before depth-threshold "
+                f"stamping was added); its threshold provenance cannot be verified"
             )
         elif not math.isclose(stamped, configured, rel_tol=1e-9, abs_tol=1e-12):
             problems.append(
