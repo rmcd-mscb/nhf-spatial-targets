@@ -116,6 +116,13 @@ def test_targets_group_is_registered(render):
     assert render.GROUPS["targets"]["dir"].name == "targets"
 
 
+def test_fabric_group_is_registered(render):
+    """The KD-tree batch-partition figure renders from the same driver."""
+    assert "fabric" in render.GROUPS
+    assert render.GROUPS["fabric"]["dir"].name == "fabric"
+    assert render.GROUPS["fabric"]["figures_subdir"] == "fabric"
+
+
 def test_swap_project_dir_single_line(render):
     src = 'PROJECT_DIR = Path("/x/gfv2-spatial-targets")\n'
     new, n = render._swap_project_dir_in_source(src, "/y/or-spatial-targets")
