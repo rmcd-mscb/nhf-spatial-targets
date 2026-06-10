@@ -67,7 +67,7 @@ At minimum:
 | Purpose | Per-item template |
 | Bounding coordinates | Umbrella: union of children. Source child: `catalog/sources.yml[<key>].access.bbox_nwse`. Fabric child: `<project>/fabric.json.bbox` |
 | Time period | Umbrella: union of children. Source child: `catalog/sources.yml[<key>].period`. Fabric child: union of enabled-target periods |
-| Lineage / Process steps | `<project>/manifest.json.steps[]` (currently empty — PR-B instruments this) |
+| Lineage / Process steps | `<project>/manifest.json.steps[]`, rendered by `release/mcf.py:_step_description` — including each step's resolved `params` (e.g. the ua_swe aggregate step's `depth_threshold_mm`, see below) |
 | Entity / Attribute | Per-NC variable: from `catalog/sources.yml[<key>].variables[].{name,long_name,cf_units,cell_methods}`; per-target: from `catalog/variables.yml[<target>]` |
 | Keywords (theme) | `release_defaults.yml.keywords.{umbrella,source,fabric}` + per-target CF standard_names |
 | Point of contact | `release_defaults.yml.contacts.point_of_contact` (overridable per project) |
@@ -78,6 +78,24 @@ At minimum:
 Validate FGDC XML with the [USGS Metadata Parser](https://geology.usgs.gov/tools/metadata/tools/doc/mp.html)
 before upload. Our `release/validate_xml.py` shells out to `mp` if it's on
 PATH and reports warn-only if not.
+
+**Aggregate-step parameters travel into the metadata.** When an aggregate
+step is defined by a tunable parameter, that parameter is captured in the
+manifest step's `params` and surfaced in the FGDC/ISO process steps. The
+first instance is the **SCA depth threshold**: `ua_swe`'s
+`snow_covered_fraction` is a per-pixel `snow_depth > depth_threshold_mm`
+binary evaluated *before* aggregation (a nonlinearity — see
+[transformation-pipeline.md](../architecture/transformation-pipeline.md#worked-example-ua_swe-snow_covered_fraction-the-canonical-gotcha)),
+so the threshold is baked into the aggregated NC and stamped on the variable.
+The deterministic `rebuild-manifest` projection lifts that stamp into the
+aggregate step's `params` (read from the NC attr, never config), and
+`release/mcf.py` renders it into the process-step description. Because the
+threshold is baked at aggregation time, editing
+`targets.snow_covered_area.depth_threshold_mm` without re-aggregating `ua_swe`
+is a release-blocking error: the publish preflight
+`_preflight_ua_swe_threshold_current` refuses to publish a `snow_covered_fraction`
+whose stamped threshold no longer matches config (the agg-layer analogue of
+the `config.effective.yml` staleness gate).
 
 ## File and data requirements
 

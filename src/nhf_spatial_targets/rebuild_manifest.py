@@ -275,6 +275,106 @@ def _target_nc_params(nc: Path) -> dict:
     return params
 
 
+# Aggregate steps with an aggregate-affecting, pre-aggregation-baked tunable
+# (issue #237 PR-B2). Currently ua_swe only: its ``snow_covered_fraction`` is a
+# per-pixel binary ``snow_depth > depth_threshold_mm`` evaluated PRE-aggregation
+# (a nonlinearity that does not commute with the area-weighted mean), so the
+# threshold that defined the fraction is baked into the agg NC and must travel
+# with it as provenance. The general pattern -- an aggregate-affecting parameter
+# stamped on its derived variable, lifted here into that aggregate step's
+# ``params`` -- widens this map when a second such source lands.
+_UA_SWE_KEY = "ua_swe"
+_SCF_VAR = "snow_covered_fraction"
+_DEPTH_THRESHOLD_ATTR = "depth_threshold_mm"
+
+
+def read_scf_threshold_stamp(nc: Path) -> float | None:
+    """Return the ``depth_threshold_mm`` stamped on ``snow_covered_fraction``.
+
+    Reads the pixel depth threshold (mm) baked into a ua_swe aggregated NC's
+    ``snow_covered_fraction`` variable attrs (stamped by ``aggregate/ua_swe.py``
+    pre/post-aggregation).
+
+    Returns ``None`` only for a *genuinely absent* stamp -- the variable or attr
+    is missing, or the file is a non-NetCDF placeholder (no NetCDF/HDF5 magic).
+    The caller decides what that ``None`` means: the projection omits the param
+    (best-effort, never fatal), the publish staleness gate treats it as
+    un-verifiable provenance and refuses to ship.
+
+    **Raises** ``ValueError`` for a *corrupt* stamp, mirroring
+    :func:`_target_nc_params` (issue #283): a file that carries NetCDF/HDF5 magic
+    but cannot be opened (truncated/corrupt), or a ``depth_threshold_mm`` attr
+    that is present but not a float scalar. Both are conflated with "absent" only
+    if we degrade silently -- which would let a broken agg NC ship with its
+    threshold provenance quietly dropped from the manifest. Failing loud is the
+    only safe behaviour for a file that claims to be NetCDF. (The publish flow
+    catches this ``ValueError`` at the ``_preflight_provenance_complete`` boundary
+    -- which runs the projection first -- exactly as it does for a corrupt target
+    NC, so the downstream threshold gate never sees a corrupt file.)
+    """
+    import xarray as xr
+
+    try:
+        ds = xr.open_dataset(nc)
+    except Exception as exc:
+        if _looks_like_netcdf(nc):
+            raise ValueError(
+                f"ua_swe agg NC {nc} carries NetCDF/HDF5 magic but could not be "
+                f"opened ({exc}); it appears truncated or corrupt. Refusing to "
+                f"silently omit its {_DEPTH_THRESHOLD_ATTR} provenance. "
+                f"Re-aggregate ua_swe, then rebuild-manifest."
+            ) from exc
+        logger.warning(
+            "rebuild-manifest: %s is unreadable and carries no NetCDF/HDF5 magic "
+            "(%s); treating it as a non-NetCDF placeholder, so the ua_swe "
+            "aggregate step's %s param is omitted.",
+            nc,
+            exc,
+            _DEPTH_THRESHOLD_ATTR,
+        )
+        return None
+    with ds:
+        if _SCF_VAR not in ds.variables:
+            return None
+        value = ds[_SCF_VAR].attrs.get(_DEPTH_THRESHOLD_ATTR)
+        if value is None:
+            return None
+        # numpy scalar -> plain float for JSON stability + exact compares. A
+        # present-but-malformed value (non-numeric string, multi-element array)
+        # is a corrupt stamp, NOT an absent one -- raise rather than mis-report
+        # it downstream as "no stamp".
+        raw = value.item() if hasattr(value, "item") else value
+        try:
+            return float(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"{nc}: {_SCF_VAR}.{_DEPTH_THRESHOLD_ATTR} is present but not a "
+                f"float scalar ({raw!r}); refusing to treat a malformed stamp as "
+                f"absent provenance. Re-aggregate ua_swe, then rebuild-manifest."
+            ) from exc
+
+
+def _aggregate_nc_params(source_key: str, ncs: list[Path]) -> dict:
+    """Lift aggregate-baked derived-variable attrs into the aggregate step params.
+
+    Currently ua_swe-specific: reads the ``depth_threshold_mm`` stamp from the
+    deterministically-first agg NC that carries it (``ncs`` is pre-sorted) into
+    ``params``. Read from the NC attr, **not** config -- the rebuild is a pure
+    function of disk and must stay deterministic; config could have drifted from
+    what actually defined the on-disk fraction (the publish staleness gate is the
+    place that catches that drift). A missing var/attr yields ``{}``: the param
+    is provenance-enriching, not gating, so the projection never fails on its
+    absence.
+    """
+    if source_key != _UA_SWE_KEY:
+        return {}
+    for nc in ncs:
+        stamp = read_scf_threshold_stamp(nc)
+        if stamp is not None:
+            return {_DEPTH_THRESHOLD_ATTR: stamp}
+    return {}
+
+
 def synthesize_steps(
     *,
     datastore: Path,
@@ -328,14 +428,20 @@ def synthesize_steps(
     # aggregate: every data/aggregated/<key>/ dir (incl. derived variants).
     aggregated_root = project_dir / "data" / "aggregated"
     for source_dir in _sorted_source_dirs(aggregated_root):
+        ncs = _ncs_in(source_dir)
         outputs = _guarded_output_entries(
-            _ncs_in(source_dir),
+            ncs,
             compute_sha256=compute_sha256,
             source_key=source_dir.name,
         )
         if not outputs:
             continue
-        _record(kind="aggregate", source_key=source_dir.name, outputs=outputs)
+        _record(
+            kind="aggregate",
+            source_key=source_dir.name,
+            outputs=outputs,
+            params=_aggregate_nc_params(source_dir.name, ncs),
+        )
 
     # target: one per targets/*.nc (one-level glob; never per-year intermediates).
     targets_dir = project_dir / "targets"

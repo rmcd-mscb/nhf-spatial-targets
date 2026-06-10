@@ -791,3 +791,156 @@ def test_typed_records_enforce_key_invariant():
         publish.ScopeDiff(
             scope="fabric", key=None, sb_id=None, local="missing", remote="missing"
         )
+
+
+# ---------------------------------------------------------------------------
+# ua_swe depth-threshold staleness gate (verify-don't-mutate) -- PR-B2 / #237
+# ---------------------------------------------------------------------------
+
+import numpy as np  # noqa: E402
+import xarray as xr  # noqa: E402
+import yaml as _yaml  # noqa: E402
+
+
+def _write_ua_swe_agg_nc(
+    project, *, threshold, with_scf=True, name="ua_swe_1982_agg.nc"
+):
+    """Write a ua_swe aggregated NC under the project's aggregated dir.
+
+    ``threshold`` None + ``with_scf`` True -> snow_covered_fraction present but
+    unstamped (un-verifiable provenance). ``with_scf`` False -> no scf var.
+    """
+    nc = project.aggregated_dir() / "ua_swe" / name
+    nc.parent.mkdir(parents=True, exist_ok=True)
+    data = {"swe": (("nhm_id",), np.array([10.0, 20.0, 30.0]))}
+    if with_scf:
+        data["snow_covered_fraction"] = (("nhm_id",), np.array([0.0, 0.5, 1.0]))
+    ds = xr.Dataset(data, coords={"nhm_id": [1, 2, 3]})
+    if with_scf and threshold is not None:
+        ds["snow_covered_fraction"].attrs["depth_threshold_mm"] = float(threshold)
+    ds.to_netcdf(nc)
+    return nc
+
+
+def _set_config_threshold(project, threshold):
+    """Inject targets.snow_covered_area.depth_threshold_mm into config.effective.yml.
+
+    Edits the (read-only) effective config in place. ``threshold`` None leaves the
+    key unset so the gate exercises its DEFAULT_DEPTH_THRESHOLD_MM fallback.
+    """
+    eff = project.workdir / "config.effective.yml"
+    eff.chmod(0o644)
+    body = _yaml.safe_load(eff.read_text()) or {}
+    if threshold is not None:
+        body.setdefault("targets", {}).setdefault("snow_covered_area", {})[
+            "depth_threshold_mm"
+        ] = threshold
+    eff.write_text(_yaml.safe_dump(body))
+
+
+def test_ua_swe_threshold_noop_when_not_aggregated(tmp_path):
+    """A project that never aggregated ua_swe (no agg dir) clears the gate."""
+    project = build_release_project(tmp_path)
+    publish._preflight_ua_swe_threshold_current(project)  # does not raise
+
+
+def test_ua_swe_threshold_noop_when_dir_empty(tmp_path):
+    """A ua_swe agg dir with no NCs is a no-op (nothing to verify)."""
+    project = build_release_project(tmp_path)
+    (project.aggregated_dir() / "ua_swe").mkdir(parents=True)
+    publish._preflight_ua_swe_threshold_current(project)  # does not raise
+
+
+def test_ua_swe_threshold_match_passes(tmp_path):
+    """Stamped threshold == config threshold clears the gate."""
+    project = build_release_project(tmp_path)
+    _write_ua_swe_agg_nc(project, threshold=5.0)
+    _set_config_threshold(project, 5.0)
+    publish._preflight_ua_swe_threshold_current(project)  # does not raise
+
+
+def test_ua_swe_threshold_default_fallback_passes(tmp_path):
+    """Config unset + a fraction baked at the module default (1.0 mm) passes:
+    the gate's fallback mirrors aggregate/ua_swe._resolve_depth_threshold_mm."""
+    from nhf_spatial_targets.aggregate.ua_swe import DEFAULT_DEPTH_THRESHOLD_MM
+
+    project = build_release_project(tmp_path)
+    _write_ua_swe_agg_nc(project, threshold=DEFAULT_DEPTH_THRESHOLD_MM)
+    _set_config_threshold(project, None)  # key unset -> default
+    publish._preflight_ua_swe_threshold_current(project)  # does not raise
+
+
+def test_ua_swe_threshold_mismatch_is_fatal(tmp_path):
+    """Editing the config threshold without re-aggregating -> fatal: the agg NC's
+    stamped threshold no longer matches config (the agg-layer fossil)."""
+    project = build_release_project(tmp_path)
+    _write_ua_swe_agg_nc(project, threshold=1.0)
+    _set_config_threshold(project, 25.0)
+    with pytest.raises(publish.PreflightError, match="depth_threshold_mm=1.0"):
+        publish._preflight_ua_swe_threshold_current(project)
+
+
+def test_ua_swe_threshold_default_mismatch_is_fatal(tmp_path):
+    """Config unset (resolves to default 1.0) but the fraction was baked at a
+    non-default threshold -> fatal."""
+    project = build_release_project(tmp_path)
+    _write_ua_swe_agg_nc(project, threshold=10.0)
+    _set_config_threshold(project, None)
+    with pytest.raises(publish.PreflightError, match="depth_threshold_mm=10.0"):
+        publish._preflight_ua_swe_threshold_current(project)
+
+
+def test_ua_swe_threshold_missing_stamp_is_fatal(tmp_path):
+    """A ua_swe agg NC with no depth_threshold_mm stamp (aggregated before
+    stamping existed) is un-verifiable provenance -> fatal, not a silent pass."""
+    project = build_release_project(tmp_path)
+    _write_ua_swe_agg_nc(project, threshold=None)  # scf var, no stamp
+    _set_config_threshold(project, 1.0)
+    with pytest.raises(publish.PreflightError, match="carries no"):
+        publish._preflight_ua_swe_threshold_current(project)
+
+
+def test_ua_swe_threshold_isclose_tolerates_float_noise(tmp_path):
+    """The gate compares with math.isclose, so a threshold differing only by
+    floating-point noise passes -- a regression to bare `==` would fail here."""
+    project = build_release_project(tmp_path)
+    _write_ua_swe_agg_nc(project, threshold=1.0)
+    # Equal under isclose (rel_tol 1e-9) but NOT under ==.
+    _set_config_threshold(project, 1.0000000001)
+    publish._preflight_ua_swe_threshold_current(project)  # does not raise
+
+
+def test_ua_swe_threshold_effective_config_unreadable_is_fatal(tmp_path):
+    """An unreadable config.effective.yml when the gate runs -> clean
+    PreflightError (defensive; the effective-config staleness gate normally
+    catches this first, but a call-order change must not crash this gate)."""
+    project = build_release_project(tmp_path)
+    _write_ua_swe_agg_nc(project, threshold=1.0)
+    eff = project.workdir / "config.effective.yml"
+    eff.chmod(0o644)
+    eff.write_text("{ : : not valid yaml")
+    with pytest.raises(publish.PreflightError, match="unreadable"):
+        publish._preflight_ua_swe_threshold_current(project)
+
+
+def test_ua_swe_threshold_mismatch_blocks_real_publish(tmp_path):
+    """End-to-end: a stale ua_swe depth threshold aborts a real publish_*()
+    through _preflight_common BEFORE any ScienceBase mutation -- proving the gate
+    is wired in, not just callable in isolation."""
+    from nhf_spatial_targets.rebuild_manifest import rebuild_manifest
+
+    project = build_release_project(tmp_path)
+    reg = _registry(tmp_path)
+    _seed_umbrella(reg)
+    session = FakeSbSession()
+    _write_ua_swe_agg_nc(project, threshold=1.0)
+    # Rebuild so the on-disk manifest carries the ua_swe aggregate step (the
+    # provenance / drift gates pass); config.yml is untouched so the
+    # effective-config staleness gate also passes.
+    rebuild_manifest(project)
+    _set_config_threshold(project, 25.0)  # edited threshold, didn't re-aggregate
+    with pytest.raises(publish.PreflightError, match="no longer matches config"):
+        publish.publish_fabric_child(
+            project, make_sb_client(session), registry_path=reg, now=NOW
+        )
+    assert session.created == []  # nothing published -- gate fired fail-fast
