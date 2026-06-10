@@ -474,8 +474,6 @@ nhf-spatial-targets/
 ├── catalog/
 │   ├── sources.yml          # data source registry with access info
 │   └── variables.yml        # calibration target definitions and range methods
-├── config/
-│   └── pipeline.yml         # reference run configuration
 ├── docs/
 │   ├── architecture/        # transformation-pipeline, nc-encoding, python-patterns
 │   ├── references/          # TM 6-B10 crib sheet, lessons-learned, known-gaps-resolved

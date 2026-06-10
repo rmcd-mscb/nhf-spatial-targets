@@ -78,7 +78,6 @@ pixi run -e dev pre-commit install
 
 ```
 catalog/           # YAML data source registry and variable definitions
-config/            # pipeline.yml reference configuration
 src/nhf_spatial_targets/
   _logging.py      # Structured logging setup
   catalog.py       # Python API for catalog/ YAML files
@@ -107,16 +106,21 @@ tests/
 ## Config schema additions
 
 When you add a new optional parameter to the project config (top-level key
-or nested commented stub), update all four in the same PR. The first three
-keep new projects current; the fourth keeps existing projects discoverable.
+or nested commented stub), update all three in the same PR. The first two
+keep new projects current; the third keeps existing projects discoverable.
+
+`src/nhf_spatial_targets/init_run.py:_CONFIG_TEMPLATE` is the **single source
+of truth** for the config schema — the literal text an operator gets from
+`nhf-targets init`. There is intentionally no second mirror copy: the former
+`config/pipeline.yml` reference was retired in #315 because the hand-synced
+duplicate kept drifting out of step with the template.
 
 1. **`src/nhf_spatial_targets/init_run.py:_CONFIG_TEMPLATE`** — add the
    parameter as a commented stub (schema + example value + reason it's
    optional).
-2. **`config/pipeline.yml`** — mirror the addition.
-3. **`tests/test_init_run.py`** — assert the new key (or commented-stub
+2. **`tests/test_init_run.py`** — assert the new key (or commented-stub
    line) appears in the rendered template.
-4. **`src/nhf_spatial_targets/upgrade_config.py:OPTIONAL_CONFIG_FEATURES`**
+3. **`src/nhf_spatial_targets/upgrade_config.py:OPTIONAL_CONFIG_FEATURES`**
    — append an `OptionalConfigFeature` entry so existing-project operators
    discover the addition via `nhf-targets upgrade-config -d <dir>`.
 
@@ -420,7 +424,7 @@ stale recipe runs the wrong command. Walk this checklist against the diff:
   recipes, `docs/sources/<src>.md`, `docs/references/*` (known-gaps, tm6b10,
   transformation-pipeline, usgs-process).
 - **In-tree operator docs** — SLURM script header comments, `slurm/**/README.md`,
-  config templates (`init_run.py` / `config/pipeline.yml` stubs).
+  the config template (`init_run.py:_CONFIG_TEMPLATE` stubs).
 - **Catalog prose** — `catalog/sources.yml` / `variables.yml` `notes:` /
   `description:` / `range_notes:` that describe behavior the change touched.
 
