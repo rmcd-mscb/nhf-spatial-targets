@@ -2,7 +2,7 @@
 #SBATCH --job-name=nhf-fetch
 #SBATCH --account=impd
 #SBATCH --partition=cpu
-#SBATCH --array=0-13
+#SBATCH --array=0-14
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=128G
@@ -80,6 +80,7 @@ FETCH_TASKS=(
     "fetch-daymet"         # 11 — 1980–2024 at 1 km, daily (ORNL DAAC zarr, MANUAL STAGING; see docs/sources/daymet.md)
     "fetch-snodas"         # 12 — 2003–present at 1 km, daily (NSIDC G02158 via earthaccess)
     "fetch-margulis-wus-sr" # 13 — 1985–2021 at 90 m, daily (NSIDC-0719 via earthaccess) — Oregon-fabric only
+    "fetch-ua-swe"         # 14 — 1982–2022 at 4 km, daily (NSIDC-0719 UA Broxton; SWE + SCA source)
 )
 
 # Map array index → fetch period (YYYY/YYYY)
@@ -101,6 +102,7 @@ FETCH_PERIODS=(
     "1980/2024"   # 11 daymet      (publisher ends 2024; V4 R1)
     "2003/2025"   # 12 snodas      (daily archive starts 2003-09-30)
     "1985/2021"   # 13 margulis-wus-sr (water years 1985-2021)
+    "1981/2023"   # 14 ua-swe      (calendar-year range; resolves WY1982-2023 raws)
 )
 
 TASK="${FETCH_TASKS[$SLURM_ARRAY_TASK_ID]}"
