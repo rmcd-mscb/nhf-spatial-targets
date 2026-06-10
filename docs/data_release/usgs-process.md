@@ -108,10 +108,10 @@ the `config.effective.yml` staleness gate).
   recommended for preservation. Our pipeline ships per-item `checksums.csv`
   (path, sha256, size, mtime) + GNU `SHA256SUMS` (for `sha256sum -c`).
 - **CRS metadata**: EPSG code in FGDC + CF `grid_mapping` variable in each
-  NetCDF. Already enforced by [`io_nc.atomic_to_netcdf`](../../src/nhf_spatial_targets/io_nc.py).
+  NetCDF. Already enforced by [`io_nc.atomic_to_netcdf`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/io_nc.py).
 - **Variable docs**: CF standard names where they exist, plus `long_name`,
   `units`, `cell_methods`. Already enforced by
-  [`fetch/consolidate.py::apply_cf_metadata`](../../src/nhf_spatial_targets/fetch/consolidate.py).
+  [`fetch/consolidate.py::apply_cf_metadata`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/fetch/consolidate.py).
 - **README**: Not mandated but expected. Auto-generated per child in our
   pipeline (`release/readme.py` + Jinja templates).
 - **File size**: Per-file practical limit is ~10 GB on ScienceBase; per-item
