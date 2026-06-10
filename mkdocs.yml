@@ -89,6 +89,9 @@ plugins:
 # - docs/plans/         internal design specs (this PR's spec lives there)
 # - docs/superpowers/   superpowers-skill design notes (parallel to plans/)
 # - docs/presentations/ Marp .slides.md target a separate PDF pipeline
+# - docs/reviews/       point-in-time review artifacts (e.g. the public-API
+#                       evaluation); GitHub-readable with repo-relative links
+#                       that don't resolve in the flattened site (issue #325)
 # - docs/references/*.f90    Fortran source code (linked from references but not a doc)
 # - docs/references/*.pdf    large source PDFs (linked but not rendered inline)
 # - docs/references/*.md     literal markdown extracts of the above PDFs
@@ -97,6 +100,7 @@ exclude_docs: |
   plans/
   superpowers/
   presentations/
+  reviews/
   references/*.f90
   references/*.pdf
   references/tm6b10.md

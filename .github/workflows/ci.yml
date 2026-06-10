@@ -24,3 +24,15 @@ jobs:
 
       - name: Test
         run: pixi run -e dev test
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          environments: docs
+
+      - name: Build docs (--strict)
+        run: pixi run docs-build
