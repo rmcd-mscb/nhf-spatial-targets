@@ -462,26 +462,28 @@ multi_source_runoff_bounds(sources):
 ```
 - Output: `lower_bound` and `upper_bound` variables, dims `(time, hru)`, units `cfs`, CF-1.6 attrs
 
-#### AET (`targets/aet.py`) — **STUB**
+#### AET (`targets/aet.py`) — **IMPLEMENTED**
 - Sources: mod16a2_v061, ssebop, mwbm_climgrid
 - Method: multi_source_minmax over absolute mm/month values
 - MOD16A2 8-day → monthly: overlap-weighted sum (`(days_overlap / composite_length) × value`)
 - `sources` override from project config (pending MOD16A2 decision)
 
-#### Recharge (`targets/rch.py`) — **STUB**
+#### Recharge (`targets/rch.py`) — **IMPLEMENTED**
 - Sources: reitz2017, watergap22d, era5_land (ssro)
 - Each source normalized 0–1 over 2000–2009 before min/max
 - Annual output
 
-#### Soil Moisture (`targets/som.py`) — **STUB**
+#### Soil Moisture (`targets/som.py`) — **IMPLEMENTED**
 - Sources: merra2, ncep_ncar, nldas_mosaic, nldas_noah
 - Monthly: normalize per calendar month over 1982–2010
 - Annual: normalize over full 1982–2010
 - Two separate output NCs
 
-#### Snow-Covered Area (`targets/sca.py`) — **STUB**
-- Source: mod10c1_v061
-- Read aggregated NC (native 0–100); apply ÷ 100; call `normalize.modis_ci_bounds(sca, ci, 0.70)`
+#### Snow-Covered Area (`targets/sca.py`) — **IMPLEMENTED**
+- Sources: mod10c1_v061 + ua_swe, combined NaN-aware (#237)
+- MOD10C1: read aggregated NC (native 0–100); ÷ 100; CI-bounded interval `[ci·sca, ci·sca + (1−ci)]` where CI ≥ threshold
+- UA SWE: depth-thresholded `snow_covered_fraction`, degenerate `[v, v]` interval
+- Combine: `lower = nanmin`, `upper = nanmax`, `n_sources = Σ finite`
 - Daily output per HRU
 
 ---
@@ -491,7 +493,7 @@ multi_source_runoff_bounds(sources):
 ### Decision 1: Runoff — ERA5 + GLDAS replaces NHM-MWBM (Issue #41)
 - NHM-MWBM was circular (PRMS-derived, used to calibrate PRMS)
 - Two independent reanalysis sources provide better constraint and remove circularity
-- MWBM kept in catalog; not yet consumed by `targets/run.py`
+- MWBM kept in catalog and now consumed by `targets/run.py` (capped at its 2020 publisher end)
 - GLDAS unit trap: `_acc` = mean of 3-hourly accumulations; requires `× 8 × days_in_month`
 
 ### Decision 2: AET — MOD16A2 v061 Inclusion Pending
@@ -564,8 +566,20 @@ multi_source_runoff_bounds(sources):
 
 ## Part 8: Known Open Gaps
 
-1. **SCA CI-bounds formula:** TM 6-B10 describes intent; math in PRMSobjfun.f (not public). `targets/sca.py` is a stub pending resolution.
-2. **AET target builder:** Stub. Awaiting MOD16A2 v061 collaborator decision + MWBM integration.
-3. **Recharge target builder:** Stub. Requires per-source normalization + multi-source min/max.
-4. **Soil moisture target builder:** Stub. Requires per-calendar-month normalization (monthly) + annual normalization.
-5. **MWBM in runoff bounds:** Aggregated but not yet consumed by `targets/run.py`.
+All six target builders (runoff/aet/rch/som/sca/swe) are now implemented; the
+gaps below were the open items at the time this reference was first written and
+are recorded here as resolved. `catalog/sources.yml` `status:`/`notes:` and the
+"Known Gaps" block in `CLAUDE.md` are authoritative for current status.
+
+1. **SCA CI-bounds formula (RESOLVED):** the `calcSCA` math was recovered from
+   `PRMSobjfun.f90` (lines 1052–1061); `targets/sca.py` implements it, extended
+   in #237 to a two-source MOD10C1 + UA SWE NaN-aware bound.
+2. **AET target builder (RESOLVED):** `targets/aet.py` implemented (MOD16A2 v061
+   + SSEBop + MWBM).
+3. **Recharge target builder (RESOLVED):** `targets/rch.py` implemented
+   (per-source normalization + multi-source min/max).
+4. **Soil moisture target builder (RESOLVED):** `targets/som.py` implemented
+   (per-calendar-month + annual normalization).
+5. **MWBM in runoff bounds (RESOLVED):** `targets/run.py` consumes
+   `mwbm_climgrid` (capped at 2020 — the publisher's end; see the
+   gfv2/OR source-selection notes).

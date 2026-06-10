@@ -12,14 +12,14 @@ cd <repo root>
 mkdir -p logs
 OR=/caldera/hovenweep/projects/usgs/water/impd/nhgf/or-spatial-targets
 
-# 1. Aggregate the 14 array sources (incl. Margulis WUS-SR, OR-only SWE).
+# 1. Aggregate the 15 array sources (incl. Margulis WUS-SR OR-only SWE + UA SWE).
 sbatch slurm/project_or/agg_all_or.slurm
 
 # 2. Aggregate the two companion sources the array excludes.
 PROJECT_DIR=$OR sbatch slurm/shared/agg_ssebop.slurm
 PROJECT_DIR=$OR sbatch slurm/shared/agg_daymet.slurm   # edit --region (na) inside if needed
 
-# 3. Build the 5 implemented targets (runoff/aet/rch/som/swe; sca self-skips).
+# 3. Build all six implemented targets (runoff/aet/rch/som/sca/swe).
 #    Submit after the aggregations above have completed.
 sbatch slurm/project_or/run_or.slurm
 

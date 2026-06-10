@@ -102,7 +102,7 @@ over absolute mm/month values (no normalization); converted to cfs before writin
 **Combination rule:** per-HRU per-month `lower = min(sources)`, `upper = max(sources)` over absolute mm/month (no normalization; inter-source spread is the calibration bound)
 **Output period:** 2000–2010 (TM 6-B10 default; user-configurable)
 **Sources:** SSEBop `et`, MWBM ClimGrid `aet`, MOD16A2 v061 `ET_500m` — all three
-**Builder:** `targets/aet.py` (stub — `NotImplementedError`)
+**Builder:** `targets/aet.py`
 
 ---
 
@@ -176,7 +176,7 @@ over absolute mm/month values (no normalization); converted to cfs before writin
 **PRMS variable:** `recharge`
 **Combination rule:** each source normalized 0–1 over 2000–2009 independently per HRU, then `lower = min(normalized)`, `upper = max(normalized)` per year
 **Output period:** annual, 2000–2009 (normalization window matches calibration window)
-**Builder:** `targets/rch.py` (stub — `NotImplementedError`)
+**Builder:** `targets/rch.py`
 
 **Normalization rationale:** sources measure conceptually different fluxes (empirical regression vs process model vs soil drainage proxy); absolute magnitudes diverge substantially especially in arid regions. Optimizer targets relative year-to-year change, making normalization tractable and making absolute differences irrelevant.
 
@@ -249,7 +249,7 @@ over absolute mm/month values (no normalization); converted to cfs before writin
 **Two outputs required:**
 - **Monthly:** normalize per calendar month (all Januaries together, all Februaries together, etc.) over 1982–2010 — confirmed in TM 6-B10 Appendix 1
 - **Annual:** normalize over full 1982–2010 period
-**Builder:** `targets/som.py` (stub — `NotImplementedError`)
+**Builder:** `targets/som.py`
 
 **Normalization rationale:** sources use fundamentally different physical quantities (plant-available wetness, volumetric water content, mass per area); per-source 0–1 normalization cancels constant offsets and makes GWETTOP (0–1 dimensionless) combinable with VWC (0.05–0.45 m³/m³) and kg/m² (0–40 kg/m²).
 
@@ -344,12 +344,12 @@ over absolute mm/month values (no normalization); converted to cfs before writin
 ## 5. Snow-Covered Area (`snowcov_area`)
 
 **PRMS variable:** `snowcov_area`
-**Single source:** MOD10C1 v061 only
-**Combination rule:** CI-based bounds from daily SCA and associated Clear_Index per HRU
+**Sources:** MOD10C1 v061 (CI-bounded) + UA SWE (depth-thresholded `snow_covered_fraction`), combined NaN-aware (#237)
+**Combination rule:** per-source interval registry → `lower = nanmin`, `upper = nanmax`, `n_sources = Σ finite`; MOD10C1 → `[ci·sca, ci·sca + (1−ci)]` where CI ≥ threshold; UA SWE → degenerate `[v, v]`
 **Output:** daily, per-HRU, fraction [0, 1]
-**Output period:** 2000–2010 (user-configurable)
-**Builder:** `targets/sca.py` (stub — `NotImplementedError`)
-**Open gap:** exact bounds formula not published; PRMSobjfun.f not publicly available
+**Output period:** user-configurable (recorded in target metadata + manifest)
+**Builder:** `targets/sca.py`
+**Bounds formula:** recovered from `PRMSobjfun.f90` `calcSCA` (lines 1052–1061); the earlier "not publicly available" gap is closed
 
 ---
 

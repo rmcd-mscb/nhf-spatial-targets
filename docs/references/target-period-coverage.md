@@ -119,12 +119,19 @@ NOAH/MOSAIC).
 | Source | Coverage |
 |---|---|
 | mod10c1_v061 | 2000–2025 |
-| **Intersection** | **2000–2025** (26 years × 365 days ≈ 9498 daily timesteps) |
+| ua_swe | 1982–2022 |
+| **Union** (default `min_sources_for_bound: 1`) | **1982–2025** — a bound is defined wherever ≥1 source is finite |
+| Two-source overlap (`n_sources == 2`) | 2000–2022 |
 
-Single-source target — intersection equals coverage. Builder is
-currently a stub (CI-bounds formula gap per [CLAUDE.md](../conventions.md)
-Known Gaps); period extends easily once the placeholder formula
-lands.
+Two-source NaN-aware bound (#237): unlike the min/max-intersection
+targets above, SCA combines sources with `lower = nanmin`,
+`upper = nanmax`, so coverage is the **union**, not the intersection —
+the bound is well-defined whenever either source has data. ua_swe
+(depth-thresholded `snow_covered_fraction`) extends coverage back to
+1982; mod10c1 (CI-bounded) carries it to 2025. Setting
+`min_sources_for_bound: 2` narrows the bound to the 2000–2022 overlap.
+The `calcSCA` CI-bounds formula gap is closed (recovered from
+`PRMSobjfun.f90`); the builder is implemented.
 
 ### Snow water equivalent (`targets/swe.py`) — pending
 

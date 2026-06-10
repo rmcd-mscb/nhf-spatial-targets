@@ -14,10 +14,11 @@
 # Oregon" entry point. Thin wrapper over the shared target dispatch; only
 # PROJECT_DIR differs from slurm/project_gfv2/run_gfv2.slurm.
 #
-# Builds the 5 implemented targets (runoff/aet/rch/som/swe). Index 4 (run-sca)
-# is a stub: it raises NotImplementedError, which the CLI catches and logs as
-# "skipping", so the array completes without a failure. SWE picks up the OR-only
-# Margulis WUS-SR source via fabric_scope.
+# Builds all six implemented targets (runoff/aet/rch/som/sca/swe). Index 4
+# (run-sca) is the two-source MOD10C1 + UA SWE bound (#237). A target whose
+# configured sources are not yet aggregated self-skips (logged "skipping") so
+# the array completes without a failure. SWE picks up the OR-only Margulis
+# WUS-SR source via fabric_scope.
 #
 # Prerequisites (see slurm/project_or/README.md for the full order):
 #   agg_all_or.slurm + slurm/shared/agg_ssebop.slurm + slurm/shared/agg_daymet.slurm (--region na) done.

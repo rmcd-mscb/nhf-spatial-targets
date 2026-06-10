@@ -397,6 +397,28 @@ All work follows issue-branch-PR flow:
 - Rebase feature branches against origin/main before opening PRs.
 - Before every commit, run: `git branch --show-current` (must not be main/master), `git status` (review untracked), `git diff --cached --stat` (review staged). Stage files explicitly by path — never use `git add -A` or `git add .`.
 
+### Documentation Sync Gate (every PR)
+
+Before opening or finalizing **any** PR, scan whether the change has drifted
+the docs and forward-facing documentation, and update them in the same PR.
+Docs that lag the code are a silent correctness bug — an operator following a
+stale recipe runs the wrong command. Walk this checklist against the diff:
+
+- **CLAUDE.md** — command lists (the `pixi run` / `nhf-targets` examples),
+  section invariants, and any rule the change alters or adds.
+- **README.md** and **`docs/`** — architecture notes, source/target tables,
+  recipes, `docs/sources/<src>.md`, `docs/references/*` (known-gaps, tm6b10,
+  transformation-pipeline, usgs-process).
+- **In-tree operator docs** — SLURM script header comments, `slurm/**/README.md`,
+  config templates (`init_run.py` / `config/pipeline.yml` stubs).
+- **Catalog prose** — `catalog/sources.yml` / `variables.yml` `notes:` /
+  `description:` / `range_notes:` that describe behavior the change touched.
+
+If the change adds/renames a source, target, stage, command, or config key,
+treat the matching doc update as **required**, not optional — the same PR-
+boundary rule as the test-coverage and config-schema checklists. If a scan
+turns up nothing to change, say so explicitly rather than skipping silently.
+
 ## Pre-commit Quality Gate
 
 Before suggesting a commit, always run:

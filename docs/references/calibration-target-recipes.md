@@ -15,8 +15,8 @@ place to look.
 
 Status: most of this is consolidated from the `inspect_consolidated_*`
 notebooks (PR #68) and the catalog corrections that fell out of them.
-Several target builders are still stubs raising `NotImplementedError`;
-the recipes below are guidance for filling them in.
+All six target builders (runoff/aet/rch/som/sca/swe) are now implemented;
+the recipes below document the as-built behavior.
 
 For **which time window each target can be built over**, see
 [`target-period-coverage.md`](target-period-coverage.md) — per-source
@@ -136,7 +136,7 @@ the diff between user config and defaults is logged to stderr.
 
 - **PRMS variable:** `hru_actet`
 - **Sources:** SSEBop `et`, MOD16A2 v061 `ET_500m`, MWBM (Wieczorek et al. 2024) `aet`
-- **Builder:** `src/nhf_spatial_targets/targets/aet.py` (status: stub at last check)
+- **Builder:** `src/nhf_spatial_targets/targets/aet.py` (status: implemented)
 
 **Native-unit conversion to mm/month**
 
@@ -218,7 +218,7 @@ Per-HRU per-month: `lower_bound = min(ssebop, mod16a2, mwbm)`,
 
 - **PRMS variable:** `recharge`
 - **Sources:** Reitz 2017 `total_recharge`, WaterGAP 2.2d `qrdif`, ERA5-Land `ssro`
-- **Builder:** `src/nhf_spatial_targets/targets/rch.py` (status: stub)
+- **Builder:** `src/nhf_spatial_targets/targets/rch.py` (status: implemented)
 - **TM 6-B10 originally used Reitz + WaterGAP 2.2a. We replace 2.2a with 2.2d
   (open-access on PANGAEA) and add ERA5-Land ssro as a third proxy.**
 
@@ -279,7 +279,7 @@ These will diverge in absolute magnitude, especially in arid regions — the per
 - **PRMS variable:** `soil_rechr`
 - **Sources:** MERRA-2 `GWETTOP`, NLDAS-2 NOAH `SoilM_0_10cm`,
   NLDAS-2 MOSAIC `SoilM_0_10cm`, NCEP/NCAR R1 `soilw_0_10cm`
-- **Builder:** `src/nhf_spatial_targets/targets/som.py` (status: stub)
+- **Builder:** `src/nhf_spatial_targets/targets/som.py` (status: implemented)
 
 **Native-unit handling**
 
@@ -358,11 +358,15 @@ combinable with VWC (0.05–0.45 typical) — the constant offset cancels.
 ### 5. Snow-covered area (SCA)
 
 - **PRMS variable:** `snowcov_area`
-- **Sources:** MOD10C1 v061 — `Day_CMG_Snow_Cover` (SCA) and
-  `Day_CMG_Clear_Index` (CI). The consolidated NC also contains
-  `Day_CMG_Cloud_Obscured` (kept for QA cross-checks) and
-  `Snow_Spatial_QA` (categorical 0–4 quality flag, **not the CI**).
-- **Builder:** `src/nhf_spatial_targets/targets/sca.py` (status: stub)
+- **Sources:** two, combined NaN-aware (#237).
+  1. MOD10C1 v061 — `Day_CMG_Snow_Cover` (SCA) and `Day_CMG_Clear_Index` (CI).
+     The consolidated NC also contains `Day_CMG_Cloud_Obscured` (kept for QA
+     cross-checks) and `Snow_Spatial_QA` (categorical 0–4 quality flag, **not
+     the CI**). Yields the CI-bounded interval `[ci·sca, ci·sca + (1−ci)]`
+     where CI ≥ threshold.
+  2. UA SWE (NSIDC-0719) — depth-thresholded `snow_covered_fraction`, a
+     degenerate `[v, v]` interval (no CI gate).
+- **Builder:** `src/nhf_spatial_targets/targets/sca.py` (status: implemented)
 
 **Native-unit handling**
 
