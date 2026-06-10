@@ -26,7 +26,8 @@ pixi install                # default env
 # 1. Create a project skeleton at a path of your choosing
 pixi run init -- --project-dir /data/my-targets
 
-# 2. Edit /data/my-targets/config.yml — set:
+# 2. Edit /data/my-targets/config.yml — set the three keys marked
+#    "# >>> REQUIRED: change this <<<":
 #      fabric.path     (HRU GeoPackage / Parquet / Shapefile)
 #      fabric.id_col   (HRU identifier column name)
 #      datastore       (separate from project, e.g. /data/nhf-datastore)
@@ -50,6 +51,17 @@ pixi run agg-daymet -- --project-dir /data/my-targets --period 1980/2024
 # 9. Build calibration targets
 pixi run run -- --project-dir /data/my-targets
 ```
+
+!!! note "`validate` always requires NASA Earthdata credentials"
+    `validate` checks for NASA Earthdata credentials (and a `~/.netrc` entry
+    for them) **unconditionally** — even if the targets you enabled use no
+    NASA source. Nearly every default target draws on at least one
+    Earthdata-authenticated source (MODIS, MERRA-2, NLDAS, SNODAS, UA SWE), so
+    this is a blanket requirement rather than a per-project one. Fill in the
+    `nasa_earthdata` block of `.credentials.yml` and run `materialize-creds`
+    (step 5) before `validate`, or it will fail asking for them. Copernicus CDS
+    credentials, by contrast, are required only when an enabled source uses CDS
+    (currently ERA5-Land).
 
 ## What you get
 

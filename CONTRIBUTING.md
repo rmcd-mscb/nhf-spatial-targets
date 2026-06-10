@@ -181,8 +181,8 @@ shows the multi-variant pattern (monthly + annual emit).
 9. **Default config** — if the target needs new config keys (sources list,
    period, normalization params, `nn_fill` flag), update
    [`src/nhf_spatial_targets/defaults.py`](src/nhf_spatial_targets/defaults.py),
-   [`config/pipeline.yml`](config/pipeline.yml),
-   [`src/nhf_spatial_targets/init_run.py:_CONFIG_TEMPLATE`](src/nhf_spatial_targets/init_run.py),
+   [`src/nhf_spatial_targets/init_run.py:_CONFIG_TEMPLATE`](src/nhf_spatial_targets/init_run.py)
+   (the single source of truth for the config schema),
    and `OPTIONAL_CONFIG_FEATURES` in
    [`src/nhf_spatial_targets/upgrade_config.py`](src/nhf_spatial_targets/upgrade_config.py)
    so existing-project operators find the new keys via
