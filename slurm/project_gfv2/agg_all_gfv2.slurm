@@ -2,7 +2,7 @@
 #SBATCH --job-name=nhf-agg-gfv2
 #SBATCH --account=impd
 #SBATCH --partition=cpu
-#SBATCH --array=0-13
+#SBATCH --array=0-14
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=128G

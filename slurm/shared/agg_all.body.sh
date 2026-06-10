@@ -39,6 +39,7 @@ AGG_TASKS=(
     "agg-mwbm-climgrid" # 11 — USGS MWBM (ClimGrid) (2.5 arcmin monthly, 4 vars)
     "agg-era5-land-sd"  # 12 — ERA5-Land sd   (0.1° daily snow depth, SWE source)
     "agg-margulis-wus-sr" # 13 — Margulis WUS-SR (90 m daily SWE, OR-only SWE source)
+    "agg-ua-swe"        # 14 — UA SWE NSIDC-0719 (4 km daily, EPSG:5070; SWE + SCA source)
 )
 
 # Optional --period override per task. Empty string means "no clip"; the
@@ -60,6 +61,7 @@ AGG_PERIODS=(
     "1979/2020"     # 11 mwbm-climgrid (publisher: 1895-2020; clip to NHM window, drop spinup)
     ""              # 12 era5-land-sd
     ""              # 13 margulis-wus-sr (1985-2020 on disk; clip via --period if desired)
+    ""              # 14 ua-swe (CY1982-2022 on disk; clip via --period if desired)
 )
 
 if ((SLURM_ARRAY_TASK_ID < 0 || SLURM_ARRAY_TASK_ID >= ${#AGG_TASKS[@]})); then

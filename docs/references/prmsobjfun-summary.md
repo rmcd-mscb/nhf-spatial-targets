@@ -188,9 +188,9 @@ The bound is then `(LOWER, UPPER)` per HRU/day where CI passed the gate;
 days where CI ≤ 70 are dropped from the RMSE denominator (`n` only
 increments for valid days).
 
-**Implication for this pipeline:** `targets/sca.py` is currently a stub
-because the formula was thought unrecoverable. It isn't. The implementation
-is roughly:
+**Implication for this pipeline:** `targets/sca.py` now implements this
+formula (the stub is gone — #237 extended it to a two-source MOD10C1 + UA SWE
+bound). The MOD10C1 interval is roughly:
 
 ```python
 def build_sca_target(mod10c1_aggregated_nc, ci_threshold=0.70):
@@ -265,8 +265,8 @@ PRMS objfun.
 
 ## Things this file makes us reconsider
 
-- **SCA is buildable now.** `targets/sca.py` can stop being a stub. Worth
-  a small follow-up issue.
+- **SCA is built.** `targets/sca.py` implements this formula (#237), extended
+  to a two-source MOD10C1 + UA SWE NaN-aware bound.
 - **Bound-collapse to a point estimate is well-defined, not a bug.** When
   the operator sees `upper == lower` in a deck figure, the question is
   whether the resulting point-estimate constraint is *informative* — not

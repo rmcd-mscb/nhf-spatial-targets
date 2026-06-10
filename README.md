@@ -215,7 +215,8 @@ Each `fetch` command downloads source granules and consolidates them into CF-1.6
 | Daymet V4 R1 | `fetch daymet` | manual staging (ORNL DAAC regional zarrs) | `daymet_{na,hi,pr}.zarr` (verify-only, recorded in manifest) |
 | SNODAS | `fetch snodas` | earthaccess + HTTPS (NSIDC G02158 daily `.tar`) | `snodas_daily_<year>.nc` |
 | Margulis WUS-SR | `fetch margulis-wus-sr` | earthaccess (NSIDC-0719 per-WY per-tile) | raw granules under `raw/<year>/` (consolidation TBD) |
-| **all** | `fetch all` | runs all 14 sources sequentially | — |
+| UA SWE | `fetch ua-swe` | earthaccess (NSIDC-0719 UA Broxton, per-WY 4 km NetCDF) | `ua_swe_daily_<year>.nc` (calendar-year, EPSG:5070) |
+| **all** | `fetch all` | runs all 15 sources sequentially | — |
 
 All fetch commands are **incremental** — periods (or per-year completion records, for sources that track them) already recorded in `manifest.json` are skipped on re-run. `mwbm-climgrid` and `daymet` are verify-only: the operator stages the file(s) manually (see `docs/sources/mwbm_climgrid.md`, `docs/sources/daymet.md`), then the fetch command registers them in the manifest.
 
@@ -289,7 +290,7 @@ fabric-independent (the datastore is shared):
 mkdir -p logs
 export PROJECT_DIR=/path/to/gfv11-targets
 
-# General fetch-all array (14 sources):
+# General fetch-all array (15 sources):
 sbatch slurm/shared/fetch_all.slurm
 
 # Single source by index (e.g. rerun MERRA-2 only):
@@ -323,6 +324,7 @@ Array index → source mapping (`slurm/shared/fetch_all.slurm`):
 | 11 | Daymet V4 R1 | 1980/2024 | ORNL DAAC zarr, manual staging |
 | 12 | SNODAS | 2003/2025 | NSIDC G02158 via earthaccess |
 | 13 | Margulis WUS-SR | 1985/2021 | NSIDC-0719 via earthaccess; OR-fabric only |
+| 14 | UA SWE | 1981/2023 | NSIDC-0719 UA Broxton; SWE + SCA source (CY1982–2022 on disk) |
 
 Most fetch routines are network I/O-bound; the general script allocates 1 CPU and 128 GB RAM per task with a 24-hour wall-clock limit. Per-source scripts (`slurm/shared/fetch_era5_land.slurm`, `slurm/shared/fetch_snodas.slurm`, `slurm/project_or/fetch_margulis_wus_sr.slurm`) tune memory and concurrency for their workload — notably SNODAS uses only 8 GB because PR #110's dask-streaming consolidator bounds peak RSS. Override `PROJECT_DIR` and `REPO_DIR` via environment before submission. SLURM directives (`--account`, `--partition`) at the top of each script may need adjustment for your cluster.
 
@@ -388,7 +390,7 @@ sbatch slurm/shared/agg_ssebop.slurm
 PERIOD=2010/2020 sbatch slurm/shared/agg_daymet.slurm
 ```
 
-Array index → source mapping for the `agg_all_<fabric>.slurm` array (14 sources):
+Array index → source mapping for the `agg_all_<fabric>.slurm` array (15 sources):
 
 | Index | Source | Notes |
 |---|---|---|
@@ -406,6 +408,7 @@ Array index → source mapping for the `agg_all_<fabric>.slurm` array (14 source
 | 11 | MWBM ClimGrid | 2.5 arcmin monthly, 4 vars (clipped to 1979/2020 in-script) |
 | 12 | ERA5-Land sd | 0.1° daily snow depth (SWE source) |
 | 13 | Margulis WUS-SR | 90 m daily SWE — OR-only (fabric_scope=[or]); no-op on other fabrics |
+| 14 | UA SWE | 4 km daily SWE + SCA source — EPSG:5070-native (fast weight-gen); aggregates `swe` + depth-thresholded `snow_covered_fraction` (#237) |
 
 All jobs are CPU/memory-bound; the agg array allocates 1 CPU and 128 GB RAM per task with a 24-hour wall-clock limit. Override `BATCH_SIZE` (default 10000 HRUs/batch, tuned for 128 GB) with `BATCH_SIZE=2500 sbatch slurm/project_<fabric>/agg_all_<fabric>.slurm` if a source OOMs. WGS84-native sources (SNODAS, GLDAS) cost ~5–8× more in weight generation than projected sources (Daymet, MODIS sinusoidal) at comparable resolution — see [`docs/architecture/transformation-pipeline.md`](docs/architecture/transformation-pipeline.md).
 
