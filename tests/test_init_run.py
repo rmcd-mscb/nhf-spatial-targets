@@ -32,6 +32,29 @@ def test_init_config_template_has_required_fields(tmp_path):
     assert "targets" in config
 
 
+def test_init_config_template_marks_required_keys(tmp_path):
+    """The three keys `validate` hard-requires (fabric.path, fabric.id_col,
+    datastore) carry the REQUIRED marker so a newcomer edits them before
+    running validate, instead of hitting a bare FileNotFoundError on the
+    shipped placeholder (#318)."""
+    workdir = tmp_path / "ws"
+    init_project(workdir)
+    text = (workdir / "config.yml").read_text()
+    marker = "# >>> REQUIRED: change this <<<"
+    # Banner explains the marker.
+    assert marker in text
+    # One marker on each of the three hard-required lines.
+    required_lines = [
+        ln
+        for ln in text.splitlines()
+        if marker in ln and not ln.strip().startswith("#")
+    ]
+    assert len(required_lines) == 3
+    assert any(ln.startswith("  path:") for ln in required_lines)
+    assert any(ln.startswith("  id_col:") for ln in required_lines)
+    assert any(ln.startswith("datastore:") for ln in required_lines)
+
+
 def test_init_credentials_template(tmp_path):
     workdir = tmp_path / "ws"
     init_project(workdir)
