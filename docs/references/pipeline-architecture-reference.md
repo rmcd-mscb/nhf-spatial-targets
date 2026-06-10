@@ -171,9 +171,9 @@ source unit gotchas), see `calibration-target-recipes.md`.
 3. MWBM `runoff` already mm/month
 4. Per HRU per month: `(mm × 1e-3 / days_in_month) × hru_area_m2` → m³/day
 5. m³/day → cfs via `× 35.3146667 / 86400.0`
-6. `lower_bound = min(era5_cfs, gldas_cfs)`, `upper_bound = max(era5_cfs, gldas_cfs)`
+6. NaN-aware over the configured sources (era5_cfs, gldas_cfs, mwbm_cfs): `lower_bound = nanmin`, `upper_bound = nanmax`, plus an `n_sources` diagnostic (`multi_source_nanminmax`)
 
-**Note:** mwbm_climgrid declared as third source but `targets/run.py` currently consumes only ERA5 and GLDAS; mwbm aggregated to disk but not yet folded into bounds.
+**Note:** `targets/run.py` consumes all three runoff sources (ERA5-Land, GLDAS, MWBM ClimGrid). MWBM ends at its 2020 publisher cap, so it contributes to bounds only through 2020 (`n_sources` drops from 3 to 2 thereafter).
 
 #### AET (aet / hru_actet)
 

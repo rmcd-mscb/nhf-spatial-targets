@@ -15,9 +15,10 @@
 # PROJECT_DIR differs from slurm/project_gfv2/run_gfv2.slurm.
 #
 # Builds all six implemented targets (runoff/aet/rch/som/sca/swe). Index 4
-# (run-sca) is the two-source MOD10C1 + UA SWE bound (#237). A target whose
-# configured sources are not yet aggregated self-skips (logged "skipping") so
-# the array completes without a failure. SWE picks up the OR-only Margulis
+# (run-sca) is the two-source MOD10C1 + UA SWE bound (#237). Each target
+# requires its configured sources to be aggregated FIRST: missing sources fail
+# the array task with FileNotFoundError (exit 1) — they do NOT self-skip, so run
+# the agg array to completion before this one. SWE picks up the OR-only Margulis
 # WUS-SR source via fabric_scope.
 #
 # Prerequisites (see slurm/project_or/README.md for the full order):

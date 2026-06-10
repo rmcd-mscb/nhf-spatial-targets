@@ -9,9 +9,12 @@
 #
 # All six targets are implemented (runoff/aet/rch/som/sca/swe). SCA is the
 # two-source NaN-aware bound from MOD10C1 (calcSCA CI-interval) + UA SWE
-# (depth-thresholded snow_covered_fraction), #237. A target whose configured
-# sources have not been aggregated yet self-skips (the CLI logs "skipping")
-# rather than failing the array.
+# (depth-thresholded snow_covered_fraction), #237. Each target requires its
+# configured sources to be aggregated FIRST: a target whose sources are not yet
+# on disk fails its array task with FileNotFoundError (exit 1) — it does NOT
+# self-skip. Run the agg array to completion before this one. (The CLI only
+# logs "skipping" for a builder that raises NotImplementedError; no target does
+# anymore, so in practice nothing self-skips.)
 
 # Flush Python stdout per-line so slurm logs update in real time.
 export PYTHONUNBUFFERED=1
