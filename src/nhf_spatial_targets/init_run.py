@@ -9,13 +9,18 @@ import yaml
 _CONFIG_TEMPLATE = """\
 # nhf-spatial-targets project configuration
 # Edit this file, then run: nhf-targets validate --project-dir <this-dir>
+#
+# Lines marked  # >>> REQUIRED: change this <<<  are placeholders that `validate`
+# hard-requires you to set (fabric.path, fabric.id_col, datastore). Leaving them
+# at the shipped placeholder makes `validate` fail with a FileNotFoundError /
+# ValueError. Everything else has a working default.
 
 # ---------------------------------------------------------------------------
 # Fabric
 # ---------------------------------------------------------------------------
 fabric:
-  path: /path/to/fabric.gpkg        # absolute path to the HRU fabric
-  id_col: nhm_id
+  path: /path/to/fabric.gpkg        # >>> REQUIRED: change this <<<  absolute path to the HRU fabric
+  id_col: nhm_id                    # >>> REQUIRED: change this <<<  HRU id column in the fabric (verify it matches)
   crs: EPSG:4326
   buffer_deg: 0.1                    # degrees to buffer bbox for downloads
   # Equal-area CRS used for HRU area + NN-fill distances. EPSG:5070 is
@@ -37,7 +42,7 @@ fabric:
 # ---------------------------------------------------------------------------
 # Datastore — shared directory for raw source downloads
 # ---------------------------------------------------------------------------
-datastore: /path/to/datastore        # absolute path; may be shared across runs
+datastore: /path/to/datastore        # >>> REQUIRED: change this <<<  absolute path; may be shared across runs
 
 # Optional Unix directory permissions (octal string, e.g. "2775" for setgid + group rwx)
 # Ignored on Windows.
