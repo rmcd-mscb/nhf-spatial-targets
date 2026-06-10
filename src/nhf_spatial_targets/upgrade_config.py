@@ -10,10 +10,10 @@ with the literal commented block to paste.
 **Report-only.** This module never mutates the operator's config.yml.
 
 When you add a new optional config parameter (update
-``init_run.py:_CONFIG_TEMPLATE`` + ``config/pipeline.yml`` +
-``tests/test_init_run.py`` per the CLAUDE.md "Config schema additions"
-checklist), also append an :class:`OptionalConfigFeature` entry to
-:data:`OPTIONAL_CONFIG_FEATURES` below so existing-project operators see it.
+``init_run.py:_CONFIG_TEMPLATE`` + ``tests/test_init_run.py`` per the
+CLAUDE.md "Config schema additions" checklist), also append an
+:class:`OptionalConfigFeature` entry to :data:`OPTIONAL_CONFIG_FEATURES`
+below so existing-project operators see it.
 """
 
 from __future__ import annotations

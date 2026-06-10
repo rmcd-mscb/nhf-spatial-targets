@@ -185,7 +185,8 @@ variables:
       weighted to the HRU). No CI gate — the fraction is physical.
 
       Config knobs (snow_covered_area): forced_zero_combined (default true) and
-      min_sources_for_bound (default 1) — see config/pipeline.yml.
+      min_sources_for_bound (default 1) — see the snow_covered_area block in
+      the init config template (init_run.py:_CONFIG_TEMPLATE).
     ci_threshold: 0.70
     normalize: false
     output_format: netcdf
