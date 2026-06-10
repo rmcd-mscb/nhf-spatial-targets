@@ -122,3 +122,17 @@ def test_init_config_template_carries_release_stub(tmp_path):
     # Commented-out by default (operator opts in by uncommenting).
     cfg = yaml.safe_load(text)
     assert "release" not in cfg
+
+
+def test_init_config_template_carries_sca_multi_source_knobs(tmp_path):
+    """The SCA block ships ua_swe as a second source plus the three multi-source
+    knobs (depth_threshold_mm / forced_zero_combined / min_sources_for_bound) so
+    new projects build the two-source bound and discover the tuning keys (#237)."""
+    workdir = tmp_path / "ws"
+    init_project(workdir)
+    cfg = yaml.safe_load((workdir / "config.yml").read_text())
+    sca = cfg["targets"]["snow_covered_area"]
+    assert sca["sources"] == ["mod10c1_v061", "ua_swe"]
+    assert sca["depth_threshold_mm"] == 1.0
+    assert sca["forced_zero_combined"] is True
+    assert sca["min_sources_for_bound"] == 1

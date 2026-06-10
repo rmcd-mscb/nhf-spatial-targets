@@ -151,33 +151,41 @@ variables:
   snow_covered_area:
     prms_variable: snowcov_area
     description: >
-      Daily fractional snow-covered area. CI-based bounds from MOD10C1.
-      Only days with confidence interval > 70% used. Bounds derived from
-      daily SCA value and associated confidence interval.
+      Daily fractional snow-covered area. Two-source NaN-aware bound: the
+      MOD10C1 CI-bounded interval (only days with confidence interval > 70%)
+      combined with the ua_swe depth-derived snow-covered fraction. ua_swe
+      reaches back to WY 1982, widening the pre-2003 bound where MOD10C1
+      (2000+) is the only other source.
     prms_reference: "TM 6-B7 (Markstrom et al. 2015)"
     time_step: daily
     period: "2000/2010"
     units: fraction (0-1)
     sources:
       - mod10c1_v061  # v006 used in original TM 6-B10; v006 decommissioned 2023-07-31
+      - ua_swe        # UA NSIDC-0719, CONUS, snow_covered_fraction (WY 1982+)
     range_method: modis_ci
     range_notes: >
-      From MOD10C1 v061:
+      Per-source intervals combined NaN-aware (lower = nanmin, upper = nanmax).
+
+      MOD10C1 v061 CI-bounded interval:
         sca = Day_CMG_Snow_Cover / 100  (fraction 0-1, after masking flag values >100)
         ci  = Day_CMG_Clear_Index / 100  (fraction 0-1, after masking flag values >100)
-      Filter: only use grid cells/days where ci > 0.70 (per TM 6-B10).
-      TM 6-B10: "a confidence interval equal to 100 percent indicates clear
-      sky conditions with the highest level of confidence... daily values of
-      snow-covered area were used if the confidence interval was greater than
-      70 percent."  In MOD10C1 v006 the CI variable was named
-      Day_CMG_Confidence_Index; it was renamed to Day_CMG_Clear_Index in
-      v061.  Earlier versions of this catalog used Snow_Spatial_QA for the
-      CI filter, which was incorrect — Snow_Spatial_QA is a 0-4 categorical
-      QA flag, not a percent CI.
-      TM 6-B10: "upper and lower range...calculated and treated as an error
-      bound based on the daily snow-covered area value and the associated
-      confidence interval." Exact formula not specified in report.
-      PRMSobjfun.f not publicly available — formula remains unconfirmed.
+      Filter: only use grid cells/days where ci >= 0.70 (per TM 6-B10).
+      lower = ci * sca; upper = lower + (1 - ci) (algebraically capped at 1.0).
+      July/August are forced to (0, 0) for CI-passing cells. The formula is
+      taken verbatim from PRMSobjfun.f90:calcSCA (lines 1052-1061), which
+      landed in docs/references/ — it is no longer unconfirmed. In MOD10C1
+      v006 the CI variable was named Day_CMG_Confidence_Index; it was renamed
+      to Day_CMG_Clear_Index in v061. Earlier versions of this catalog used
+      Snow_Spatial_QA for the CI filter, which was incorrect — Snow_Spatial_QA
+      is a 0-4 categorical QA flag, not a percent CI.
+
+      ua_swe contributes a degenerate [v, v] interval, v = snow_covered_fraction
+      (the depth-thresholded snow_depth > depth_threshold_mm binary, area-
+      weighted to the HRU). No CI gate — the fraction is physical.
+
+      Config knobs (snow_covered_area): forced_zero_combined (default true) and
+      min_sources_for_bound (default 1) — see config/pipeline.yml.
     ci_threshold: 0.70
     normalize: false
     output_format: netcdf

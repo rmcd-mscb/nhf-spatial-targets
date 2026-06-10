@@ -76,6 +76,33 @@ def _write_mod10c1_year(
     ds.to_netcdf(path)
 
 
+def _write_ua_swe_year(
+    path: Path,
+    year: int,
+    *,
+    scf: float | np.ndarray,
+    id_col: str = "nhm_id",
+) -> None:
+    """Write a per-year ua_swe aggregated NC with ``snow_covered_fraction``.
+
+    ``scf`` is the already-[0, 1] per-HRU snow-covered fraction (no scaling).
+    Scalars broadcast over (time, hru); arrays must be (time, hru)-shaped.
+    """
+    times = pd.date_range(f"{year}-01-01", f"{year}-12-31", freq="D")
+    hrus = [1, 2, 3]
+    if np.isscalar(scf):
+        scf_arr = np.full((len(times), len(hrus)), scf, dtype=np.float32)
+    else:
+        scf_arr = np.asarray(scf, dtype=np.float32)
+    ds = xr.Dataset(
+        {"snow_covered_fraction": (("time", id_col), scf_arr)},
+        coords={"time": times, id_col: hrus},
+    )
+    ds["snow_covered_fraction"].attrs["units"] = "1"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ds.to_netcdf(path)
+
+
 def _make_sca_project(
     tmp_path: Path,
     *,
@@ -84,11 +111,18 @@ def _make_sca_project(
     nn_fill: bool = False,
     snow_native: float | np.ndarray = 60.0,
     ci_native: float | np.ndarray = 90.0,
+    sources: tuple[str, ...] = ("mod10c1_v061",),
+    ua_swe_scf: float | np.ndarray = 0.5,
+    forced_zero_combined: bool | None = None,
+    min_sources_for_bound: int | None = None,
 ) -> Path:
-    """Build a project skeleton with synthetic fabric + MOD10C1 NCs.
+    """Build a project skeleton with synthetic fabric + per-source agg NCs.
 
-    Default values: snow=60% (sca_obs=0.60), ci=90% (ci=0.90), passing
-    threshold. Override for gate / July-Aug / NaN-coverage scenarios.
+    Defaults to **single-source mod10c1** (snow=60% → sca_obs=0.60, ci=90% →
+    ci=0.90, passing) so the bulk of the suite stays a single-source
+    regression. Pass ``sources=("mod10c1_v061", "ua_swe")`` (with
+    ``ua_swe_scf``) for the multi-source cases; ``ua_swe`` alone is also
+    allowed. Override for gate / July-Aug / NaN-coverage scenarios.
     """
     workdir = tmp_path / "proj"
     workdir.mkdir()
@@ -96,15 +130,22 @@ def _make_sca_project(
     _write_synthetic_fabric(fabric_path)
     (workdir / "fabric.json").write_text(json.dumps({"id_col": "nhm_id"}))
 
+    sca_cfg = {
+        "period": period,
+        "ci_threshold": ci_threshold,
+        "nn_fill": nn_fill,
+        "sources": list(sources),
+    }
+    if forced_zero_combined is not None:
+        sca_cfg["forced_zero_combined"] = forced_zero_combined
+    if min_sources_for_bound is not None:
+        sca_cfg["min_sources_for_bound"] = min_sources_for_bound
+
     cfg = {
         "datastore": str(tmp_path / "store"),
         "fabric": {"path": str(fabric_path), "id_col": "nhm_id", "token": "or"},
         "targets": {
-            "snow_covered_area": {
-                "period": period,
-                "ci_threshold": ci_threshold,
-                "nn_fill": nn_fill,
-            },
+            "snow_covered_area": sca_cfg,
             "runoff": {"enabled": False},
             "aet": {"enabled": False},
             "recharge": {"enabled": False},
@@ -114,7 +155,7 @@ def _make_sca_project(
     }
     (workdir / "config.yml").write_text(yaml.safe_dump(cfg))
 
-    agg_dir = workdir / "data" / "aggregated" / "mod10c1_v061"
+    agg_root = workdir / "data" / "aggregated"
     years = list(
         range(
             pd.Timestamp(period.split("/")[0]).year,
@@ -122,12 +163,19 @@ def _make_sca_project(
         )
     )
     for year in years:
-        _write_mod10c1_year(
-            agg_dir / f"mod10c1_v061_{year}_agg.nc",
-            year,
-            snow_native=snow_native,
-            ci_native=ci_native,
-        )
+        if "mod10c1_v061" in sources:
+            _write_mod10c1_year(
+                agg_root / "mod10c1_v061" / f"mod10c1_v061_{year}_agg.nc",
+                year,
+                snow_native=snow_native,
+                ci_native=ci_native,
+            )
+        if "ua_swe" in sources:
+            _write_ua_swe_year(
+                agg_root / "ua_swe" / f"ua_swe_{year}_agg.nc",
+                year,
+                scf=ua_swe_scf,
+            )
     return workdir
 
 
@@ -136,8 +184,8 @@ def _make_sca_project(
 # ---------------------------------------------------------------------------
 
 
-def test_build_rejects_multi_source_config(tmp_path: Path):
-    """The modis_ci range method requires exactly mod10c1_v061."""
+def test_build_rejects_unknown_source(tmp_path: Path):
+    """A source with no registered interval loader fails loudly at build."""
     from nhf_spatial_targets.targets.sca import build
     from nhf_spatial_targets.workspace import load
 
@@ -150,7 +198,45 @@ def test_build_rejects_multi_source_config(tmp_path: Path):
     ]
     cfg_path.write_text(yaml.safe_dump(cfg))
     project = load(workdir)
-    with pytest.raises(ValueError, match="modis_ci range method requires"):
+    with pytest.raises(ValueError, match="no registered interval loader"):
+        build(project)
+
+
+def test_build_rejects_empty_sources(tmp_path: Path):
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_sca_project(tmp_path)
+    cfg_path = workdir / "config.yml"
+    cfg = yaml.safe_load(cfg_path.read_text())
+    cfg["targets"]["snow_covered_area"]["sources"] = []
+    cfg_path.write_text(yaml.safe_dump(cfg))
+    project = load(workdir)
+    with pytest.raises(ValueError, match="sources is empty"):
+        build(project)
+
+
+def test_build_rejects_bad_min_sources(tmp_path: Path):
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_sca_project(tmp_path, min_sources_for_bound=3)
+    project = load(workdir)
+    with pytest.raises(ValueError, match=r"min_sources_for_bound=.*must be"):
+        build(project)
+
+
+def test_build_rejects_nonpositive_depth_threshold(tmp_path: Path):
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_sca_project(tmp_path)
+    cfg_path = workdir / "config.yml"
+    cfg = yaml.safe_load(cfg_path.read_text())
+    cfg["targets"]["snow_covered_area"]["depth_threshold_mm"] = 0.0
+    cfg_path.write_text(yaml.safe_dump(cfg))
+    project = load(workdir)
+    with pytest.raises(ValueError, match=r"depth_threshold_mm=.*must"):
         build(project)
 
 
@@ -1273,3 +1359,147 @@ def test_stitch_fails_loud_on_missing_in_period_file(
     project = load(workdir)
     with pytest.raises((FileNotFoundError, OSError), match="2006"):
         build(project)
+
+
+# ---------------------------------------------------------------------------
+# Multi-source bound (#237 PR-D): mod10c1 CI-interval + ua_swe fraction
+# ---------------------------------------------------------------------------
+
+
+def _open_sca(project):
+    return xr.open_dataset(project.targets_dir() / "sca_targets.nc")
+
+
+def test_two_source_combine_widens_bound(tmp_path: Path):
+    """mod10c1 [0.54, 0.64] (snow=60, ci=90) unioned NaN-aware with ua_swe's
+    degenerate [0.5, 0.5] widens the lower bound to 0.50; n_sources=2."""
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_sca_project(
+        tmp_path,
+        period="2005-03-15/2005-03-15",  # non-summer
+        sources=("mod10c1_v061", "ua_swe"),
+        snow_native=60.0,
+        ci_native=90.0,
+        ua_swe_scf=0.5,
+    )
+    project = load(workdir)
+    build(project)
+    with _open_sca(project) as ds:
+        np.testing.assert_allclose(ds["lower_bound"].values, 0.50, rtol=1e-5)
+        np.testing.assert_allclose(ds["upper_bound"].values, 0.64, rtol=1e-5)
+        assert (ds["n_sources"].values == 2).all()
+        assert ds["n_sources"].attrs["flag_meanings"] == "none one two"
+        assert ds.attrs["source_keys"] == "mod10c1_v061,ua_swe"
+
+
+def test_ua_swe_only_low_ci_cell_yields_point_interval(tmp_path: Path):
+    """ua_swe carries no CI gate: as the sole source it produces a degenerate
+    [v, v] bound even where MOD10C1 would fail its CI threshold."""
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_sca_project(
+        tmp_path,
+        period="2005-03-15/2005-03-15",
+        sources=("ua_swe",),
+        ua_swe_scf=0.3,
+    )
+    project = load(workdir)
+    build(project)
+    with _open_sca(project) as ds:
+        np.testing.assert_allclose(ds["lower_bound"].values, 0.30, rtol=1e-5)
+        np.testing.assert_allclose(ds["upper_bound"].values, 0.30, rtol=1e-5)
+        assert (ds["n_sources"].values == 1).all()
+
+
+def test_forced_zero_combined_true_zeros_summer_bound(tmp_path: Path):
+    """Default (forced_zero_combined=True): July zeros the COMBINED bound for
+    every observed cell, ua_swe included -> (0, 0)."""
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_sca_project(
+        tmp_path,
+        period="2005-07-15/2005-07-15",
+        sources=("mod10c1_v061", "ua_swe"),
+        snow_native=60.0,
+        ci_native=90.0,
+        ua_swe_scf=0.5,
+    )
+    project = load(workdir)
+    build(project)
+    with _open_sca(project) as ds:
+        np.testing.assert_allclose(ds["lower_bound"].values, 0.0, atol=1e-7)
+        np.testing.assert_allclose(ds["upper_bound"].values, 0.0, atol=1e-7)
+
+
+def test_forced_zero_combined_false_preserves_summer_ua_swe(tmp_path: Path):
+    """forced_zero_combined=False zeros only the mod10c1 contribution in July;
+    ua_swe's 0.5 fraction survives into the combined upper bound -> [0, 0.5]."""
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_sca_project(
+        tmp_path,
+        period="2005-07-15/2005-07-15",
+        sources=("mod10c1_v061", "ua_swe"),
+        snow_native=60.0,
+        ci_native=90.0,
+        ua_swe_scf=0.5,
+        forced_zero_combined=False,
+    )
+    project = load(workdir)
+    build(project)
+    with _open_sca(project) as ds:
+        np.testing.assert_allclose(ds["lower_bound"].values, 0.0, atol=1e-7)
+        np.testing.assert_allclose(ds["upper_bound"].values, 0.5, rtol=1e-5)
+        assert (ds["n_sources"].values == 2).all()
+
+
+def test_min_sources_for_bound_two_nans_single_source_cell(tmp_path: Path):
+    """min_sources_for_bound=2 masks the combined bound to NaN where fewer than
+    two sources are finite. ua_swe all-NaN -> only mod10c1 finite -> NaN bound,
+    while n_sources still records the single finite contribution."""
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_sca_project(
+        tmp_path,
+        period="2005-03-15/2005-03-15",
+        sources=("mod10c1_v061", "ua_swe"),
+        snow_native=60.0,
+        ci_native=90.0,
+        ua_swe_scf=np.nan,  # ua_swe contributes nothing
+        min_sources_for_bound=2,
+    )
+    project = load(workdir)
+    build(project)
+    with _open_sca(project) as ds:
+        assert np.isnan(ds["lower_bound"].values).all()
+        assert np.isnan(ds["upper_bound"].values).all()
+        assert (ds["n_sources"].values == 1).all()
+
+
+def test_min_sources_for_bound_two_keeps_two_source_cell(tmp_path: Path):
+    """The min=2 mask leaves a genuine two-source cell intact (regression guard
+    so the mask doesn't over-NaN)."""
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_sca_project(
+        tmp_path,
+        period="2005-03-15/2005-03-15",
+        sources=("mod10c1_v061", "ua_swe"),
+        snow_native=60.0,
+        ci_native=90.0,
+        ua_swe_scf=0.5,
+        min_sources_for_bound=2,
+    )
+    project = load(workdir)
+    build(project)
+    with _open_sca(project) as ds:
+        np.testing.assert_allclose(ds["lower_bound"].values, 0.50, rtol=1e-5)
+        np.testing.assert_allclose(ds["upper_bound"].values, 0.64, rtol=1e-5)
+        assert (ds["n_sources"].values == 2).all()

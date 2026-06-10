@@ -12,7 +12,7 @@ Builds the baseline calibration targets documented in [Hay and others (2022), US
 | AET | `hru_actet` | SSEBop + MWBM ClimGrid + MOD16A2 v061 | Multi-source min/max | Monthly |
 | Recharge | `recharge` | Reitz 2017 + WaterGAP 2.2d + ERA5-Land (`ssro`) | Normalized min/max (2000–2009) | Annual |
 | Soil Moisture | `soil_rechr` | MERRA-2 + NCEP/NCAR + NLDAS-MOSAIC + NLDAS-NOAH | Normalized min/max (per calendar month) | Monthly + Annual |
-| Snow Cover | `snowcov_area` | MOD10C1 v061 | MODIS CI bounds (CI > 70%) | Daily |
+| Snow Cover | `snowcov_area` | MOD10C1 v061 + UA SWE² | NaN-aware bound: MODIS CI-interval (CI ≥ 70%) ∪ depth-derived fraction | Daily |
 | SWE | `pkwater_equiv` | Daymet + SNODAS + ERA5-Land (`sd`) + UA SWE² + Margulis WUS-SR¹ | NaN-aware multi-source min/max | Daily |
 
 ¹ Margulis Western US Snow Reanalysis is **fabric-scoped to Oregon**
@@ -31,8 +31,11 @@ All six target builders are implemented. Each writes a per-HRU per-time
 `(lower_bound, upper_bound)` NetCDF to `<project>/targets/` along with an
 optional `_nn_filled.nc` companion that fills NaN HRUs from up to 10 nearest
 finite neighbours. The `nhf-targets run` driver builds all enabled targets in
-sequence; pass `--target <key>` (or `pixi run run-<x>`) to build one. SCA's
-bound formula follows `PRMSobjfun.f90:calcSCA` verbatim (PR #210); SWE uses
+sequence; pass `--target <key>` (or `pixi run run-<x>`) to build one. SCA is a
+two-source NaN-aware bound: MOD10C1's `PRMSobjfun.f90:calcSCA` CI-interval
+combined with UA SWE's depth-derived `snow_covered_fraction` (a degenerate
+`[v, v]` interval reaching back to WY 1982), tunable via
+`snow_covered_area.{forced_zero_combined, min_sources_for_bound}` (#237). SWE uses
 NaN-aware multi-source min/max across 4 (gfv2) or 5 (OR) sources via the
 `fabric_scope` mechanism on Margulis WUS-SR (PR #101/#135), with UA SWE
 (NSIDC-0719) extending the bound back to 1982 (PR #237).
