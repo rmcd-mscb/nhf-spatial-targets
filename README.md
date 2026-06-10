@@ -185,6 +185,14 @@ The fabric file must contain a polygon geometry column and a unique integer HRU 
 | 6 | `nhf-targets agg <source> --project-dir <dir>` | Aggregates source data to HRU fabric. SSEBop and Daymet take an explicit `--period` (remote STAC / multi-year zarr); others infer the period from available years on disk. |
 | 7 | `nhf-targets run --project-dir <dir>` | Builds all six calibration targets (runoff, AET, recharge, soil moisture, SCA, SWE) from aggregated data. Pass `--target <key>` to build a single target. |
 
+**Maintaining an existing project.** When a `git pull` brings a new config key, a new
+source, a new manifest field, or a storage-layout change, you bring an existing project
+up to date with the report-only `upgrade-config` / `upgrade-manifest` commands and the
+regenerating `rebuild-manifest` / `rechunk` / `validate` commands — never by re-`init`ing.
+The catch-up sequences and the one ordering rule that bites (re-run `validate` after any
+`config.yml` edit, or the publish gate fails) are documented in
+[docs/maintenance.md](docs/maintenance.md).
+
 **Key paths:**
 
 - `<project>/config.yml` — project configuration (fabric, datastore, daymet_root, targets, dir_mode)

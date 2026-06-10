@@ -45,6 +45,14 @@ pixi run nhf-targets agg all          --project-dir /data/nhf-runs/my-run
 pixi run catalog-sources
 pixi run catalog-variables
 
+# Existing-project catch-up / maintenance (see docs/maintenance.md).
+# upgrade-* are report-only; rebuild-manifest / rechunk regenerate derived
+# artifacts. Re-run validate after any config.yml edit (publish gate is fatal).
+pixi run upgrade-config   -- --project-dir /data/nhf-runs/my-run
+pixi run upgrade-manifest -- --project-dir /data/nhf-runs/my-run
+pixi run rebuild-manifest -- --project-dir /data/nhf-runs/my-run
+pixi run rechunk          -- --project-dir /data/nhf-runs/my-run --dry-run
+
 # Development (requires dev environment: pixi install -e dev)
 pixi run -e dev test          # pytest (excludes integration tests)
 pixi run -e dev test-integration  # integration tests (requires credentials/network)

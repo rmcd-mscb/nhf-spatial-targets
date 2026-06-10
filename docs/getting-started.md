@@ -89,6 +89,7 @@ pixi run run-swe    -- --project-dir /data/my-targets
 
 ## Where to go next
 
+- [Maintaining an existing project](maintenance.md) — catching a project up after a pull adds a config key / source / manifest field, and the `validate`-after-config-edit rule
 - [Architecture · Transformation pipeline](architecture/transformation-pipeline.md) — pre/post-aggregation policy, `mean` vs `masked_mean`, canonical row order
 - [Architecture · Python patterns](architecture/python-patterns.md) — `from __future__ import annotations`, atomic writes, fingerprint caches, why every module looks the way it does
 - [Sources](sources/index.md) — per-source operator notes for every gridded dataset
