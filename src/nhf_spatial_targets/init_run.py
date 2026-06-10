@@ -211,9 +211,13 @@ _CREDENTIALS_TEMPLATE = {
         "password": "",
     },
     "cds": {
-        "_comment": "Copernicus CDS API — https://cds.climate.copernicus.eu",
+        "_comment": (
+            "Copernicus CDS API — paste the Personal Access Token shown on "
+            "https://cds.climate.copernicus.eu/profile (a single token; the "
+            "current CDS endpoint no longer uses the legacy '<uid>:<key>' form)"
+        ),
         "url": "https://cds.climate.copernicus.eu/api",
-        "key": "<uid>:<key>",
+        "key": "<personal-access-token>",
     },
 }
 

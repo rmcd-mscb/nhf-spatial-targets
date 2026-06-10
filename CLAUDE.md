@@ -319,9 +319,11 @@ The pipeline separates **projects** (fabric-specific) from the **datastore** (sh
 6. `nhf-targets agg ssebop --project-dir <project-dir>` aggregates remote data to fabric
 7. `nhf-targets run --project-dir <project-dir>` builds calibration targets
 
-- `nhf-targets reconcile-manifest --project-dir <dir>` backfills `manifest.json`
-  from consolidated NCs already in a shared datastore (new project against an
-  existing datastore). Gap-fill only; see `docs/architecture/reconcile-manifest.md`.
+- `nhf-targets rebuild-manifest --project-dir <dir>` regenerates `manifest.json`
+  as a deterministic projection of (on-disk artifacts × catalog × `fabric.json`).
+  This subsumes the former `reconcile-manifest` (removed in #279); it also covers
+  the gap-fill case of a new project pointed at an existing shared datastore. See
+  `docs/architecture/reconcile-manifest.md` for the tombstone/redirect note.
 
 **Key paths:**
 - `<project>/config.yml` — project configuration (fabric, datastore, targets, dir_mode)
