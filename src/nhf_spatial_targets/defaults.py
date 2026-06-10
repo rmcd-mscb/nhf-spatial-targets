@@ -111,12 +111,23 @@ DEFAULTS: dict = {
         },
         "snow_covered_area": {
             "enabled": True,
-            "sources": ["mod10c1_v061"],
+            "sources": ["mod10c1_v061", "ua_swe"],
             "time_step": "daily",
             "period": None,
             "prms_variable": "snowcov_area",
             "range_method": "modis_ci",
             "ci_threshold": 0.70,
+            # Pixel snow-depth cutoff (mm) for ua_swe's snow_covered_fraction
+            # binary; consumed at the ua_swe AGGREGATE stage (changing it
+            # requires re-aggregating ua_swe), validated > 0 by the SCA builder.
+            "depth_threshold_mm": 1.0,
+            # True: zero the COMBINED bound in Jul/Aug (calcSCA). False: zero
+            # only the mod10c1 contribution pre-combine, so ua_swe's summer
+            # alpine fraction survives into the combined upper bound.
+            "forced_zero_combined": True,
+            # 1: keep a bound wherever >=1 source is finite (degenerate [v, v]
+            # allowed). 2: NaN the combined bound where < 2 sources are finite.
+            "min_sources_for_bound": 1,
             "output_file": "sca_targets.nc",
             "nn_fill": True,
             "nn_max_candidates": 10,

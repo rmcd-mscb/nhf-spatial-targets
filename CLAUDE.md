@@ -18,8 +18,10 @@ pixi run validate -- --project-dir /data/nhf-runs/my-run
 # Run the full pipeline against a project
 pixi run run -- --project-dir /data/nhf-runs/my-run
 
-# Run a single target (runoff / aet / rch / som / swe are implemented; sca is a
-# stub pending the #210 implementation of the calcSCA formula from PRMSobjfun.f90)
+# Run a single target (runoff / aet / rch / som / swe / sca are all implemented).
+# SCA is a two-source NaN-aware bound: MOD10C1's calcSCA CI-interval
+# (PRMSobjfun.f90 lines 1052-1061) combined with ua_swe's depth-derived
+# snow_covered_fraction (#237).
 pixi run run-runoff -- --project-dir /data/nhf-runs/my-run
 pixi run run-aet -- --project-dir /data/nhf-runs/my-run
 
@@ -366,8 +368,10 @@ See `docs/references/known-gaps-resolved.md` for resolved items.
 **Still open:**
 - *(none currently — the SCA CI-bounds formula gap closed 2026-05-24 when the
   PRMSobjfun source landed in [`docs/references/PRMSobjfun.f90`](docs/references/PRMSobjfun.f90);
-  formula is in `calcSCA` lines 1052-1061 and `targets/sca.py` can be promoted
-  from stub to implementation. See [`docs/references/prmsobjfun-summary.md`](docs/references/prmsobjfun-summary.md).)*
+  formula is in `calcSCA` lines 1052-1061 and `targets/sca.py` now implements it,
+  extended to a two-source bound with ua_swe in #237. See
+  [`docs/references/prmsobjfun-summary.md`](docs/references/prmsobjfun-summary.md)
+  and [`known-gaps-resolved.md`](docs/references/known-gaps-resolved.md).)*
 
 ## Testing
 

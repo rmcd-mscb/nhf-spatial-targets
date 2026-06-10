@@ -124,11 +124,23 @@ targets:
     enabled: true
     sources:
       - mod10c1_v061
+      - ua_swe            # UA NSIDC-0719, CONUS, snow_covered_fraction (WY 1982+)
     time_step: daily
     period: "2000-01-01/2010-12-31"
     prms_variable: snowcov_area
     range_method: modis_ci
     ci_threshold: 0.70
+    # Pixel snow-depth cutoff (mm) for ua_swe's snow_covered_fraction binary.
+    # Consumed at the ua_swe AGGREGATE stage (changing it requires re-aggregating
+    # ua_swe; the publish gate refuses a stamp that disagrees with this value).
+    depth_threshold_mm: 1.0
+    # true: zero the COMBINED bound in Jul/Aug (calcSCA). false: zero only the
+    # mod10c1 contribution pre-combine, so ua_swe's summer alpine fraction
+    # survives into the combined upper bound.
+    forced_zero_combined: true
+    # 1: keep a bound wherever >=1 source is finite (a single source's [v, v] is
+    # allowed). 2: NaN the combined bound where fewer than 2 sources are finite.
+    min_sources_for_bound: 1
     output_file: sca_targets.nc
 
   snow_water_equivalent:

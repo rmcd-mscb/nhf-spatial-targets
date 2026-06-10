@@ -111,10 +111,19 @@ for RUN/AET, individual source values too. The Fortran optimizer
 | Report window | 2000–2010 |
 | Units | fraction (0–1) |
 | Report source | MOD10C1 (MODIS/Terra Snow Cover Daily L3 Global 0.05 Deg CMG; Hall & Riggs 2016) |
-| **This repo** | MOD10C1 **v061** (v006 decommissioned 2023-07-31) |
-| Filtering | use only pixels/days with confidence interval **> 70 %** (`ci > 0.70`) |
-| Range rule | "upper and lower range … calculated and treated as an error bound based on the daily snow-covered area value and the associated confidence interval" — **exact formula not disclosed**; lives in `PRMSobjfun.f` which is not publicly available |
+| **This repo** | MOD10C1 **v061** (v006 decommissioned 2023-07-31) **+ UA SWE** (NSIDC-0719) as a second source — see below |
+| Filtering | MOD10C1: use only pixels/days with confidence interval **≥ 70 %** (`ci ≥ 0.70`). UA SWE: no CI gate (physical fraction) |
+| Range rule | MOD10C1 CI-interval `lower = ci·sca`, `upper = lower + (1 − ci)` (now confirmed — `PRMSobjfun.f90:calcSCA` lines 1052-1061 landed in `docs/references/`). UA SWE adds a degenerate `[v, v]` interval, `v = snow_covered_fraction`. Combined NaN-aware (`lower = nanmin`, `upper = nanmax`). |
 | Appendix 1 file schema | `Year, Month, Day, SCA, CI` — bounds are derived inside PRMSobjfun.f, not carried in the target file |
+
+**This repo extends the report (#237).** TM 6-B10 used MOD10C1 alone. Here SCA is
+a **two-source** bound: the MOD10C1 calcSCA CI-interval combined with UA SWE's
+depth-derived `snow_covered_fraction` (reaching back to WY 1982, widening the
+pre-2000 bound where MOD10C1 (2000+) is the other source). Two config knobs tune
+the combine — `snow_covered_area.forced_zero_combined` (Jul/Aug forced-zero
+scope) and `min_sources_for_bound` (zero-width-bound policy); an explicit
+mod10c1-only config still builds the single-source bound byte-for-byte (the
+default `sources` is now two-source).
 
 **Builder:** `src/nhf_spatial_targets/targets/sca.py` · **catalog:** `variables.yml → snow_covered_area`
 
@@ -128,9 +137,10 @@ for RUN/AET, individual source values too. The Fortran optimizer
   the Reitz 2017 period. CLAUDE.md currently follows the body (2000–2009).
   Either way: **this repo does not hardcode it** — normalization window is
   driven by user config and recorded in target metadata.
-- **SCA CI-bounds formula.** Report describes the intent but not the math; the
-  Fortran source for `PRMSobjfun.f` is not published. This is the one
-  still-open gap in `CLAUDE.md → Known Gaps`.
+- **SCA CI-bounds formula** *(resolved).* The report described the intent but
+  not the math; `PRMSobjfun.f90` landed in `docs/references/` (2026-05-24) and
+  `targets/sca.py` now implements `calcSCA` (lines 1052-1061) verbatim, extended
+  to a two-source bound with UA SWE (#237). See `known-gaps-resolved.md`.
 
 ## Objective-function mechanics (byHRU)
 

@@ -1,31 +1,49 @@
-"""Build snow-covered area calibration targets from MOD10C1 v061.
+"""Build snow-covered area calibration targets (multi-source bound).
 
-Single-source CI-bounded build. The bound formula is taken verbatim from
-``PRMSobjfun.f90:calcSCA`` (`docs/references/PRMSobjfun.f90` lines
-1052-1061) — the original PRMS calibration objective function this
-pipeline's targets are designed to feed. Both inputs are first scaled
-from MOD10C1's native 0-100 integer scale to fractional [0, 1]:
+Each configured source produces a per-(HRU, day) ``[lower, upper]``
+interval; the intervals are combined NaN-aware (``lower = nanmin``,
+``upper = nanmax``) into the calibration bound, with an int8 ``n_sources``
+finite-contribution diagnostic. Two sources are registered today:
 
-    sca_obs = Day_CMG_Snow_Cover / 100
-    ci      = Day_CMG_Clear_Index / 100
+- **mod10c1_v061** — the CI-bounded interval taken verbatim from
+  ``PRMSobjfun.f90:calcSCA`` (`docs/references/PRMSobjfun.f90` lines
+  1052-1061), the original PRMS calibration objective function this
+  pipeline's targets feed. Inputs are scaled from MOD10C1's native 0-100
+  integer scale to fractional [0, 1]::
 
-For each (HRU, day) where the HRU-mean clear index passes the configured
-threshold (``ci >= snow_covered_area.ci_threshold``, default 0.70 — the
-fractional equivalent of the Fortran ``70.0`` on the native scale)::
+      sca_obs = Day_CMG_Snow_Cover / 100
+      ci      = Day_CMG_Clear_Index / 100
 
-    lower = ci * sca_obs
-    upper = lower + (1 - ci)
+  For each (HRU, day) where the HRU-mean clear index passes
+  ``snow_covered_area.ci_threshold`` (default 0.70 — the fractional
+  equivalent of the Fortran ``70.0``)::
 
-``upper`` is algebraically capped at 1.0:
-``ci*sca + (1-ci) ≤ ci*1 + (1-ci) = 1`` for any ``sca`` in ``[0, 1]``.
-Cells whose HRU-mean CI is below threshold produce NaN bounds.
+      lower = ci * sca_obs
+      upper = lower + (1 - ci)          # algebraically capped at 1.0
 
-July and August are forced to ``(lower, upper) = (0, 0)`` for every CI-
-passing HRU, again mirroring calcSCA. The driver applies the forced-zero
-mask after this module's loader returns via
-:attr:`TargetAdapter.forced_zero_months` /
-:attr:`TargetAdapter.forced_zero_validity_var`, so the rule stays
-declarative on the adapter.
+  Sub-threshold cells produce a NaN interval.
+
+- **ua_swe** — a degenerate ``[v, v]`` interval, ``v =
+  snow_covered_fraction`` (an already-[0, 1] per-HRU fraction from the
+  ua_swe aggregated NC, the depth-thresholded binary area-weighted to the
+  fabric). No CI gate — ua_swe's fraction is physical, not confidence-
+  weighted. ua_swe reaches back to WY 1982, widening the pre-2000 bound
+  where MOD10C1 (2000+) is the other source.
+
+**July/August forced-zero (calcSCA).** Summer is forced to
+``(lower, upper) = (0, 0)``, gated by ``forced_zero_combined`` (default
+True):
+
+- ``True`` — the driver zeros the *combined* bound in Jul/Aug for every
+  cell any source observes (the validity mask the loader returns).
+- ``False`` — only the mod10c1 contribution is zeroed (pre-combine, in the
+  loader) and the driver-level forced-zero is suppressed, so ua_swe's
+  alpine summer fraction survives into the combined ``upper`` bound.
+
+**Zero-width bounds.** ``min_sources_for_bound`` (default 1) controls
+degenerate intervals: ``1`` keeps a bound wherever ≥1 source is finite
+(a single source's ``[v, v]`` is allowed); ``2`` masks the combined bound
+to NaN wherever fewer than two sources are finite, guaranteeing width.
 
 If ``snow_covered_area.nn_fill`` is True (default), a second file
 ``<output>_nn_filled.nc`` is written with NaN bounds filled by the
@@ -50,6 +68,8 @@ operator re-runs against a healthy cache.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -66,11 +86,15 @@ from nhf_spatial_targets.workspace import Project
 logger = logging.getLogger(__name__)
 
 _MOD10C1_KEY = "mod10c1_v061"
+_UA_SWE_KEY = "ua_swe"
 _SCA_VAR = "Day_CMG_Snow_Cover"
 _CI_VAR = "Day_CMG_Clear_Index"
+_SCF_VAR = "snow_covered_fraction"
 _SUMMER_ZERO_MONTHS = (7, 8)
 _FRAC_VALID_BOUND_ATTR = "frac_valid_bound"
 _LOW_VALID_WARN_FRACTION = 0.01
+#: Per-year time chunking shared by every source interval loader.
+_DAY_CHUNKS = {"time": 366}
 
 
 def _warn_low_valid_coverage(year: int, frac_valid: float, ci_threshold: float) -> None:
@@ -89,6 +113,143 @@ def _warn_low_valid_coverage(year: int, frac_valid: float, ci_threshold: float) 
 
 
 # ---------------------------------------------------------------------------
+# Per-source interval registry
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _SourceInterval:
+    """One source's per-(HRU, day) bound interval for a calendar year.
+
+    ``lower`` / ``upper`` are the source's ``[lower, upper]`` bound, NaN
+    together where the source contributes nothing at that cell. The source is
+    *finite* — and counts toward ``n_sources`` — exactly where ``lower`` is
+    non-NaN; the combine (:func:`_combine_intervals`) and ``frac_valid`` both
+    derive that count from ``lower`` alone, so ``upper`` MUST be NaN wherever
+    ``lower`` is. ``forces_summer_zero`` is the per-cell mask of where this
+    source triggers the calcSCA July/August forced-zero (mod10c1: CI-passing
+    cells; ua_swe: every observed cell) — a seasonal *rule*, carried alongside
+    the bound because it shares the same (time, id_col) grid.
+
+    All three fields must share dims; ``__post_init__`` asserts that cheaply
+    (dims only — no ``.compute()``, so the dask graph stays lazy) to catch a
+    loader wiring the wrong array at the construction boundary.
+    """
+
+    lower: xr.DataArray
+    upper: xr.DataArray
+    forces_summer_zero: xr.DataArray
+
+    def __post_init__(self) -> None:
+        if not (self.upper.dims == self.lower.dims == self.forces_summer_zero.dims):
+            raise ValueError(
+                f"_SourceInterval fields must share dims; got lower={self.lower.dims}, "
+                f"upper={self.upper.dims}, "
+                f"forces_summer_zero={self.forces_summer_zero.dims}."
+            )
+
+
+def _load_mod10c1_interval(
+    *,
+    project: Project,
+    period: tuple[str, str],
+    year_master_idx: pd.DatetimeIndex,
+    fabric_hru_ids: np.ndarray,
+    id_col: str,
+    sca_cfg: dict,
+) -> _SourceInterval:
+    """CI-bounded MOD10C1 interval (the calcSCA formula, unchanged)."""
+    ci_threshold = float(sca_cfg["ci_threshold"])
+    chunks = {**_DAY_CHUNKS, id_col: -1}
+    snow_native = read_aggregated_source(
+        project, _MOD10C1_KEY, _SCA_VAR, period, chunks
+    )
+    ci_native = read_aggregated_source(project, _MOD10C1_KEY, _CI_VAR, period, chunks)
+    check_hru_coords(snow_native, fabric_hru_ids, id_col, _MOD10C1_KEY)
+    check_hru_coords(ci_native, fabric_hru_ids, id_col, _MOD10C1_KEY)
+
+    sca_obs = reindex_to_day_start(snow_native / 100.0, year_master_idx)
+    ci = reindex_to_day_start(ci_native / 100.0, year_master_idx)
+
+    ci_passing = ci >= ci_threshold
+    lower = xr.where(ci_passing, ci * sca_obs, np.nan)
+    upper = xr.where(ci_passing, lower + (1.0 - ci), np.nan)
+    return _SourceInterval(lower=lower, upper=upper, forces_summer_zero=ci_passing)
+
+
+def _load_ua_swe_interval(
+    *,
+    project: Project,
+    period: tuple[str, str],
+    year_master_idx: pd.DatetimeIndex,
+    fabric_hru_ids: np.ndarray,
+    id_col: str,
+    sca_cfg: dict,
+) -> _SourceInterval:
+    """Degenerate ``[v, v]`` interval from ua_swe ``snow_covered_fraction``.
+
+    ``v`` is the already-[0, 1] per-HRU snow-covered fraction (the depth-
+    thresholded binary area-weighted to the fabric in ``aggregate/ua_swe``);
+    no scaling and no CI gate — ua_swe is physical. ``forces_summer_zero`` is
+    every finite cell, so under ``forced_zero_combined=True`` ua_swe's summer
+    cells are forced to zero alongside mod10c1's.
+    """
+    scf = read_aggregated_source(
+        project, _UA_SWE_KEY, _SCF_VAR, period, {**_DAY_CHUNKS, id_col: -1}
+    )
+    check_hru_coords(scf, fabric_hru_ids, id_col, _UA_SWE_KEY)
+    v = reindex_to_day_start(scf, year_master_idx)
+    return _SourceInterval(lower=v, upper=v, forces_summer_zero=v.notnull())
+
+
+#: source key -> interval loader. ``build`` validates every configured
+#: ``snow_covered_area.sources`` key against this registry, so an unknown
+#: source fails loudly at build time rather than KeyError-ing here.
+_INTERVAL_LOADERS: dict[str, Callable[..., _SourceInterval]] = {
+    _MOD10C1_KEY: _load_mod10c1_interval,
+    _UA_SWE_KEY: _load_ua_swe_interval,
+}
+
+
+def _combine_intervals(
+    intervals: dict[str, _SourceInterval], *, min_sources_for_bound: int
+) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray]:
+    """NaN-aware union of per-source intervals.
+
+    Returns ``(lower, upper, n_sources, forces_summer_zero)`` where ``lower``
+    is the per-cell min of source lowers, ``upper`` the max of source uppers,
+    ``n_sources`` the int8 count of finite contributions, and
+    ``forces_summer_zero`` the OR of the sources' summer-forced-zero masks.
+
+    When ``min_sources_for_bound >= 2`` the combined bound is masked to NaN
+    wherever ``n_sources < min_sources_for_bound`` (guaranteeing a
+    non-degenerate interval); the mod10c1-only / ``min=1`` path leaves the
+    bound untouched, preserving the single-source result exactly.
+    """
+    keys = list(intervals)
+    lowers = xr.concat(
+        [intervals[k].lower for k in keys], dim=xr.Variable("source", keys)
+    )
+    uppers = xr.concat(
+        [intervals[k].upper for k in keys], dim=xr.Variable("source", keys)
+    )
+    summer = xr.concat(
+        [intervals[k].forces_summer_zero for k in keys],
+        dim=xr.Variable("source", keys),
+    )
+    lower = lowers.min(dim="source", skipna=True)
+    upper = uppers.max(dim="source", skipna=True)
+    n_sources = lowers.notnull().sum(dim="source").astype(np.int8)
+    forces_summer_zero = summer.any(dim="source")
+
+    if min_sources_for_bound >= 2:
+        has_width = n_sources >= min_sources_for_bound
+        lower = lower.where(has_width)
+        upper = upper.where(has_width)
+    return lower, upper, n_sources, forces_summer_zero
+
+
+# ---------------------------------------------------------------------------
 # Per-year source loader (the driver calls this once per year)
 # ---------------------------------------------------------------------------
 
@@ -103,25 +264,33 @@ def _load_sca_year(
     id_col: str,
     year_context: tuple[int, str, str] | None,
 ) -> SourceLoaderResult:
-    """Compute CI-bounded SCA bounds for one calendar year.
+    """Combine the configured sources into one calendar year's SCA bound.
 
-    Returns the result the generic year-chunked driver hands to
-    :func:`_writers.write_bounds_target`. The July/August forced-zero
-    policy is applied **after** this loader returns by the driver via
+    Each ``snow_covered_area.sources`` key is loaded via
+    :data:`_INTERVAL_LOADERS` into a per-source ``[lower, upper]`` interval,
+    then combined NaN-aware (:func:`_combine_intervals`). The July/August
+    forced-zero is applied **after** this loader returns by the driver via
     :func:`_driver._apply_forced_zero`, reading the ``valid`` mask from
-    ``extras`` — keeping the seasonal rule declarative on the adapter
-    rather than baked into the loader.
+    ``extras``.
 
-    Per-year ``frac_valid_bound`` is surfaced via
-    ``extras["per_year_attrs"]`` so it lands on each year's intermediate
-    NC and survives the skip-branch re-read (which the
-    :func:`_on_sca_year_skip` hook uses to re-emit the WARNING).
+    **Forced-zero / combine coupling.** ``forced_zero_combined`` (default
+    True) gates how summer is zeroed *without* any driver or adapter change:
 
-    ``adapter`` is used to re-read ``ci_threshold`` from the project
-    config so per-build threshold changes invalidate cached
-    intermediates via the config-fingerprint path. ``year_context`` is
-    always supplied by the driver for SCA (``year_chunked=True``);
-    ``None`` is treated as a programmer error and raises.
+    - ``True`` — the returned ``valid`` mask is ``forces_summer_zero`` (every
+      cell any source observes, AND ≥ ``min_sources_for_bound`` finite), so the
+      driver zeros the *combined* bound in Jul/Aug. For a mod10c1-only,
+      ``min=1`` config this is ``ci >= ci_threshold`` — byte-identical to the
+      single-source build.
+    - ``False`` — the mod10c1 interval is zeroed in Jul/Aug *before* the
+      combine (here, in the loader), and the returned ``valid`` mask is
+      forced False in Jul/Aug so the driver-level forced-zero no-ops, letting
+      ua_swe's summer fraction survive into the combined ``upper``.
+
+    Per-year ``frac_valid_bound`` is surfaced via ``extras["per_year_attrs"]``
+    so it lands on each year's intermediate NC and survives the skip-branch
+    re-read (which :func:`_on_sca_year_skip` uses to re-emit the WARNING).
+    ``year_context`` is always supplied by the driver for SCA
+    (``year_chunked=True``); ``None`` is a programmer error and raises.
     """
     if year_context is None:
         raise RuntimeError(
@@ -134,46 +303,64 @@ def _load_sca_year(
     if len(year_master_idx) == 0:
         raise ValueError(f"Year {year}: empty master index from period {period!r}.")
 
-    ci_threshold = float(project.target(adapter.config_key)["ci_threshold"])
+    sca_cfg = project.target(adapter.config_key)
+    sources = list(sca_cfg["sources"])
+    ci_threshold = float(sca_cfg["ci_threshold"])
+    forced_zero_combined = bool(sca_cfg.get("forced_zero_combined", True))
+    min_sources = int(sca_cfg.get("min_sources_for_bound", 1))
 
-    snow_native = read_aggregated_source(
-        project,
-        _MOD10C1_KEY,
-        _SCA_VAR,
-        period,
-        chunks={"time": 366, id_col: -1},
+    intervals = {
+        key: _INTERVAL_LOADERS[key](
+            project=project,
+            period=period,
+            year_master_idx=year_master_idx,
+            fabric_hru_ids=fabric_hru_ids,
+            id_col=id_col,
+            sca_cfg=sca_cfg,
+        )
+        for key in sources
+    }
+
+    # forced_zero_combined=False: zero the mod10c1 contribution in summer
+    # BEFORE the combine, so ua_swe's (un-zeroed) fraction survives into the
+    # combined upper bound. The driver-level forced-zero is suppressed below.
+    in_summer = year_master_idx.month.isin(_SUMMER_ZERO_MONTHS)
+    in_summer = xr.DataArray(in_summer, coords={"time": year_master_idx}, dims="time")
+    if not forced_zero_combined and _MOD10C1_KEY in intervals:
+        iv = intervals[_MOD10C1_KEY]
+        zero_here = in_summer & iv.forces_summer_zero
+        intervals[_MOD10C1_KEY] = _SourceInterval(
+            lower=xr.where(zero_here, 0.0, iv.lower),
+            upper=xr.where(zero_here, 0.0, iv.upper),
+            forces_summer_zero=iv.forces_summer_zero,
+        )
+
+    lower, upper, n_sources, forces_summer_zero = _combine_intervals(
+        intervals, min_sources_for_bound=min_sources
     )
-    ci_native = read_aggregated_source(
-        project,
-        _MOD10C1_KEY,
-        _CI_VAR,
-        period,
-        chunks={"time": 366, id_col: -1},
-    )
-    check_hru_coords(snow_native, fabric_hru_ids, id_col, _MOD10C1_KEY)
-    check_hru_coords(ci_native, fabric_hru_ids, id_col, _MOD10C1_KEY)
 
-    sca_obs = reindex_to_day_start(snow_native / 100.0, year_master_idx)
-    ci = reindex_to_day_start(ci_native / 100.0, year_master_idx)
+    # The driver forces (0, 0) where `valid & month in {7, 8}`. Gate by the
+    # min-sources width mask too (min>=2) so a NaN'd narrow cell is never
+    # un-masked back to zero. For forced_zero_combined=False, drive `valid`
+    # False in summer so the driver no-ops there (mod10c1 already pre-zeroed).
+    valid = forces_summer_zero
+    if min_sources >= 2:
+        valid = valid & (n_sources >= min_sources)
+    if not forced_zero_combined:
+        valid = valid & ~in_summer
 
-    valid = ci >= ci_threshold
-    lower = xr.where(valid, ci * sca_obs, np.nan)
-    upper = xr.where(valid, lower + (1.0 - ci), np.nan)
-    # Note: July/August forced-zero is applied post-loader by the driver
-    # from the `valid` mask in `extras`; see TargetAdapter.forced_zero_*.
-
-    valid_bound = valid & sca_obs.notnull()
-    n_sources = valid_bound.astype(np.int8)
-
-    frac_valid = float(valid_bound.mean().compute())
+    bound_finite = lower.notnull()
+    frac_valid = float(bound_finite.mean().compute())
     _warn_low_valid_coverage(year, frac_valid, ci_threshold)
 
+    # `source_keys` is stamped by the driver's _common_global_attrs from the
+    # merged target config; we add only the human-readable `source` and the
+    # SCA-specific resolved knobs here.
     extra_attrs = {
-        "source": (
-            "MOD10C1 v061 Day_CMG_Snow_Cover + Day_CMG_Clear_Index "
-            "(CI-bounded per TM 6-B10 / PRMSobjfun.f90:calcSCA)"
-        ),
+        "source": _sca_source_description(sources),
         "ci_threshold": ci_threshold,
+        "forced_zero_combined": str(forced_zero_combined),
+        "min_sources_for_bound": min_sources,
         "summer_zero_months": ",".join(str(m) for m in _SUMMER_ZERO_MONTHS),
     }
 
@@ -181,7 +368,7 @@ def _load_sca_year(
         lower=lower,
         upper=upper,
         n_sources=n_sources,
-        n_sources_count=1,
+        n_sources_count=len(sources),
         time_index=year_master_idx,
         time_offset_unit=pd.offsets.Day(1),
         extra_attrs=extra_attrs,
@@ -190,6 +377,25 @@ def _load_sca_year(
             "per_year_attrs": {_FRAC_VALID_BOUND_ATTR: frac_valid},
         },
     )
+
+
+def _sca_source_description(sources: list[str]) -> str:
+    """Human-readable ``source`` global attr listing the combined sources."""
+    parts = []
+    if _MOD10C1_KEY in sources:
+        parts.append(
+            "MOD10C1 v061 Day_CMG_Snow_Cover + Day_CMG_Clear_Index "
+            "(CI-bounded per TM 6-B10 / PRMSobjfun.f90:calcSCA)"
+        )
+    if _UA_SWE_KEY in sources:
+        parts.append(
+            "UA NSIDC-0719 snow_covered_fraction (depth-thresholded binary, "
+            "area-weighted to HRU; degenerate [v, v] interval)"
+        )
+    for key in sources:
+        if key not in (_MOD10C1_KEY, _UA_SWE_KEY):
+            parts.append(key)
+    return "; ".join(parts)
 
 
 def _on_sca_year_skip(
@@ -233,8 +439,8 @@ ADAPTER = TargetAdapter(
     bounds_long_name_kind="daily fractional snow-covered area",
     cell_methods="time: point",
     title=(
-        "NHM SCA calibration target (CI-bounded fractional 0-1; "
-        "lower/upper from MOD10C1 v061)"
+        "NHM SCA calibration target (fractional 0-1; NaN-aware bound over "
+        "MOD10C1 v061 CI-interval + ua_swe depth-derived fraction)"
     ),
     nn_title="NHM SCA calibration target (NN-filled, fractional 0-1)",
     references=(
@@ -258,20 +464,30 @@ ADAPTER = TargetAdapter(
 def build(project: Project) -> None:
     """Build the SCA calibration target.
 
-    Validates the SCA-specific config invariants (single source =
-    mod10c1_v061; ci_threshold ∈ [0, 1]) and delegates the year loop,
-    cache management, orphan pruning, and stitching to the generic
-    year-chunked driver via :func:`_driver.build`.
+    Validates the SCA config invariants — every ``sources`` key has a
+    registered interval loader; ``ci_threshold ∈ [0, 1]``;
+    ``min_sources_for_bound ∈ {1, 2}``; ``depth_threshold_mm > 0`` (consumed
+    at the ua_swe aggregate stage, validated here so a bad value fails before
+    a long build) — and delegates the year loop, cache management, orphan
+    pruning, and stitching to the generic year-chunked driver via
+    :func:`_driver.build`.
     """
     from nhf_spatial_targets.targets._driver import build as run_driver
 
     sca_cfg = project.target(ADAPTER.config_key)
-    if list(sca_cfg["sources"]) != [_MOD10C1_KEY]:
+    sources = list(sca_cfg["sources"])
+    if not sources:
         raise ValueError(
-            f"snow_covered_area.sources={sca_cfg['sources']!r}; the "
-            f"modis_ci range method requires exactly one source: "
-            f"[{_MOD10C1_KEY!r}]. Adjust the project config."
+            "snow_covered_area.sources is empty; configure at least one of "
+            f"{sorted(_INTERVAL_LOADERS)}."
         )
+    unknown = [s for s in sources if s not in _INTERVAL_LOADERS]
+    if unknown:
+        raise ValueError(
+            f"snow_covered_area.sources has no registered interval loader for "
+            f"{unknown}; known sources are {sorted(_INTERVAL_LOADERS)}."
+        )
+
     ci_threshold = float(sca_cfg["ci_threshold"])
     if not (0.0 <= ci_threshold <= 1.0):
         raise ValueError(
@@ -280,11 +496,29 @@ def build(project: Project) -> None:
             f"70 corresponds to 0.70 here."
         )
 
+    min_sources = int(sca_cfg.get("min_sources_for_bound", 1))
+    if min_sources not in (1, 2):
+        raise ValueError(
+            f"snow_covered_area.min_sources_for_bound={min_sources!r} must be "
+            f"1 (degenerate single-source bound allowed) or 2 (require width)."
+        )
+
+    depth_threshold_mm = float(sca_cfg.get("depth_threshold_mm", 1.0))
+    if depth_threshold_mm <= 0:
+        raise ValueError(
+            f"snow_covered_area.depth_threshold_mm={depth_threshold_mm!r} must "
+            f"be > 0 (it is the pixel snow-depth cutoff for ua_swe's "
+            f"snow_covered_fraction binary, consumed at the aggregate stage)."
+        )
+
     logger.info(
-        "Building SCA target: source=%s, period=%s, ci_threshold=%.2f, fabric=%s",
-        _MOD10C1_KEY,
+        "Building SCA target: sources=%s, period=%s, ci_threshold=%.2f, "
+        "forced_zero_combined=%s, min_sources_for_bound=%d, fabric=%s",
+        sources,
         sca_cfg["period"],
         ci_threshold,
+        bool(sca_cfg.get("forced_zero_combined", True)),
+        min_sources,
         project.config["fabric"]["path"],
     )
 

@@ -140,6 +140,46 @@ OPTIONAL_CONFIG_FEATURES: list[OptionalConfigFeature] = [
         added="2026-05-26 (#243)",
         why="ScienceBase data-release metadata for `nhf-targets release` (#241)",
     ),
+    OptionalConfigFeature(
+        name="snow_covered_area.depth_threshold_mm",
+        # Leaf key, unique to snow_covered_area in the schema.
+        detect=r"(?m)^\s*#?\s*depth_threshold_mm\s*:",
+        block=(
+            "    # Pixel snow-depth cutoff (mm) for ua_swe's snow_covered_fraction\n"
+            "    # binary. Consumed at the ua_swe AGGREGATE stage (changing it requires\n"
+            "    # re-aggregating ua_swe; the publish gate refuses a stamp that\n"
+            "    # disagrees with this value). Paste under `targets.snow_covered_area:`.\n"
+            "    # depth_threshold_mm: 1.0\n"
+        ),
+        added="2026-06-10 (#237)",
+        why="pixel snow-depth cutoff for ua_swe's SCA snow_covered_fraction (#237)",
+    ),
+    OptionalConfigFeature(
+        name="snow_covered_area.forced_zero_combined",
+        detect=r"(?m)^\s*#?\s*forced_zero_combined\s*:",
+        block=(
+            "    # true: zero the COMBINED SCA bound in Jul/Aug (calcSCA). false: zero\n"
+            "    # only the mod10c1 contribution pre-combine, so ua_swe's summer alpine\n"
+            "    # fraction survives into the combined upper bound. Paste under\n"
+            "    # `targets.snow_covered_area:`.\n"
+            "    # forced_zero_combined: true\n"
+        ),
+        added="2026-06-10 (#237)",
+        why="July/August forced-zero policy for the multi-source SCA bound (#237)",
+    ),
+    OptionalConfigFeature(
+        name="snow_covered_area.min_sources_for_bound",
+        detect=r"(?m)^\s*#?\s*min_sources_for_bound\s*:",
+        block=(
+            "    # 1: keep an SCA bound wherever >=1 source is finite (a single\n"
+            "    # source's degenerate [v, v] is allowed). 2: NaN the combined bound\n"
+            "    # where fewer than 2 sources are finite. Paste under\n"
+            "    # `targets.snow_covered_area:`.\n"
+            "    # min_sources_for_bound: 1\n"
+        ),
+        added="2026-06-10 (#237)",
+        why="zero-width-bound policy for the multi-source SCA bound (#237)",
+    ),
 ]
 
 

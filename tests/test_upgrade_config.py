@@ -33,7 +33,14 @@ def test_check_drift_reports_all_features_when_none_present(tmp_path):
     missing = check_drift(tmp_path)
     names = {f.name for f in missing}
     # All shipped features should be reported on a bare config.
-    assert {"fabric.token", "representative_points", "release"} <= names
+    assert {
+        "fabric.token",
+        "representative_points",
+        "release",
+        "snow_covered_area.depth_threshold_mm",
+        "snow_covered_area.forced_zero_combined",
+        "snow_covered_area.min_sources_for_bound",
+    } <= names
 
 
 def test_check_drift_clean_when_live_value_present(tmp_path):
@@ -141,6 +148,9 @@ def test_cli_exits_zero_when_in_sync(tmp_path, capsys):
         "datastore: /x\n"
         "# representative_points:\n"
         "# release:\n"
+        "# depth_threshold_mm: 1.0\n"
+        "# forced_zero_combined: true\n"
+        "# min_sources_for_bound: 1\n"
     )
     # Cyclopts wraps even successful returns in SystemExit(0).
     with pytest.raises(SystemExit) as exc:
