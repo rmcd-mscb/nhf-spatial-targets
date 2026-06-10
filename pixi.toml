@@ -184,6 +184,7 @@ fetch-mwbm-climgrid = { cmd = "nhf-targets fetch mwbm-climgrid", description = "
 fetch-daymet = { cmd = "nhf-targets fetch daymet", description = "Register operator-staged Daymet V4 R1 regional zarr stores (verify-only)" }
 fetch-snodas = { cmd = "nhf-targets fetch snodas", description = "Download SNODAS daily SWE granules from NSIDC (G02158) via earthaccess" }
 fetch-margulis-wus-sr = { cmd = "nhf-targets fetch margulis-wus-sr", description = "Download Margulis Western US Snow Reanalysis (NSIDC-0719) via earthaccess" }
+fetch-ua-swe = { cmd = "nhf-targets fetch ua-swe", description = "Download UA daily 4-km SWE/snow-depth (NSIDC-0719) + consolidate to calendar-year NCs" }
 fetch-all = { cmd = "nhf-targets fetch all", description = "Download all source datasets sequentially" }
 
 # Aggregation
@@ -203,6 +204,7 @@ agg-snodas       = { cmd = "nhf-targets agg snodas",       description = "Aggreg
 agg-mwbm-climgrid = { cmd = "nhf-targets agg mwbm-climgrid", description = "Aggregate USGS MWBM (ClimGrid-forced) monthly outputs to HRU fabric" }
 agg-era5-land-sd = { cmd = "nhf-targets agg era5-land-sd", description = "Aggregate ERA5-Land daily snow depth water equivalent to HRU fabric" }
 agg-margulis-wus-sr = { cmd = "nhf-targets agg margulis-wus-sr", description = "Aggregate Margulis WUS-SR daily SWE to HRU fabric (OR fabric only)" }
+agg-ua-swe       = { cmd = "nhf-targets agg ua-swe",       description = "Aggregate UA daily SWE + depth-derived snow_covered_fraction to HRU fabric (SWE + SCA source)" }
 agg-all          = { cmd = "nhf-targets agg all",          description = "Aggregate all tier-1/2 sources to HRU fabric sequentially" }
 
 # Catalog inspection
