@@ -247,6 +247,7 @@ render-figures              = { cmd = "python scripts/render_figures.py --group 
 render-figures-consolidated = { cmd = "python scripts/render_figures.py --group consolidated", description = "Re-execute consolidated notebooks and save to docs/figures/consolidated/<project>/" }
 render-figures-aggregated   = { cmd = "python scripts/render_figures.py --group aggregated",   description = "Re-execute aggregated notebooks and save to docs/figures/aggregated/<project>/" }
 render-figures-targets      = { cmd = "python scripts/render_figures.py --group targets",      description = "Re-execute target inspection notebooks and save to docs/figures/targets/<project>/" }
+render-figures-fabric       = { cmd = "python scripts/render_figures.py --group fabric",       description = "Re-execute fabric inspection notebooks and save to docs/figures/fabric/<project>/" }
 
 # Marp slide-deck rendering — runs puppeteer's downloaded chrome under
 # marp-cli so the same `--pdf`/`--html`/`--server` workflow works on HPC

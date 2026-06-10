@@ -1,9 +1,10 @@
 """Execute the inspection notebooks with SAVE_FIGURES=True.
 
-Walks each notebook under notebooks/consolidated/, notebooks/aggregated/, and
-notebooks/targets/, executes it via ``jupyter nbconvert --execute --inplace``,
-and lets the notebooks' embedded ``save_figure`` calls populate
-``docs/figures/{consolidated,aggregated,targets}/<project>/``.
+Walks each notebook under notebooks/consolidated/, notebooks/aggregated/,
+notebooks/targets/, and notebooks/fabric/, executes it via
+``jupyter nbconvert --execute --inplace``, and lets the notebooks' embedded
+``save_figure`` calls populate
+``docs/figures/{consolidated,aggregated,targets,fabric}/<project>/``.
 
 The startup hook is the same trick used by slurm/shared/inspect_aggregated.slurm
 / slurm/shared/inspect_consolidated.slurm: a temp file is written to disk and
@@ -57,6 +58,11 @@ GROUPS = {
         "dir": REPO_ROOT / "notebooks" / "targets",
         "helpers_dir": "notebooks/targets",
         "figures_subdir": "targets",
+    },
+    "fabric": {
+        "dir": REPO_ROOT / "notebooks" / "fabric",
+        "helpers_dir": "notebooks/fabric",
+        "figures_subdir": "fabric",
     },
 }
 
@@ -244,7 +250,7 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(
         "--group",
-        choices=("consolidated", "aggregated", "targets", "all"),
+        choices=("consolidated", "aggregated", "targets", "fabric", "all"),
         default="all",
         help="Which notebook group to render (default: all)",
     )
@@ -283,7 +289,7 @@ def main() -> int:
     if args.project is None and args.project_dir is not None:
         args.project = Path(args.project_dir).name
     groups = (
-        ["consolidated", "aggregated", "targets"]
+        ["consolidated", "aggregated", "targets", "fabric"]
         if args.group == "all"
         else [args.group]
     )
