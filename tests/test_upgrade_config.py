@@ -148,6 +148,9 @@ def test_cli_exits_zero_when_in_sync(tmp_path, capsys):
         "datastore: /x\n"
         "# representative_points:\n"
         "# release:\n"
+        "# depth_threshold_mm: 1.0\n"
+        "# forced_zero_combined: true\n"
+        "# min_sources_for_bound: 1\n"
     )
     # Cyclopts wraps even successful returns in SystemExit(0).
     with pytest.raises(SystemExit) as exc:
