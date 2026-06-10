@@ -158,7 +158,13 @@ def test_snow_water_equivalent_variable_present():
     assert v["prms_variable"] == "pkwater_equiv"
     assert v["range_method"] == "multi_source_minmax"
     assert v["normalize"] is False
-    assert v["sources"] == ["daymet", "snodas", "era5_land", "margulis_wus_sr"]
+    assert v["sources"] == [
+        "daymet",
+        "snodas",
+        "era5_land",
+        "margulis_wus_sr",
+        "ua_swe",
+    ]
     # Required-fields sanity check (matches the existing target-variable
     # schema across runoff/aet/recharge/soil_moisture/sca).
     for field in (

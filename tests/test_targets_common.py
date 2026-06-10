@@ -1091,6 +1091,7 @@ def test_swe_target_shims_declare_expected_cf_units():
     assert by_key["snodas"].expected_cf_units == "kg m-2"
     assert by_key["era5_land_sd"].expected_cf_units == "m"
     assert by_key["margulis_wus_sr"].expected_cf_units == "m"
+    assert by_key["ua_swe"].expected_cf_units == "kg m-2"
 
 
 # ---------------------------------------------------------------------------

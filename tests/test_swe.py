@@ -8,8 +8,8 @@ builder implementation status.
 from __future__ import annotations
 
 
-def test_swe_variable_lists_four_sources():
-    """SWE catalog variable carries all four SWE sources."""
+def test_swe_variable_lists_five_sources():
+    """SWE catalog variable carries all five SWE sources (ua_swe added #237)."""
     from nhf_spatial_targets import catalog
 
     v = catalog.variable("snow_water_equivalent")
@@ -18,4 +18,5 @@ def test_swe_variable_lists_four_sources():
         "snodas",
         "era5_land",
         "margulis_wus_sr",
+        "ua_swe",
     }
