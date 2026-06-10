@@ -255,6 +255,68 @@ targets/sca.py
     └─ Write CF-compliant per-HRU per-day NetCDF.
 ```
 
+## Worked example: ua_swe `snow_covered_fraction` (the canonical gotcha)
+
+`ua_swe` (UA daily 4-km SWE + snow depth, source `ua_swe`) derives a
+*second* SCA signal: a per-HRU snow-covered fraction from a per-pixel
+binary `snow_depth > depth_threshold_mm`. It is the cleanest illustration
+of why a threshold must precede aggregation, because the threshold is a
+**tunable parameter** and the pre/post answers diverge sharply.
+
+```
+aggregate/ua_swe.py      pre_aggregate_hook = make_pre_aggregate_hook(threshold)
+    ├─ scf = (snow_depth > depth_threshold_mm).astype(float)
+    │        .where(snow_depth.notnull())     ← re-NaN fill pixels (load-bearing)
+    └─ Stamp depth_threshold_mm on scf.attrs. swe / snow_depth untouched.
+
+aggregate/ua_swe.py      stat_method = "masked_mean"
+    └─ NaN (off-CONUS / fill) pixels excluded; without this, NaN > t = False
+       would inject phantom 0.0 and dilute border HRUs.
+
+aggregate/ua_swe.py      post_aggregate_hook = make_post_aggregate_hook(threshold)
+    └─ Re-assert CF attrs + the depth_threshold_mm stamp (synthesized-var
+       attrs don't reliably survive gdptools).
+
+→ <project>/data/aggregated/ua_swe/ua_swe_<year>_agg.nc
+   carries: swe (kg m-2 ≡ mm), snow_depth (mm),
+            snow_covered_fraction ∈ [0,1], attr depth_threshold_mm
+```
+
+**Worked example (threshold = 1 mm).** An HRU split 40% deep snow / 60%
+bare ground (depths 200 mm and 0 mm):
+
+- Pre-aggregation binary (the right answer): pixels → `[1, 0]`,
+  area-weighted → `snow_covered_fraction = 0.40`. ✅ 40% of the HRU is
+  snow-covered.
+- Post-aggregation binary (the wrong answer): area-weight depth first →
+  HRU-mean depth = `0.4 × 200 = 80 mm`, then `80 > 1` → `1.0`. ❌ The whole
+  HRU reads as 100% snow-covered. `mean(d > t) ≠ mean(d) > t`.
+
+**Threshold-baking + re-aggregation coupling.** Because the threshold is
+applied *inside* the pre-aggregation nonlinearity, the value that defined
+`snow_covered_fraction` is **baked into the agg NC** — it is not a knob a
+downstream target can re-tune. Three consequences, all enforced:
+
+1. The threshold is **stamped** on `snow_covered_fraction.attrs["depth_threshold_mm"]`
+   (PR-B), so the agg NC self-documents the value that produced it.
+2. The deterministic `rebuild-manifest` projection **lifts that stamp into
+   the aggregate step's `params`** (read from the NC attr, never config — the
+   rebuild is a pure function of disk), so it flows into `manifest.json` and
+   the released FGDC/ISO process steps automatically (PR-B2).
+3. Changing `targets.snow_covered_area.depth_threshold_mm` **invalidates the
+   agg NC, not just the target** — the operator must re-aggregate `ua_swe`.
+   A publish-time staleness gate
+   (`release/publish.py:_preflight_ua_swe_threshold_current`, the agg-layer
+   analogue of the `config.effective.yml` staleness gate) refuses to publish
+   when the stamped threshold ≠ the config-resolved threshold, closing the
+   "edited config, forgot to re-aggregate" footgun (PR-B2).
+
+Contrast with `mod10c1`'s `ci_threshold` (0.70), which does *not* force a
+re-aggregation: that threshold gates the **already-aggregated HRU-mean CI** —
+a post-aggregation operation on a linear quantity — so it can live as a
+target-stage knob. Same word "threshold," opposite stage, dictated entirely
+by where the nonlinearity sits.
+
 ## Decision flow for a new source
 
 When you add a new source that needs transformations, ask in order:

@@ -729,6 +729,104 @@ def _preflight_config_product_consistency(project: Project) -> None:
         )
 
 
+def _preflight_ua_swe_threshold_current(project: Project) -> None:
+    """Verify the ua_swe agg NC's baked depth threshold matches config intent.
+
+    The **aggregate-layer analogue** of :func:`_preflight_effective_config_current`.
+    ua_swe's ``snow_covered_fraction`` is a per-pixel binary
+    ``snow_depth > depth_threshold_mm`` evaluated PRE-aggregation -- a
+    nonlinearity that does not commute with the area-weighted mean -- so the
+    threshold is *baked into the agg NC*, not a downstream knob. If an operator
+    edits ``targets.snow_covered_area.depth_threshold_mm`` without re-aggregating
+    ua_swe, the published fraction (and the manifest aggregate-step / FGDC / ISO
+    provenance lifted from its stamp) would describe a threshold the data was NOT
+    built with.
+
+    Verify-don't-mutate, and **unconditionally fatal** (no
+    ``allow_incomplete_sources`` override), parity with the config-staleness gate:
+    shipping a fraction whose stamped threshold contradicts config is a
+    correctness error, not an incompleteness. The fix is to re-aggregate ua_swe
+    (and re-run ``validate`` / ``rebuild-manifest``) so the bake, config, and
+    provenance realign.
+
+    No-op when the project never aggregated ua_swe (not every fabric uses it):
+    an absent ``data/aggregated/ua_swe/`` dir or no NCs there -> return.
+
+    This is the **first** instance of an aggregate-affecting config param; it is
+    specced narrowly for ua_swe, but the pattern -- a pre-aggregation-baked
+    tunable whose stamp must match config at publish -- generalizes to any future
+    such source.
+
+    Stale / un-verifiable (any of) -> :class:`PreflightError`:
+
+    - an agg NC carries no ``snow_covered_fraction`` ``depth_threshold_mm`` stamp
+      (a pre-PR-B build) or is unreadable -- provenance that cannot be verified,
+    - a stamped threshold != the config-resolved
+      ``targets.snow_covered_area.depth_threshold_mm`` (default
+      :data:`~nhf_spatial_targets.aggregate.ua_swe.DEFAULT_DEPTH_THRESHOLD_MM`).
+    """
+    import math
+
+    from nhf_spatial_targets.aggregate.ua_swe import DEFAULT_DEPTH_THRESHOLD_MM
+    from nhf_spatial_targets.rebuild_manifest import (
+        _UA_SWE_KEY,
+        read_scf_threshold_stamp,
+    )
+
+    ua_swe_dir = project.aggregated_dir() / _UA_SWE_KEY
+    if not ua_swe_dir.is_dir():
+        return
+    ncs = sorted(p for p in ua_swe_dir.rglob("*.nc") if p.is_file())
+    if not ncs:
+        return
+
+    # Read the resolved threshold from the (already staleness-gated)
+    # config.effective.yml, the canonical resolved intent -- consistent with the
+    # triangle gate. The default mirrors aggregate/ua_swe._resolve_depth_threshold_mm
+    # so an unset key compares equal to a stamped default-built fraction.
+    eff_path = project.workdir / "config.effective.yml"
+    try:
+        effective = yaml.safe_load(eff_path.read_text()) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        # _preflight_effective_config_current runs first and already turns an
+        # absent/unparseable effective config into a clean PreflightError; guard
+        # here too so a call-order change can't crash this gate.
+        raise PreflightError(
+            f"config.effective.yml at {eff_path} is unreadable for the ua_swe "
+            f"depth-threshold check: {exc}"
+        ) from exc
+    sca_cfg = (effective.get("targets") or {}).get("snow_covered_area") or {}
+    configured = float(sca_cfg.get("depth_threshold_mm", DEFAULT_DEPTH_THRESHOLD_MM))
+
+    fix = (
+        f"re-aggregate ua_swe (and re-run 'nhf-targets validate -d "
+        f"{project.workdir}' / rebuild-manifest) so the baked fraction, config, "
+        f"and published provenance realign"
+    )
+    problems: list[str] = []
+    for nc in ncs:
+        stamped = read_scf_threshold_stamp(nc)
+        if stamped is None:
+            problems.append(
+                f"{nc.name} carries no snow_covered_fraction "
+                f"depth_threshold_mm stamp (a pre-PR-B build) or is unreadable; "
+                f"its threshold provenance cannot be verified"
+            )
+        elif not math.isclose(stamped, configured, rel_tol=1e-9, abs_tol=1e-12):
+            problems.append(
+                f"{nc.name} was built with depth_threshold_mm={stamped} but "
+                f"config resolves to {configured}"
+            )
+
+    if problems:
+        joined = "\n  - ".join(problems)
+        raise PreflightError(
+            "publish pre-flight: the ua_swe snow_covered_fraction was aggregated "
+            "with a depth threshold that no longer matches config "
+            f"(targets.snow_covered_area.depth_threshold_mm) -- {fix}:\n  - {joined}"
+        )
+
+
 def _preflight_common(
     project: Project, *, allow_incomplete_sources: bool = False
 ) -> None:
@@ -788,6 +886,15 @@ def _preflight_common(
     # param disagreement is a correctness inconsistency that must never ship,
     # so allow_incomplete_sources does not reach it.
     _preflight_config_product_consistency(project)
+
+    # The aggregate-layer staleness gate (verify-don't-mutate, unconditionally
+    # fatal -- no override): ua_swe's snow_covered_fraction bakes a pre-aggregation
+    # depth threshold into the agg NC, so an operator who edits the config
+    # threshold without re-aggregating would ship a fraction whose stamped
+    # provenance contradicts config. No-op for projects that never aggregated
+    # ua_swe. Runs after the config-staleness gate so config.effective.yml is
+    # known current.
+    _preflight_ua_swe_threshold_current(project)
 
 
 def _require_umbrella_sb_id(registry_path: Path | None) -> str:

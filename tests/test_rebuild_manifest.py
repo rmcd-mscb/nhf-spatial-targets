@@ -599,3 +599,121 @@ def test_rebuild_skips_vanished_file_without_aborting(tmp_path, monkeypatch, cap
     names = [Path(o["path"]).name for o in agg[0]["outputs"]]
     assert names == ["merra2_2001_agg.nc"]
     assert any("merra2_2000_agg.nc" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# PR-B2 (#237): ua_swe depth-threshold provenance lifted into aggregate params
+# ---------------------------------------------------------------------------
+
+import numpy as np  # noqa: E402
+import xarray as xr  # noqa: E402
+
+
+def _write_ua_swe_agg_nc(path: Path, *, threshold: float | None, with_scf: bool = True):
+    """Write a synthetic ua_swe aggregated NC.
+
+    When ``with_scf`` is True, includes a ``snow_covered_fraction`` variable; the
+    ``depth_threshold_mm`` attr is stamped only when ``threshold`` is not None
+    (mirrors the pre/post-aggregate stamp in ``aggregate/ua_swe.py``). ``swe`` is
+    always present as a genuine raw variable.
+    """
+    hrus = [1, 2, 3]
+    ds = xr.Dataset(
+        {
+            "swe": (("nhm_id",), np.array([10.0, 20.0, 30.0], dtype="float64")),
+            **(
+                {"snow_covered_fraction": (("nhm_id",), np.array([0.0, 0.5, 1.0]))}
+                if with_scf
+                else {}
+            ),
+        },
+        coords={"nhm_id": hrus},
+    )
+    if with_scf and threshold is not None:
+        ds["snow_covered_fraction"].attrs["depth_threshold_mm"] = float(threshold)
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    ds.to_netcdf(path)
+
+
+def test_read_scf_threshold_stamp_reads_attr(tmp_path):
+    from nhf_spatial_targets.rebuild_manifest import read_scf_threshold_stamp
+
+    nc = tmp_path / "ua_swe_1982_agg.nc"
+    _write_ua_swe_agg_nc(nc, threshold=5.0)
+    assert read_scf_threshold_stamp(nc) == 5.0
+
+
+def test_read_scf_threshold_stamp_absent_attr_is_none(tmp_path):
+    from nhf_spatial_targets.rebuild_manifest import read_scf_threshold_stamp
+
+    nc = tmp_path / "ua_swe_1982_agg.nc"
+    _write_ua_swe_agg_nc(nc, threshold=None)  # scf var, but no stamp
+    assert read_scf_threshold_stamp(nc) is None
+
+
+def test_read_scf_threshold_stamp_no_scf_var_is_none(tmp_path):
+    from nhf_spatial_targets.rebuild_manifest import read_scf_threshold_stamp
+
+    nc = tmp_path / "ua_swe_1982_agg.nc"
+    _write_ua_swe_agg_nc(nc, threshold=None, with_scf=False)
+    assert read_scf_threshold_stamp(nc) is None
+
+
+def test_read_scf_threshold_stamp_unreadable_is_none(tmp_path):
+    from nhf_spatial_targets.rebuild_manifest import read_scf_threshold_stamp
+
+    nc = tmp_path / "ua_swe_1982_agg.nc"
+    nc.write_bytes(b"not a netcdf")
+    assert read_scf_threshold_stamp(nc) is None  # warns + degrades, never raises
+
+
+def test_aggregate_nc_params_only_for_ua_swe(tmp_path):
+    from nhf_spatial_targets.rebuild_manifest import _aggregate_nc_params
+
+    nc = tmp_path / "ua_swe_1982_agg.nc"
+    _write_ua_swe_agg_nc(nc, threshold=2.5)
+    # Non-ua_swe key: never lifts a param, even from a stamped NC.
+    assert _aggregate_nc_params("merra2", [nc]) == {}
+    # ua_swe: lifts the stamped threshold.
+    assert _aggregate_nc_params("ua_swe", [nc]) == {"depth_threshold_mm": 2.5}
+
+
+def test_aggregate_nc_params_reads_first_stamped_deterministically(tmp_path):
+    from nhf_spatial_targets.rebuild_manifest import _aggregate_nc_params
+
+    # ncs are pre-sorted by the caller; the first carrying a stamp wins.
+    first = tmp_path / "ua_swe_1982_agg.nc"
+    second = tmp_path / "ua_swe_1983_agg.nc"
+    _write_ua_swe_agg_nc(first, threshold=1.0)
+    _write_ua_swe_agg_nc(second, threshold=1.0)
+    assert _aggregate_nc_params("ua_swe", [first, second]) == {
+        "depth_threshold_mm": 1.0
+    }
+
+
+def test_aggregate_nc_params_empty_when_no_stamp(tmp_path):
+    from nhf_spatial_targets.rebuild_manifest import _aggregate_nc_params
+
+    nc = tmp_path / "ua_swe_1982_agg.nc"
+    _write_ua_swe_agg_nc(nc, threshold=None)
+    assert _aggregate_nc_params("ua_swe", [nc]) == {}
+
+
+def test_synthesize_steps_lifts_ua_swe_threshold_param(tmp_path):
+    from nhf_spatial_targets.rebuild_manifest import synthesize_steps
+
+    (tmp_path / "datastore").mkdir()
+    proj = tmp_path / "proj"
+    agg = proj / "data" / "aggregated" / "ua_swe"
+    _write_ua_swe_agg_nc(agg / "ua_swe_1982_agg.nc", threshold=3.0)
+    (proj / "fabric.json").write_text("{}")
+
+    steps = synthesize_steps(
+        datastore=tmp_path / "datastore",
+        project_dir=proj,
+        compute_sha256=False,
+    )
+    agg_steps = [s for s in steps if s["kind"] == "aggregate"]
+    assert len(agg_steps) == 1
+    assert agg_steps[0]["source_key"] == "ua_swe"
+    assert agg_steps[0]["params"] == {"depth_threshold_mm": 3.0}
