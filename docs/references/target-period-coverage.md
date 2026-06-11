@@ -143,8 +143,8 @@ Two source aggregations not yet on disk; max-overlap deferred:
 | snodas | 2004–2012 (aggregated; **2004–2024 if re-aggregated against full fetched archive**) |
 | era5_land sd | 1979–2025 (variable on disk; needs aggregator's `variables` tuple extension) |
 | margulis_wus_sr | 1985–2020 (daily NCs on disk; needs aggregator run) |
-| **Intersection (non-OR fabric, post-re-aggregation)** | **2004–2024** (21 years) |
-| **Intersection (OR fabric)** | **2004–2020** (margulis caps at 2020) |
+| **Intersection (without margulis, post-re-aggregation)** | **2004–2024** (21 years) |
+| **Intersection (with margulis)** | **2004–2020** (margulis caps at 2020) |
 
 **Outstanding work for SWE:**
 - Re-aggregate snodas for 2013–2024 (21 fetched yearly archives that

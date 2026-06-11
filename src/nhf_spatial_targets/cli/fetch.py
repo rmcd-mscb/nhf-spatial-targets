@@ -171,8 +171,8 @@ def fetch_all_cmd(
             # skip lines and stage the missing inputs as needed.
             #   - mwbm-climgrid: CAPTCHA-gated ScienceBase download.
             #   - daymet: pre-staged zarr root not yet configured.
-            #   - margulis-wus-sr: Oregon-only; legitimately absent for
-            #     non-Oregon projects.
+            #   - margulis-wus-sr: Western-US coverage; legitimately absent
+            #     when the project fabric's bbox doesn't reach the WUS domain.
             manual_skip = {"mwbm-climgrid", "daymet", "margulis-wus-sr"}
             if name in manual_skip:
                 console.print(

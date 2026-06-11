@@ -96,7 +96,7 @@ pixi run fetch-mwbm-climgrid   -- --project-dir /data/gfv11-targets             
 pixi run fetch-daymet          -- --project-dir /data/gfv11-targets               # manual stage required
 pixi run fetch-snodas          -- --project-dir /data/gfv11-targets --period 2003/2024
 pixi run fetch-ua-swe          -- --project-dir /data/gfv11-targets --period 1981/2023  # SWE + SCA source
-pixi run fetch-margulis-wus-sr -- --project-dir /data/gfv11-targets --period 1985/2021  # OR fabric only
+pixi run fetch-margulis-wus-sr -- --project-dir /data/gfv11-targets --period 1985/2021  # WUS coverage (fabric-bbox search)
 
 # 7. Aggregate sources to the HRU fabric
 pixi run agg-all     -- --project-dir /data/gfv11-targets                # 12 local-NC sources
@@ -252,7 +252,7 @@ Rough per-source estimates for a full NHM modelling period (1979–2025 for sour
 | MWBM ClimGrid | 1895–2020 (full) | Single global NC (~7.5 GB published) | **~8 GB** |
 | Daymet V4 R1 | 1980–2024 (NA/HI/PR) | Regional zarr stores, operator-staged | **~1–2 TB** if all three regions kept |
 | SNODAS | 2003–2024 (22 yr) | per-year daily NCs (raw `.tar` optional) | **80–150 GB** |
-| Margulis WUS-SR | 1985–2021 (WUS) | Per-water-year per-tile granules (OR fabric only) | **~20 GB** |
+| Margulis WUS-SR | 1985–2021 (WUS) | Per-water-year per-tile granules (fabric-bbox CMR search) | **~20 GB** |
 | **Total (typical CONUS run, excluding Daymet)** | | | **~300–500 GB** |
 
 These are order-of-magnitude estimates. Daymet's regional zarrs are sized for the full dataset; in practice the operator stages only the regions they need (NA covers CONUS).

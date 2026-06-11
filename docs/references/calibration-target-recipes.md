@@ -417,7 +417,7 @@ Per-HRU per-day:
 
 - **PRMS variable:** `pkwater_equiv`
 - **Sources:** Daymet V4 R1 `swe`; SNODAS `swe`; ERA5-Land `sd`;
-  Margulis WUS-SR `SWE` (Oregon fabric only).
+  Margulis WUS-SR `SWE` (Western US coverage; NaN elsewhere, #309).
 - **Builder:** `src/nhf_spatial_targets/targets/swe.py`
 
 **Native-unit handling**
@@ -547,8 +547,9 @@ regardless of period length. For gfv2 (~361 k HRUs):
   time): ~10 GB peak (independent of source count — bounds are already
   combined) → also fits in `--mem=32G`.
 - **A 46-year × 4-source full-fabric SWE build fits in `--mem=32G`**
-  (the OR fabric's 5-source build is ≈ ~25 GB by the same linear
-  scaling, so it also fits 32G; `--mem=48G` is optional extra headroom,
+  (a 5-source build — any fabric where all five sources have coverage —
+  is ≈ ~25 GB by the same linear scaling, so it also fits 32G;
+  `--mem=48G` is optional extra headroom,
   not a requirement), where the single-shot pattern would have needed
   >575 GB.
 

@@ -13,6 +13,11 @@ The aggregation array (`agg_all_gfv2.slurm`) deliberately excludes SSEBop
 (remote STAC) and Daymet (needs `--region` + a staged zarr root), so those are
 submitted separately.
 
+Since #309, Margulis WUS-SR (array index 13) is no longer token-gated: on
+gfv2 it requires fetched raw data like every other source (the task fails
+with `FileNotFoundError` otherwise) and, once aggregated, contributes
+NaN-aware to Western-US HRUs in the SWE bound.
+
 ```bash
 cd <repo root>
 mkdir -p logs

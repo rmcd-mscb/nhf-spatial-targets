@@ -18,16 +18,15 @@
 # (manifest fast path), so resuming after a partial run requires no
 # flag changes.
 #
-# This source is fabric-scoped to Oregon (catalog/sources.yml ->
-# margulis_wus_sr.fabric_scope.fabrics: ["or"]). Running on a non-Oregon
-# project emits a warning and proceeds — raw data lands in the shared
-# datastore and remains usable by any Oregon-fabric project pointed at
-# the same datastore — but expect zero granules per year.
+# This source covers only the Western US (#309 removed the old
+# fabric_scope opt-in). The CMR search bbox is the project fabric's
+# buffered bbox — raw data lands in the shared datastore and remains
+# usable by any project pointed at the same datastore; fabrics outside
+# the WUS get zero granules per year.
 #
-# Consolidation of the per-water-year per-tile granules into per-year
-# NetCDFs is DEFERRED to the Margulis aggregate follow-up (umbrella
-# #101). This script only stages raw downloads. See
-# docs/sources/margulis_wus_sr.md.
+# Per-water-year per-tile granules are consolidated into per-calendar-year
+# NetCDFs by the consolidator that runs after each year's downloads
+# complete. See docs/sources/margulis_wus_sr.md.
 #
 # Usage:
 #   mkdir -p logs

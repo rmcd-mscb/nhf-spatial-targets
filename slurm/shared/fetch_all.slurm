@@ -44,10 +44,10 @@
 # Missing zarrs raise FileNotFoundError per region. See
 # docs/sources/daymet.md.
 #
-# Margulis WUS-SR (index 13) is fabric-scoped to Oregon. Non-Oregon
-# projects can still fetch it (raw downloads stay reusable across
-# projects sharing a datastore) but expect zero granules per year and
-# a one-line warning. See docs/sources/margulis_wus_sr.md.
+# Margulis WUS-SR (index 13) covers only the Western US; the CMR search
+# bbox is the project fabric's buffered bbox, so fabrics outside the WUS
+# get zero granules per year (raw downloads stay reusable across projects
+# sharing a datastore). See docs/sources/margulis_wus_sr.md.
 
 set -euo pipefail
 
@@ -79,7 +79,7 @@ FETCH_TASKS=(
     "fetch-mwbm-climgrid"  # 10 — 1900–2020 at 2.5 arcmin, monthly (ScienceBase, MANUAL DOWNLOAD; see docs/sources/mwbm_climgrid.md) — ends 2020
     "fetch-daymet"         # 11 — 1980–2024 at 1 km, daily (ORNL DAAC zarr, MANUAL STAGING; see docs/sources/daymet.md)
     "fetch-snodas"         # 12 — 2003–present at 1 km, daily (NSIDC G02158 via earthaccess)
-    "fetch-margulis-wus-sr" # 13 — 1985–2021 at 90 m, daily (NSIDC-0719 via earthaccess) — Oregon-fabric only
+    "fetch-margulis-wus-sr" # 13 — 1985–2021 at 90 m, daily (WUS_UCLA_SR via earthaccess) — Western US coverage
     "fetch-ua-swe"         # 14 — 1982–2022 at 4 km, daily (NSIDC-0719 UA Broxton; SWE + SCA source)
 )
 
