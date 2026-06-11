@@ -46,10 +46,11 @@ pixi run catalog-sources
 pixi run catalog-variables
 
 # Existing-project catch-up / maintenance (see docs/maintenance.md).
-# upgrade-* are report-only; rebuild-manifest / rechunk regenerate derived
-# artifacts. Re-run validate after any config.yml edit (publish gate is fatal).
-pixi run upgrade-config   -- --project-dir /data/nhf-runs/my-run
-pixi run upgrade-manifest -- --project-dir /data/nhf-runs/my-run
+# All four live under the `nhf-targets maintenance` sub-app. check-* are
+# report-only; rebuild-manifest / rechunk regenerate derived artifacts.
+# Re-run validate after any config.yml edit (publish gate is fatal).
+pixi run check-config     -- --project-dir /data/nhf-runs/my-run
+pixi run check-manifest   -- --project-dir /data/nhf-runs/my-run
 pixi run rebuild-manifest -- --project-dir /data/nhf-runs/my-run
 pixi run rechunk          -- --project-dir /data/nhf-runs/my-run --dry-run
 
@@ -81,7 +82,8 @@ catalog/           # YAML data source registry and variable definitions
 src/nhf_spatial_targets/
   _logging.py      # Structured logging setup
   catalog.py       # Python API for catalog/ YAML files
-  cli.py           # Cyclopts CLI: nhf-targets init | materialize-credentials | validate | run | fetch | catalog
+  cli/             # Cyclopts CLI: init | materialize-credentials | validate | run
+                   #   + sub-apps: fetch | agg (alias: aggregate) | catalog | release | maintenance
   credentials.py   # materialize_cdsapirc / materialize_netrc_earthdata helpers
   defaults.py      # Default config schema and merge logic
   workspace.py     # Project path resolution, Project dataclass, make_dir()
@@ -122,9 +124,9 @@ duplicate kept drifting out of step with the template.
    line) appears in the rendered template.
 3. **`src/nhf_spatial_targets/upgrade_config.py:OPTIONAL_CONFIG_FEATURES`**
    — append an `OptionalConfigFeature` entry so existing-project operators
-   discover the addition via `nhf-targets upgrade-config -d <dir>`.
+   discover the addition via `nhf-targets maintenance check-config -d <dir>`.
 
-`upgrade-config` is **report-only** — it never mutates an operator's
+`maintenance check-config` is **report-only** — it never mutates an operator's
 `config.yml`; it prints what's missing and the literal block to paste.
 
 ## Manifest & config durability
@@ -134,13 +136,13 @@ blur them (issue #279).
 
 | Kind | Artifacts | Rule |
 |---|---|---|
-| **Intent** (hand-authored) | `config.yml`, `catalog/` | Never auto-clobbered by development. Non-destructively upgradable (report-only: `upgrade-config`, `upgrade-manifest`). **Validated against the catalog so dangling refs fail loudly** (`validate` rejects a `targets.*.sources[]` key absent from, or superseded in, `sources.yml`). |
+| **Intent** (hand-authored) | `config.yml`, `catalog/` | Never auto-clobbered by development. Non-destructively upgradable (report-only: `maintenance check-config`, `maintenance check-manifest`). **Validated against the catalog so dangling refs fail loudly** (`validate` rejects a `targets.*.sources[]` key absent from, or superseded in, `sources.yml`). |
 | **Derived** (a projection) | `manifest.json`, `config.effective.yml`, `fabric.json` | Regenerable as a pure projection. Version-stamped. **Staleness-gated at publish.** Never hand-edited. |
 
 The core invariant:
 
 > `manifest.json` = a deterministic projection of (on-disk artifacts × current
-> catalog × `fabric.json`). `rebuild-manifest` is authoritative; live capture
+> catalog × `fabric.json`). `maintenance rebuild-manifest` is authoritative; live capture
 > (during `agg`/`run`) is a fast path the projection can always reproduce.
 
 `config.effective.yml` is the same kind of artifact for config: a
@@ -216,7 +218,7 @@ Modeled on the three-point "Config schema additions" checklist above:
 - Mark superseded sources with `superseded_by:` key and `status: superseded`
 - Fabric-restricted sources (e.g. Margulis WUS-SR for Oregon) carry an optional `fabric_scope: {fabrics: [<token>], notes: ...}` block. Allowed fabric tokens are enumerated by `catalog.FABRIC_SCOPE_TOKENS` and validated by `catalog.validate_fabric_scope`; adding a new fabric means extending that set and the matching check in target builders. Raw downloads remain reusable across projects sharing a datastore — `fabric_scope` is enforced at the target-build stage, not at fetch time
 - **CF-1.6 compliance is required for every NetCDF the pipeline writes** — consolidated source NCs in `<datastore>/<source>/{daily,monthly}/`, aggregated NCs in `<project>/data/aggregated/`, and final target NCs in `<project>/targets/`. Use `fetch/consolidate.py:apply_cf_metadata` as the single entry point for setting `Conventions=CF-1.6`, variable `units` / `long_name` / `cell_methods` / `grid_mapping` from the catalog, coordinate `standard_name` / `units` / `axis`, and the WGS84 `crs` ancillary variable. Do not set these attrs by hand in source-specific code — read everything from `catalog/sources.yml` so a unit correction in the catalog flows through every NC on the next consolidate. Each fetch/consolidate module should have a test that asserts the output NC carries the required CF-1.6 attribute set.
-- **Never write a NetCDF with a bare `ds.to_netcdf(...)`.** Route every pipeline-written NC (aggregated, target) through `io_nc.build_encoding` + `io_nc.atomic_to_netcdf` so it gets the canonical chunking + zlib + pinned-time encoding. The full per-layer policy, the HDF5 partial-chunk rationale, and the `nhf-targets rechunk` backfill are in [docs/architecture/nc-encoding-policy.md](docs/architecture/nc-encoding-policy.md). `build_encoding(layer="consolidated", ...)` is a seam owned by issue #158 and currently raises; daymet/ssebop aggregated outputs are intentionally left unchunked.
+- **Never write a NetCDF with a bare `ds.to_netcdf(...)`.** Route every pipeline-written NC (aggregated, target) through `io_nc.build_encoding` + `io_nc.atomic_to_netcdf` so it gets the canonical chunking + zlib + pinned-time encoding. The full per-layer policy, the HDF5 partial-chunk rationale, and the `nhf-targets maintenance rechunk` backfill are in [docs/architecture/nc-encoding-policy.md](docs/architecture/nc-encoding-policy.md). `build_encoding(layer="consolidated", ...)` is a seam owned by issue #158 and currently raises; daymet/ssebop aggregated outputs are intentionally left unchunked.
 - **Canonical row order on every fabric-aligned artifact is `id_col` ascending**, enforced at emission (issue #93). Aggregator (`aggregate/_driver.py`, `aggregate/ssebop.py`) sorts `year_ds` by `id_col` immediately before `_atomic_write_netcdf`; target writers call `write_target_nc(..., sort_dim=project.id_col)`. `validate` records `id_col_sorted: bool` on `fabric.json` / `manifest.json` and warns when the source `.gpkg` is not monotonic (it does not fail — the aggregator canonicalizes anyway). `read_aggregated_source` keeps a defensive `.sortby(id_col)` for pre-#93 NCs already on disk. Downstream code may rely on positional alignment without runtime checks; full reasoning is in [docs/architecture/transformation-pipeline.md](docs/architecture/transformation-pipeline.md#canonical-row-order-on-emission).
 
 ## Aggregation Transformation Policy
@@ -331,7 +333,7 @@ The pipeline separates **projects** (fabric-specific) from the **datastore** (sh
 6. `nhf-targets agg ssebop --project-dir <project-dir>` aggregates remote data to fabric
 7. `nhf-targets run --project-dir <project-dir>` builds calibration targets
 
-- `nhf-targets rebuild-manifest --project-dir <dir>` regenerates `manifest.json`
+- `nhf-targets maintenance rebuild-manifest --project-dir <dir>` regenerates `manifest.json`
   as a deterministic projection of (on-disk artifacts × catalog × `fabric.json`).
   This subsumes the former `reconcile-manifest` (removed in #279); it also covers
   the gap-fill case of a new project pointed at an existing shared datastore. See

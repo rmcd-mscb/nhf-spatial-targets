@@ -83,16 +83,16 @@ def test_check_never_mutates(tmp_path):
 
 
 def test_cli_exits_1_on_drift(tmp_path):
-    from nhf_spatial_targets.cli.run import upgrade_manifest_cmd
+    from nhf_spatial_targets.cli.maintenance import check_manifest_cmd
 
     (tmp_path / "manifest.json").write_text(json.dumps({"sources": {}, "steps": []}))
     with pytest.raises(SystemExit) as e:
-        upgrade_manifest_cmd(tmp_path)
+        check_manifest_cmd(tmp_path)
     assert e.value.code == 1
 
 
 def test_cli_exits_0_in_sync(tmp_path):
-    from nhf_spatial_targets.cli.run import upgrade_manifest_cmd
+    from nhf_spatial_targets.cli.maintenance import check_manifest_cmd
     from nhf_spatial_targets.release.lineage import CURRENT_MANIFEST_SCHEMA_VERSION
 
     (tmp_path / "manifest.json").write_text(
@@ -105,22 +105,22 @@ def test_cli_exits_0_in_sync(tmp_path):
         )
     )
     # No SystemExit on the in-sync path (returns normally / exit 0).
-    upgrade_manifest_cmd(tmp_path)
+    check_manifest_cmd(tmp_path)
 
 
 def test_cli_exits_2_on_missing_project_dir(tmp_path):
-    from nhf_spatial_targets.cli.run import upgrade_manifest_cmd
+    from nhf_spatial_targets.cli.maintenance import check_manifest_cmd
 
     missing = tmp_path / "does-not-exist"
     with pytest.raises(SystemExit) as e:
-        upgrade_manifest_cmd(missing)
+        check_manifest_cmd(missing)
     assert e.value.code == 2
 
 
 def test_cli_exits_1_on_corrupt_manifest(tmp_path):
-    from nhf_spatial_targets.cli.run import upgrade_manifest_cmd
+    from nhf_spatial_targets.cli.maintenance import check_manifest_cmd
 
     (tmp_path / "manifest.json").write_text("{not valid json")
     with pytest.raises(SystemExit) as e:
-        upgrade_manifest_cmd(tmp_path)
+        check_manifest_cmd(tmp_path)
     assert e.value.code == 1

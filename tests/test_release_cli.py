@@ -273,7 +273,7 @@ def test_publish_allow_incomplete_sources_threads_to_publisher(tmp_path, monkeyp
     assert pub.call_args.kwargs["allow_incomplete_sources"] is True
 
 
-def test_publish_source_confirm_requires_source_key(tmp_path, monkeypatch):
+def test_publish_sources_confirm_requires_source(tmp_path, monkeypatch):
     project = build_release_project(tmp_path)
     _patch_seams(monkeypatch, project, make_sb_client(FakeSbSession()))
     monkeypatch.setattr(rel, "publish_source_child", MagicMock())
@@ -285,7 +285,7 @@ def test_publish_source_confirm_requires_source_key(tmp_path, monkeypatch):
         "-d",
         str(project.workdir),
         "--scope",
-        "source",
+        "sources",
         "--confirm",
     )
 
@@ -302,15 +302,15 @@ def test_publish_source_confirm_dispatches_with_key(tmp_path, monkeypatch):
         "-d",
         str(project.workdir),
         "--scope",
-        "source",
-        "--source-key",
+        "sources",
+        "--source",
         "era5_land",
         "--confirm",
     )
 
     pub.assert_called_once()
     assert pub.call_args.args[2] == "era5_land"
-    assert (project.release_dir / "last_publish_source_era5_land.log").is_file()
+    assert (project.release_dir / "last_publish_sources_era5_land.log").is_file()
 
 
 def test_publish_umbrella_confirm_requires_parent_id(tmp_path, monkeypatch):
@@ -393,14 +393,14 @@ def test_publish_create_umbrella_composes_umbrella_then_child(tmp_path, monkeypa
 
 @pytest.mark.parametrize(
     "publish_scope,preview_scope",
-    [("source", "sources"), ("umbrella", "all"), ("fabric", "fabric")],
+    [("sources", "sources"), ("umbrella", "all"), ("fabric", "fabric")],
 )
 def test_publish_without_confirm_previews_mapped_scope(
     tmp_path, monkeypatch, publish_scope, preview_scope
 ):
     """The publish-scope -> dry-run-scope preview mapping (_PUBLISH_PREVIEW_SCOPE):
     a no-confirm publish runs dry_run with the mapped build scope, never the raw
-    publish scope (umbrella/source are not valid dry_run scopes)."""
+    publish scope (umbrella is not a valid dry_run scope)."""
     project = build_release_project(tmp_path)
     _patch_seams(monkeypatch, project, make_sb_client(FakeSbSession()))
     recorder = MagicMock()

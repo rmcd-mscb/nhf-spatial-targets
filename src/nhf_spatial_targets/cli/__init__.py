@@ -2,13 +2,15 @@
 
 The CLI is split across per-stage submodules:
 
-- ``cli.fetch``    — ``fetch`` sub-app (downloads to the datastore)
-- ``cli.agg``      — ``agg`` sub-app (HRU aggregation)
-- ``cli.catalog``  — ``catalog`` sub-app (registry inspection)
-- ``cli.run``      — root-level commands (init / validate / run / rechunk
-  / rebuild-manifest / upgrade-config / materialize-credentials)
-- ``cli._params``  — shared ``Annotated[..., Parameter(...)]`` aliases for
-  the agg sub-app
+- ``cli.fetch``       — ``fetch`` sub-app (downloads to the datastore)
+- ``cli.agg``         — ``agg`` sub-app (HRU aggregation; ``aggregate`` alias)
+- ``cli.catalog``     — ``catalog`` sub-app (registry inspection)
+- ``cli.release``     — ``release`` sub-app (ScienceBase data release)
+- ``cli.maintenance`` — ``maintenance`` sub-app (check-config /
+  check-manifest / rebuild-manifest / rechunk)
+- ``cli.run``         — root-level commands (init / validate / run /
+  materialize-credentials)
+- ``cli._params``     — shared ``Annotated[..., Parameter(...)]`` aliases
 
 The package re-exports ``app`` (the root cyclopts ``App``), ``main``
 (``app.meta``, the ``pyproject.toml`` script entry), ``_dispatch``,
@@ -52,7 +54,7 @@ from nhf_spatial_targets.aggregate.watergap22d import aggregate_watergap22d
 
 app = App(
     name="nhf-targets",
-    help="nhf-spatial-targets: build NHM calibration target datasets.",
+    help="nhf-targets: build NHM calibration target datasets.",
     version=_pkg_version("nhf-spatial-targets"),
 )
 
@@ -72,17 +74,20 @@ def launcher(
 from nhf_spatial_targets.cli.agg import agg_app  # noqa: E402
 from nhf_spatial_targets.cli.catalog import catalog_app  # noqa: E402
 from nhf_spatial_targets.cli.fetch import fetch_app  # noqa: E402
+from nhf_spatial_targets.cli.maintenance import (  # noqa: E402
+    check_config_cmd,
+    check_manifest_cmd,
+    maintenance_app,
+    rebuild_manifest_cmd,
+    rechunk,
+)
 from nhf_spatial_targets.cli.release import release_app  # noqa: E402
 from nhf_spatial_targets.cli.run import (  # noqa: E402
     _dispatch,
     init,
     materialize_credentials_cmd,
-    rebuild_manifest_cmd,
-    rechunk,
     register as _register_run_commands,
     run,
-    upgrade_config_cmd,
-    upgrade_manifest_cmd,
     validate,
 )
 
@@ -90,6 +95,7 @@ app.command(fetch_app)
 app.command(agg_app)
 app.command(catalog_app)
 app.command(release_app)
+app.command(maintenance_app)
 _register_run_commands(app)
 
 
@@ -103,14 +109,14 @@ __all__ = [
     "main",
     "setup_logging",
     "_dispatch",
-    # root-level command callables (kept importable for tests)
+    # command callables (kept importable for tests)
     "init",
     "validate",
     "run",
     "rechunk",
     "rebuild_manifest_cmd",
-    "upgrade_config_cmd",
-    "upgrade_manifest_cmd",
+    "check_config_cmd",
+    "check_manifest_cmd",
     "materialize_credentials_cmd",
     # aggregate callables (test-patch targets)
     "aggregate_daymet",

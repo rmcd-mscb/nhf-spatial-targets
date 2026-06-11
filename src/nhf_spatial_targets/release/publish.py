@@ -354,7 +354,7 @@ def _preflight_provenance_complete(
     projection of the on-disk artifacts, reads the on-disk manifest, and
     refuses to publish unless they agree. Publish stays a pure read-local /
     write-remote operation: this gate never writes the manifest -- regenerating
-    it is the operator's explicit ``nhf-targets rebuild-manifest`` action, which
+    it is the operator's explicit ``nhf-targets maintenance rebuild-manifest`` action, which
     is what keeps publish idempotent.
 
     Always-fatal (a manifest this broken cannot be published at all):
@@ -386,7 +386,7 @@ def _preflight_provenance_complete(
     on_disk = read_manifest(project.manifest_path)
 
     rebuild_hint = (
-        f"run 'nhf-targets rebuild-manifest -d {project.workdir}' to regenerate "
+        f"run 'nhf-targets maintenance rebuild-manifest -d {project.workdir}' to regenerate "
         f"manifest.json as a complete projection of the on-disk artifacts, then "
         f"re-publish"
     )

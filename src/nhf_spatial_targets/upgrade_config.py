@@ -4,7 +4,7 @@ init template.
 Existing projects don't pick up new optional features (e.g. ``fabric.token``,
 ``representative_points``) added to the init template, because they were
 created before those features existed. This module is the operator-facing
-discovery path: ``nhf-targets upgrade-config -d <dir>`` lists what's missing,
+discovery path: ``nhf-targets maintenance check-config -d <dir>`` lists what's missing,
 with the literal commented block to paste.
 
 **Report-only.** This module never mutates the operator's config.yml.
@@ -44,7 +44,7 @@ class OptionalConfigFeature:
         ``(?m)^\\s*#?\\s*<key>\\s*:``.
     block
         The literal commented stub from ``_CONFIG_TEMPLATE`` — what the
-        operator sees in the ``--upgrade-config`` paste output. Kept in
+        operator sees in the ``check-config`` paste output. Kept in
         sync with the init template by the CLAUDE.md discipline.
     added
         Provenance shown in the report table (``"2026-05-23 (#193)"``).
@@ -206,7 +206,7 @@ def check_drift(project_dir: Path) -> list[OptionalConfigFeature]:
 # Whole-target + new-source hints (issue #279, PR-5)
 # ---------------------------------------------------------------------------
 #
-# Beyond the enumerated optional params above, upgrade-config also surfaces two
+# Beyond the enumerated optional params above, check-config also surfaces two
 # coarser-grained drifts, both report-only:
 #   - a whole target in the defaults schema that the operator's config omits;
 #   - a catalog source eligible for a target (per variables.yml) that the

@@ -23,7 +23,7 @@ ScienceBase release (`CLAUDE.md` §Manifest & config durability).
 | `validate` | [Validate](validate.md) | Preflight checks; writes `fabric.json` + `config.effective.yml` (the config actuator) |
 | `rebuild_manifest` | [Rebuild manifest](rebuild-manifest.md) | `manifest.json` as a deterministic projection of (disk × catalog × `fabric.json`) |
 | `release.lineage` | [Lineage](lineage.md) | Shared manifest skeleton, step kinds, `mtime`-derived timestamps |
-| `upgrade_config` | [Upgrade config](upgrade-config.md) | Report-only optional-config drift; the paste-this block |
+| `upgrade_config` | [Upgrade config](upgrade-config.md) | Report-only optional-config drift (`maintenance check-config`); the paste-this block |
 | `rechunk` | [Rechunk](rechunk.md) | Idempotent backfill of NCs to the canonical chunk/compress layout |
 | `fetch.consolidate` | [Consolidate](consolidate.md) | `apply_cf_metadata` — the single CF-1.6 metadata entry point |
 | `release` | [Release package](release.md) | ScienceBase data-release subsystem (build → dry-run → publish) |

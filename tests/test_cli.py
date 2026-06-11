@@ -979,3 +979,85 @@ def test_run_runoff_smoke(tmp_path):
     project = load(workdir)
     _dispatch("runoff", project)
     assert (workdir / "targets" / "runoff_targets.nc").exists()
+
+
+# ---- CLI grammar (issue #319) ----------------------------------------------
+
+
+def test_run_target_nickname_maps_to_long_key(tmp_path):
+    """--target accepts the pixi-task nicknames (rch/som/sca/swe)."""
+    workdir = _make_minimal_project(
+        tmp_path,
+        "targets:\n  recharge:\n    enabled: true\n    period: 2000-01-01/2000-12-31\n",
+    )
+
+    with patch("nhf_spatial_targets.cli._dispatch") as mock_dispatch:
+        _run("run", "--project-dir", str(workdir), "--target", "rch")
+
+    mock_dispatch.assert_called_once()
+    assert mock_dispatch.call_args[0][0] == "recharge"
+
+
+def test_run_unknown_nickname_still_errors(tmp_path):
+    """A token that is neither a config key nor a nickname exits 1."""
+    workdir = _make_minimal_project(
+        tmp_path,
+        "targets:\n  runoff:\n    enabled: true\n    period: 2000-01-01/2000-12-31\n",
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        _run("run", "--project-dir", str(workdir), "--target", "bogus")
+    assert exc.value.code == 1
+
+
+def test_project_dir_short_alias_on_fetch(tmp_path):
+    """fetch commands accept -d as an alias for --project-dir."""
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+
+    with patch(
+        "nhf_spatial_targets.fetch.merra2.fetch_merra2",
+        return_value={"source_key": "merra2"},
+    ) as mock_fetch:
+        _run("fetch", "merra2", "-d", str(workdir), "-p", "2010/2010")
+
+    mock_fetch.assert_called_once_with(workdir=workdir, period="2010/2010")
+
+
+def test_project_dir_short_alias_on_agg(tmp_path):
+    """agg commands accept -d as an alias for --project-dir."""
+    with patch("nhf_spatial_targets.cli.aggregate_gldas") as mock_agg:
+        import json as json_mod
+
+        workdir = _make_minimal_project(tmp_path)
+        (workdir / "fabric.json").write_text(json_mod.dumps({"id_col": "nhm_id"}))
+        _run("agg", "gldas", "-d", str(workdir))
+
+    mock_agg.assert_called_once()
+
+
+def test_aggregate_is_an_alias_for_agg(tmp_path):
+    """The spelled-out sub-app name dispatches identically to 'agg'."""
+    with patch("nhf_spatial_targets.cli.aggregate_gldas") as mock_agg:
+        workdir = _make_minimal_project(tmp_path)
+        _run("aggregate", "gldas", "-d", str(workdir))
+
+    mock_agg.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "verb", ["upgrade-config", "upgrade-manifest", "rebuild-manifest", "rechunk"]
+)
+def test_old_flat_maintenance_verbs_are_removed(verb, tmp_path):
+    """The pre-#319 root spellings are a hard break: unknown commands."""
+    from cyclopts.exceptions import UnknownCommandError
+
+    with pytest.raises(UnknownCommandError):
+        app([verb, "--project-dir", str(tmp_path)], exit_on_error=False)
+
+
+def test_maintenance_subapp_hosts_all_four_verbs():
+    from nhf_spatial_targets.cli.maintenance import maintenance_app
+
+    for verb in ("check-config", "check-manifest", "rebuild-manifest", "rechunk"):
+        assert verb in maintenance_app

@@ -20,7 +20,7 @@ regenerates the **derived** kind; it never touches your **intent**.
 | Kind | Artifacts | Catch-up rule |
 |---|---|---|
 | **Intent** (hand-authored) | `config.yml`, `catalog/` | Edited only by *you*, by hand. The report-only commands below tell you what to paste; they never write to these files. |
-| **Derived** (a projection) | `manifest.json`, `config.effective.yml`, `fabric.json` | Regenerated from disk + catalog + intent. Never hand-edited. `validate` and `rebuild-manifest` own these. |
+| **Derived** (a projection) | `manifest.json`, `config.effective.yml`, `fabric.json` | Regenerated from disk + catalog + intent. Never hand-edited. `validate` and `maintenance rebuild-manifest` own these. |
 
 ## The maintenance commands
 
@@ -30,32 +30,34 @@ your intent):
 
 | Command | Kind | Reads | Writes | Use when |
 |---|---|---|---|---|
-| `upgrade-config` | report-only | `config.yml`, defaults, catalog | nothing (prints stubs) | after a pull that may add optional config keys / targets / sources |
-| `upgrade-manifest` | report-only | `manifest.json` | nothing (prints status) | to check whether the manifest schema is behind |
+| `maintenance check-config` | report-only | `config.yml`, defaults, catalog | nothing (prints stubs) | after a pull that may add optional config keys / targets / sources |
+| `maintenance check-manifest` | report-only | `manifest.json` | nothing (prints status) | to check whether the manifest schema is behind |
 | `validate` | regenerates | `config.yml`, fabric, catalog | `fabric.json`, `config.effective.yml`, `manifest.json` | after **any** `config.yml` edit, and before any release |
-| `rebuild-manifest` | regenerates | datastore × catalog, `data/aggregated/`, `targets/`, `fabric.json` | `manifest.json` | after fetching/aggregating new data, or to normalize a behind manifest |
-| `rechunk` | regenerates | `data/aggregated/`, `targets/` | rewrites those NCs in place | one-time backfill of NetCDFs built before the chunked-encoding policy (#165) |
+| `maintenance rebuild-manifest` | regenerates | datastore × catalog, `data/aggregated/`, `targets/`, `fabric.json` | `manifest.json` | after fetching/aggregating new data, or to normalize a behind manifest |
+| `maintenance rechunk` | regenerates | `data/aggregated/`, `targets/` | rewrites those NCs in place | one-time backfill of NetCDFs built before the chunked-encoding policy (#165) |
 
-All five accept `--project-dir`/`-d`. The report-only pair **exit non-zero on drift**
-(0 = in sync), so you can wire them into a scripted heartbeat. `rebuild-manifest` and
-`rechunk` accept `--dry-run` to preview without writing.
+All five accept `--project-dir`/`-d`. The report-only `check-*` pair **exit non-zero
+on drift** (0 = in sync), so you can wire them into a scripted heartbeat.
+`rebuild-manifest` and `rechunk` accept `--dry-run` to preview without writing.
 
 ```bash
-pixi run upgrade-config    -- --project-dir /data/my-targets
-pixi run upgrade-manifest  -- --project-dir /data/my-targets
-pixi run rebuild-manifest  -- --project-dir /data/my-targets
-pixi run rechunk           -- --project-dir /data/my-targets --dry-run
+pixi run check-config     -- --project-dir /data/my-targets
+pixi run check-manifest   -- --project-dir /data/my-targets
+pixi run rebuild-manifest -- --project-dir /data/my-targets
+pixi run rechunk          -- --project-dir /data/my-targets --dry-run
 ```
 
-> **Naming caveat.** `upgrade-config` and `upgrade-manifest` only *report* — they do
-> not upgrade anything. The actuator for the manifest is `rebuild-manifest`; the
-> actuator for config is `validate` (there is no `rebuild-config`). Reconciling the
-> verb names with this behavior is tracked in
-> [issue #319](https://github.com/rmcd-mscb/nhf-spatial-targets/issues/319).
+> **Verb grammar.** The `check-*` commands only *report* — they never write. The
+> actuator for the manifest is `maintenance rebuild-manifest`; the actuator for
+> config is `validate` (there is no `rebuild-config`). The grouping and `check-*`
+> naming landed with
+> [issue #319](https://github.com/rmcd-mscb/nhf-spatial-targets/issues/319),
+> which renamed the former flat `upgrade-config` / `upgrade-manifest` /
+> `rebuild-manifest` / `rechunk` root commands.
 
 ## The one ordering rule that bites
 
-After you edit `config.yml` — including pasting a stub from `upgrade-config` — you
+After you edit `config.yml` — including pasting a stub from `check-config` — you
 **must** re-run `validate` before you publish:
 
 ```bash
@@ -79,12 +81,12 @@ A developer added an optional key to the init template and registered it in
 `upgrade_config.OPTIONAL_CONFIG_FEATURES`. Existing projects don't have it.
 
 ```bash
-pixi run upgrade-config -- --project-dir /data/my-targets   # prints the commented stub to paste
+pixi run check-config -- --project-dir /data/my-targets     # prints the commented stub to paste
 # paste the printed block into config.yml by hand
 pixi run validate -- --project-dir /data/my-targets         # regenerates config.effective.yml
 ```
 
-`upgrade-config` also prints two informational tables when relevant: **targets in the
+`check-config` also prints two informational tables when relevant: **targets in the
 defaults schema absent from your config** and **catalog sources available but not yet
 in your `targets.*.sources[]`** (the latter only if you pin explicit source lists).
 Neither affects the exit code — they are hints, not drift.
@@ -95,7 +97,7 @@ A developer added a source to `catalog/sources.yml` plus its `fetch/` and `aggre
 modules. To fold it into an existing project's targets:
 
 ```bash
-pixi run upgrade-config -- --project-dir /data/my-targets   # "available catalog sources" hint
+pixi run check-config -- --project-dir /data/my-targets     # "available catalog sources" hint
 # if you pin sources: add the new key to the relevant target's sources[] in config.yml, then:
 pixi run validate -- --project-dir /data/my-targets         # re-stamp config.effective.yml
 pixi run fetch-<src> -- --project-dir /data/my-targets      # download to the shared datastore
@@ -114,7 +116,7 @@ A developer bumped `CURRENT_MANIFEST_SCHEMA_VERSION` (the manifest's top-level *
 changed).
 
 ```bash
-pixi run upgrade-manifest  -- --project-dir /data/my-targets  # reports "schema vN; current is M"
+pixi run check-manifest    -- --project-dir /data/my-targets  # reports "schema vN; current is M"
 pixi run rebuild-manifest  -- --project-dir /data/my-targets  # re-stamps to the current schema
 ```
 

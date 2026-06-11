@@ -27,7 +27,7 @@
 #   mkdir -p logs
 #   sbatch rechunk_gfv2_targets.slurm
 #   # preview (no writes; fine on the login node):
-#   pixi run nhf-targets rechunk --project-dir <gfv2> --layer target --dry-run
+#   pixi run nhf-targets maintenance rechunk --project-dir <gfv2> --layer target --dry-run
 
 set -euo pipefail
 export PYTHONUNBUFFERED=1
@@ -53,6 +53,6 @@ echo "=== rechunk targets: $PROJECT_DIR ==="
 echo "=== Repo:    $REPO_DIR ($(git -C "$REPO_DIR" branch --show-current 2>/dev/null)) ==="
 echo "=== Start:   $(date -u +%Y-%m-%dT%H:%M:%SZ) on $(hostname) ==="
 
-pixi run nhf-targets rechunk --project-dir "$PROJECT_DIR" --layer target
+pixi run nhf-targets maintenance rechunk --project-dir "$PROJECT_DIR" --layer target
 
 echo "=== Done:    $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="

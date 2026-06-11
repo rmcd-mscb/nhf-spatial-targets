@@ -9,6 +9,8 @@ from typing import Annotated
 
 from cyclopts import App, Parameter
 
+from nhf_spatial_targets.cli._params import _PROJECT_DIR_PARAM
+
 _logger = logging.getLogger(__name__)
 
 # Exit code for a run that completed but produced incomplete data — some
@@ -74,13 +76,7 @@ def _emit_fetch_banner(console, display_name: str, summary: object) -> bool:
 
 @fetch_app.command(name="all")
 def fetch_all_cmd(
-    workdir: Annotated[
-        Path,
-        Parameter(
-            name=["--project-dir"],
-            help="Project created by 'nhf-targets init'.",
-        ),
-    ],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     period: Annotated[
         str,
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
@@ -213,13 +209,7 @@ def fetch_all_cmd(
 
 @fetch_app.command(name="merra2")
 def fetch_merra2_cmd(
-    workdir: Annotated[
-        Path,
-        Parameter(
-            name=["--project-dir"],
-            help="Project created by 'nhf-targets init'.",
-        ),
-    ],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     period: Annotated[
         str,
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
@@ -262,13 +252,7 @@ def fetch_merra2_cmd(
 
 @fetch_app.command(name="nldas-mosaic")
 def fetch_nldas_mosaic_cmd(
-    workdir: Annotated[
-        Path,
-        Parameter(
-            name=["--project-dir"],
-            help="Project created by 'nhf-targets init'.",
-        ),
-    ],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     period: Annotated[
         str,
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
@@ -307,13 +291,7 @@ def fetch_nldas_mosaic_cmd(
 
 @fetch_app.command(name="nldas-noah")
 def fetch_nldas_noah_cmd(
-    workdir: Annotated[
-        Path,
-        Parameter(
-            name=["--project-dir"],
-            help="Project created by 'nhf-targets init'.",
-        ),
-    ],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     period: Annotated[
         str,
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
@@ -352,13 +330,7 @@ def fetch_nldas_noah_cmd(
 
 @fetch_app.command(name="ncep-ncar")
 def fetch_ncep_ncar_cmd(
-    workdir: Annotated[
-        Path,
-        Parameter(
-            name=["--project-dir"],
-            help="Project created by 'nhf-targets init'.",
-        ),
-    ],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     period: Annotated[
         str,
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
@@ -397,13 +369,7 @@ def fetch_ncep_ncar_cmd(
 
 @fetch_app.command(name="mod16a2")
 def fetch_mod16a2_cmd(
-    workdir: Annotated[
-        Path,
-        Parameter(
-            name=["--project-dir"],
-            help="Project created by 'nhf-targets init'.",
-        ),
-    ],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     period: Annotated[
         str,
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
@@ -460,13 +426,7 @@ def fetch_mod16a2_cmd(
 
 @fetch_app.command(name="mod10c1")
 def fetch_mod10c1_cmd(
-    workdir: Annotated[
-        Path,
-        Parameter(
-            name=["--project-dir"],
-            help="Project created by 'nhf-targets init'.",
-        ),
-    ],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     period: Annotated[
         str,
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
@@ -521,13 +481,7 @@ def fetch_mod10c1_cmd(
 
 @fetch_app.command(name="watergap22d")
 def fetch_watergap22d_cmd(
-    workdir: Annotated[
-        Path,
-        Parameter(
-            name=["--project-dir"],
-            help="Project created by 'nhf-targets init'.",
-        ),
-    ],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     period: Annotated[
         str,
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
@@ -566,13 +520,7 @@ def fetch_watergap22d_cmd(
 
 @fetch_app.command(name="era5-land")
 def fetch_era5_land_cmd(
-    workdir: Annotated[
-        Path,
-        Parameter(
-            name=["--project-dir"],
-            help="Project created by 'nhf-targets init'.",
-        ),
-    ],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     period: Annotated[
         str,
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
@@ -643,13 +591,7 @@ def fetch_era5_land_cmd(
 
 @fetch_app.command(name="gldas")
 def fetch_gldas_cmd(
-    workdir: Annotated[
-        Path,
-        Parameter(
-            name=["--project-dir"],
-            help="Project created by 'nhf-targets init'.",
-        ),
-    ],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     period: Annotated[
         str,
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
@@ -688,13 +630,7 @@ def fetch_gldas_cmd(
 
 @fetch_app.command(name="reitz2017")
 def fetch_reitz2017_cmd(
-    workdir: Annotated[
-        Path,
-        Parameter(
-            name=["--project-dir"],
-            help="Project created by 'nhf-targets init'.",
-        ),
-    ],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     period: Annotated[
         str,
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
@@ -733,13 +669,7 @@ def fetch_reitz2017_cmd(
 
 @fetch_app.command(name="mwbm-climgrid")
 def fetch_mwbm_climgrid_cmd(
-    workdir: Annotated[
-        Path,
-        Parameter(
-            name=["--project-dir"],
-            help="Project created by 'nhf-targets init'.",
-        ),
-    ],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     period: Annotated[
         str,
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
@@ -792,13 +722,7 @@ def fetch_mwbm_climgrid_cmd(
 
 @fetch_app.command(name="daymet")
 def fetch_daymet_cmd(
-    workdir: Annotated[
-        Path,
-        Parameter(
-            name=["--project-dir"],
-            help="Project created by 'nhf-targets init'.",
-        ),
-    ],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     period: Annotated[
         str,
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
@@ -865,13 +789,7 @@ def fetch_daymet_cmd(
 
 @fetch_app.command(name="snodas")
 def fetch_snodas_cmd(
-    workdir: Annotated[
-        Path,
-        Parameter(
-            name=["--project-dir"],
-            help="Project created by 'nhf-targets init'.",
-        ),
-    ],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     period: Annotated[
         str,
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
@@ -941,13 +859,7 @@ def fetch_snodas_cmd(
 
 @fetch_app.command(name="margulis-wus-sr")
 def fetch_margulis_wus_sr_cmd(
-    workdir: Annotated[
-        Path,
-        Parameter(
-            name=["--project-dir"],
-            help="Project created by 'nhf-targets init'.",
-        ),
-    ],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     period: Annotated[
         str,
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
@@ -991,13 +903,7 @@ def fetch_margulis_wus_sr_cmd(
 
 @fetch_app.command(name="ua-swe")
 def fetch_ua_swe_cmd(
-    workdir: Annotated[
-        Path,
-        Parameter(
-            name=["--project-dir"],
-            help="Project created by 'nhf-targets init'.",
-        ),
-    ],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     period: Annotated[
         str,
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),

@@ -28,7 +28,7 @@ tells you to route through `io_nc` instead, and why.
 - **Pin time** to `units="days since 1970-01-01 00:00:00"`,
   `calendar="proleptic_gregorian"`, `dtype="float64"` on `time`/`time_bnds`,
   on every layer.
-- **Backfill existing files** with `nhf-targets rechunk` rather than
+- **Backfill existing files** with `nhf-targets maintenance rechunk` rather than
   re-aggregating.
 
 ## The principle
@@ -78,13 +78,13 @@ would force the compressor to re-inflate every on-disk chunk on every time
 slab — ~30× read amplification on a daily source. Full-time dask chunks read
 each on-disk chunk exactly once.
 
-## Migration: `nhf-targets rechunk`
+## Migration: `nhf-targets maintenance rechunk`
 
 The writers only chunk NCs they newly write. Projects built before this work
 hold contiguous, uncompressed NCs. Backfill them in place:
 
 ```bash
-nhf-targets rechunk --project-dir <dir> [--layer aggregated|target] [--source <key>] [--dry-run]
+nhf-targets maintenance rechunk --project-dir <dir> [--layer aggregated|target] [--source <key>] [--dry-run]
 ```
 
 It is **idempotent** (skips files already fully chunked), **atomic**

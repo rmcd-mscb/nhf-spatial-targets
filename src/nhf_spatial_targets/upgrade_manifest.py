@@ -1,7 +1,7 @@
 """Report whether a project's manifest.json predates the current schema.
 
 Mirrors :mod:`nhf_spatial_targets.upgrade_config`: a report-only operator
-discovery path. ``nhf-targets upgrade-manifest -d <dir>`` detects a manifest
+discovery path. ``nhf-targets maintenance check-manifest -d <dir>`` detects a manifest
 whose ``manifest_schema_version`` is behind
 :data:`~nhf_spatial_targets.release.lineage.CURRENT_MANIFEST_SCHEMA_VERSION`
 and points the operator at the forthcoming ``rebuild-manifest`` command (issue

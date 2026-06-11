@@ -1,7 +1,7 @@
 # reconcile-manifest (removed — superseded by `rebuild-manifest`)
 
 > **`nhf-targets reconcile-manifest` no longer exists.** It was removed in
-> issue #279 (PR-2) and replaced by `nhf-targets rebuild-manifest`.
+> issue #279 (PR-2) and replaced by `nhf-targets maintenance rebuild-manifest`.
 
 ## Why it was replaced
 
@@ -20,7 +20,7 @@ source uniformly, and it is byte-identical on re-run.
 ## What to run instead
 
 ```bash
-nhf-targets rebuild-manifest --project-dir <dir> [--compute-sha256] [--dry-run]
+nhf-targets maintenance rebuild-manifest --project-dir <dir> [--compute-sha256] [--dry-run]
 ```
 
 - **Sources** = the (datastore ∩ catalog) ∪ aggregated-dirs union. A dir whose

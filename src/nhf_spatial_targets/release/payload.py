@@ -213,7 +213,7 @@ def stage_fabric_child(project: Project, *, copy: bool = False) -> FabricChildPl
         raise ReleaseError(
             f"Cannot stage fabric child: manifest.json missing at "
             f"{plan.manifest_src}. Run 'nhf-targets validate' then "
-            f"'nhf-targets rebuild-manifest' for this project before publishing."
+            f"'nhf-targets maintenance rebuild-manifest' for this project before publishing."
         )
     _copy_file(plan.manifest_src, plan.stage_dir / "manifest.json")
 
