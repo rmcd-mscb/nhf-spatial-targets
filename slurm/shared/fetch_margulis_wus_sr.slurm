@@ -19,10 +19,13 @@
 # flag changes.
 #
 # This source covers only the Western US (#309 removed the old
-# fabric_scope opt-in). The CMR search bbox is the project fabric's
-# buffered bbox — raw data lands in the shared datastore and remains
-# usable by any project pointed at the same datastore; fabrics outside
-# the WUS get zero granules per year.
+# fabric_scope opt-in, so this is now a fabric-independent shared
+# fetcher like fetch_ua_swe / fetch_snodas). The CMR search bbox is the
+# project fabric's buffered bbox — raw data lands in the shared
+# datastore and remains usable by any project pointed at the same
+# datastore; fabrics outside the WUS get zero granules per year. A CONUS
+# project (e.g. gfv2) wants this too, since Margulis now contributes to
+# its Western-US HRUs.
 #
 # Per-water-year per-tile granules are consolidated into per-calendar-year
 # NetCDFs by the consolidator that runs after each year's downloads
@@ -30,11 +33,11 @@
 #
 # Usage:
 #   mkdir -p logs
-#   export PROJECT_DIR=/path/to/oregon-project
-#   sbatch slurm/project_or/fetch_margulis_wus_sr.slurm
+#   export PROJECT_DIR=/path/to/your/project
+#   sbatch slurm/shared/fetch_margulis_wus_sr.slurm
 #
 # To fetch a subset of years only:
-#   PERIOD=2000/2010 sbatch slurm/project_or/fetch_margulis_wus_sr.slurm
+#   PERIOD=2000/2010 sbatch slurm/shared/fetch_margulis_wus_sr.slurm
 
 set -euo pipefail
 
@@ -44,7 +47,7 @@ set -euo pipefail
 export PYTHONUNBUFFERED=1
 
 REPO_DIR="${REPO_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/nhf-spatial-targets}"
-PROJECT_DIR="${PROJECT_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/or-spatial-targets}"
+PROJECT_DIR="${PROJECT_DIR:?set PROJECT_DIR to the target project dir, e.g. PROJECT_DIR=/caldera/.../gfv2-spatial-targets}"
 PERIOD="${PERIOD:-1985/2021}"
 
 echo "=== Margulis WUS-SR fetch ==="

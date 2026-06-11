@@ -38,7 +38,8 @@ Notes:
 - `PROJECT_DIR` defaults to `or-spatial-targets` in the `project_or/` wrappers;
   the `shared/` scripts default to gfv2, so pass `PROJECT_DIR=$OR` to them.
 - Margulis WUS-SR raw downloads live in the shared datastore and are fetched via
-  `slurm/project_or/fetch_margulis_wus_sr.slurm` (WUS coverage; the raw NCs are
-  reusable across projects sharing the datastore).
+  `slurm/shared/fetch_margulis_wus_sr.slurm` (a fabric-independent shared fetcher
+  since #309 — pass `PROJECT_DIR=$OR`; the raw NCs are reusable across projects
+  sharing the datastore).
 - `REPO_DIR` auto-resolves from the submit directory; override it to run a
   worktree/branch checkout.
