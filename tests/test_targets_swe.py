@@ -409,13 +409,15 @@ def test_build_ua_swe_participates_in_envelope_and_count(tmp_path: Path):
         assert "UA SWE" in ds.attrs["source"]
 
 
-def test_build_oregon_five_source_envelope_with_ua_swe(tmp_path: Path):
-    """OR fabric with all five sources → n_sources=5, full production envelope.
+def test_build_five_source_envelope_with_ua_swe(tmp_path: Path):
+    """All five sources requested and aggregated → n_sources=5 envelope.
 
     This is the shape the regenerated FGDC/MCF release fixtures advertise:
     daymet=50, snodas=80, era5=100, margulis=200, ua_swe=300 (mm/inches
-    ordered). Both fabric-scoped Margulis and CONUS ua_swe contribute, so
-    the source attr must name both and the count must reach 5.
+    ordered). Any fabric where all five sources have aggregated coverage
+    yields this; the source attr must name both Margulis and UA SWE and
+    the count must reach 5 (#309: no token gate — coverage is the only
+    thing that matters).
     """
     from nhf_spatial_targets.targets.swe import build
     from nhf_spatial_targets.workspace import load

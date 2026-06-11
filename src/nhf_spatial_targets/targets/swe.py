@@ -212,7 +212,9 @@ def _filter_sources_by_availability(
             logger.warning(
                 "swe: skipping source '%s' — no aggregated NCs found under %s "
                 "(pattern: %s). Run "
-                "'pixi run nhf-targets agg %s --project-dir %s' to include it.",
+                "'pixi run nhf-targets agg %s --project-dir %s' to include it. "
+                "If that command reports no spatial overlap with this fabric, "
+                "the source cannot contribute here.",
                 src,
                 agg_dir,
                 pattern,
@@ -227,9 +229,10 @@ def _filter_sources_by_availability(
 def _resolve_sources(project: Project) -> tuple[list[str], list[str]]:
     """Resolve the effective source list for the current build.
 
-    Returns ``(effective_sources, requested_sources)``. Cached by the
-    per-year loader's first call so the filter loop doesn't re-run
-    every year (the inputs are config-derived and constant across years).
+    Returns ``(effective_sources, requested_sources)``. Called once by
+    ``build`` for logging and once per year by the loader — the
+    re-resolution is a cheap directory scan, and the inputs are
+    config-derived and constant across years.
     """
     swe_cfg = project.target("snow_water_equivalent")
     requested = list(swe_cfg["sources"])
@@ -265,7 +268,7 @@ def _load_year(
     mm → inches conversion. Per-year source-coverage gaps surface as INFO
     logs and contribute NaN to that year's bound.
     """
-    sources, requested_sources = _resolve_sources(project)
+    sources, _ = _resolve_sources(project)
     shims = shims_by_config_label(SHIMS)
     year, year_start, year_end = year_context
 

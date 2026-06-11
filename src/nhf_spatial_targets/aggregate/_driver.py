@@ -659,6 +659,26 @@ def aggregate_year(
     """
     out_path = per_year_output_path(project, adapter.source_key, year)
     if out_path.exists():
+        # The idempotent skip honours existing files, but a pre-#309 NC (or
+        # one written under a buggy coverage classification) may not span
+        # the full fabric — and downstream code now relies on that
+        # invariant. Warn loudly so a fixed classifier isn't silently
+        # shadowed by stale output forever.
+        with xr.open_dataset(out_path) as existing:
+            n_existing = int(existing.sizes.get(id_col, 0))
+        n_fabric = int(fabric_batched[id_col].nunique())
+        if n_existing != n_fabric:
+            logger.warning(
+                "%s: year %d: existing per-year NC %s carries %d HRUs but "
+                "the fabric has %d. It predates the full-fabric reindex "
+                "(#309) or was written under different coverage; delete it "
+                "and re-run agg to rebuild.",
+                adapter.source_key,
+                year,
+                out_path,
+                n_existing,
+                n_fabric,
+            )
         logger.info(
             "%s: year %d: per-year NC exists, skipping (%s)",
             adapter.source_key,
@@ -1040,8 +1060,17 @@ def _covered_batch_ids(
     size and crashes with ``max() iterable argument is empty`` when the
     subset spans fewer than two grid coords along either axis. A batch
     is therefore "covered" when at least two x and two y grid coords
-    fall inside the batch bbox padded by the same 2x-max-resolution
-    buffer gdptools applies (``_get_shp_bounds_w_buffer``).
+    fall inside the batch bbox padded by a per-axis analogue of — never
+    larger than — the buffer gdptools applies
+    (``_get_shp_bounds_w_buffer``), so the guard may be conservative at
+    a grid edge but never admits a batch gdptools would crash on.
+
+    Batch bounds are transformed to the source CRS with
+    ``Transformer.transform_bounds(..., densify_pts=21)``: a corner-only
+    transform of a reprojected rectangle underestimates its true extent
+    wherever the edges curve, and a falsely "uncovered" edge batch is
+    silent data loss (a falsely "covered" one is harmless — gdptools
+    just aggregates it).
 
     Coordinates are detected from ``adapter.raw_grid_variable`` on the
     raw (un-hooked) file — the same variable the cross-year grid-shape
@@ -1049,11 +1078,20 @@ def _covered_batch_ids(
 
     Longitude convention: for geographic source grids published on
     0–360 longitudes, negative batch-bound longitudes are shifted +360
-    before comparison. Anti-meridian-crossing fabrics are out of scope
-    (no current fabric crosses it).
+    before comparison. Fabrics whose bbox straddles the 0° or 180°
+    longitude seam are out of scope (no current fabric does) — the seam
+    case raises rather than misclassifying.
+
+    Raises
+    ------
+    ValueError
+        Non-finite source-grid coordinates, a fabric with no CRS,
+        non-finite transformed batch bounds (a CRS-domain failure), or
+        a batch bbox straddling a longitude seam. These are
+        configuration/data defects — never legitimate non-coverage —
+        and must not degrade into a silent "no overlap" skip.
     """
-    from pyproj import CRS
-    from shapely.geometry import box as _box
+    from pyproj import CRS, Transformer
 
     with xr.open_dataset(source_file) as ds:
         x_coord, y_coord, _ = detect_coords(
@@ -1066,6 +1104,21 @@ def _covered_batch_ids(
         xs = np.asarray(ds[x_coord].values, dtype="float64")
         ys = np.asarray(ds[y_coord].values, dtype="float64")
 
+    if not (np.isfinite(xs).all() and np.isfinite(ys).all()):
+        raise ValueError(
+            f"{adapter.source_key}: non-finite values in grid coordinates "
+            f"{x_coord!r}/{y_coord!r} of {source_file.name}; cannot classify "
+            f"fabric coverage. The source NC is corrupt or its coordinates "
+            f"were mis-detected."
+        )
+    if fabric_batched.crs is None:
+        raise ValueError(
+            f"{adapter.source_key}: the fabric has no CRS, so its batches "
+            f"cannot be transformed to the source grid CRS "
+            f"({adapter.source_crs}) for coverage classification. Set a CRS "
+            f"on the fabric file (config fabric.path)."
+        )
+
     pad_x = 2.0 * float(np.max(np.abs(np.diff(xs)))) if xs.size > 1 else 0.0
     pad_y = 2.0 * float(np.max(np.abs(np.diff(ys)))) if ys.size > 1 else 0.0
     shift_lon = (
@@ -1073,25 +1126,63 @@ def _covered_batch_ids(
         and float(xs.max()) > 180.0
     )
 
-    bids = [int(b) for b in sorted(fabric_batched["batch_id"].unique())]
-    batch_boxes = gpd.GeoSeries(
-        [
-            _box(*fabric_batched.loc[fabric_batched["batch_id"] == b].total_bounds)
-            for b in bids
-        ],
-        crs=fabric_batched.crs,
-    ).to_crs(adapter.source_crs)
+    transformer = Transformer.from_crs(
+        fabric_batched.crs, adapter.source_crs, always_xy=True
+    )
 
     covered: set[int] = set()
-    for bid, geom in zip(bids, batch_boxes, strict=True):
-        minx, miny, maxx, maxy = geom.bounds
+    for bid in sorted(int(b) for b in fabric_batched["batch_id"].unique()):
+        sub = fabric_batched.loc[fabric_batched["batch_id"] == bid]
+        minx, miny, maxx, maxy = transformer.transform_bounds(
+            *sub.total_bounds, densify_pts=21
+        )
+        if not np.all(np.isfinite([minx, miny, maxx, maxy])):
+            raise ValueError(
+                f"{adapter.source_key}: batch {bid} bounds transformed to "
+                f"{adapter.source_crs} are non-finite "
+                f"({(minx, miny, maxx, maxy)}). The fabric lies outside the "
+                f"source CRS domain or SourceAdapter.source_crs is wrong — "
+                f"refusing to classify this as 'no overlap'."
+            )
         if shift_lon:
             minx = minx + 360.0 if minx < 0 else minx
             maxx = maxx + 360.0 if maxx < 0 else maxx
+            if minx > maxx:
+                raise ValueError(
+                    f"{adapter.source_key}: batch {bid} bbox straddles a "
+                    f"longitude seam after 0-360 normalisation "
+                    f"(minx={minx - 360.0:.6g}, maxx={maxx:.6g}); "
+                    f"seam-crossing fabrics are not supported by the "
+                    f"coverage guard."
+                )
         n_x = int(np.count_nonzero((xs >= minx - pad_x) & (xs <= maxx + pad_x)))
         n_y = int(np.count_nonzero((ys >= miny - pad_y) & (ys <= maxy + pad_y)))
         if n_x >= 2 and n_y >= 2:
             covered.add(bid)
+
+    if not covered:
+        # Evidence, not just the conclusion: print both bboxes so an
+        # operator can eyeball whether "no overlap" is believable (a wrong
+        # source_crs would otherwise be indistinguishable from genuine
+        # non-overlap).
+        fabric_bounds = transformer.transform_bounds(
+            *fabric_batched.total_bounds, densify_pts=21
+        )
+        logger.warning(
+            "%s: source grid bbox x=[%.6g, %.6g] y=[%.6g, %.6g] (in %s) has "
+            "no overlap with any fabric batch (fabric bounds in source CRS: "
+            "x=[%.6g, %.6g] y=[%.6g, %.6g]).",
+            adapter.source_key,
+            xs.min(),
+            xs.max(),
+            ys.min(),
+            ys.max(),
+            adapter.source_crs,
+            fabric_bounds[0],
+            fabric_bounds[2],
+            fabric_bounds[1],
+            fabric_bounds[3],
+        )
     return covered
 
 
@@ -1286,10 +1377,15 @@ def aggregate_source(
     # data here").
     covered = _covered_batch_ids(assigned_year_files[0][1], adapter, fabric_batched)
     if not covered:
-        logger.info(
+        # WARNING, not INFO: for an explicitly requested source this is a
+        # surprising outcome, and every classifier failure mode that isn't
+        # caught by its hard errors funnels here. The classifier already
+        # logged the grid/fabric bboxes as evidence.
+        logger.warning(
             "%s: skipping aggregation — the source grid has no spatial "
-            "overlap with this fabric. Raw downloads remain reusable by "
-            "projects whose fabric the source covers.",
+            "overlap with this fabric (see preceding coverage log for the "
+            "grid/fabric bounds). Raw downloads remain reusable by projects "
+            "whose fabric the source covers.",
             adapter.source_key,
         )
         return

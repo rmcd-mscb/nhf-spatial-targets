@@ -2507,10 +2507,14 @@ def test_aggregate_source_partial_coverage_emits_full_fabric_with_nan(tmp_path, 
     assert np.isnan(vals[:, 2:]).all()  # uncovered cluster -> honest NaN
     assert "partial fabric coverage" in caplog.text
     # Manifest lists weight CSVs only for covered batches — uncovered
-    # batches never get a CSV written (provenance must match disk).
+    # batches never get a CSV written (provenance must match disk). Assert
+    # identity (the covered batch's id), not just count, so a regression
+    # listing the WRONG batch's file cannot pass.
     manifest = json.loads((tmp_path / "manifest.json").read_text())
     weight_files = manifest["sources"]["merra2"]["weight_files"]
-    assert len(weight_files) == 1
+    fabric = _batched_fabric_gdf(fabric_path, batch_size=2)
+    covered_bid = int(fabric.loc[fabric["hru_id"] == 0, "batch_id"].iloc[0])
+    assert weight_files == [f"weights/merra2_batch{covered_bid}.csv"]
 
 
 def test_aggregate_source_zero_coverage_skips_cleanly(tmp_path, caplog):
@@ -2548,7 +2552,7 @@ def test_aggregate_source_zero_coverage_skips_cleanly(tmp_path, caplog):
     assert "no spatial overlap" in caplog.text
 
 
-def test_aggregate_year_rejects_hru_ids_absent_from_fabric(tmp_path):
+def test_aggregate_source_rejects_hru_ids_absent_from_fabric(tmp_path):
     """The full-fabric reindex must fail loudly (not silently emit all-NaN)
     when aggregated ids don't match the fabric — e.g. id dtype drift or a
     stale weight cache from a different fabric."""
@@ -2594,3 +2598,173 @@ def test_aggregate_year_rejects_hru_ids_absent_from_fabric(tmp_path):
             workdir=tmp_path,
             batch_size=2,
         )
+
+
+def test_covered_batch_ids_projected_source_crs(tmp_path):
+    """snodas/ua_swe run the classifier with source_crs=EPSG:5070 (meters).
+
+    Exercises three things the EPSG:4326 tests cannot: batch-bounds
+    transformation into a meter-based CRS (densified, not corner-only),
+    the is_geographic guard keeping the 0-360 lon shift off (projected
+    x-coords are trivially > 180), and pads computed in meters. A
+    regression here silently drops a whole source via the zero-overlap
+    skip."""
+    from pyproj import Transformer
+
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import _covered_batch_ids
+
+    # CONUS-located fabric (EPSG:5070's design domain).
+    polys = [box(-105.0, 39.0, -104.5, 40.0), box(-104.5, 39.0, -104.0, 40.0)]
+    gdf = gpd.GeoDataFrame({"hru_id": [0, 1]}, geometry=polys, crs="EPSG:4326")
+    fabric_path = tmp_path / "fabric_conus.gpkg"
+    gdf.to_file(fabric_path, driver="GPKG")
+    fabric = _batched_fabric_gdf(fabric_path)
+
+    t = Transformer.from_crs("EPSG:4326", "EPSG:5070", always_xy=True)
+    minx, miny, maxx, maxy = t.transform_bounds(
+        -105.0, 39.0, -104.0, 40.0, densify_pts=21
+    )
+    adapter = SourceAdapter(
+        source_key="ua_swe",
+        output_name="ua_swe_agg.nc",
+        variables=["a"],
+        source_crs="EPSG:5070",
+    )
+
+    covering = _write_grid_nc(
+        tmp_path,
+        lons=list(np.linspace(minx, maxx, 5)),
+        lats=list(np.linspace(miny, maxy, 5)),
+    )
+    assert _covered_batch_ids(covering, adapter, fabric) == set(
+        fabric["batch_id"].unique()
+    )
+
+    # Same grid shifted 2,000 km east: finite, in-domain, zero overlap.
+    far = tmp_path / "far"
+    far.mkdir()
+    far_nc = _write_grid_nc(
+        far,
+        lons=list(np.linspace(minx + 2.0e6, maxx + 2.0e6, 5)),
+        lats=list(np.linspace(miny, maxy, 5)),
+    )
+    assert _covered_batch_ids(far_nc, adapter, fabric) == set()
+
+
+def test_covered_batch_ids_pad_boundary_matches_gdptools_buffer(tmp_path):
+    """Pins the 2x-max-cell pad contract (the gdptools buffered-subset
+    analogue): a batch just beyond the grid edge but inside the pad is
+    covered (gdptools subsets >=2 coords and aggregates honest NaN); a
+    batch beyond the pad is not. ``pad = 0`` must fail this test."""
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import _covered_batch_ids
+
+    # Grid lons 0.5..3.5 step 1 -> pad_x = 2; lats 0.25/0.75 -> pad_y = 1.
+    nc = _write_grid_nc(tmp_path, lons=[0.5, 1.5, 2.5, 3.5], lats=[0.25, 0.75])
+    # Batch A bbox x [4, 5]: padded window reaches back to x=2 -> two grid
+    # cols (2.5, 3.5) inside -> covered. Batch B bbox x [8, 9]: padded
+    # window [6, 11] -> no grid cols -> uncovered.
+    polys = [box(4, 0, 5, 1), box(8, 0, 9, 1)]
+    gdf = gpd.GeoDataFrame({"hru_id": [0, 1]}, geometry=polys, crs="EPSG:4326")
+    fabric_path = tmp_path / "fabric_edge.gpkg"
+    gdf.to_file(fabric_path, driver="GPKG")
+    fabric = _batched_fabric_gdf(fabric_path, batch_size=1)
+    assert fabric["batch_id"].nunique() == 2
+
+    adapter = SourceAdapter(
+        source_key="merra2", output_name="merra2_agg.nc", variables=["a"]
+    )
+    covered = _covered_batch_ids(nc, adapter, fabric)
+    covered_hrus = set(fabric.loc[fabric["batch_id"].isin(list(covered)), "hru_id"])
+    assert covered_hrus == {0}
+
+
+def test_covered_batch_ids_descending_latitudes(tmp_path, tiny_fabric):
+    """Most real grids publish latitude descending (MODIS CMG, SNODAS);
+    the pad and range tests must be order-independent."""
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import _covered_batch_ids
+
+    nc = _write_grid_nc(tmp_path, lons=[0.5, 1.5], lats=[0.75, 0.25])
+    adapter = SourceAdapter(
+        source_key="merra2", output_name="merra2_agg.nc", variables=["a"]
+    )
+    fabric = _batched_fabric_gdf(tiny_fabric)
+    assert _covered_batch_ids(nc, adapter, fabric) == set(fabric["batch_id"].unique())
+
+
+def test_covered_batch_ids_rejects_crs_less_fabric(tmp_path, tiny_fabric):
+    """A fabric without a CRS must fail with a contextual error, not
+    geopandas' generic 'naive geometries' message deep in agg."""
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import _covered_batch_ids
+
+    nc = _write_grid_nc(tmp_path, lons=[0.5, 1.5], lats=[0.25, 0.75])
+    adapter = SourceAdapter(
+        source_key="merra2", output_name="merra2_agg.nc", variables=["a"]
+    )
+    fabric = _batched_fabric_gdf(tiny_fabric).set_crs(None, allow_override=True)
+    with pytest.raises(ValueError, match="fabric has no CRS"):
+        _covered_batch_ids(nc, adapter, fabric)
+
+
+def test_covered_batch_ids_rejects_non_finite_grid_coords(tmp_path, tiny_fabric):
+    """Non-finite grid coords must raise — they would otherwise make every
+    comparison False and masquerade as a clean 'no overlap' skip."""
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import _covered_batch_ids
+
+    nc = _write_grid_nc(tmp_path, lons=[0.5, np.nan], lats=[0.25, 0.75])
+    adapter = SourceAdapter(
+        source_key="merra2", output_name="merra2_agg.nc", variables=["a"]
+    )
+    with pytest.raises(ValueError, match="non-finite"):
+        _covered_batch_ids(nc, adapter, _batched_fabric_gdf(tiny_fabric))
+
+
+def test_aggregate_year_warns_when_existing_nc_misses_fabric_hrus(tmp_path, caplog):
+    """The idempotent skip honours an existing per-year NC, but if it does
+    not span the full fabric (pre-#309 file, or output of a since-fixed
+    coverage misclassification) the operator must be told it is stale —
+    otherwise re-running agg silently keeps the bad data forever."""
+    import logging
+
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import aggregate_source
+
+    fabric_path = _partial_coverage_project(
+        tmp_path, lons=[0.5, 1.5], lats=[0.25, 0.75]
+    )
+    # Pre-write a per-year NC carrying only 2 of the 4 fabric HRUs.
+    agg_dir = tmp_path / "data" / "aggregated" / "merra2"
+    agg_dir.mkdir(parents=True)
+    times = pd.date_range("2000-01-01", periods=12, freq="MS")
+    xr.Dataset(
+        {"a": (["time", "hru_id"], np.ones((12, 2)))},
+        coords={
+            "time": ("time", times, {"standard_name": "time"}),
+            "hru_id": [0, 1],
+        },
+    ).to_netcdf(agg_dir / "merra2_2000_agg.nc")
+
+    adapter = SourceAdapter(
+        source_key="merra2", output_name="merra2_agg.nc", variables=["a"]
+    )
+    with (
+        patch(
+            "nhf_spatial_targets.aggregate._driver.catalog_source",
+            return_value={"access": {"type": "local_nc"}},
+        ),
+        caplog.at_level(
+            logging.WARNING, logger="nhf_spatial_targets.aggregate._driver"
+        ),
+    ):
+        aggregate_source(
+            adapter,
+            fabric_path=fabric_path,
+            id_col="hru_id",
+            workdir=tmp_path,
+            batch_size=2,
+        )
+    assert "carries 2 HRUs but the fabric has 4" in caplog.text
