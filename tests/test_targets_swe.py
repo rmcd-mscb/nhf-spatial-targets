@@ -70,7 +70,6 @@ def _make_swe_project(
     period: str = "2003-10-01/2003-12-31",
     sources: list[str] | None = None,
     nn_fill: bool = True,
-    fabric_token: str | None = None,
     write_daymet: bool = True,
     write_snodas: bool = True,
     write_era5_sd: bool = True,
@@ -100,7 +99,6 @@ def _make_swe_project(
         "fabric": {
             "path": str(fabric_path),
             "id_col": "nhm_id",
-            "token": fabric_token,
         },
         "targets": {
             "snow_water_equivalent": {
@@ -230,31 +228,6 @@ def test_mm_to_inches_linear():
 
 
 # ---------------------------------------------------------------------------
-# Fabric scope filter (logic-level)
-# ---------------------------------------------------------------------------
-
-
-def test_fabric_scope_filter_keeps_scoped_source_when_token_matches():
-    from nhf_spatial_targets.targets.swe import _filter_sources_by_fabric_scope
-
-    kept = _filter_sources_by_fabric_scope(
-        ["daymet", "snodas", "era5_land", "margulis_wus_sr"], "or"
-    )
-    assert "margulis_wus_sr" in kept
-    assert kept == ["daymet", "snodas", "era5_land", "margulis_wus_sr"]
-
-
-def test_fabric_scope_filter_drops_scoped_source_when_token_mismatches():
-    from nhf_spatial_targets.targets.swe import _filter_sources_by_fabric_scope
-
-    kept = _filter_sources_by_fabric_scope(
-        ["daymet", "snodas", "era5_land", "margulis_wus_sr"], None
-    )
-    assert "margulis_wus_sr" not in kept
-    assert kept == ["daymet", "snodas", "era5_land"]
-
-
-# ---------------------------------------------------------------------------
 # Availability filter (logic-level + end-to-end)
 # ---------------------------------------------------------------------------
 
@@ -273,7 +246,6 @@ def test_availability_filter_drops_unaggregated_source(tmp_path: Path, caplog):
 
     workdir = _make_swe_project(
         tmp_path,
-        fabric_token="or",
         write_margulis=False,
         nn_fill=False,
     )
@@ -291,7 +263,7 @@ def test_availability_filter_drops_unaggregated_source(tmp_path: Path, caplog):
 def test_build_oregon_without_margulis_succeeds_with_three_sources(
     tmp_path: Path, caplog
 ):
-    """End-to-end: fabric_token='or' requests all 4 sources, but Margulis
+    """End-to-end: all 4 sources requested, but Margulis
     has never been aggregated. Build succeeds against the other 3 with a
     WARNING; n_sources stays at 3 everywhere, source attr drops Margulis."""
     import logging
@@ -301,7 +273,6 @@ def test_build_oregon_without_margulis_succeeds_with_three_sources(
 
     workdir = _make_swe_project(
         tmp_path,
-        fabric_token="or",
         write_margulis=False,
         nn_fill=False,
     )
@@ -322,7 +293,6 @@ def test_build_all_sources_unaggregated_raises(tmp_path: Path):
 
     workdir = _make_swe_project(
         tmp_path,
-        fabric_token="or",
         write_daymet=False,
         write_snodas=False,
         write_era5_sd=False,
@@ -343,7 +313,9 @@ def test_build_writes_unfilled_and_filled_files(tmp_path: Path):
     from nhf_spatial_targets.targets.swe import build
     from nhf_spatial_targets.workspace import load
 
-    workdir = _make_swe_project(tmp_path, fabric_token="or")
+    workdir = _make_swe_project(
+        tmp_path,
+    )
     project = load(workdir)
     build(project)
     assert (project.targets_dir() / "swe_targets.nc").exists()
@@ -354,7 +326,7 @@ def test_build_output_schema(tmp_path: Path):
     from nhf_spatial_targets.targets.swe import build
     from nhf_spatial_targets.workspace import load
 
-    workdir = _make_swe_project(tmp_path, fabric_token="or", nn_fill=False)
+    workdir = _make_swe_project(tmp_path, nn_fill=False)
     project = load(workdir)
     build(project)
     with xr.open_dataset(project.targets_dir() / "swe_targets.nc") as ds:
@@ -378,7 +350,6 @@ def test_build_daily_time_index(tmp_path: Path):
     workdir = _make_swe_project(
         tmp_path,
         period="2003-12-01/2003-12-31",
-        fabric_token="or",
         nn_fill=False,
     )
     project = load(workdir)
@@ -402,7 +373,6 @@ def test_build_unit_chain_min_max_ordered(tmp_path: Path):
     workdir = _make_swe_project(
         tmp_path,
         period="2003-12-15/2003-12-15",
-        fabric_token="or",
         nn_fill=False,
     )
     project = load(workdir)
@@ -416,7 +386,7 @@ def test_build_unit_chain_min_max_ordered(tmp_path: Path):
 def test_build_ua_swe_participates_in_envelope_and_count(tmp_path: Path):
     """ua_swe (kg/m² ≡ mm, identity-to-mm) joins the min/max envelope (#237 PR-C).
 
-    Non-OR fabric (token unset) so Margulis is excluded; sources are
+    Margulis is omitted from the requested sources; the rest are
     daymet=50mm, snodas=80mm, era5=100mm, ua_swe=300mm. ua_swe is the new
     maximum, so the upper bound must move to 300/25.4 in, n_sources must
     count it (4), and its description must appear in the source attr.
@@ -428,7 +398,6 @@ def test_build_ua_swe_participates_in_envelope_and_count(tmp_path: Path):
         tmp_path,
         period="2003-12-15/2003-12-15",
         sources=["daymet", "snodas", "era5_land", "ua_swe"],
-        fabric_token=None,
         nn_fill=False,
     )
     project = load(workdir)
@@ -455,7 +424,6 @@ def test_build_oregon_five_source_envelope_with_ua_swe(tmp_path: Path):
         tmp_path,
         period="2003-12-15/2003-12-15",
         sources=["daymet", "snodas", "era5_land", "margulis_wus_sr", "ua_swe"],
-        fabric_token="or",
         nn_fill=False,
     )
     project = load(workdir)
@@ -472,7 +440,7 @@ def test_build_oregon_includes_margulis_in_source_attr(tmp_path: Path):
     from nhf_spatial_targets.targets.swe import build
     from nhf_spatial_targets.workspace import load
 
-    workdir = _make_swe_project(tmp_path, fabric_token="or", nn_fill=False)
+    workdir = _make_swe_project(tmp_path, nn_fill=False)
     project = load(workdir)
     build(project)
     with xr.open_dataset(project.targets_dir() / "swe_targets.nc") as ds:
@@ -481,50 +449,6 @@ def test_build_oregon_includes_margulis_in_source_attr(tmp_path: Path):
         assert "Daymet" in src_attr
         assert "SNODAS" in src_attr
         assert "ERA5-Land" in src_attr
-        assert ds.attrs["fabric_token"] == "or"
-
-
-def test_build_no_token_drops_margulis(tmp_path: Path, caplog):
-    """Fabric token unset (e.g. gfv2-style CONUS project) → Margulis is
-    silently dropped via fabric_scope filter; bound reduces to 3 sources.
-
-    Also asserts the filter logs the skip with the source name + token,
-    so an operator can see why a source vanished from the bound without
-    having to instrument anything (PR #135 review nit).
-    """
-    import logging
-
-    from nhf_spatial_targets.targets.swe import build
-    from nhf_spatial_targets.workspace import load
-
-    workdir = _make_swe_project(
-        tmp_path,
-        fabric_token=None,
-        nn_fill=False,
-        write_margulis=False,  # operator wouldn't fetch margulis here
-    )
-    project = load(workdir)
-    with caplog.at_level(logging.INFO, logger="nhf_spatial_targets.targets.swe"):
-        build(project)
-    with xr.open_dataset(project.targets_dir() / "swe_targets.nc") as ds:
-        assert (ds["n_sources"].values == 3).all()
-        assert "Margulis" not in ds.attrs["source"]
-    assert "margulis_wus_sr" in caplog.text
-    assert "fabric_scope" in caplog.text
-
-
-def test_build_invalid_fabric_token_raises(tmp_path: Path):
-    """A typo like fabric.token=oregon (instead of `or`) must fail loudly
-    rather than silently filter every fabric-scoped source out."""
-    from nhf_spatial_targets.targets.swe import build
-    from nhf_spatial_targets.workspace import load
-
-    workdir = _make_swe_project(
-        tmp_path, fabric_token="oregon", write_margulis=False, nn_fill=False
-    )
-    project = load(workdir)
-    with pytest.raises(ValueError, match="fabric.token='oregon'"):
-        build(project)
 
 
 def test_build_unknown_source_raises(tmp_path: Path):
@@ -533,7 +457,6 @@ def test_build_unknown_source_raises(tmp_path: Path):
 
     workdir = _make_swe_project(
         tmp_path,
-        fabric_token="or",
         sources=["daymet", "not_a_real_source"],
         write_snodas=False,
         write_era5_sd=False,
@@ -552,7 +475,9 @@ def test_build_emits_id_col_sorted_target_ncs(tmp_path: Path):
     from nhf_spatial_targets.targets.swe import build
     from nhf_spatial_targets.workspace import load
 
-    workdir = _make_swe_project(tmp_path, fabric_token="or")
+    workdir = _make_swe_project(
+        tmp_path,
+    )
     project = load(workdir)
     build(project)
     for fname in ("swe_targets.nc", "swe_targets_nn_filled.nc"):
@@ -578,7 +503,6 @@ def test_build_writes_per_year_intermediates(tmp_path: Path):
     workdir = _make_swe_project(
         tmp_path,
         period="2003-12-01/2004-01-31",  # spans two calendar years
-        fabric_token="or",
         nn_fill=False,
     )
     project = load(workdir)
@@ -604,7 +528,6 @@ def test_build_stitched_time_index_is_contiguous_across_year_boundary(
     workdir = _make_swe_project(
         tmp_path,
         period="2003-12-30/2004-01-02",
-        fabric_token="or",
         nn_fill=False,
     )
     project = load(workdir)
@@ -628,7 +551,6 @@ def test_build_per_year_n_sources_varies_with_source_coverage(tmp_path: Path):
     workdir = _make_swe_project(
         tmp_path,
         period="2003-12-30/2004-01-02",
-        fabric_token="or",
         nn_fill=False,
     )
     # Remove the SNODAS 2003 NC so 2003 has only 3 sources.
@@ -659,7 +581,6 @@ def test_build_year_chunked_idempotent_skips_existing_intermediates(
     workdir = _make_swe_project(
         tmp_path,
         period="2003-12-30/2004-01-02",
-        fabric_token="or",
         nn_fill=False,
     )
     project = load(workdir)
@@ -704,7 +625,7 @@ def test_iter_period_years_rejects_reversed_period():
 def test_stitched_output_global_attrs_carry_target_metadata(tmp_path: Path):
     """The stitch step overlays the target's `extra_global_attrs` on
     top of the per-year files' attrs, so the canonical output keeps the
-    PR-#135 metadata (source, period, fabric_token, etc) and strips
+    PR-#135 metadata (source, period, etc) and strips
     per-year-only attrs that would mislead about the file's scope.
     """
     from nhf_spatial_targets.targets.swe import build
@@ -713,14 +634,12 @@ def test_stitched_output_global_attrs_carry_target_metadata(tmp_path: Path):
     workdir = _make_swe_project(
         tmp_path,
         period="2003-12-30/2004-01-02",
-        fabric_token="or",
         nn_fill=False,
     )
     project = load(workdir)
     build(project)
     with xr.open_dataset(project.targets_dir() / "swe_targets.nc") as ds:
         assert ds.attrs["period"] == "2003-12-30/2004-01-02"
-        assert ds.attrs["fabric_token"] == "or"
         assert "Margulis" in ds.attrs["source"]
         assert "stitched from" in ds.attrs["history"]
         # PR #139 review must-fix: year_chunk is set on every per-year
@@ -754,7 +673,6 @@ def test_build_nn_fill_actually_fills_nan_cells(tmp_path: Path):
         tmp_path,
         period="2003-12-01/2003-12-03",
         sources=["daymet"],
-        fabric_token=None,
         write_snodas=False,
         write_era5_sd=False,
         write_margulis=False,
@@ -813,7 +731,6 @@ def test_fingerprint_mismatch_rebuilds_year(tmp_path: Path, caplog):
     workdir = _make_swe_project(
         tmp_path,
         period="2003-12-15/2003-12-15",
-        fabric_token="or",
         nn_fill=False,
     )
     project = load(workdir)
@@ -868,7 +785,6 @@ def test_pre_213_intermediate_triggers_rebuild(tmp_path: Path, caplog):
     workdir = _make_swe_project(
         tmp_path,
         period="2003-12-15/2003-12-15",
-        fabric_token="or",
         nn_fill=False,
     )
     # Pre-populate intermediates_dir with a fake legacy file (no fingerprint).
@@ -923,7 +839,6 @@ def test_period_shrink_prunes_orphan_intermediates(tmp_path: Path, caplog):
     workdir = _make_swe_project(
         tmp_path,
         period="2003-12-01/2004-01-31",
-        fabric_token="or",
         nn_fill=False,
     )
     project = load(workdir)
@@ -981,7 +896,6 @@ def test_stitch_input_computed_from_period_not_glob(tmp_path: Path):
     workdir = _make_swe_project(
         tmp_path,
         period="2003-12-15/2003-12-15",
-        fabric_token="or",
         nn_fill=False,
     )
     project = load(workdir)
@@ -1005,3 +919,44 @@ def test_stitch_input_computed_from_period_not_glob(tmp_path: Path):
     with xr.open_dataset(project.targets_dir() / "swe_targets.nc") as ds:
         years = sorted(set(pd.DatetimeIndex(ds["time"].values).year))
     assert years == [2003]
+
+
+def test_build_partial_coverage_source_contributes_only_where_finite(tmp_path: Path):
+    """#309: a partial-coverage source (NaN rows at uncovered HRUs, as the
+    aggregation driver now emits) joins the bound only where finite; the
+    bound falls back to the remaining sources elsewhere and n_sources
+    drops by one at the uncovered HRU."""
+    from nhf_spatial_targets.targets.swe import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_swe_project(tmp_path, period="2003-12-15/2003-12-15", nn_fill=False)
+    nc = (
+        workdir
+        / "data"
+        / "aggregated"
+        / "margulis_wus_sr"
+        / "margulis_wus_sr_2003_agg.nc"
+    )
+    with xr.open_dataset(nc) as ds:
+        patched = ds.load()
+    patched["SWE"].values[:, 0] = np.nan  # HRU 0 "outside the source grid"
+    nc.unlink()
+    patched.to_netcdf(nc)
+
+    project = load(workdir)
+    build(project)
+    with xr.open_dataset(project.targets_dir() / "swe_targets.nc") as out:
+        n0 = out["n_sources"].isel(nhm_id=0).values
+        nrest = out["n_sources"].isel(nhm_id=slice(1, None)).values
+        assert (n0 == 3).all()
+        assert (nrest == 4).all()
+        # margulis (200 mm) sets the upper bound only where it has data;
+        # at HRU 0 the bound falls back to era5 (100 mm).
+        np.testing.assert_allclose(
+            out["upper_bound"].isel(nhm_id=0).values, 100.0 / 25.4, rtol=1e-5
+        )
+        np.testing.assert_allclose(
+            out["upper_bound"].isel(nhm_id=slice(1, None)).values,
+            200.0 / 25.4,
+            rtol=1e-5,
+        )

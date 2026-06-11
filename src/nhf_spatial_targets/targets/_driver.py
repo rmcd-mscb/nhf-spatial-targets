@@ -399,7 +399,7 @@ def _build_year_chunked(
     ]
     # Stitch global attrs: adapter common + last loader's per-target extras
     # (which carry e.g. SCA's ci_threshold / summer_zero_months and SWE's
-    # fabric_token / source list). Since every per-year file carries the
+    # source list). Since every per-year file carries the
     # same set of these attrs (they're config-derived, not data-derived),
     # using the last loader's contribution is consistent with the existing
     # behaviour where the original builders built one extra_attrs dict at
