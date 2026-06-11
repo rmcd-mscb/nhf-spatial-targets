@@ -2540,3 +2540,173 @@ def test_covered_batch_ids_handles_0_360_longitudes(tmp_path):
     )
     fabric = _batched_fabric_gdf(fabric_path)
     assert _covered_batch_ids(nc, adapter, fabric) == set(fabric["batch_id"].unique())
+
+
+def _partial_coverage_project(tmp_path, lons, lats):
+    """Two-cluster fabric (batches at x 0-2 and x 10-12) + grid NC."""
+    polys = [box(0, 0, 1, 1), box(1, 0, 2, 1), box(10, 0, 11, 1), box(11, 0, 12, 1)]
+    gdf = gpd.GeoDataFrame({"hru_id": [0, 1, 2, 3]}, geometry=polys, crs="EPSG:4326")
+    fabric_path = tmp_path / "fabric2.gpkg"
+    gdf.to_file(fabric_path, driver="GPKG")
+
+    datastore = tmp_path / "datastore"
+    (datastore / "merra2").mkdir(parents=True)
+    src_nc = datastore / "merra2" / "merra2_2000_consolidated.nc"
+    _grid_ds(lons, lats).to_netcdf(src_nc)
+
+    (tmp_path / "config.yml").write_text(
+        yaml.dump(
+            {
+                "fabric": {"path": str(fabric_path), "id_col": "hru_id"},
+                "datastore": str(datastore),
+            }
+        )
+    )
+    (tmp_path / "fabric.json").write_text(json.dumps({"sha256": "f00"}))
+    (tmp_path / "manifest.json").write_text(json.dumps({"sources": {}, "steps": []}))
+    (tmp_path / "data" / "aggregated").mkdir(parents=True)
+    (tmp_path / "weights").mkdir()
+    return fabric_path
+
+
+def _fake_agg_for_batch(batch_gdf, **kwargs):
+    """Echo the batch's own HRUs back, mimicking gdptools output."""
+    times = pd.date_range("2000-01-01", periods=12, freq="MS")
+    hrus = batch_gdf["hru_id"].to_list()
+    return xr.Dataset(
+        {"a": (["time", "hru_id"], np.ones((12, len(hrus))))},
+        coords={
+            "time": ("time", times, {"standard_name": "time"}),
+            "hru_id": hrus,
+        },
+    )
+
+
+def test_aggregate_source_partial_coverage_emits_full_fabric_with_nan(tmp_path, caplog):
+    """#309: uncovered batches are skipped; the per-year NC still carries
+    every fabric HRU, with honest NaN rows at uncovered HRUs."""
+    import logging
+
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import aggregate_source
+
+    fabric_path = _partial_coverage_project(
+        tmp_path, lons=[0.5, 1.5], lats=[0.25, 0.75]
+    )
+    adapter = SourceAdapter(
+        source_key="merra2", output_name="merra2_agg.nc", variables=["a"]
+    )
+    with (
+        patch(
+            "nhf_spatial_targets.aggregate._driver.catalog_source",
+            return_value={"access": {"type": "local_nc"}},
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.compute_or_load_weights",
+            return_value=_fake_weights(),
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.aggregate_variables_for_batch",
+            side_effect=lambda **kw: _fake_agg_for_batch(**kw),
+        ),
+        caplog.at_level(logging.INFO, logger="nhf_spatial_targets.aggregate._driver"),
+    ):
+        aggregate_source(
+            adapter,
+            fabric_path=fabric_path,
+            id_col="hru_id",
+            workdir=tmp_path,
+            batch_size=2,
+        )
+
+    per_year = tmp_path / "data" / "aggregated" / "merra2" / "merra2_2000_agg.nc"
+    with xr.open_dataset(per_year) as ds:
+        out = ds.load()
+    assert out["hru_id"].values.tolist() == [0, 1, 2, 3]
+    vals = out["a"].values
+    assert np.isfinite(vals[:, :2]).all()  # covered cluster
+    assert np.isnan(vals[:, 2:]).all()  # uncovered cluster -> honest NaN
+    assert "partial fabric coverage" in caplog.text
+
+
+def test_aggregate_source_zero_coverage_skips_cleanly(tmp_path, caplog):
+    """#309: a source grid with no fabric overlap is skipped with an INFO
+    log — no aggregated dir, no manifest entry, no gdptools crash."""
+    import logging
+
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import aggregate_source
+
+    fabric_path = _partial_coverage_project(
+        tmp_path, lons=[100.5, 101.5], lats=[50.25, 50.75]
+    )
+    adapter = SourceAdapter(
+        source_key="merra2", output_name="merra2_agg.nc", variables=["a"]
+    )
+    with (
+        patch(
+            "nhf_spatial_targets.aggregate._driver.catalog_source",
+            return_value={"access": {"type": "local_nc"}},
+        ),
+        caplog.at_level(logging.INFO, logger="nhf_spatial_targets.aggregate._driver"),
+    ):
+        aggregate_source(
+            adapter,
+            fabric_path=fabric_path,
+            id_col="hru_id",
+            workdir=tmp_path,
+            batch_size=2,
+        )
+
+    assert not (tmp_path / "data" / "aggregated" / "merra2").exists()
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    assert "merra2" not in manifest["sources"]
+    assert "no spatial overlap" in caplog.text
+
+
+def test_aggregate_year_rejects_hru_ids_absent_from_fabric(tmp_path):
+    """The full-fabric reindex must fail loudly (not silently emit all-NaN)
+    when aggregated ids don't match the fabric — e.g. id dtype drift or a
+    stale weight cache from a different fabric."""
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import aggregate_source
+
+    fabric_path = _partial_coverage_project(
+        tmp_path, lons=[0.5, 1.5], lats=[0.25, 0.75]
+    )
+    adapter = SourceAdapter(
+        source_key="merra2", output_name="merra2_agg.nc", variables=["a"]
+    )
+
+    def _alien_ids(**kwargs):
+        times = pd.date_range("2000-01-01", periods=12, freq="MS")
+        return xr.Dataset(
+            {"a": (["time", "hru_id"], np.ones((12, 1)))},
+            coords={
+                "time": ("time", times, {"standard_name": "time"}),
+                "hru_id": [99],
+            },
+        )
+
+    with (
+        patch(
+            "nhf_spatial_targets.aggregate._driver.catalog_source",
+            return_value={"access": {"type": "local_nc"}},
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.compute_or_load_weights",
+            return_value=_fake_weights(),
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.aggregate_variables_for_batch",
+            side_effect=lambda **kw: _alien_ids(**kw),
+        ),
+        pytest.raises(ValueError, match="absent from the fabric"),
+    ):
+        aggregate_source(
+            adapter,
+            fabric_path=fabric_path,
+            id_col="hru_id",
+            workdir=tmp_path,
+            batch_size=2,
+        )

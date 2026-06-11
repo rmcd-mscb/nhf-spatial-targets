@@ -639,8 +639,14 @@ def aggregate_year(
     id_col: str,
     *,
     catalog_meta: dict | None = None,
+    covered_batch_ids: set[int] | None = None,
 ) -> Path:
     """Aggregate one year to HRU polygons; idempotent on the per-year NC.
+
+    ``covered_batch_ids`` (from :func:`_covered_batch_ids`) restricts the
+    batch loop to batches that overlap the source grid; skipped batches'
+    HRUs become NaN rows via the full-fabric reindex below. ``None``
+    aggregates every batch.
 
     Returns the path of the per-year aggregated NC. If that path already
     exists, returns immediately without opening the source file. Otherwise
@@ -686,6 +692,8 @@ def aggregate_year(
 
         datasets: list[xr.Dataset] = []
         for bid in sorted(fabric_batched["batch_id"].unique()):
+            if covered_batch_ids is not None and int(bid) not in covered_batch_ids:
+                continue
             batch_gdf = fabric_batched[fabric_batched["batch_id"] == bid].drop(
                 columns=["batch_id"]
             )
@@ -729,6 +737,13 @@ def aggregate_year(
                 raise
             datasets.append(batch_ds)
 
+        if not datasets:
+            raise ValueError(
+                f"{adapter.source_key}: year {year}: no spatial batch overlaps "
+                f"the source grid; aggregate_source should have skipped this "
+                f"source before the per-year loop."
+            )
+
         year_ds = xr.concat(datasets, dim=id_col)
 
     if adapter.post_aggregate_hook is not None:
@@ -739,11 +754,22 @@ def aggregate_year(
     )
     _attach_cf_global_attrs(year_ds, adapter.source_key, meta)
 
-    # Canonical row order on emission: HRU dim ascending by id_col (issue #93).
-    # gdptools concatenates batches in iteration order, which is typically
-    # VPU-grouped rather than id_col-ascending. Sorting once at emission gives
-    # downstream consumers a stable invariant.
-    year_ds = year_ds.sortby(id_col)
+    # Canonical row order + full-fabric HRU set on emission (#93, #309).
+    # gdptools concatenates batches in iteration order (typically
+    # VPU-grouped), and batches outside the source grid are skipped for
+    # partial-coverage sources — reindexing to the sorted full-fabric id
+    # set restores id_col-ascending order and inserts honest NaN rows
+    # for HRUs the source does not cover.
+    all_ids = np.sort(fabric_batched[id_col].to_numpy())
+    extra = np.setdiff1d(year_ds[id_col].to_numpy(), all_ids)
+    if extra.size:
+        raise ValueError(
+            f"{adapter.source_key}: year {year}: aggregated output carries "
+            f"{extra.size} HRU id(s) absent from the fabric (e.g. "
+            f"{extra[:5].tolist()}) — id_col dtype mismatch or a stale "
+            f"weight cache from a different fabric."
+        )
+    year_ds = year_ds.reindex({id_col: all_ids})
 
     # Cadence comes from the adapter's authoritative output_cadence, NOT the
     # catalog time_step free-text (unreliable: one entry serves era5_land's
@@ -1293,6 +1319,35 @@ def aggregate_source(
             n_batches,
         )
 
+    # Geometry-driven coverage guard (#309, replaces the catalog
+    # fabric_scope token gate). Zero overlap → skip the source for this
+    # fabric; partial overlap → aggregate covered batches and emit NaN
+    # rows for the rest (targets' NaN-aware combine reads them as "no
+    # data here").
+    covered = _covered_batch_ids(assigned_year_files[0][1], adapter, fabric_batched)
+    if not covered:
+        logger.info(
+            "%s: skipping aggregation — the source grid has no spatial "
+            "overlap with this fabric. Raw downloads remain reusable by "
+            "projects whose fabric the source covers.",
+            adapter.source_key,
+        )
+        return
+    if len(covered) < n_batches:
+        n_hrus = len(fabric_batched)
+        n_covered_hrus = int(fabric_batched["batch_id"].isin(list(covered)).sum())
+        logger.info(
+            "%s: partial fabric coverage — source grid bbox overlaps %d of "
+            "%d batches (%d of %d HRUs, %.1f%%); HRUs outside the source "
+            "grid will be NaN in the aggregated output.",
+            adapter.source_key,
+            len(covered),
+            n_batches,
+            n_covered_hrus,
+            n_hrus,
+            100.0 * n_covered_hrus / n_hrus,
+        )
+
     per_year_paths = [
         aggregate_year(
             adapter,
@@ -1302,6 +1357,7 @@ def aggregate_source(
             fabric_batched,
             id_col,
             catalog_meta=meta,
+            covered_batch_ids=covered,
         )
         for year, path in assigned_year_files
     ]
