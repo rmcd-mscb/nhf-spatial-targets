@@ -22,7 +22,7 @@ Provide calibration targets aggregated to the gfv2 fabric for parameter estimati
 | --- | --- | --- | --- |
 | runoff | Monthly basin mean runoff. Range is min/max across two reanalysis sources per HRU and time step. | cfs | multi_source_minmax |
 | aet | Monthly actual evapotranspiration. Range is min/max across three independent source datasets per HRU and time step. Absolute values used (not normalized); range reflects inter-product spread. | inches/day | multi_source_minmax |
-| snow_water_equivalent | Daily basin snow water equivalent. Range is min/max across five independent SWE sources per HRU and time step. Margulis Western US Snow Reanalysis is fabric-scoped to Oregon only (see fabric_scope in catalog/sources.yml); non-Oregon fabrics are bounded by the remaining four sources (daymet, snodas, era5_land, ua_swe). UA SWE (NSIDC-0719) contributes calendar years 1982-2022 (re-windowed at consolidate from water years 1982-2023), extending the bound well before the SNODAS 2003 start. Absolute values used (not normalized). | inches | multi_source_minmax |
+| snow_water_equivalent | Daily basin snow water equivalent. Range is min/max across five independent SWE sources per HRU and time step. Margulis Western US Snow Reanalysis covers only the Western US; outside its domain the NaN-aware bound falls back to the remaining four sources (daymet, snodas, era5_land, ua_swe). UA SWE (NSIDC-0719) contributes calendar years 1982-2022 (re-windowed at consolidate from water years 1982-2023), extending the bound well before the SNODAS 2003 start. Absolute values used (not normalized). | inches | multi_source_minmax |
 
 ## Files
 
