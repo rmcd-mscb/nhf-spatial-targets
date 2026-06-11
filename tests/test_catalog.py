@@ -251,67 +251,16 @@ def test_margulis_wus_sr_source_present():
     assert swe["cell_methods"] == "time: point"
     assert s["citations"]
     assert s["units"]
-    # N7 — spatial_extent is now a pure source-extent string, not a
-    # project-scoping mention. Fabric scoping lives in fabric_scope.
+    # N7 — spatial_extent is a pure source-extent string (partial fabric
+    # coverage is geometry-driven at agg time, #309).
     assert "Oregon-fabric only" not in s["spatial_extent"]
 
 
-def test_margulis_wus_sr_fabric_scope_oregon_only():
-    """Margulis WUS-SR carries the new optional fabric_scope field."""
-    s = source("margulis_wus_sr")
-    scope = s["fabric_scope"]
-    assert scope["fabrics"] == ["or"]
-    assert "notes" in scope
-
-
-def test_fabric_scope_field_only_on_scoped_sources():
-    """No other current source declares fabric_scope.
-
-    Defensive: catches accidental copy/paste of the field onto sources
-    that should be available to all fabrics.
-    """
-    scoped = {key for key, src in sources().items() if "fabric_scope" in src}
-    assert scoped == {"margulis_wus_sr"}
-
-
-def test_every_fabric_scope_block_validates():
-    """Every declared `fabric_scope` block passes the validator.
-
-    Catches typos like `fabrics: [oregon]` that would otherwise
-    silently disable scoping at the target-builder boundary.
-    """
-    from nhf_spatial_targets.catalog import validate_fabric_scope
-
-    for key, src in sources().items():
-        validate_fabric_scope(key, src.get("fabric_scope"))
-
-
-def test_validate_fabric_scope_rejects_unknown_token():
-    from nhf_spatial_targets.catalog import validate_fabric_scope
-
-    with pytest.raises(ValueError, match="unknown token"):
-        validate_fabric_scope("test_src", {"fabrics": ["oregon"]})
-
-
-def test_validate_fabric_scope_rejects_non_list_fabrics():
-    from nhf_spatial_targets.catalog import validate_fabric_scope
-
-    with pytest.raises(ValueError, match="non-empty list"):
-        validate_fabric_scope("test_src", {"fabrics": "or"})
-
-
-def test_validate_fabric_scope_rejects_empty_fabrics():
-    from nhf_spatial_targets.catalog import validate_fabric_scope
-
-    with pytest.raises(ValueError, match="non-empty list"):
-        validate_fabric_scope("test_src", {"fabrics": []})
-
-
-def test_validate_fabric_scope_none_is_ok():
-    """`fabric_scope: None` (i.e. field absent) is the global default and OK."""
-    from nhf_spatial_targets.catalog import validate_fabric_scope
-
-    validate_fabric_scope("test_src", None)
+def test_no_source_declares_fabric_scope():
+    """fabric_scope was removed in #309 — partial fabric coverage is now
+    geometry-driven at agg time. A reappearing block means someone
+    resurrected the dead mechanism."""
+    assert not {key for key, src in sources().items() if "fabric_scope" in src}
 
 
 # ---------------------------------------------------------------------------
@@ -481,8 +430,9 @@ def test_release_block_daymet_is_metadata_only():
     assert "ORNL" in rb["notes"]
 
 
-def test_release_block_margulis_publishable_despite_fabric_scope():
-    """Margulis WUS-SR is fabric-scoped for consumption, not for publication."""
+def test_release_block_margulis_publishable():
+    """Margulis WUS-SR is publishable (partial fabric coverage is
+    irrelevant to publication)."""
     from nhf_spatial_targets.catalog import release_block
 
     rb = release_block("margulis_wus_sr")

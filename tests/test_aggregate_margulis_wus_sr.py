@@ -61,30 +61,15 @@ def test_cli_registers_agg_margulis():
     assert cli.aggregate_margulis_wus_sr is aggregate_margulis_wus_sr
 
 
-def test_catalog_declares_fabric_scope_oregon():
-    """Target builder relies on catalog fabric_scope to keep Margulis
-    out of non-OR fabrics; if the catalog scope is removed/widened the
-    target builder default behaviour will silently change."""
-    entry = cat.source("margulis_wus_sr")
-    scope = entry.get("fabric_scope")
-    assert scope is not None
-    cat.validate_fabric_scope("margulis_wus_sr", scope)
-    assert "or" in scope["fabrics"]
-
-
-def test_aggregate_margulis_skips_non_or_fabric(tmp_path):
-    """Regression for the gfv2 + margulis_wus_sr crash:
-    ``nhf-targets agg margulis-wus-sr --project-dir <gfv2>`` died inside
-    gdptools with ``max() iterable argument is empty`` because the OR-only
-    consolidated NCs had no overlap with the national fabric. The driver
-    must honour catalog ``fabric_scope`` and skip cleanly when the
-    project's ``fabric.token`` isn't ``or``.
-
-    The test deliberately doesn't populate a datastore for the source —
-    if the skip regresses, the function reaches the raw-dir glob and
-    raises ``FileNotFoundError`` instead of returning ``None``.
-    """
+def test_aggregate_margulis_missing_raw_raises(tmp_path):
+    """#309 removed the fabric_scope token gate: margulis behaves like every
+    other source — aggregating without fetched raw data raises
+    FileNotFoundError pointing at the fetch command, instead of silently
+    skipping based on a catalog token. (Zero spatial overlap with a fabric
+    is now handled geometrically by the driver's coverage guard.)"""
     import json
+
+    import pytest
     import yaml
 
     datastore = tmp_path / "datastore"
@@ -92,11 +77,7 @@ def test_aggregate_margulis_skips_non_or_fabric(tmp_path):
     (tmp_path / "config.yml").write_text(
         yaml.dump(
             {
-                "fabric": {
-                    "path": str(tmp_path / "fake.gpkg"),
-                    "id_col": "hru_id",
-                    "token": None,
-                },
+                "fabric": {"path": str(tmp_path / "fake.gpkg"), "id_col": "hru_id"},
                 "datastore": str(datastore),
             }
         )
@@ -104,11 +85,9 @@ def test_aggregate_margulis_skips_non_or_fabric(tmp_path):
     (tmp_path / "fabric.json").write_text(json.dumps({"sha256": "f00"}))
     (tmp_path / "manifest.json").write_text(json.dumps({"sources": {}, "steps": []}))
 
-    # Must not raise; must return None (the skip path).
-    result = aggregate_margulis_wus_sr(
-        fabric_path=tmp_path / "fake.gpkg",
-        id_col="hru_id",
-        workdir=tmp_path,
-    )
-    assert result is None
-    assert not (tmp_path / "data" / "aggregated" / "margulis_wus_sr").exists()
+    with pytest.raises(FileNotFoundError, match="fetch margulis_wus_sr"):
+        aggregate_margulis_wus_sr(
+            fabric_path=tmp_path / "fake.gpkg",
+            id_col="hru_id",
+            workdir=tmp_path,
+        )

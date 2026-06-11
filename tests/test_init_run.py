@@ -102,17 +102,6 @@ def test_init_config_template_parses_as_valid_yaml(tmp_path):
     assert "representative_points" not in cfg
 
 
-def test_init_config_template_carries_fabric_token_stub(tmp_path):
-    """The fabric.token stub is present (commented) and points operators
-    at FABRIC_SCOPE_TOKENS — without this we silently skipped Margulis on
-    Oregon (#182)."""
-    workdir = tmp_path / "ws"
-    init_project(workdir)
-    text = (workdir / "config.yml").read_text()
-    assert "# token: or" in text
-    assert "FABRIC_SCOPE_TOKENS" in text
-
-
 def test_init_config_template_carries_representative_points_stub(tmp_path):
     """The representative_points stub teaches operators about the per-target
     notebook override before lookup_hrus_by_points raises mid-render (#192)."""

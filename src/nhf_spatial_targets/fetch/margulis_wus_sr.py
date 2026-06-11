@@ -1,12 +1,11 @@
-"""Fetch Margulis Western US Snow Reanalysis (NSIDC-0719) via earthaccess.
+"""Fetch Margulis Western US Snow Reanalysis (WUS_UCLA_SR) via earthaccess.
 
-NSIDC-0719 is a daily 90 m posterior SWE reanalysis over the Western US
-for water years 1985-2021. This source is **fabric-scoped to Oregon
-only** in this pipeline (see ``catalog/sources.yml ->
-margulis_wus_sr.fabric_scope``). The fetch step does not enforce that
-scope — raw downloads stay in the shared datastore and remain usable
-by any project pointing at the same store — but the manifest entry
-records the scope so downstream aggregate/target code can honour it.
+WUS_UCLA_SR is a daily 90 m posterior SWE reanalysis over the Western US
+for water years 1985-2021 (distinct from NSIDC-0719, which is the UA
+Broxton product — see ``ua_swe``). The CMR search bbox is the project fabric's
+buffered bbox, so a project fetches only what its fabric can use, while
+raw downloads stay in the shared datastore and remain usable by any
+project pointing at the same store.
 
 The module has two stages:
 
@@ -445,15 +444,9 @@ def fetch_margulis_wus_sr(workdir: Path, period: str) -> dict:
        logged + recorded in the manifest as ``consolidate_error`` but does
        not abort the rest of the fetch.
 
-    The flock-protected manifest entry records the fabric scope from the
-    catalog plus per-calendar-year ``daily_path`` / ``consolidated_utc`` /
-    ``source_water_years`` for completed consolidations.
-
-    The source is fabric-scoped to Oregon via the catalog's
-    ``fabric_scope`` block; calling on a non-Oregon project still runs
-    (raw downloads are reusable across projects sharing a datastore)
-    but emits a warning that the search bbox is unlikely to overlap
-    NSIDC-0719's Western US domain.
+    The flock-protected manifest entry records per-calendar-year
+    ``daily_path`` / ``consolidated_utc`` / ``source_water_years`` for
+    completed consolidations.
 
     Parameters
     ----------
@@ -485,7 +478,6 @@ def fetch_margulis_wus_sr(workdir: Path, period: str) -> dict:
     ws = _load_project(workdir)
     meta = _catalog.source(_SOURCE_KEY)
     access = meta["access"]
-    fabric_scope = meta.get("fabric_scope", {})
     data_lo, data_hi = period_bounds(meta["period"])
     years = years_in_period(period)
     for y in years:
@@ -495,26 +487,6 @@ def fetch_margulis_wus_sr(workdir: Path, period: str) -> dict:
                 f"({data_lo}-{data_hi}, from catalog `sources.yml[{_SOURCE_KEY}]"
                 f".period`). Adjust --period."
             )
-
-    # Operator hint: warn (don't fail) if the project's fabric isn't in
-    # the source's `fabric_scope.fabrics` list. Raw downloads are still
-    # useful (reusable by any project pointing at the same datastore),
-    # but a non-Oregon CMR search will return 0 granules on every year
-    # and the operator deserves a hint about why.
-    scope_fabrics = list(fabric_scope.get("fabrics") or [])
-    fabric_id = (ws.config.get("fabric") or {}).get("id") or (
-        (ws.config.get("fabric") or {}).get("name")
-    )
-    if scope_fabrics and fabric_id and fabric_id not in scope_fabrics:
-        logger.warning(
-            "margulis_wus_sr is scoped to fabrics %s in the catalog; this "
-            "project's fabric is %r, which is outside that scope. "
-            "Fetching anyway (raw downloads are datastore-shared), but "
-            "expect zero granules per year. See docs/sources/"
-            "margulis_wus_sr.md.",
-            scope_fabrics,
-            fabric_id,
-        )
 
     raw_root = ws.raw_dir(_SOURCE_KEY) / "raw"
     raw_root.mkdir(parents=True, exist_ok=True)
@@ -641,7 +613,7 @@ def fetch_margulis_wus_sr(workdir: Path, period: str) -> dict:
         _attempt_consolidation_into_record(rec, raw_root, daily_dir)
         year_records.append(rec)
 
-    _update_manifest(workdir, period, meta, year_records, fabric_scope, search_bbox)
+    _update_manifest(workdir, period, meta, year_records, search_bbox)
 
     return {
         "source_key": _SOURCE_KEY,
@@ -651,7 +623,6 @@ def fetch_margulis_wus_sr(workdir: Path, period: str) -> dict:
         "variables": [v["name"] for v in meta["variables"]],
         "period": period,
         "search_bbox": search_bbox,
-        "fabric_scope": fabric_scope,
         "years": year_records,
         "download_timestamp": now_utc,
     }
@@ -726,7 +697,6 @@ def _update_manifest(
     period: str,
     meta: dict,
     year_records: list[dict],
-    fabric_scope: dict,
     search_bbox: tuple[float, float, float, float],
 ) -> None:
     """Merge Margulis provenance into manifest.json (flock-protected)."""
@@ -764,7 +734,6 @@ def _update_manifest(
                 "license": meta.get("license", "public domain (NSIDC)"),
                 "period": period,
                 "search_bbox": list(search_bbox),
-                "fabric_scope": fabric_scope,
                 "variables": [v["name"] for v in meta["variables"]],
                 "years": merged_years,
             }
@@ -795,7 +764,6 @@ def _update_manifest(
                     "period": period,
                     "years": [int(rec["year"]) for rec in year_records],
                     "search_bbox": list(search_bbox),
-                    "fabric_scope": fabric_scope,
                 },
                 command=f"fetch {_SOURCE_KEY.replace('_', '-')}",
             )

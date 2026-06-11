@@ -26,12 +26,6 @@ fabric:
   # Equal-area CRS used for HRU area + NN-fill distances. EPSG:5070 is
   # CONUS Albers — override for AK / HI / PR (e.g. EPSG:3338 for Alaska).
   area_crs: "EPSG:5070"
-  # Optional fabric-scope token. Sources tagged with `fabric_scope` in
-  # catalog/sources.yml (e.g. margulis_wus_sr -> [or]) are silently skipped
-  # at both agg and target stages when this is unset. Set to one of
-  # catalog.FABRIC_SCOPE_TOKENS (currently {"or"}) on fabric-restricted
-  # projects to opt in.
-  # token: or
   # KD-tree partition target HRUs/batch. The same partition is reused
   # across every source's aggregation. Override per-run with CLI
   # --batch-size. Changing this value invalidates any cached weight
@@ -154,7 +148,7 @@ targets:
       - daymet
       - snodas
       - era5_land
-      - margulis_wus_sr   # Oregon fabric only (fabric_scope)
+      - margulis_wus_sr   # Western US coverage; NaN elsewhere (#309)
       - ua_swe            # UA NSIDC-0719, CONUS, extends bound to 1982 (CY 1982-2022)
     time_step: daily
     period: "2003-01-01/2010-12-31"

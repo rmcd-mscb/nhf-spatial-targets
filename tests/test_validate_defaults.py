@@ -116,3 +116,17 @@ def test_check_required_raises_on_missing_period(tmp_path: Path):
     }
     with pytest.raises(ValueError, match="targets.runoff.period"):
         _check_required_keys(user_cfg)
+
+
+def test_report_unknown_keys_warns_on_retired_fabric_token(tmp_path: Path, capsys):
+    """docs/maintenance.md promises pre-#309 configs carrying the retired
+    fabric.token key get a validate warning naming it — pin that path."""
+    from nhf_spatial_targets.validate import _report_defaults_and_unknowns
+
+    user_cfg = {
+        "datastore": "/d",
+        "fabric": {"path": "/p", "id_col": "nhm_id", "token": "or"},
+    }
+    _report_defaults_and_unknowns(user_cfg)
+    err = capsys.readouterr().err
+    assert "[warning] unknown config key: fabric.token" in err

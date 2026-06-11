@@ -12,7 +12,7 @@ cd <repo root>
 mkdir -p logs
 OR=/caldera/hovenweep/projects/usgs/water/impd/nhgf/or-spatial-targets
 
-# 1. Aggregate the 15 array sources (incl. Margulis WUS-SR OR-only SWE + UA SWE).
+# 1. Aggregate the 15 array sources (incl. Margulis WUS-SR WUS-coverage SWE + UA SWE).
 sbatch slurm/project_or/agg_all_or.slurm
 
 # 2. Aggregate the two companion sources the array excludes.
@@ -38,7 +38,8 @@ Notes:
 - `PROJECT_DIR` defaults to `or-spatial-targets` in the `project_or/` wrappers;
   the `shared/` scripts default to gfv2, so pass `PROJECT_DIR=$OR` to them.
 - Margulis WUS-SR raw downloads live in the shared datastore and are fetched via
-  `slurm/project_or/fetch_margulis_wus_sr.slurm` (OR-scoped, but the raw NCs are
-  reusable across projects sharing the datastore).
+  `slurm/shared/fetch_margulis_wus_sr.slurm` (a fabric-independent shared fetcher
+  since #309 — pass `PROJECT_DIR=$OR`; the raw NCs are reusable across projects
+  sharing the datastore).
 - `REPO_DIR` auto-resolves from the submit directory; override it to run a
   worktree/branch checkout.

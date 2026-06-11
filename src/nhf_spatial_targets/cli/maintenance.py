@@ -209,7 +209,7 @@ def check_config_cmd(
 ):
     """Report optional-config features missing from the project's config.yml.
 
-    Existing projects don't pick up new optional features (e.g. fabric.token,
+    Existing projects don't pick up new optional features (e.g.
     representative_points) added to the init template, because they were
     created before those features existed. This command compares the project's
     config.yml against the registry in upgrade_config.OPTIONAL_CONFIG_FEATURES

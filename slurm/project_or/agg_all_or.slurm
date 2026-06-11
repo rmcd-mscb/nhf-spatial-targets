@@ -14,8 +14,9 @@
 # PROJECT_DIR, then sources the shared task array + dispatch. Only PROJECT_DIR
 # differs from slurm/project_gfv2/agg_all_gfv2.slurm.
 #
-# Index 13 (agg-margulis-wus-sr) is the OR-only SWE source (fabric_scope=[or]);
-# it is a no-op on non-OR fabrics but produces real output here.
+# Index 13 (agg-margulis-wus-sr) covers only the Western US; since #309 it
+# aggregates wherever its grid overlaps the fabric (NaN elsewhere) and
+# requires fetched raw data on every fabric (FileNotFoundError otherwise).
 #
 # This array excludes SSEBop and Daymet (remote/region-arg aggregators); the
 # Oregon build also needs:

@@ -143,7 +143,7 @@ def _make_sca_project(
 
     cfg = {
         "datastore": str(tmp_path / "store"),
-        "fabric": {"path": str(fabric_path), "id_col": "nhm_id", "token": "or"},
+        "fabric": {"path": str(fabric_path), "id_col": "nhm_id"},
         "targets": {
             "snow_covered_area": sca_cfg,
             "runoff": {"enabled": False},

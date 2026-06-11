@@ -15,10 +15,11 @@ Builds the baseline calibration targets documented in [Hay and others (2022), US
 | Snow Cover | `snowcov_area` | MOD10C1 v061 + UA SWE² | NaN-aware bound: MODIS CI-interval (CI ≥ 70%) ∪ depth-derived fraction | Daily |
 | SWE | `pkwater_equiv` | Daymet + SNODAS + ERA5-Land (`sd`) + UA SWE² + Margulis WUS-SR¹ | NaN-aware multi-source min/max | Daily |
 
-¹ Margulis Western US Snow Reanalysis is **fabric-scoped to Oregon**
-via `catalog/sources.yml` → `margulis_wus_sr.fabric_scope`. Non-Oregon projects
-reduce the SWE bound to the remaining four sources (Daymet, SNODAS, ERA5-Land,
-UA SWE) at target-build time; raw downloads remain reusable across any project
+¹ Margulis Western US Snow Reanalysis covers only the **Western US**; it
+contributes NaN-aware to the HRUs it covers and drops out elsewhere (#309 —
+the former fabric_scope/fabric.token gate is gone). Outside its domain the
+SWE bound falls back to the remaining four sources (Daymet, SNODAS,
+ERA5-Land, UA SWE); raw downloads remain reusable across any project
 sharing the datastore.
 
 ² UA Daily 4-km SWE (NSIDC-0719; Broxton, Zeng & Dawson 2019) is CONUS-wide,
@@ -37,8 +38,9 @@ combined with UA SWE's depth-derived `snow_covered_fraction` (a degenerate
 `[v, v]` interval reaching back to WY 1982), tunable via
 `snow_covered_area.{forced_zero_combined, min_sources_for_bound}` (#237). SWE uses
 NaN-aware multi-source min/max across 4 (gfv2) or 5 (OR) sources via the
-`fabric_scope` mechanism on Margulis WUS-SR (PR #101/#135), with UA SWE
-(NSIDC-0719) extending the bound back to 1982 (PR #237).
+geometry-driven partial coverage of Margulis WUS-SR (#309; formerly the
+`fabric_scope` token gate of PR #101/#135), with UA SWE (NSIDC-0719)
+extending the bound back to 1982 (PR #237).
 
 ## Quick Start
 
@@ -94,7 +96,7 @@ pixi run fetch-mwbm-climgrid   -- --project-dir /data/gfv11-targets             
 pixi run fetch-daymet          -- --project-dir /data/gfv11-targets               # manual stage required
 pixi run fetch-snodas          -- --project-dir /data/gfv11-targets --period 2003/2024
 pixi run fetch-ua-swe          -- --project-dir /data/gfv11-targets --period 1981/2023  # SWE + SCA source
-pixi run fetch-margulis-wus-sr -- --project-dir /data/gfv11-targets --period 1985/2021  # OR fabric only
+pixi run fetch-margulis-wus-sr -- --project-dir /data/gfv11-targets --period 1985/2021  # WUS coverage (fabric-bbox search)
 
 # 7. Aggregate sources to the HRU fabric
 pixi run agg-all     -- --project-dir /data/gfv11-targets                # 12 local-NC sources
@@ -250,7 +252,7 @@ Rough per-source estimates for a full NHM modelling period (1979–2025 for sour
 | MWBM ClimGrid | 1895–2020 (full) | Single global NC (~7.5 GB published) | **~8 GB** |
 | Daymet V4 R1 | 1980–2024 (NA/HI/PR) | Regional zarr stores, operator-staged | **~1–2 TB** if all three regions kept |
 | SNODAS | 2003–2024 (22 yr) | per-year daily NCs (raw `.tar` optional) | **80–150 GB** |
-| Margulis WUS-SR | 1985–2021 (WUS) | Per-water-year per-tile granules (OR fabric only) | **~20 GB** |
+| Margulis WUS-SR | 1985–2021 (WUS) | Per-water-year per-tile granules (fabric-bbox CMR search) | **~20 GB** |
 | **Total (typical CONUS run, excluding Daymet)** | | | **~300–500 GB** |
 
 These are order-of-magnitude estimates. Daymet's regional zarrs are sized for the full dataset; in practice the operator stages only the regions they need (NA covers CONUS).
@@ -291,7 +293,7 @@ fabric-independent (the datastore is shared):
 - [`slurm/shared/fetch_all.slurm`](slurm/shared/fetch_all.slurm) — 15-element array (indices 0–14), one task per source (general case)
 - [`slurm/shared/fetch_era5_land.slurm`](slurm/shared/fetch_era5_land.slurm) — sharded array (default 4 workers) for ERA5-Land specifically; respects CDS per-user throttling
 - [`slurm/shared/fetch_snodas.slurm`](slurm/shared/fetch_snodas.slurm) — sharded array (default 4 workers) for SNODAS; per-day idempotent
-- [`slurm/project_or/fetch_margulis_wus_sr.slurm`](slurm/project_or/fetch_margulis_wus_sr.slurm) — single task; Oregon-scoped (raw downloads still datastore-shared), no sharding yet
+- [`slurm/shared/fetch_margulis_wus_sr.slurm`](slurm/shared/fetch_margulis_wus_sr.slurm) — single task; Western-US coverage (any fabric whose bbox overlaps the WUS; raw downloads datastore-shared), no sharding yet
 
 **Prerequisites — complete these before submitting:**
 
@@ -343,7 +345,7 @@ Array index → source mapping (`slurm/shared/fetch_all.slurm`):
 | 13 | Margulis WUS-SR | 1985/2021 | NSIDC-0719 via earthaccess; OR-fabric only |
 | 14 | UA SWE | 1981/2023 | NSIDC-0719 UA Broxton; SWE + SCA source (CY1982–2022 on disk) |
 
-Most fetch routines are network I/O-bound; the general script allocates 1 CPU and 128 GB RAM per task with a 24-hour wall-clock limit. Per-source scripts (`slurm/shared/fetch_era5_land.slurm`, `slurm/shared/fetch_snodas.slurm`, `slurm/project_or/fetch_margulis_wus_sr.slurm`) tune memory and concurrency for their workload — notably SNODAS uses only 8 GB because PR #110's dask-streaming consolidator bounds peak RSS. Override `PROJECT_DIR` and `REPO_DIR` via environment before submission. SLURM directives (`--account`, `--partition`) at the top of each script may need adjustment for your cluster — on caldera, `--account=impd` is mandatory (see the callout above).
+Most fetch routines are network I/O-bound; the general script allocates 1 CPU and 128 GB RAM per task with a 24-hour wall-clock limit. Per-source scripts (`slurm/shared/fetch_era5_land.slurm`, `slurm/shared/fetch_snodas.slurm`, `slurm/shared/fetch_margulis_wus_sr.slurm`) tune memory and concurrency for their workload — notably SNODAS uses only 8 GB because PR #110's dask-streaming consolidator bounds peak RSS. Override `PROJECT_DIR` and `REPO_DIR` via environment before submission. SLURM directives (`--account`, `--partition`) at the top of each script may need adjustment for your cluster — on caldera, `--account=impd` is mandatory (see the callout above).
 
 ### Running Aggregation: PC vs HPC
 
@@ -424,7 +426,7 @@ Array index → source mapping for the `agg_all_<fabric>.slurm` array (15 source
 | 10 | SNODAS | ~1 km daily SWE (CONUS) — WGS84-native, weight gen is the hot path |
 | 11 | MWBM ClimGrid | 2.5 arcmin monthly, 4 vars (clipped to 1979/2020 in-script) |
 | 12 | ERA5-Land sd | 0.1° daily snow depth (SWE source) |
-| 13 | Margulis WUS-SR | 90 m daily SWE — OR-only (fabric_scope=[or]); no-op on other fabrics |
+| 13 | Margulis WUS-SR | 90 m daily SWE — Western US coverage; NaN outside its domain (#309) |
 | 14 | UA SWE | 4 km daily SWE + SCA source — EPSG:5070-native (fast weight-gen); aggregates `swe` + depth-thresholded `snow_covered_fraction` (#237) |
 
 All jobs are CPU/memory-bound; the agg array allocates 1 CPU and 128 GB RAM per task with a 24-hour wall-clock limit. Override `BATCH_SIZE` (default 10000 HRUs/batch, tuned for 128 GB) with `BATCH_SIZE=2500 sbatch slurm/project_<fabric>/agg_all_<fabric>.slurm` if a source OOMs. WGS84-native sources (SNODAS, GLDAS) cost ~5–8× more in weight generation than projected sources (Daymet, MODIS sinusoidal) at comparable resolution — see [`docs/architecture/transformation-pipeline.md`](docs/architecture/transformation-pipeline.md).
@@ -622,7 +624,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the dev-environment setup, the
 issue-branch-PR workflow, and **"Extending the Pipeline" recipes** with
 checklisted file touch-points for adding a new source, target, or fabric.
 Project-wide conventions (transformation policy, CF-1.6 NetCDF policy,
-manifest read-merge-write, `fabric_scope`, pre-commit quality gate) live in
+manifest read-merge-write, partial-coverage aggregation, pre-commit quality gate) live in
 [`CLAUDE.md`](CLAUDE.md) and apply equally to human contributors.
 
 ### Platform notes
@@ -659,7 +661,7 @@ Pixi supports **linux-64**, **osx-arm64**, and **win-64** (see `pixi.toml`).
 | **Recharge target builder** (`normalized_minmax`, 2-source; PR #133/#134) | Done |
 | **Soil moisture target builder** (`normalized_minmax`, monthly + annual; PR #133/#134) | Done |
 | **SCA target builder** (CI-bounded two-source MOD10C1 v061 ∪ UA SWE per `PRMSobjfun.f90:calcSCA`; PR #210/#212, year-chunk fingerprinting #213/#214, finish workflow #217, two-source #237) | Done |
-| **SWE target builder** (4-source gfv2 / 5-source OR NaN-aware, OR-scoped Margulis via `fabric_scope`, UA SWE extending to 1982; PR #101/#135, #237) | Done |
+| **SWE target builder** (NaN-aware five-source bound; Margulis contributes via geometry-driven partial coverage (#309), UA SWE extending to 1982; PR #101/#135, #237) | Done |
 | Margulis WUS-SR per-WY granule consolidation | Done (PR #101/#135) |
 
 ## Known Gaps

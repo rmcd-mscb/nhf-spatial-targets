@@ -15,7 +15,7 @@ This pipeline builds the baseline calibration targets documented in [Hay and oth
 | Snow cover | `snowcov_area` | MOD10C1 v061 · UA SWE² | NaN-aware bound: MODIS CI-interval (CI ≥ 70 %) ∪ depth-derived fraction | Daily |
 | SWE | `pkwater_equiv` | Daymet · SNODAS · ERA5-Land · UA SWE² · Margulis WUS-SR¹ | NaN-aware multi-source min/max | Daily |
 
-¹ Margulis Western US Snow Reanalysis (NSIDC-0719) is **fabric-scoped to Oregon** via `catalog/sources.yml → margulis_wus_sr.fabric_scope`. Non-Oregon projects reduce the SWE bound to the remaining four sources (Daymet, SNODAS, ERA5-Land, UA SWE) at target-build time; raw downloads remain reusable across any project sharing the datastore.
+¹ Margulis Western US Snow Reanalysis covers only the **Western US**; it contributes NaN-aware to the HRUs it covers and drops out elsewhere (#309 — the former fabric_scope/fabric.token gate is gone). Outside its domain the SWE bound falls back to the remaining four sources (Daymet, SNODAS, ERA5-Land, UA SWE); raw downloads remain reusable across any project sharing the datastore.
 
 ² UA Daily 4-km SWE (NSIDC-0719; Broxton, Zeng & Dawson 2019) is CONUS-wide for calendar years 1982–2022 and is the only SWE source reaching before SNODAS's 2003 start. It is a fifth SWE source and the second SCA source (its depth-derived snow-covered fraction extends the CI-bound back to 1982); see [#237](https://github.com/rmcd-mscb/nhf-spatial-targets/issues/237).
 

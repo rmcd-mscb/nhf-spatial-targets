@@ -39,7 +39,7 @@ AGG_TASKS=(
     "agg-snodas"        # 10 — SNODAS         (~1 km daily SWE, CONUS)
     "agg-mwbm-climgrid" # 11 — USGS MWBM (ClimGrid) (2.5 arcmin monthly, 4 vars)
     "agg-era5-land-sd"  # 12 — ERA5-Land sd   (0.1° daily snow depth, SWE source)
-    "agg-margulis-wus-sr" # 13 — Margulis WUS-SR (90 m daily SWE, OR-only SWE source)
+    "agg-margulis-wus-sr" # 13 — Margulis WUS-SR (90 m daily SWE, Western US coverage)
     "agg-ua-swe"        # 14 — UA SWE NSIDC-0719 (4 km daily, EPSG:5070; SWE + SCA source)
 )
 

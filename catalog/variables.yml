@@ -196,12 +196,12 @@ variables:
     description: >
       Daily basin snow water equivalent. Range is min/max across five
       independent SWE sources per HRU and time step. Margulis Western US
-      Snow Reanalysis is fabric-scoped to Oregon only (see fabric_scope in
-      catalog/sources.yml); non-Oregon fabrics are bounded by the remaining
-      four sources (daymet, snodas, era5_land, ua_swe). UA SWE (NSIDC-0719)
-      contributes calendar years 1982-2022 (re-windowed at consolidate from
-      water years 1982-2023), extending the bound well before the SNODAS
-      2003 start. Absolute values used (not normalized).
+      Snow Reanalysis covers only the Western US; outside its domain the
+      NaN-aware bound falls back to the remaining four sources (daymet,
+      snodas, era5_land, ua_swe). UA SWE (NSIDC-0719) contributes calendar
+      years 1982-2022 (re-windowed at consolidate from water years
+      1982-2023), extending the bound well before the SNODAS 2003 start.
+      Absolute values used (not normalized).
     prms_reference: "TM 6-B7 (Markstrom et al. 2015)"
     time_step: daily
     # Historical default, not a hard constraint (CLAUDE.md: period fields
@@ -217,7 +217,7 @@ variables:
       - daymet
       - snodas
       - era5_land            # 'sd' (snow depth water equivalent)
-      - margulis_wus_sr      # Oregon fabric only
+      - margulis_wus_sr      # Western US coverage; NaN elsewhere
       - ua_swe               # UA NSIDC-0719 'swe' (CONUS, CY1982-2022)
     range_method: multi_source_minmax
     range_notes: >
@@ -231,9 +231,9 @@ variables:
         upper_bound = nanmax(daymet, snodas, era5_sd, margulis, ua_swe).
       nanmin/nanmax (xr.concat([...]).min(skipna=True)) means a bound is
       defined whenever >=1 source is finite at that (HRU, time); only
-      all-NaN cells produce NaN. Margulis WUS-SR is fabric-scoped to
-      Oregon (see catalog/sources.yml fabric_scope); for non-OR fabrics
-      it is excluded by the target builder so the bound reduces to a
-      4-source min/max (daymet, snodas, era5_sd, ua_swe).
+      all-NaN cells produce NaN. Margulis WUS-SR covers only the Western
+      US; at HRUs outside its domain it contributes NaN and the bound
+      reduces to the remaining sources (the former fabric_scope gate was
+      removed in #309).
     normalize: false
     output_format: netcdf

@@ -850,8 +850,9 @@ sources:
       UCLA/Margulis Western US Snow Reanalysis, daily 90 m posterior
       snow water equivalent over the Sierra Nevada, Cascades, Rockies
       and adjacent ranges for water years 1985-2021. Used as a SWE
-      calibration source for the Oregon fabric only; for other fabrics
-      the SWE target builder excludes this source (see fabric_scope).
+      calibration source; it contributes to the SWE bound at the HRUs
+      its Western US domain covers and is honest NaN elsewhere
+      (geometry-driven partial coverage, #309).
     citations:
       - "Fang, Y., Liu, Y., and Margulis, S.A., 2022, doi:10.5067/PP7T2GBI52I2"
     doi: "10.5067/PP7T2GBI52I2"
@@ -874,19 +875,6 @@ sources:
         The earlier `url:` here pointed at https://nsidc.org/data/nsidc-0719
         which is the UA Broxton product (see `ua_swe`), not this one;
         the corrected slug is /wus_ucla_sr.
-    fabric_scope:
-      # `fabrics:` is the list of fabric tokens for which this source
-      # should be aggregated. Allowed tokens (kept in sync with the
-      # known fabric set this pipeline targets): "or" (Oregon).
-      # Token names quoted to avoid YAML reserved-word edge cases.
-      fabrics: ["or"]
-      notes: >
-        Spatial extent is the Western US (CA, OR, WA, ID, NV, UT, and
-        parts of MT, WY, CO, AZ, NM). This catalog scopes the source
-        to fabric "or" because the SWE target builder is keyed on the
-        Oregon HRU set in the current pipeline; enforcement happens at
-        target-build time, not at fetch time. Raw downloads remain
-        reusable by any project pointing at the same datastore.
     variables:
       - name: SWE
         long_name: posterior snow water equivalent
@@ -903,15 +891,16 @@ sources:
     license: public domain (NASA NSIDC)
     status: current
     release:
-      # `fabric_scope` restricts AGGREGATION consumption to the Oregon
-      # fabric, but the consolidated NSIDC source NCs themselves are
-      # public-domain redistributable. The consolidated-source child in
-      # the ScienceBase release carries the data.
+      # Spatial coverage is Western-US-only, but the consolidated NSIDC
+      # source NCs are public-domain redistributable. The
+      # consolidated-source child item in the ScienceBase release
+      # carries the data.
       publishable: true
       notes: >
-        Fabric-scoped to "or" for aggregation/consumption; the
-        consolidated source data is public-domain and redistributable as
-        part of the umbrella release for any consumer.
+        Western US spatial coverage; on fabrics extending beyond the WUS
+        the aggregated/target outputs carry data only at covered HRUs
+        (#309). The consolidated source data is public-domain and
+        redistributable as part of the umbrella release for any consumer.
 
   ua_swe:
     name: University of Arizona Daily 4-km Gridded SWE and Snow Depth (NSIDC-0719)

@@ -18,24 +18,26 @@
 # (manifest fast path), so resuming after a partial run requires no
 # flag changes.
 #
-# This source is fabric-scoped to Oregon (catalog/sources.yml ->
-# margulis_wus_sr.fabric_scope.fabrics: ["or"]). Running on a non-Oregon
-# project emits a warning and proceeds — raw data lands in the shared
-# datastore and remains usable by any Oregon-fabric project pointed at
-# the same datastore — but expect zero granules per year.
+# This source covers only the Western US (#309 removed the old
+# fabric_scope opt-in, so this is now a fabric-independent shared
+# fetcher like fetch_ua_swe / fetch_snodas). The CMR search bbox is the
+# project fabric's buffered bbox — raw data lands in the shared
+# datastore and remains usable by any project pointed at the same
+# datastore; fabrics outside the WUS get zero granules per year. A CONUS
+# project (e.g. gfv2) wants this too, since Margulis now contributes to
+# its Western-US HRUs.
 #
-# Consolidation of the per-water-year per-tile granules into per-year
-# NetCDFs is DEFERRED to the Margulis aggregate follow-up (umbrella
-# #101). This script only stages raw downloads. See
-# docs/sources/margulis_wus_sr.md.
+# Per-water-year per-tile granules are consolidated into per-calendar-year
+# NetCDFs by the consolidator that runs after each year's downloads
+# complete. See docs/sources/margulis_wus_sr.md.
 #
 # Usage:
 #   mkdir -p logs
-#   export PROJECT_DIR=/path/to/oregon-project
-#   sbatch slurm/project_or/fetch_margulis_wus_sr.slurm
+#   export PROJECT_DIR=/path/to/your/project
+#   sbatch slurm/shared/fetch_margulis_wus_sr.slurm
 #
 # To fetch a subset of years only:
-#   PERIOD=2000/2010 sbatch slurm/project_or/fetch_margulis_wus_sr.slurm
+#   PERIOD=2000/2010 sbatch slurm/shared/fetch_margulis_wus_sr.slurm
 
 set -euo pipefail
 
@@ -45,7 +47,7 @@ set -euo pipefail
 export PYTHONUNBUFFERED=1
 
 REPO_DIR="${REPO_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/nhf-spatial-targets}"
-PROJECT_DIR="${PROJECT_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/or-spatial-targets}"
+PROJECT_DIR="${PROJECT_DIR:?set PROJECT_DIR to the target project dir, e.g. PROJECT_DIR=/caldera/.../gfv2-spatial-targets}"
 PERIOD="${PERIOD:-1985/2021}"
 
 echo "=== Margulis WUS-SR fetch ==="

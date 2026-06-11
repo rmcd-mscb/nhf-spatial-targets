@@ -18,8 +18,8 @@
 # (run-sca) is the two-source MOD10C1 + UA SWE bound (#237). Each target
 # requires its configured sources to be aggregated FIRST: missing sources fail
 # the array task with FileNotFoundError (exit 1) — they do NOT self-skip, so run
-# the agg array to completion before this one. SWE picks up the OR-only Margulis
-# WUS-SR source via fabric_scope.
+# the agg array to completion before this one. SWE picks up Margulis WUS-SR
+# wherever its aggregated data covers this fabric (#309, NaN-aware combine).
 #
 # Prerequisites (see slurm/project_or/README.md for the full order):
 #   agg_all_or.slurm + slurm/shared/agg_ssebop.slurm + slurm/shared/agg_daymet.slurm (--region na) done.

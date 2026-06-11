@@ -7,7 +7,7 @@ matching the PRMS ``pkwater_equiv`` PUNIT):
   - Daymet V4 R1 ``swe``       (kg m⁻² ≡ mm water-eq, daily)
   - SNODAS ``swe``             (kg m⁻² ≡ mm water-eq, daily)
   - ERA5-Land ``sd``           (m water-eq, daily — instantaneous snapshot)
-  - Margulis WUS-SR ``SWE``    (m water-eq, daily — Oregon fabric only)
+  - Margulis WUS-SR ``SWE``    (m water-eq, daily — Western US coverage)
   - UA SWE (NSIDC-0719) ``swe``  (kg m⁻² ≡ mm water-eq, daily; CONUS 1982–2022)
 
 UA SWE (NSIDC-0719, the University of Arizona daily 4-km product) reaches
@@ -35,17 +35,12 @@ alongside. ``snow_water_equivalent.sources`` controls which sources
 contribute, so dropping a source from the bound is a one-line config
 change rather than a code edit.
 
-**Fabric scope enforcement.** Margulis WUS-SR carries
-``fabric_scope.fabrics: ["or"]`` in ``catalog/sources.yml`` — it should
-only contribute on the Oregon fabric. The builder reads the project's
-``fabric.token`` (e.g. ``"or"``) and silently skips any requested source
-whose ``fabric_scope`` does not include that token (with a clear log
-line). Projects whose ``fabric.token`` is unset behave as if the token
-were "(unset)" — which means any source carrying ``fabric_scope`` is
-skipped. This is the safe default for non-Oregon fabrics that
-accidentally inherit the five-source SWE default from
-``defaults.py`` (which drops to four — daymet, snodas, era5_land,
-ua_swe — once the OR-only Margulis is filtered out).
+**Partial spatial coverage.** Margulis WUS-SR covers only the Western
+US; the aggregation driver (#309) emits its aggregated NCs reindexed to
+the full fabric with honest NaN at uncovered HRUs. Because the combine
+is NaN-aware, the source contributes wherever it is finite and drops
+out elsewhere — no configuration needed. The former catalog
+``fabric_scope`` / config ``fabric.token`` gate was removed in #309.
 
 If ``snow_water_equivalent.nn_fill`` is True (default), a second file
 ``<output>_nn_filled.nc`` is written with bound NaNs filled by the
@@ -77,7 +72,6 @@ import logging
 import pandas as pd
 import xarray as xr
 
-from nhf_spatial_targets import catalog
 from nhf_spatial_targets.targets._adapter import (
     SourceLoaderResult,
     TargetAdapter,
@@ -178,7 +172,7 @@ SHIMS: tuple[SourceShim, ...] = (
     SourceShim(
         source_key="margulis_wus_sr",
         aggregated_var="SWE",
-        description="Margulis WUS-SR SWE (m → mm, daily; OR fabric only)",
+        description="Margulis WUS-SR SWE (m → mm, daily; WUS coverage)",
         to_common_units=margulis_to_mm,
         expected_cf_units="m",
     ),
@@ -201,33 +195,8 @@ def mm_to_inches(da: xr.DataArray) -> xr.DataArray:
 
 
 # ---------------------------------------------------------------------------
-# Fabric scope + availability filters (single-pass before per-year loop)
+# Availability filter (single-pass before per-year loop)
 # ---------------------------------------------------------------------------
-
-
-def _filter_sources_by_fabric_scope(
-    requested: list[str], fabric_token: str | None
-) -> list[str]:
-    """Drop sources whose ``fabric_scope`` excludes this project's fabric."""
-    kept: list[str] = []
-    for src in requested:
-        meta = catalog.source(src)
-        scope = meta.get("fabric_scope")
-        catalog.validate_fabric_scope(src, scope)
-        if scope is None:
-            kept.append(src)
-            continue
-        scope_fabrics = list(scope.get("fabrics") or [])
-        if fabric_token is not None and fabric_token in scope_fabrics:
-            kept.append(src)
-        else:
-            logger.info(
-                "swe: skipping source '%s' — fabric_scope=%s, project fabric token=%r",
-                src,
-                scope_fabrics,
-                fabric_token,
-            )
-    return kept
 
 
 def _filter_sources_by_availability(
@@ -243,7 +212,9 @@ def _filter_sources_by_availability(
             logger.warning(
                 "swe: skipping source '%s' — no aggregated NCs found under %s "
                 "(pattern: %s). Run "
-                "'pixi run nhf-targets agg %s --project-dir %s' to include it.",
+                "'pixi run nhf-targets agg %s --project-dir %s' to include it. "
+                "If that command reports no spatial overlap with this fabric, "
+                "the source cannot contribute here.",
                 src,
                 agg_dir,
                 pattern,
@@ -255,37 +226,21 @@ def _filter_sources_by_availability(
     return kept
 
 
-def _resolve_sources(project: Project) -> tuple[list[str], list[str], str | None]:
+def _resolve_sources(project: Project) -> tuple[list[str], list[str]]:
     """Resolve the effective source list for the current build.
 
-    Returns ``(effective_sources, requested_sources, fabric_token)``. Cached
-    by the per-year loader's first call so the filter loops don't re-run
-    every year (the inputs are config-derived and constant across years).
+    Returns ``(effective_sources, requested_sources)``. Called once by
+    ``build`` for logging and once per year by the loader — the
+    re-resolution is a cheap directory scan, and the inputs are
+    config-derived and constant across years.
     """
     swe_cfg = project.target("snow_water_equivalent")
     requested = list(swe_cfg["sources"])
-    fabric_cfg = project.config.get("fabric") or {}
-    fabric_token = fabric_cfg.get("token")
     shims = shims_by_config_label(SHIMS)
 
     validate_source_units(SHIMS, requested)
 
-    if fabric_token is not None and fabric_token not in catalog.FABRIC_SCOPE_TOKENS:
-        raise ValueError(
-            f"fabric.token={fabric_token!r} is not a recognised fabric token. "
-            f"Allowed: {sorted(catalog.FABRIC_SCOPE_TOKENS)}. To add a new "
-            f"fabric, extend catalog.FABRIC_SCOPE_TOKENS."
-        )
-
-    sources = _filter_sources_by_fabric_scope(requested, fabric_token)
-    if not sources:
-        raise ValueError(
-            f"snow_water_equivalent.sources={requested!r} resolved to "
-            f"zero sources after fabric_scope filtering (fabric token="
-            f"{fabric_token!r}). Add a non-scoped source or set fabric.token."
-        )
-
-    sources = _filter_sources_by_availability(project, sources, shims)
+    sources = _filter_sources_by_availability(project, requested, shims)
     if not sources:
         raise ValueError(
             f"snow_water_equivalent.sources={requested!r} resolved to "
@@ -294,7 +249,7 @@ def _resolve_sources(project: Project) -> tuple[list[str], list[str], str | None
             f"for at least one requested source before building the SWE target."
         )
 
-    return sources, requested, fabric_token
+    return sources, requested
 
 
 def _load_year(
@@ -313,7 +268,7 @@ def _load_year(
     mm → inches conversion. Per-year source-coverage gaps surface as INFO
     logs and contribute NaN to that year's bound.
     """
-    sources, requested_sources, fabric_token = _resolve_sources(project)
+    sources, _ = _resolve_sources(project)
     shims = shims_by_config_label(SHIMS)
     year, year_start, year_end = year_context
 
@@ -359,7 +314,6 @@ def _load_year(
 
     extra_attrs = {
         "source": "; ".join(shims[s].description for s in sources),
-        "fabric_token": fabric_token or "",
     }
 
     return SourceLoaderResult(
@@ -410,7 +364,7 @@ def build(project: Project) -> None:
     ``<output>_nn_filled.nc``.
 
     Thin wrapper around :func:`targets._driver.build`. Source filtering
-    (fabric_scope + availability) runs inside the loader so it is
+    (availability) runs inside the loader so it is
     visible in test fixtures that drive the loader directly without the
     full driver. Per-year contributions follow the period-union
     semantics — sources whose coverage doesn't include a given year are
@@ -419,17 +373,16 @@ def build(project: Project) -> None:
     """
     from nhf_spatial_targets.targets._driver import build as run_driver
 
-    sources, requested, fabric_token = _resolve_sources(project)
+    sources, requested = _resolve_sources(project)
     swe_cfg = project.target("snow_water_equivalent")
     logger.info(
         "Building SWE target: %d sources (%s) [requested %d (%s)], "
-        "period %s, fabric=%s (token=%r)",
+        "period %s, fabric=%s",
         len(sources),
         ",".join(sources),
         len(requested),
         ",".join(requested),
         swe_cfg["period"],
         project.config["fabric"]["path"],
-        fabric_token,
     )
     run_driver(ADAPTER, project)

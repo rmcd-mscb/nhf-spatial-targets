@@ -1,7 +1,7 @@
 """Report optional-config drift between a project's config.yml and the latest
 init template.
 
-Existing projects don't pick up new optional features (e.g. ``fabric.token``,
+Existing projects don't pick up new optional features (e.g.
 ``representative_points``) added to the init template, because they were
 created before those features existed. This module is the operator-facing
 discovery path: ``nhf-targets maintenance check-config -d <dir>`` lists what's missing,
@@ -35,7 +35,7 @@ class OptionalConfigFeature:
     ----------
     name
         The dotted key path as the operator should think of it
-        (``fabric.token``, ``representative_points``). Shown in the table.
+        (``representative_points``). Shown in the table.
     detect
         A regex applied to the project's ``config.yml`` text in MULTILINE
         mode. The feature is considered in-sync if it matches **any** form:
@@ -72,23 +72,6 @@ class OptionalConfigFeature:
 # (operator pasted but hasn't enabled) and live values both count as in-sync.
 
 OPTIONAL_CONFIG_FEATURES: list[OptionalConfigFeature] = [
-    OptionalConfigFeature(
-        name="fabric.token",
-        # Nested under `fabric:`; we match the leaf key only because there is
-        # no other `token:` field in the schema today. If that changes,
-        # tighten this to require fabric: context (e.g. multi-line lookbehind).
-        detect=r"(?m)^\s*#?\s*token\s*:",
-        block=(
-            "  # Optional fabric-scope token. Sources tagged with `fabric_scope` in\n"
-            "  # catalog/sources.yml (e.g. margulis_wus_sr -> [or]) are silently skipped\n"
-            "  # at both agg and target stages when this is unset. Set to one of\n"
-            '  # catalog.FABRIC_SCOPE_TOKENS (currently {"or"}) on fabric-restricted\n'
-            "  # projects to opt in. Paste under the `fabric:` block.\n"
-            "  # token: or\n"
-        ),
-        added="2026-05-23 (#193)",
-        why="opt-in for fabric_scope sources (e.g. margulis_wus_sr on the OR fabric)",
-    ),
     OptionalConfigFeature(
         name="representative_points",
         detect=r"(?m)^\s*#?\s*representative_points\s*:",

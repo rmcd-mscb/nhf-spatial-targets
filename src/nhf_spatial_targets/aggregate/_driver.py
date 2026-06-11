@@ -17,7 +17,6 @@ import pandas as pd
 import xarray as xr
 from gdptools import AggGen, UserCatData, WeightGen
 
-from nhf_spatial_targets import catalog
 from nhf_spatial_targets.aggregate._adapter import SourceAdapter
 from nhf_spatial_targets.aggregate._coords import detect_coords
 from nhf_spatial_targets.aggregate.batching import spatial_batch
@@ -639,8 +638,14 @@ def aggregate_year(
     id_col: str,
     *,
     catalog_meta: dict | None = None,
+    covered_batch_ids: set[int] | None = None,
 ) -> Path:
     """Aggregate one year to HRU polygons; idempotent on the per-year NC.
+
+    ``covered_batch_ids`` (from :func:`_covered_batch_ids`) restricts the
+    batch loop to batches that overlap the source grid; skipped batches'
+    HRUs become NaN rows via the full-fabric reindex below. ``None``
+    aggregates every batch.
 
     Returns the path of the per-year aggregated NC. If that path already
     exists, returns immediately without opening the source file. Otherwise
@@ -654,6 +659,26 @@ def aggregate_year(
     """
     out_path = per_year_output_path(project, adapter.source_key, year)
     if out_path.exists():
+        # The idempotent skip honours existing files, but a pre-#309 NC (or
+        # one written under a buggy coverage classification) may not span
+        # the full fabric — and downstream code now relies on that
+        # invariant. Warn loudly so a fixed classifier isn't silently
+        # shadowed by stale output forever.
+        with xr.open_dataset(out_path) as existing:
+            n_existing = int(existing.sizes.get(id_col, 0))
+        n_fabric = int(fabric_batched[id_col].nunique())
+        if n_existing != n_fabric:
+            logger.warning(
+                "%s: year %d: existing per-year NC %s carries %d HRUs but "
+                "the fabric has %d. It predates the full-fabric reindex "
+                "(#309) or was written under different coverage; delete it "
+                "and re-run agg to rebuild.",
+                adapter.source_key,
+                year,
+                out_path,
+                n_existing,
+                n_fabric,
+            )
         logger.info(
             "%s: year %d: per-year NC exists, skipping (%s)",
             adapter.source_key,
@@ -686,6 +711,8 @@ def aggregate_year(
 
         datasets: list[xr.Dataset] = []
         for bid in sorted(fabric_batched["batch_id"].unique()):
+            if covered_batch_ids is not None and int(bid) not in covered_batch_ids:
+                continue
             batch_gdf = fabric_batched[fabric_batched["batch_id"] == bid].drop(
                 columns=["batch_id"]
             )
@@ -729,6 +756,13 @@ def aggregate_year(
                 raise
             datasets.append(batch_ds)
 
+        if not datasets:
+            raise ValueError(
+                f"{adapter.source_key}: year {year}: no spatial batch overlaps "
+                f"the source grid; aggregate_source should have skipped this "
+                f"source before the per-year loop."
+            )
+
         year_ds = xr.concat(datasets, dim=id_col)
 
     if adapter.post_aggregate_hook is not None:
@@ -739,11 +773,22 @@ def aggregate_year(
     )
     _attach_cf_global_attrs(year_ds, adapter.source_key, meta)
 
-    # Canonical row order on emission: HRU dim ascending by id_col (issue #93).
-    # gdptools concatenates batches in iteration order, which is typically
-    # VPU-grouped rather than id_col-ascending. Sorting once at emission gives
-    # downstream consumers a stable invariant.
-    year_ds = year_ds.sortby(id_col)
+    # Canonical row order + full-fabric HRU set on emission (#93, #309).
+    # gdptools concatenates batches in iteration order (typically
+    # VPU-grouped), and batches outside the source grid are skipped for
+    # partial-coverage sources — reindexing to the sorted full-fabric id
+    # set restores id_col-ascending order and inserts honest NaN rows
+    # for HRUs the source does not cover.
+    all_ids = np.sort(fabric_batched[id_col].to_numpy())
+    extra = np.setdiff1d(year_ds[id_col].to_numpy(), all_ids)
+    if extra.size:
+        raise ValueError(
+            f"{adapter.source_key}: year {year}: aggregated output carries "
+            f"{extra.size} HRU id(s) absent from the fabric (e.g. "
+            f"{extra[:5].tolist()}) — id_col dtype mismatch or a stale "
+            f"weight cache from a different fabric."
+        )
+    year_ds = year_ds.reindex({id_col: all_ids})
 
     # Cadence comes from the adapter's authoritative output_cadence, NOT the
     # catalog time_step free-text (unreliable: one entry serves era5_land's
@@ -1002,39 +1047,143 @@ def _attach_cf_global_attrs(ds: xr.Dataset, source_key: str, meta: dict) -> None
     ds.attrs.setdefault("institution", "USGS")
 
 
-def _skip_for_fabric_scope(source_key: str, meta: dict, project: Project) -> bool:
-    """Return True (and log) if the source's ``fabric_scope`` excludes the project.
+def _covered_batch_ids(
+    source_file: Path,
+    adapter: SourceAdapter,
+    fabric_batched: gpd.GeoDataFrame,
+) -> set[int]:
+    """Classify which spatial batches overlap the source grid's bbox.
 
-    Sources may declare ``fabric_scope.fabrics: [<token>, ...]`` in
-    ``catalog/sources.yml`` to restrict where they are useful (e.g. Margulis
-    WUS-SR is Oregon-only). Aggregating such a source against a fabric whose
-    token isn't in the scope drives gdptools into an empty-intersection state
-    that surfaces as a cryptic ``max() iterable argument is empty`` deep
-    inside ``WeightGen`` (issue surfaced from gfv2 + margulis_wus_sr). We
-    short-circuit here instead, mirroring the SWE target's
-    ``_filter_sources_by_fabric_scope``: a missing ``fabric.token`` (the
-    default for projects that haven't declared one) drops every
-    fabric-scoped source, so ``agg all`` on a national fabric quietly
-    skips OR-only sources rather than aborting the run.
+    Geometry-driven coverage guard (#309, replaces the retired catalog
+    ``fabric_scope`` token gate). gdptools' ``UserCatData`` subsets the
+    source grid to the target bbox buffered by twice the maximum cell
+    size and crashes with ``max() iterable argument is empty`` when the
+    subset spans fewer than two grid coords along either axis. A batch
+    is therefore "covered" when at least two x and two y grid coords
+    fall inside the batch bbox padded by a per-axis analogue of — never
+    larger than — the buffer gdptools applies
+    (``_get_shp_bounds_w_buffer``), so the guard may be conservative at
+    a grid edge but never admits a batch gdptools would crash on.
+
+    Batch bounds are transformed to the source CRS with
+    ``Transformer.transform_bounds(..., densify_pts=21)``: a corner-only
+    transform of a reprojected rectangle underestimates its true extent
+    wherever the edges curve, and a falsely "uncovered" edge batch is
+    silent data loss (a falsely "covered" one is harmless — gdptools
+    just aggregates it).
+
+    Coordinates are detected from ``adapter.raw_grid_variable`` on the
+    raw (un-hooked) file — the same variable the cross-year grid-shape
+    check uses, guaranteed present by ``aggregate_source``'s preflight.
+
+    Longitude convention: for geographic source grids published on
+    0–360 longitudes, negative batch-bound longitudes are shifted +360
+    before comparison. Fabrics whose bbox straddles the 0° or 180°
+    longitude seam are out of scope (no current fabric does) — the seam
+    case raises rather than misclassifying.
+
+    Raises
+    ------
+    ValueError
+        Non-finite source-grid coordinates, a fabric with no CRS,
+        non-finite transformed batch bounds (a CRS-domain failure), or
+        a batch bbox straddling a longitude seam. These are
+        configuration/data defects — never legitimate non-coverage —
+        and must not degrade into a silent "no overlap" skip.
     """
-    scope = meta.get("fabric_scope")
-    catalog.validate_fabric_scope(source_key, scope)
-    if scope is None:
-        return False
-    fabric_token = (project.config.get("fabric") or {}).get("token")
-    scope_fabrics = list(scope.get("fabrics") or [])
-    if fabric_token is not None and fabric_token in scope_fabrics:
-        return False
-    logger.info(
-        "%s: skipping aggregation — catalog fabric_scope=%s, project "
-        "fabric.token=%r. Raw downloads are reusable across projects "
-        "sharing a datastore, but this source has no meaningful overlap "
-        "with the current fabric.",
-        source_key,
-        scope_fabrics,
-        fabric_token,
+    from pyproj import CRS, Transformer
+
+    with xr.open_dataset(source_file) as ds:
+        x_coord, y_coord, _ = detect_coords(
+            ds,
+            adapter.raw_grid_variable,
+            x_override=adapter.x_coord,
+            y_override=adapter.y_coord,
+            time_override=adapter.time_coord,
+        )
+        xs = np.asarray(ds[x_coord].values, dtype="float64")
+        ys = np.asarray(ds[y_coord].values, dtype="float64")
+
+    if not (np.isfinite(xs).all() and np.isfinite(ys).all()):
+        raise ValueError(
+            f"{adapter.source_key}: non-finite values in grid coordinates "
+            f"{x_coord!r}/{y_coord!r} of {source_file.name}; cannot classify "
+            f"fabric coverage. The source NC is corrupt or its coordinates "
+            f"were mis-detected."
+        )
+    if fabric_batched.crs is None:
+        raise ValueError(
+            f"{adapter.source_key}: the fabric has no CRS, so its batches "
+            f"cannot be transformed to the source grid CRS "
+            f"({adapter.source_crs}) for coverage classification. Set a CRS "
+            f"on the fabric file (config fabric.path)."
+        )
+
+    pad_x = 2.0 * float(np.max(np.abs(np.diff(xs)))) if xs.size > 1 else 0.0
+    pad_y = 2.0 * float(np.max(np.abs(np.diff(ys)))) if ys.size > 1 else 0.0
+    shift_lon = (
+        CRS.from_user_input(adapter.source_crs).is_geographic
+        and float(xs.max()) > 180.0
     )
-    return True
+
+    transformer = Transformer.from_crs(
+        fabric_batched.crs, adapter.source_crs, always_xy=True
+    )
+
+    covered: set[int] = set()
+    for bid in sorted(int(b) for b in fabric_batched["batch_id"].unique()):
+        sub = fabric_batched.loc[fabric_batched["batch_id"] == bid]
+        minx, miny, maxx, maxy = transformer.transform_bounds(
+            *sub.total_bounds, densify_pts=21
+        )
+        if not np.all(np.isfinite([minx, miny, maxx, maxy])):
+            raise ValueError(
+                f"{adapter.source_key}: batch {bid} bounds transformed to "
+                f"{adapter.source_crs} are non-finite "
+                f"({(minx, miny, maxx, maxy)}). The fabric lies outside the "
+                f"source CRS domain or SourceAdapter.source_crs is wrong — "
+                f"refusing to classify this as 'no overlap'."
+            )
+        if shift_lon:
+            minx = minx + 360.0 if minx < 0 else minx
+            maxx = maxx + 360.0 if maxx < 0 else maxx
+            if minx > maxx:
+                raise ValueError(
+                    f"{adapter.source_key}: batch {bid} bbox straddles a "
+                    f"longitude seam after 0-360 normalisation "
+                    f"(minx={minx - 360.0:.6g}, maxx={maxx:.6g}); "
+                    f"seam-crossing fabrics are not supported by the "
+                    f"coverage guard."
+                )
+        n_x = int(np.count_nonzero((xs >= minx - pad_x) & (xs <= maxx + pad_x)))
+        n_y = int(np.count_nonzero((ys >= miny - pad_y) & (ys <= maxy + pad_y)))
+        if n_x >= 2 and n_y >= 2:
+            covered.add(bid)
+
+    if not covered:
+        # Evidence, not just the conclusion: print both bboxes so an
+        # operator can eyeball whether "no overlap" is believable (a wrong
+        # source_crs would otherwise be indistinguishable from genuine
+        # non-overlap).
+        fabric_bounds = transformer.transform_bounds(
+            *fabric_batched.total_bounds, densify_pts=21
+        )
+        logger.warning(
+            "%s: source grid bbox x=[%.6g, %.6g] y=[%.6g, %.6g] (in %s) has "
+            "no overlap with any fabric batch (fabric bounds in source CRS: "
+            "x=[%.6g, %.6g] y=[%.6g, %.6g]).",
+            adapter.source_key,
+            xs.min(),
+            xs.max(),
+            ys.min(),
+            ys.max(),
+            adapter.source_crs,
+            fabric_bounds[0],
+            fabric_bounds[2],
+            fabric_bounds[1],
+            fabric_bounds[3],
+        )
+    return covered
 
 
 def _assign_worker_years(
@@ -1080,11 +1229,10 @@ def aggregate_source(
     ``<source_key>/`` and stale ``<source_key>_agg.nc`` consolidated files
     are removed via ``_migrate_legacy_layout`` at the top of the function.
 
-    Sources whose catalog ``fabric_scope`` excludes the project's
-    ``fabric.token`` are skipped via :func:`_skip_for_fabric_scope` (a
-    no-op return with an INFO log) so ``agg all`` on e.g. a national
-    fabric quietly skips OR-only sources like Margulis WUS-SR instead
-    of pushing an empty intersection through gdptools.
+    Spatial coverage is geometry-driven (#309): batches whose bbox does
+    not overlap the source grid are skipped and their HRUs emitted as
+    NaN rows; a source with zero fabric overlap is skipped entirely
+    with an INFO log (see :func:`_covered_batch_ids`).
 
     Variables declared by ``adapter.variables`` that are missing from the
     source NC cause ValueError before any year is aggregated — unless the
@@ -1105,9 +1253,6 @@ def aggregate_source(
     # uses catalog_key / raw_dir_key here; for the 1:1 case both default
     # to source_key in SourceAdapter.__post_init__.
     meta = catalog_source(adapter.catalog_key)
-
-    if _skip_for_fabric_scope(adapter.source_key, meta, project):
-        return
 
     _migrate_legacy_layout(project, adapter.source_key)
 
@@ -1225,6 +1370,40 @@ def aggregate_source(
             n_batches,
         )
 
+    # Geometry-driven coverage guard (#309, replaces the catalog
+    # fabric_scope token gate). Zero overlap → skip the source for this
+    # fabric; partial overlap → aggregate covered batches and emit NaN
+    # rows for the rest (targets' NaN-aware combine reads them as "no
+    # data here").
+    covered = _covered_batch_ids(assigned_year_files[0][1], adapter, fabric_batched)
+    if not covered:
+        # WARNING, not INFO: for an explicitly requested source this is a
+        # surprising outcome, and every classifier failure mode that isn't
+        # caught by its hard errors funnels here. The classifier already
+        # logged the grid/fabric bboxes as evidence.
+        logger.warning(
+            "%s: skipping aggregation — the source grid has no spatial "
+            "overlap with this fabric (see preceding coverage log for the "
+            "grid/fabric bounds). Raw downloads remain reusable by projects "
+            "whose fabric the source covers.",
+            adapter.source_key,
+        )
+        return
+    if len(covered) < n_batches:
+        n_hrus = len(fabric_batched)
+        n_covered_hrus = int(fabric_batched["batch_id"].isin(list(covered)).sum())
+        logger.info(
+            "%s: partial fabric coverage — source grid bbox overlaps %d of "
+            "%d batches (%d of %d HRUs, %.1f%%); HRUs outside the source "
+            "grid will be NaN in the aggregated output.",
+            adapter.source_key,
+            len(covered),
+            n_batches,
+            n_covered_hrus,
+            n_hrus,
+            100.0 * n_covered_hrus / n_hrus,
+        )
+
     per_year_paths = [
         aggregate_year(
             adapter,
@@ -1234,6 +1413,7 @@ def aggregate_source(
             fabric_batched,
             id_col,
             catalog_meta=meta,
+            covered_batch_ids=covered,
         )
         for year, path in assigned_year_files
     ]
@@ -1262,9 +1442,12 @@ def aggregate_source(
         access=meta.get("access", {}),
         period=derived_period,
         output_files=rel_output_files,
+        # Only covered batches get weight CSVs (#309) — enumerating
+        # range(n_batches) would list files that were never written for
+        # partial-coverage sources.
         weight_files=[
             str(Path("weights") / f"{adapter.source_key}_batch{i}.csv")
-            for i in range(n_batches)
+            for i in sorted(covered)
         ],
         batch_size=batch_size,
         n_workers=n_workers,
