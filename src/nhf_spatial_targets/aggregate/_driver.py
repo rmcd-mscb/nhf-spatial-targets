@@ -1346,9 +1346,12 @@ def aggregate_source(
         access=meta.get("access", {}),
         period=derived_period,
         output_files=rel_output_files,
+        # Only covered batches get weight CSVs (#309) — enumerating
+        # range(n_batches) would list files that were never written for
+        # partial-coverage sources.
         weight_files=[
             str(Path("weights") / f"{adapter.source_key}_batch{i}.csv")
-            for i in range(n_batches)
+            for i in sorted(covered)
         ],
         batch_size=batch_size,
         n_workers=n_workers,

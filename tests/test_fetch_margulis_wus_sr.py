@@ -255,14 +255,15 @@ def test_authentication_failure_propagates(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_manifest_records_fabric_scope(tmp_path, monkeypatch):
-    """The manifest entry carries the Oregon-only scope from the catalog."""
+def test_manifest_records_search_bbox_and_variables(tmp_path, monkeypatch):
+    """The manifest entry carries the fabric-buffered search bbox and the
+    variable list (fabric_scope recording was removed in #309)."""
     workdir = _make_project(tmp_path)
     _stub_earthaccess(monkeypatch, granules_per_year=1)
     fetch_margulis_wus_sr(workdir=workdir, period="2000/2000")
     manifest = json.loads((workdir / "manifest.json").read_text())
     entry = manifest["sources"]["margulis_wus_sr"]
-    assert entry["fabric_scope"]["fabrics"] == ["or"]
+    assert "fabric_scope" not in entry
     assert entry["variables"] == ["SWE"]
     # Manifest field is `search_bbox` (the fabric-buffered search bbox),
     # distinct from SNODAS's fixed `bbox`.

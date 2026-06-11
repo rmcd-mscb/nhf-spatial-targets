@@ -2506,6 +2506,11 @@ def test_aggregate_source_partial_coverage_emits_full_fabric_with_nan(tmp_path, 
     assert np.isfinite(vals[:, :2]).all()  # covered cluster
     assert np.isnan(vals[:, 2:]).all()  # uncovered cluster -> honest NaN
     assert "partial fabric coverage" in caplog.text
+    # Manifest lists weight CSVs only for covered batches — uncovered
+    # batches never get a CSV written (provenance must match disk).
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    weight_files = manifest["sources"]["merra2"]["weight_files"]
+    assert len(weight_files) == 1
 
 
 def test_aggregate_source_zero_coverage_skips_cleanly(tmp_path, caplog):

@@ -867,8 +867,8 @@ def fetch_margulis_wus_sr_cmd(
 ):
     """Download Margulis Western US Snow Reanalysis (WUS_UCLA_SR) via earthaccess.
 
-    Fabric-scoped to Oregon only (catalog `fabric_scope`); the scope is
-    recorded in manifest.json but not enforced at fetch time. Fetch-only:
+    The CMR search bbox is the project fabric's buffered bbox (the
+    source itself covers the Western US). Fetch-only:
     consolidation is deferred to the Margulis aggregate follow-up.
     """
     import json as json_mod
