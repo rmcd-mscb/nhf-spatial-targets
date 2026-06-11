@@ -1,4 +1,4 @@
-"""Margulis Western US Snow Reanalysis daily SWE aggregator (Oregon-only).
+"""Margulis Western US Snow Reanalysis daily SWE aggregator.
 
 Reads per-year consolidated NCs at
 ``<datastore>/margulis_wus_sr/daily/margulis_wus_sr_daily_<year>.nc``
@@ -14,11 +14,11 @@ does not apply any per-pixel quality gate in a ``pre_aggregate_hook``
 — HRUs that straddle the WUS domain edge become honest NaN, which the
 SWE target builder handles at multi-source combination time.
 
-The catalog declares ``fabric_scope.fabrics: [or]`` for this source;
-``fetch_margulis_wus_sr`` records that scope in ``manifest.json`` but
-does not enforce it (raw downloads stay reusable across projects). The
-SWE target builder is responsible for skipping this source on non-OR
-fabrics — see ``targets/swe.py``.
+The source covers only the Western US. The aggregation driver's
+geometry-driven coverage guard (#309) skips fabric batches outside the
+grid and emits honest NaN rows for them, so on a CONUS fabric the
+aggregated NC carries data only at WUS HRUs; the SWE target's NaN-aware
+combine uses it wherever it is finite.
 """
 
 from __future__ import annotations

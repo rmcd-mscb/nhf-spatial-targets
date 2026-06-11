@@ -17,7 +17,6 @@ import pandas as pd
 import xarray as xr
 from gdptools import AggGen, UserCatData, WeightGen
 
-from nhf_spatial_targets import catalog
 from nhf_spatial_targets.aggregate._adapter import SourceAdapter
 from nhf_spatial_targets.aggregate._coords import detect_coords
 from nhf_spatial_targets.aggregate.batching import spatial_batch
@@ -1096,41 +1095,6 @@ def _covered_batch_ids(
     return covered
 
 
-def _skip_for_fabric_scope(source_key: str, meta: dict, project: Project) -> bool:
-    """Return True (and log) if the source's ``fabric_scope`` excludes the project.
-
-    Sources may declare ``fabric_scope.fabrics: [<token>, ...]`` in
-    ``catalog/sources.yml`` to restrict where they are useful (e.g. Margulis
-    WUS-SR is Oregon-only). Aggregating such a source against a fabric whose
-    token isn't in the scope drives gdptools into an empty-intersection state
-    that surfaces as a cryptic ``max() iterable argument is empty`` deep
-    inside ``WeightGen`` (issue surfaced from gfv2 + margulis_wus_sr). We
-    short-circuit here instead, mirroring the SWE target's
-    ``_filter_sources_by_fabric_scope``: a missing ``fabric.token`` (the
-    default for projects that haven't declared one) drops every
-    fabric-scoped source, so ``agg all`` on a national fabric quietly
-    skips OR-only sources rather than aborting the run.
-    """
-    scope = meta.get("fabric_scope")
-    catalog.validate_fabric_scope(source_key, scope)
-    if scope is None:
-        return False
-    fabric_token = (project.config.get("fabric") or {}).get("token")
-    scope_fabrics = list(scope.get("fabrics") or [])
-    if fabric_token is not None and fabric_token in scope_fabrics:
-        return False
-    logger.info(
-        "%s: skipping aggregation — catalog fabric_scope=%s, project "
-        "fabric.token=%r. Raw downloads are reusable across projects "
-        "sharing a datastore, but this source has no meaningful overlap "
-        "with the current fabric.",
-        source_key,
-        scope_fabrics,
-        fabric_token,
-    )
-    return True
-
-
 def _assign_worker_years(
     all_year_files: list[tuple[int, Path]],
     worker_index: int,
@@ -1174,11 +1138,10 @@ def aggregate_source(
     ``<source_key>/`` and stale ``<source_key>_agg.nc`` consolidated files
     are removed via ``_migrate_legacy_layout`` at the top of the function.
 
-    Sources whose catalog ``fabric_scope`` excludes the project's
-    ``fabric.token`` are skipped via :func:`_skip_for_fabric_scope` (a
-    no-op return with an INFO log) so ``agg all`` on e.g. a national
-    fabric quietly skips OR-only sources like Margulis WUS-SR instead
-    of pushing an empty intersection through gdptools.
+    Spatial coverage is geometry-driven (#309): batches whose bbox does
+    not overlap the source grid are skipped and their HRUs emitted as
+    NaN rows; a source with zero fabric overlap is skipped entirely
+    with an INFO log (see :func:`_covered_batch_ids`).
 
     Variables declared by ``adapter.variables`` that are missing from the
     source NC cause ValueError before any year is aggregated — unless the
@@ -1199,9 +1162,6 @@ def aggregate_source(
     # uses catalog_key / raw_dir_key here; for the 1:1 case both default
     # to source_key in SourceAdapter.__post_init__.
     meta = catalog_source(adapter.catalog_key)
-
-    if _skip_for_fabric_scope(adapter.source_key, meta, project):
-        return
 
     _migrate_legacy_layout(project, adapter.source_key)
 
