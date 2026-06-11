@@ -58,7 +58,7 @@ sbatch --array=11 slurm/project_gfv2/rechunk_gfv2.slurm    # one source (snodas)
 
 # Target NCs — single job; --mem=160G headroom for the ~11 GB (decompressed
 # ~55 GB) SWE targets. Preview first on the login node:
-pixi run nhf-targets rechunk --project-dir $GFV2 --layer target --dry-run
+pixi run nhf-targets maintenance rechunk --project-dir $GFV2 --layer target --dry-run
 sbatch slurm/project_gfv2/rechunk_gfv2_targets.slurm
 ```
 

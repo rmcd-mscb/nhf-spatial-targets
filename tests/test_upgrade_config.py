@@ -1,4 +1,4 @@
-"""Tests for nhf-targets upgrade-config (#193 follow-up).
+"""Tests for nhf-targets maintenance check-config (#193 follow-up).
 
 Detection is the contract: a feature is in sync if its `detect` regex matches
 the project's config.yml text in any form — live value, the commented stub
@@ -129,7 +129,7 @@ def test_cli_exits_one_on_drift(tmp_path, capsys):
 
     _write_minimal_config(tmp_path)
     with pytest.raises(SystemExit) as exc:
-        app(["upgrade-config", "--project-dir", str(tmp_path)])
+        app(["maintenance", "check-config", "--project-dir", str(tmp_path)])
     assert exc.value.code == 1
     out = capsys.readouterr().out
     # The missing feature names appear in stdout so the operator can act.
@@ -154,7 +154,7 @@ def test_cli_exits_zero_when_in_sync(tmp_path, capsys):
     )
     # Cyclopts wraps even successful returns in SystemExit(0).
     with pytest.raises(SystemExit) as exc:
-        app(["upgrade-config", "--project-dir", str(tmp_path)])
+        app(["maintenance", "check-config", "--project-dir", str(tmp_path)])
     assert exc.value.code in (None, 0)
     out = capsys.readouterr().out
     assert "in sync" in out.lower()
@@ -164,7 +164,7 @@ def test_cli_exits_two_when_project_missing(tmp_path, capsys):
     from nhf_spatial_targets.cli import app
 
     with pytest.raises(SystemExit) as exc:
-        app(["upgrade-config", "--project-dir", str(tmp_path / "no-such")])
+        app(["maintenance", "check-config", "--project-dir", str(tmp_path / "no-such")])
     assert exc.value.code == 2
     err = capsys.readouterr().err
     assert "not found" in err.lower()
@@ -172,7 +172,7 @@ def test_cli_exits_two_when_project_missing(tmp_path, capsys):
 
 # --- whole-target + new-source hints (issue #279, PR-5) ----------------------
 #
-# upgrade-config is extended beyond the enumerated optional params to surface
+# check-config is extended beyond the enumerated optional params to surface
 # (a) whole targets present in the defaults schema but absent from the
 # operator's config.yml, and (b) catalog sources eligible for a target (per
 # variables.yml) but not pinned in the operator's targets.<t>.sources[]. Both
@@ -274,14 +274,14 @@ def test_target_to_variable_mapping_is_consistent():
 
 
 def test_cli_never_mutates_config(tmp_path):
-    """upgrade-config (with the new hints) is report-only: config.yml is
+    """check-config (with the new hints) is report-only: config.yml is
     byte-identical before and after the command runs."""
     from nhf_spatial_targets.cli import app
 
     cfg = _config_with_targets(tmp_path)
     before = cfg.read_bytes()
     with pytest.raises(SystemExit):
-        app(["upgrade-config", "--project-dir", str(tmp_path)])
+        app(["maintenance", "check-config", "--project-dir", str(tmp_path)])
     assert cfg.read_bytes() == before
 
 
@@ -292,10 +292,10 @@ def test_cli_exits_one_when_config_missing_in_existing_dir(tmp_path, capsys):
 
     tmp_path.mkdir(parents=True, exist_ok=True)  # dir exists; config.yml absent
     with pytest.raises(SystemExit) as exc:
-        app(["upgrade-config", "--project-dir", str(tmp_path)])
+        app(["maintenance", "check-config", "--project-dir", str(tmp_path)])
     assert exc.value.code == 1
     err = capsys.readouterr().err
-    assert "upgrade-config failed" in err
+    assert "check-config failed" in err
 
 
 def test_cli_exits_one_on_malformed_config(tmp_path, capsys):
@@ -308,7 +308,7 @@ def test_cli_exits_one_on_malformed_config(tmp_path, capsys):
     # Unclosed bracket -> yaml.ParserError (a yaml.YAMLError subclass).
     (tmp_path / "config.yml").write_text("targets: [unclosed\n")
     with pytest.raises(SystemExit) as exc:
-        app(["upgrade-config", "--project-dir", str(tmp_path)])
+        app(["maintenance", "check-config", "--project-dir", str(tmp_path)])
     assert exc.value.code == 1
     err = capsys.readouterr().err
     assert "parse config.yml" in err

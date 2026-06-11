@@ -186,7 +186,7 @@ shows the multi-variant pattern (monthly + annual emit).
    and `OPTIONAL_CONFIG_FEATURES` in
    [`src/nhf_spatial_targets/upgrade_config.py`](src/nhf_spatial_targets/upgrade_config.py)
    so existing-project operators find the new keys via
-   `nhf-targets upgrade-config` (see `CLAUDE.md` §Config schema additions).
+   `nhf-targets maintenance check-config` (see `CLAUDE.md` §Config schema additions).
 10. **Inspect notebook** — copy
     [`notebooks/targets/inspect_target_swe.ipynb`](notebooks/targets/inspect_target_swe.ipynb)
     to `notebooks/targets/inspect_target_<target>.ipynb` and retarget the

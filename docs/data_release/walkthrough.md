@@ -59,17 +59,19 @@ nhf-targets release status -d $PROJ --scope all --token <sb-token>
 nhf-targets release publish -d $PROJ --scope fabric --confirm --token <sb-token>
 ```
 
-!!! warning "`publish` scope is singular (`--scope source`)"
-    `build` / `status` / `dry-run` take `--scope sources` (plural); `publish`
-    takes `--scope source` (singular) and needs `--source-key <key>` to name
-    the source. This asymmetry is tracked in #319.
+!!! note "Publishing a single source child"
+    Every subcommand spells the scope the same way (`--scope sources`); a
+    *confirmed* `publish --scope sources` additionally needs `--source <key>`
+    to name the one source child to publish (the singular `--scope source` /
+    `--source-key` spellings were removed in #319).
 
 ## The publish gate
 
 `publish` refuses to write when the on-disk `manifest.json` is incomplete or
 drifts from the [rebuild projection](../api/rebuild-manifest.md), or when
 `config.effective.yml` is stale relative to `config.yml` (you edited config
-without re-running `validate`). Regenerate with `nhf-targets rebuild-manifest`
-and `nhf-targets validate` rather than overriding. `--allow-incomplete-sources`
+without re-running `validate`). Regenerate with
+`nhf-targets maintenance rebuild-manifest` and `nhf-targets validate` rather
+than overriding. `--allow-incomplete-sources`
 is a deliberate, logged override for the source-completeness check only; the
 schema / fabric / steps checks stay fatal.

@@ -1,7 +1,7 @@
 # Upgrade config
 
 `nhf_spatial_targets.upgrade_config` is the operator-facing drift report behind
-`nhf-targets upgrade-config`. Existing projects don't pick up new optional
+`nhf-targets maintenance check-config`. Existing projects don't pick up new optional
 config features added to the init template after they were created; this module
 lists what's missing and prints the literal commented block to paste.
 

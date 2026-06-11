@@ -3,7 +3,7 @@
 `nhf_spatial_targets.rechunk` backfills already-written aggregated and target
 NetCDFs to the canonical chunking + compression layout (the #165 policy in
 [`docs/architecture/nc-encoding-policy.md`](../architecture/nc-encoding-policy.md)).
-It is the actuator behind `nhf-targets rechunk`.
+It is the actuator behind `nhf-targets maintenance rechunk`.
 
 Every conversion is **idempotent** (already-canonical files are skipped),
 **atomic** (tmp file + rename), and **value-preserving** (each variable is

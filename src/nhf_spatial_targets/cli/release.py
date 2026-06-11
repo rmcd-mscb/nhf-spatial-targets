@@ -37,6 +37,8 @@ from typing import TYPE_CHECKING, Annotated, Literal, NoReturn
 
 from cyclopts import App, Parameter
 
+from nhf_spatial_targets.cli._params import _PROJECT_DIR_PARAM
+
 from nhf_spatial_targets.release.build import build_all
 from nhf_spatial_targets.release.checksums import compute_checksums
 from nhf_spatial_targets.release.config import scaffold_release_yml
@@ -60,12 +62,8 @@ release_app = App(
     help="Build, validate, and publish the ScienceBase data release.",
 )
 
-# --project-dir is shared by every subcommand except auth-test (which needs only
-# credentials). The default lives on each signature so the type checker sees it.
-_PROJECT_DIR_PARAM = Parameter(
-    name=["--project-dir", "-d"],
-    help="Project created by 'nhf-targets init'.",
-)
+# --project-dir (shared with every other sub-app via cli._params) is taken by
+# every subcommand except auth-test (which needs only credentials).
 _TOKEN_PARAM = Parameter(
     name=["--token"],
     help=(
@@ -79,13 +77,14 @@ _ENV_PARAM = Parameter(
 )
 
 # A publish --scope maps to the dry_run build scope used for its no-confirm
-# preview. dry_run has no single-source or umbrella-only scope, so a 'source'
-# preview shows every source child and an 'umbrella' preview shows everything
-# (the umbrella's metadata unions its children, so 'all' is the faithful
-# preview). --confirm then publishes only the requested scope.
+# preview. dry_run has no single-source or umbrella-only scope, so a 'sources'
+# preview shows every source child (even though a confirmed publish targets the
+# one named by --source) and an 'umbrella' preview shows everything (the
+# umbrella's metadata unions its children, so 'all' is the faithful preview).
+# --confirm then publishes only the requested scope.
 _PUBLISH_PREVIEW_SCOPE: dict[str, Literal["fabric", "sources", "all"]] = {
     "fabric": "fabric",
-    "source": "sources",
+    "sources": "sources",
     "umbrella": "all",
 }
 
@@ -403,14 +402,14 @@ def status(
 def publish(
     workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     scope: Annotated[
-        Literal["umbrella", "source", "fabric"],
+        Literal["umbrella", "sources", "fabric"],
         Parameter(name=["--scope"], help="What to publish (default: fabric)."),
     ] = "fabric",
     source_key: Annotated[
         str | None,
         Parameter(
-            name=["--source-key"],
-            help="Source key to publish; required with --scope source --confirm.",
+            name=["--source"],
+            help="Source key to publish; required with --scope sources --confirm.",
         ),
     ] = None,
     confirm: Annotated[
@@ -449,7 +448,7 @@ def publish(
                 "Override the manifest completeness gate: publish even if the "
                 "manifest under-reports sources or drifts from the projection "
                 "(logged warning). Schema/fabric/steps checks stay fatal. "
-                "Prefer 'nhf-targets rebuild-manifest' instead."
+                "Prefer 'nhf-targets maintenance rebuild-manifest' instead."
             ),
         ),
     ] = False,
@@ -479,9 +478,7 @@ def publish(
         _run_client_op(
             "dry-run", dry_run, project, client, scope=_PUBLISH_PREVIEW_SCOPE[scope]
         )
-        target = (
-            scope if scope != "source" else f"source/{source_key or '<source-key>'}"
-        )
+        target = scope if scope != "sources" else f"sources/{source_key or '<source>'}"
         from rich.console import Console
 
         Console().print(
@@ -490,8 +487,8 @@ def publish(
         return
 
     # --- confirmed publish ---
-    if scope == "source" and not source_key:
-        _fail("--scope source --confirm requires --source-key.", 2)
+    if scope == "sources" and not source_key:
+        _fail("--scope sources --confirm requires --source.", 2)
     if (scope == "umbrella" or create_umbrella) and not parent_id:
         _fail(
             "publishing the umbrella requires --parent-id (the ScienceBase "
@@ -523,7 +520,7 @@ def publish(
                     allow_incomplete_sources=allow_incomplete_sources,
                 )
             )
-        elif scope == "source":
+        elif scope == "sources":
             results.append(
                 publish_source_child(
                     project,

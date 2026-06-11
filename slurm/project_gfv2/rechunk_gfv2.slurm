@@ -78,7 +78,7 @@ echo "=== Repo:    $REPO_DIR ($(git -C "$REPO_DIR" branch --show-current 2>/dev/
 echo "=== Project: $PROJECT_DIR ==="
 echo "=== Start:   $(date -u +%Y-%m-%dT%H:%M:%SZ) on $(hostname) ==="
 
-pixi run nhf-targets rechunk \
+pixi run nhf-targets maintenance rechunk \
     --project-dir "$PROJECT_DIR" \
     --layer aggregated \
     --source "$SRC"

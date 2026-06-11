@@ -1,7 +1,7 @@
-"""Shared cyclopts Parameter aliases for the agg sub-app commands.
+"""Shared cyclopts Parameter aliases for CLI commands (root app and sub-apps).
 
-Each ``agg`` command annotates its matching parameter as
-``Annotated[<type>, _AGG_*_PARAM] = <default>``. Cyclopts reads name +
+Each command annotates its matching parameter as
+``Annotated[<type>, _*_PARAM] = <default>``. Cyclopts reads name +
 help from the Parameter; the default lives on the function signature so
 the type checker still sees a concrete default (a single source of
 truth for both behavior + docs).
@@ -10,6 +10,14 @@ truth for both behavior + docs).
 from __future__ import annotations
 
 from cyclopts import Parameter
+
+# Every project-scoped command across every sub-surface (root, fetch, agg,
+# release, maintenance) spells the project directory the same way, with the
+# same -d short alias (issue #319).
+_PROJECT_DIR_PARAM = Parameter(
+    name=["--project-dir", "-d"],
+    help="Project created by 'nhf-targets init'.",
+)
 
 _AGG_BATCH_SIZE_PARAM = Parameter(
     name="--batch-size",

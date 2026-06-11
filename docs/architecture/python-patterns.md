@@ -9,8 +9,8 @@ If you are new to the repo and have Python experience but limited software-engin
 | Pattern | Where to look | Why it's there |
 |---|---|---|
 | `from __future__ import annotations` (every module) | top of any `.py` | Cheap, modern type-annotation syntax (`X \| Y`) without runtime cost |
-| `if TYPE_CHECKING:` import guards | [`cli.py:12-13`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/cli.py#L12-L13) | Heavy imports only at type-check time, never at runtime |
-| `Annotated[Type, Parameter(...)]` cyclopts wiring | every `@app.command` in [`cli.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/cli.py) | CLI help text lives next to the parameter; no separate argparse spec |
+| `if TYPE_CHECKING:` import guards | [`cli/run.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/cli/run.py) | Heavy imports only at type-check time, never at runtime |
+| `Annotated[Type, Parameter(...)]` cyclopts wiring | every command in the [`cli/`](https://github.com/rmcd-mscb/nhf-spatial-targets/tree/main/src/nhf_spatial_targets/cli) package | CLI help text lives next to the parameter; no separate argparse spec |
 | `@dataclass(frozen=True)` plugin adapters | [`aggregate/_adapter.py:SourceAdapter`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/aggregate/_adapter.py) | Declarative source plugins; immutable singletons safe to share |
 | Atomic file writes (tempfile + `os.replace`) | [`io_nc.py:atomic_to_netcdf`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/io_nc.py) | Crashed jobs never leave partial NetCDFs that look valid |
 | Manifest read-merge-write under `flock` | [`release/lineage.py:merge_source_and_append_step`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/release/lineage.py) | Concurrent SLURM array jobs can't clobber each other's manifest writes |
@@ -29,7 +29,7 @@ If you are new to the repo and have Python experience but limited software-engin
 
 ## 2. `if TYPE_CHECKING:` import guards
 
-**What:** Some imports live inside an `if TYPE_CHECKING:` block at the top of a module. Example from [`cli.py:12-13`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/cli.py#L12-L13):
+**What:** Some imports live inside an `if TYPE_CHECKING:` block at the top of a module. Example from [`cli/run.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/cli/run.py):
 
 ```python
 from typing import TYPE_CHECKING, Annotated
@@ -40,14 +40,14 @@ if TYPE_CHECKING:
 
 **Why:** `TYPE_CHECKING` is `False` at runtime and `True` only when a static type checker (mypy, pyright) is reading the file. So the import inside the guard runs at type-check time but never at runtime. Two reasons we use it:
 
-1. **Avoid circular imports.** `cli.py` references `Project` in annotations but `workspace.py` may transitively import something from `cli.py`. The guard keeps the type reference without creating a runtime cycle.
+1. **Avoid circular imports.** `cli/run.py` references `Project` in annotations but `workspace.py` may transitively import something from the `cli` package. The guard keeps the type reference without creating a runtime cycle.
 2. **Avoid heavy imports.** When a module only needs a class for annotations, not at runtime, the guard prevents loading geopandas / xarray / etc. just to declare a signature.
 
 **How to extend:** use the guard when an import is only needed for type annotations. Pair it with `from __future__ import annotations` (which makes the annotation a string at runtime, so the guarded import is never resolved at runtime). For runtime-needed imports, never use the guard.
 
 ## 3. `Annotated[Type, Parameter(...)]` cyclopts wiring
 
-**What:** Every CLI command in `cli.py` annotates its parameters with `Annotated[Type, Parameter(...)]` instead of using a separate argparse-style spec. Example:
+**What:** Every CLI command in the `cli/` package annotates its parameters with `Annotated[Type, Parameter(...)]` instead of using a separate argparse-style spec. Example:
 
 ```python
 workdir: Annotated[
@@ -58,7 +58,7 @@ workdir: Annotated[
 
 **Why:** cyclopts (our CLI framework) inspects the `Annotated` metadata to build the parser. The parameter's flag name, alias, and help string live **next to the type** rather than in a parallel declaration. The function signature is the single source of truth — no risk of the help text drifting away from the implementation.
 
-**How to extend:** when adding a new CLI command, use `Annotated[<concrete-type>, Parameter(name=..., help=...)] = <default>` for each parameter. Defaults live on the function signature (so type checkers see them); cyclopts reads `name` and `help` from the `Parameter` metadata. For parameters reused across commands (e.g. `--batch-size` on every `agg` subcommand), pull the `Parameter` into a module-level alias and reference it — see `_AGG_BATCH_SIZE_PARAM` in [`cli.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/cli.py).
+**How to extend:** when adding a new CLI command, use `Annotated[<concrete-type>, Parameter(name=..., help=...)] = <default>` for each parameter. Defaults live on the function signature (so type checkers see them); cyclopts reads `name` and `help` from the `Parameter` metadata. For parameters reused across commands (e.g. `--batch-size` on every `agg` subcommand), pull the `Parameter` into a module-level alias and reference it — see `_AGG_BATCH_SIZE_PARAM` and `_PROJECT_DIR_PARAM` in [`cli/_params.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/cli/_params.py).
 
 ## 4. `@dataclass(frozen=True)` plugin adapters
 

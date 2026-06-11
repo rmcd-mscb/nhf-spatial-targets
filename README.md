@@ -187,7 +187,7 @@ The fabric file must contain a polygon geometry column and a unique integer HRU 
 
 **Maintaining an existing project.** When a `git pull` brings a new config key, a new
 source, a new manifest field, or a storage-layout change, you bring an existing project
-up to date with the report-only `upgrade-config` / `upgrade-manifest` commands and the
+up to date with the report-only `check-config` / `check-manifest` commands and the
 regenerating `rebuild-manifest` / `rechunk` / `validate` commands — never by re-`init`ing.
 The catch-up sequences and the one ordering rule that bites (re-run `validate` after any
 `config.yml` edit, or the publish gate fails) are documented in
@@ -495,7 +495,7 @@ nhf-spatial-targets/
 │   ├── extract_geofabric.ipynb
 │   └── debug_mod16a2_agg.ipynb
 ├── src/nhf_spatial_targets/
-│   ├── cli.py               # nhf-targets CLI (cyclopts)
+│   ├── cli/                 # nhf-targets CLI (cyclopts; fetch/agg/catalog/release/maintenance sub-apps)
 │   ├── _logging.py          # structured logging setup
 │   ├── catalog.py           # catalog interface to YAML files
 │   ├── credentials.py       # ~/.cdsapirc and ~/.netrc materialisation

@@ -21,13 +21,19 @@ from cyclopts import App, Parameter
 
 from nhf_spatial_targets.cli._params import (
     _AGG_BATCH_SIZE_PARAM,
+    _PROJECT_DIR_PARAM,
     _AGG_N_WORKERS_PARAM,
     _AGG_WORKER_INDEX_PARAM,
 )
 
 _logger = logging.getLogger(__name__)
 
-agg_app = App(name="agg", help="Aggregate source datasets to HRU fabric polygons.")
+# "aggregate" is an accepted spelling of the abbreviated sub-app name
+# (issue #319); "agg" stays primary in docs and pixi tasks.
+agg_app = App(
+    name=["agg", "aggregate"],
+    help="Aggregate source datasets to HRU fabric polygons.",
+)
 
 
 def _resolve_agg_fn(name: str) -> Callable[..., object]:
@@ -145,13 +151,7 @@ def _run_tier_agg(
 
 @agg_app.command(name="ssebop")
 def agg_ssebop_cmd(
-    workdir: Annotated[
-        Path,
-        Parameter(
-            name=["--project-dir"],
-            help="Project created by 'nhf-targets init'.",
-        ),
-    ],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     period: Annotated[
         str,
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
@@ -218,13 +218,7 @@ def agg_ssebop_cmd(
 
 @agg_app.command(name="daymet")
 def agg_daymet_cmd(
-    workdir: Annotated[
-        Path,
-        Parameter(
-            name=["--project-dir"],
-            help="Project created by 'nhf-targets init'.",
-        ),
-    ],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     period: Annotated[
         str,
         Parameter(name=["--period", "-p"], help="Temporal range as 'YYYY/YYYY'."),
@@ -304,7 +298,7 @@ def agg_daymet_cmd(
 
 @agg_app.command(name="era5-land")
 def agg_era5_land_cmd(
-    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     batch_size: Annotated[int | None, _AGG_BATCH_SIZE_PARAM] = None,
     worker_index: Annotated[int, _AGG_WORKER_INDEX_PARAM] = 0,
     n_workers: Annotated[int, _AGG_N_WORKERS_PARAM] = 1,
@@ -322,7 +316,7 @@ def agg_era5_land_cmd(
 
 @agg_app.command(name="gldas")
 def agg_gldas_cmd(
-    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     batch_size: Annotated[int | None, _AGG_BATCH_SIZE_PARAM] = None,
     worker_index: Annotated[int, _AGG_WORKER_INDEX_PARAM] = 0,
     n_workers: Annotated[int, _AGG_N_WORKERS_PARAM] = 1,
@@ -340,7 +334,7 @@ def agg_gldas_cmd(
 
 @agg_app.command(name="merra2")
 def agg_merra2_cmd(
-    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     batch_size: Annotated[int | None, _AGG_BATCH_SIZE_PARAM] = None,
     worker_index: Annotated[int, _AGG_WORKER_INDEX_PARAM] = 0,
     n_workers: Annotated[int, _AGG_N_WORKERS_PARAM] = 1,
@@ -358,7 +352,7 @@ def agg_merra2_cmd(
 
 @agg_app.command(name="ncep-ncar")
 def agg_ncep_ncar_cmd(
-    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     batch_size: Annotated[int | None, _AGG_BATCH_SIZE_PARAM] = None,
     worker_index: Annotated[int, _AGG_WORKER_INDEX_PARAM] = 0,
     n_workers: Annotated[int, _AGG_N_WORKERS_PARAM] = 1,
@@ -376,7 +370,7 @@ def agg_ncep_ncar_cmd(
 
 @agg_app.command(name="nldas-mosaic")
 def agg_nldas_mosaic_cmd(
-    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     batch_size: Annotated[int | None, _AGG_BATCH_SIZE_PARAM] = None,
     worker_index: Annotated[int, _AGG_WORKER_INDEX_PARAM] = 0,
     n_workers: Annotated[int, _AGG_N_WORKERS_PARAM] = 1,
@@ -394,7 +388,7 @@ def agg_nldas_mosaic_cmd(
 
 @agg_app.command(name="nldas-noah")
 def agg_nldas_noah_cmd(
-    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     batch_size: Annotated[int | None, _AGG_BATCH_SIZE_PARAM] = None,
     worker_index: Annotated[int, _AGG_WORKER_INDEX_PARAM] = 0,
     n_workers: Annotated[int, _AGG_N_WORKERS_PARAM] = 1,
@@ -412,7 +406,7 @@ def agg_nldas_noah_cmd(
 
 @agg_app.command(name="watergap22d")
 def agg_watergap22d_cmd(
-    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     batch_size: Annotated[int | None, _AGG_BATCH_SIZE_PARAM] = None,
     worker_index: Annotated[int, _AGG_WORKER_INDEX_PARAM] = 0,
     n_workers: Annotated[int, _AGG_N_WORKERS_PARAM] = 1,
@@ -430,7 +424,7 @@ def agg_watergap22d_cmd(
 
 @agg_app.command(name="reitz2017")
 def agg_reitz2017_cmd(
-    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     batch_size: Annotated[int | None, _AGG_BATCH_SIZE_PARAM] = None,
     worker_index: Annotated[int, _AGG_WORKER_INDEX_PARAM] = 0,
     n_workers: Annotated[int, _AGG_N_WORKERS_PARAM] = 1,
@@ -448,7 +442,7 @@ def agg_reitz2017_cmd(
 
 @agg_app.command(name="mod16a2")
 def agg_mod16a2_cmd(
-    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     batch_size: Annotated[int | None, _AGG_BATCH_SIZE_PARAM] = None,
     worker_index: Annotated[int, _AGG_WORKER_INDEX_PARAM] = 0,
     n_workers: Annotated[int, _AGG_N_WORKERS_PARAM] = 1,
@@ -466,7 +460,7 @@ def agg_mod16a2_cmd(
 
 @agg_app.command(name="mod10c1")
 def agg_mod10c1_cmd(
-    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     batch_size: Annotated[int | None, _AGG_BATCH_SIZE_PARAM] = None,
     worker_index: Annotated[int, _AGG_WORKER_INDEX_PARAM] = 0,
     n_workers: Annotated[int, _AGG_N_WORKERS_PARAM] = 1,
@@ -484,7 +478,7 @@ def agg_mod10c1_cmd(
 
 @agg_app.command(name="snodas")
 def agg_snodas_cmd(
-    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     batch_size: Annotated[int | None, _AGG_BATCH_SIZE_PARAM] = None,
     worker_index: Annotated[int, _AGG_WORKER_INDEX_PARAM] = 0,
     n_workers: Annotated[int, _AGG_N_WORKERS_PARAM] = 1,
@@ -515,7 +509,7 @@ def agg_snodas_cmd(
 
 @agg_app.command(name="ua-swe")
 def agg_ua_swe_cmd(
-    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     batch_size: Annotated[int | None, _AGG_BATCH_SIZE_PARAM] = None,
     worker_index: Annotated[int, _AGG_WORKER_INDEX_PARAM] = 0,
     n_workers: Annotated[int, _AGG_N_WORKERS_PARAM] = 1,
@@ -546,7 +540,7 @@ def agg_ua_swe_cmd(
 
 @agg_app.command(name="era5-land-sd")
 def agg_era5_land_sd_cmd(
-    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     batch_size: Annotated[int | None, _AGG_BATCH_SIZE_PARAM] = None,
     worker_index: Annotated[int, _AGG_WORKER_INDEX_PARAM] = 0,
     n_workers: Annotated[int, _AGG_N_WORKERS_PARAM] = 1,
@@ -570,7 +564,7 @@ def agg_era5_land_sd_cmd(
 
 @agg_app.command(name="margulis-wus-sr")
 def agg_margulis_wus_sr_cmd(
-    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     batch_size: Annotated[int | None, _AGG_BATCH_SIZE_PARAM] = None,
     worker_index: Annotated[int, _AGG_WORKER_INDEX_PARAM] = 0,
     n_workers: Annotated[int, _AGG_N_WORKERS_PARAM] = 1,
@@ -601,7 +595,7 @@ def agg_margulis_wus_sr_cmd(
 
 @agg_app.command(name="mwbm-climgrid")
 def agg_mwbm_climgrid_cmd(
-    workdir: Annotated[Path, Parameter(name=["--project-dir"])],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     batch_size: Annotated[int | None, _AGG_BATCH_SIZE_PARAM] = None,
     worker_index: Annotated[int, _AGG_WORKER_INDEX_PARAM] = 0,
     n_workers: Annotated[int, _AGG_N_WORKERS_PARAM] = 1,
@@ -633,12 +627,7 @@ def agg_mwbm_climgrid_cmd(
 
 @agg_app.command(name="all")
 def agg_all_cmd(
-    workdir: Annotated[
-        Path,
-        Parameter(
-            name=["--project-dir"], help="Project created by 'nhf-targets init'."
-        ),
-    ],
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
     batch_size: Annotated[int | None, _AGG_BATCH_SIZE_PARAM] = None,
     worker_index: Annotated[int, _AGG_WORKER_INDEX_PARAM] = 0,
     n_workers: Annotated[int, _AGG_N_WORKERS_PARAM] = 1,

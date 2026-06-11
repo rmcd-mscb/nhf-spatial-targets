@@ -388,7 +388,7 @@ def test_frozen_clock_guard_rebuild_dry_run(tmp_path, monkeypatch):
 
 
 def test_rebuild_manifest_cmd_dry_run_writes_nothing(tmp_path):
-    from nhf_spatial_targets.cli.run import rebuild_manifest_cmd
+    from nhf_spatial_targets.cli.maintenance import rebuild_manifest_cmd
 
     project = _make_project(tmp_path, aggregated_dirs={"merra2": ["merra2_agg.nc"]})
     rebuild_manifest_cmd(project.workdir, dry_run=True)
@@ -396,7 +396,7 @@ def test_rebuild_manifest_cmd_dry_run_writes_nothing(tmp_path):
 
 
 def test_rebuild_manifest_cmd_writes(tmp_path):
-    from nhf_spatial_targets.cli.run import rebuild_manifest_cmd
+    from nhf_spatial_targets.cli.maintenance import rebuild_manifest_cmd
 
     project = _make_project(tmp_path, aggregated_dirs={"merra2": ["merra2_agg.nc"]})
     rebuild_manifest_cmd(project.workdir)
@@ -412,9 +412,11 @@ def test_reconcile_manifest_is_removed():
         importlib.import_module("nhf_spatial_targets.reconcile")
 
     from nhf_spatial_targets.cli import app
+    from nhf_spatial_targets.cli.maintenance import maintenance_app
 
     assert "reconcile-manifest" not in app  # command de-registered
-    assert "rebuild-manifest" in app  # replacement registered
+    assert "reconcile-manifest" not in maintenance_app
+    assert "rebuild-manifest" in maintenance_app  # replacement registered
 
 
 # ---------------------------------------------------------------------------
