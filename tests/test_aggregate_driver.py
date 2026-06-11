@@ -2446,3 +2446,97 @@ class TestMaskNetcdfDefaultFills:
             assert np.isnan(rt["aet"].encoding["_FillValue"])
         finally:
             rt.close()
+
+
+# ---------------------------------------------------------------------------
+# Geometry-driven coverage guard (#309 — replaces the fabric_scope token gate)
+# ---------------------------------------------------------------------------
+
+
+def _grid_ds(lons, lats, var="a"):
+    times = pd.date_range("2000-01-01", periods=12, freq="MS")
+    return xr.Dataset(
+        {var: (["time", "lat", "lon"], np.ones((12, len(lats), len(lons))))},
+        coords={
+            "time": ("time", times, {"standard_name": "time"}),
+            "lat": ("lat", list(lats), {"standard_name": "latitude"}),
+            "lon": ("lon", list(lons), {"standard_name": "longitude"}),
+        },
+    )
+
+
+def _write_grid_nc(tmp_path, lons, lats, var="a"):
+    p = tmp_path / "grid.nc"
+    _grid_ds(lons, lats, var=var).to_netcdf(p)
+    return p
+
+
+def _batched_fabric_gdf(fabric_path, batch_size=500):
+    from nhf_spatial_targets.aggregate._driver import load_and_batch_fabric
+
+    return load_and_batch_fabric(fabric_path, batch_size=batch_size)
+
+
+def test_covered_batch_ids_full_overlap(tmp_path, tiny_fabric):
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import _covered_batch_ids
+
+    nc = _write_grid_nc(tmp_path, lons=[0.5, 1.5], lats=[0.25, 0.75])
+    adapter = SourceAdapter(
+        source_key="merra2", output_name="merra2_agg.nc", variables=["a"]
+    )
+    fabric = _batched_fabric_gdf(tiny_fabric)
+    covered = _covered_batch_ids(nc, adapter, fabric)
+    assert covered == set(fabric["batch_id"].unique())
+
+
+def test_covered_batch_ids_zero_overlap(tmp_path, tiny_fabric):
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import _covered_batch_ids
+
+    # Grid far away from the tiny_fabric (x 0-4, y 0-1).
+    nc = _write_grid_nc(tmp_path, lons=[100.5, 101.5], lats=[50.25, 50.75])
+    adapter = SourceAdapter(
+        source_key="merra2", output_name="merra2_agg.nc", variables=["a"]
+    )
+    covered = _covered_batch_ids(nc, adapter, _batched_fabric_gdf(tiny_fabric))
+    assert covered == set()
+
+
+def test_covered_batch_ids_partial_overlap_two_clusters(tmp_path):
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import _covered_batch_ids
+
+    polys = [box(0, 0, 1, 1), box(1, 0, 2, 1), box(10, 0, 11, 1), box(11, 0, 12, 1)]
+    gdf = gpd.GeoDataFrame({"hru_id": [0, 1, 2, 3]}, geometry=polys, crs="EPSG:4326")
+    fabric_path = tmp_path / "fabric2.gpkg"
+    gdf.to_file(fabric_path, driver="GPKG")
+    fabric = _batched_fabric_gdf(fabric_path, batch_size=2)
+    assert fabric["batch_id"].nunique() == 2  # KD-tree split holds
+
+    nc = _write_grid_nc(tmp_path, lons=[0.5, 1.5], lats=[0.25, 0.75])
+    adapter = SourceAdapter(
+        source_key="merra2", output_name="merra2_agg.nc", variables=["a"]
+    )
+    covered = _covered_batch_ids(nc, adapter, fabric)
+    # Exactly the batch containing HRUs 0/1 (x 0-2) is covered.
+    covered_hrus = set(fabric.loc[fabric["batch_id"].isin(list(covered)), "hru_id"])
+    assert covered_hrus == {0, 1}
+
+
+def test_covered_batch_ids_handles_0_360_longitudes(tmp_path):
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import _covered_batch_ids
+
+    # Fabric at CONUS-style negative lons; grid published on 0-360.
+    polys = [box(-124.5, 42.0, -123.5, 43.0)]
+    gdf = gpd.GeoDataFrame({"hru_id": [0]}, geometry=polys, crs="EPSG:4326")
+    fabric_path = tmp_path / "fabric_neg.gpkg"
+    gdf.to_file(fabric_path, driver="GPKG")
+
+    nc = _write_grid_nc(tmp_path, lons=[235.5, 236.5], lats=[42.25, 42.75])
+    adapter = SourceAdapter(
+        source_key="merra2", output_name="merra2_agg.nc", variables=["a"]
+    )
+    fabric = _batched_fabric_gdf(fabric_path)
+    assert _covered_batch_ids(nc, adapter, fabric) == set(fabric["batch_id"].unique())

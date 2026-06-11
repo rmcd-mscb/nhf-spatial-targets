@@ -1002,6 +1002,74 @@ def _attach_cf_global_attrs(ds: xr.Dataset, source_key: str, meta: dict) -> None
     ds.attrs.setdefault("institution", "USGS")
 
 
+def _covered_batch_ids(
+    source_file: Path,
+    adapter: SourceAdapter,
+    fabric_batched: gpd.GeoDataFrame,
+) -> set[int]:
+    """Classify which spatial batches overlap the source grid's bbox.
+
+    Geometry-driven coverage guard (#309, replaces the retired catalog
+    ``fabric_scope`` token gate). gdptools' ``UserCatData`` subsets the
+    source grid to the target bbox buffered by twice the maximum cell
+    size and crashes with ``max() iterable argument is empty`` when the
+    subset spans fewer than two grid coords along either axis. A batch
+    is therefore "covered" when at least two x and two y grid coords
+    fall inside the batch bbox padded by the same 2x-max-resolution
+    buffer gdptools applies (``_get_shp_bounds_w_buffer``).
+
+    Coordinates are detected from ``adapter.raw_grid_variable`` on the
+    raw (un-hooked) file — the same variable the cross-year grid-shape
+    check uses, guaranteed present by ``aggregate_source``'s preflight.
+
+    Longitude convention: for geographic source grids published on
+    0–360 longitudes, negative batch-bound longitudes are shifted +360
+    before comparison. Anti-meridian-crossing fabrics are out of scope
+    (no current fabric crosses it).
+    """
+    from pyproj import CRS
+    from shapely.geometry import box as _box
+
+    with xr.open_dataset(source_file) as ds:
+        x_coord, y_coord, _ = detect_coords(
+            ds,
+            adapter.raw_grid_variable,
+            x_override=adapter.x_coord,
+            y_override=adapter.y_coord,
+            time_override=adapter.time_coord,
+        )
+        xs = np.asarray(ds[x_coord].values, dtype="float64")
+        ys = np.asarray(ds[y_coord].values, dtype="float64")
+
+    pad_x = 2.0 * float(np.max(np.abs(np.diff(xs)))) if xs.size > 1 else 0.0
+    pad_y = 2.0 * float(np.max(np.abs(np.diff(ys)))) if ys.size > 1 else 0.0
+    shift_lon = (
+        CRS.from_user_input(adapter.source_crs).is_geographic
+        and float(xs.max()) > 180.0
+    )
+
+    bids = [int(b) for b in sorted(fabric_batched["batch_id"].unique())]
+    batch_boxes = gpd.GeoSeries(
+        [
+            _box(*fabric_batched.loc[fabric_batched["batch_id"] == b].total_bounds)
+            for b in bids
+        ],
+        crs=fabric_batched.crs,
+    ).to_crs(adapter.source_crs)
+
+    covered: set[int] = set()
+    for bid, geom in zip(bids, batch_boxes, strict=True):
+        minx, miny, maxx, maxy = geom.bounds
+        if shift_lon:
+            minx = minx + 360.0 if minx < 0 else minx
+            maxx = maxx + 360.0 if maxx < 0 else maxx
+        n_x = int(np.count_nonzero((xs >= minx - pad_x) & (xs <= maxx + pad_x)))
+        n_y = int(np.count_nonzero((ys >= miny - pad_y) & (ys <= maxy + pad_y)))
+        if n_x >= 2 and n_y >= 2:
+            covered.add(bid)
+    return covered
+
+
 def _skip_for_fabric_scope(source_key: str, meta: dict, project: Project) -> bool:
     """Return True (and log) if the source's ``fabric_scope`` excludes the project.
 
