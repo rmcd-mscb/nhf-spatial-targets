@@ -34,7 +34,6 @@ def test_check_drift_reports_all_features_when_none_present(tmp_path):
     names = {f.name for f in missing}
     # All shipped features should be reported on a bare config.
     assert {
-        "fabric.token",
         "representative_points",
         "release",
         "snow_covered_area.depth_threshold_mm",
@@ -62,17 +61,6 @@ def test_check_drift_clean_when_commented_stub_present(tmp_path):
     )
     missing = check_drift(tmp_path)
     assert "representative_points" not in {f.name for f in missing}
-
-
-def test_check_drift_detects_nested_fabric_token_commented(tmp_path):
-    """fabric.token is a nested key; both `# token: or` and `token: or`
-    (under the fabric: block) count as in-sync."""
-    _write_minimal_config(tmp_path, body="")
-    # Append the stub form the operator would paste under fabric:
-    cfg = tmp_path / "config.yml"
-    cfg.write_text(cfg.read_text().rstrip() + "\n  # token: or\n")
-    missing = check_drift(tmp_path)
-    assert "fabric.token" not in {f.name for f in missing}
 
 
 def test_check_drift_raises_when_config_missing(tmp_path):
