@@ -15,10 +15,11 @@ Builds the baseline calibration targets documented in [Hay and others (2022), US
 | Snow Cover | `snowcov_area` | MOD10C1 v061 + UA SWE² | NaN-aware bound: MODIS CI-interval (CI ≥ 70%) ∪ depth-derived fraction | Daily |
 | SWE | `pkwater_equiv` | Daymet + SNODAS + ERA5-Land (`sd`) + UA SWE² + Margulis WUS-SR¹ | NaN-aware multi-source min/max | Daily |
 
-¹ Margulis Western US Snow Reanalysis is **fabric-scoped to Oregon**
-via `catalog/sources.yml` → `margulis_wus_sr.fabric_scope`. Non-Oregon projects
-reduce the SWE bound to the remaining four sources (Daymet, SNODAS, ERA5-Land,
-UA SWE) at target-build time; raw downloads remain reusable across any project
+¹ Margulis Western US Snow Reanalysis covers only the **Western US**; it
+contributes NaN-aware to the HRUs it covers and drops out elsewhere (#309 —
+the former fabric_scope/fabric.token gate is gone). Outside its domain the
+SWE bound falls back to the remaining four sources (Daymet, SNODAS,
+ERA5-Land, UA SWE); raw downloads remain reusable across any project
 sharing the datastore.
 
 ² UA Daily 4-km SWE (NSIDC-0719; Broxton, Zeng & Dawson 2019) is CONUS-wide,
@@ -37,8 +38,9 @@ combined with UA SWE's depth-derived `snow_covered_fraction` (a degenerate
 `[v, v]` interval reaching back to WY 1982), tunable via
 `snow_covered_area.{forced_zero_combined, min_sources_for_bound}` (#237). SWE uses
 NaN-aware multi-source min/max across 4 (gfv2) or 5 (OR) sources via the
-`fabric_scope` mechanism on Margulis WUS-SR (PR #101/#135), with UA SWE
-(NSIDC-0719) extending the bound back to 1982 (PR #237).
+geometry-driven partial coverage of Margulis WUS-SR (#309; formerly the
+`fabric_scope` token gate of PR #101/#135), with UA SWE (NSIDC-0719)
+extending the bound back to 1982 (PR #237).
 
 ## Quick Start
 
@@ -424,7 +426,7 @@ Array index → source mapping for the `agg_all_<fabric>.slurm` array (15 source
 | 10 | SNODAS | ~1 km daily SWE (CONUS) — WGS84-native, weight gen is the hot path |
 | 11 | MWBM ClimGrid | 2.5 arcmin monthly, 4 vars (clipped to 1979/2020 in-script) |
 | 12 | ERA5-Land sd | 0.1° daily snow depth (SWE source) |
-| 13 | Margulis WUS-SR | 90 m daily SWE — OR-only (fabric_scope=[or]); no-op on other fabrics |
+| 13 | Margulis WUS-SR | 90 m daily SWE — Western US coverage; NaN outside its domain (#309) |
 | 14 | UA SWE | 4 km daily SWE + SCA source — EPSG:5070-native (fast weight-gen); aggregates `swe` + depth-thresholded `snow_covered_fraction` (#237) |
 
 All jobs are CPU/memory-bound; the agg array allocates 1 CPU and 128 GB RAM per task with a 24-hour wall-clock limit. Override `BATCH_SIZE` (default 10000 HRUs/batch, tuned for 128 GB) with `BATCH_SIZE=2500 sbatch slurm/project_<fabric>/agg_all_<fabric>.slurm` if a source OOMs. WGS84-native sources (SNODAS, GLDAS) cost ~5–8× more in weight generation than projected sources (Daymet, MODIS sinusoidal) at comparable resolution — see [`docs/architecture/transformation-pipeline.md`](docs/architecture/transformation-pipeline.md).
@@ -622,7 +624,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the dev-environment setup, the
 issue-branch-PR workflow, and **"Extending the Pipeline" recipes** with
 checklisted file touch-points for adding a new source, target, or fabric.
 Project-wide conventions (transformation policy, CF-1.6 NetCDF policy,
-manifest read-merge-write, `fabric_scope`, pre-commit quality gate) live in
+manifest read-merge-write, partial-coverage aggregation, pre-commit quality gate) live in
 [`CLAUDE.md`](CLAUDE.md) and apply equally to human contributors.
 
 ### Platform notes
@@ -659,7 +661,7 @@ Pixi supports **linux-64**, **osx-arm64**, and **win-64** (see `pixi.toml`).
 | **Recharge target builder** (`normalized_minmax`, 2-source; PR #133/#134) | Done |
 | **Soil moisture target builder** (`normalized_minmax`, monthly + annual; PR #133/#134) | Done |
 | **SCA target builder** (CI-bounded two-source MOD10C1 v061 ∪ UA SWE per `PRMSobjfun.f90:calcSCA`; PR #210/#212, year-chunk fingerprinting #213/#214, finish workflow #217, two-source #237) | Done |
-| **SWE target builder** (4-source gfv2 / 5-source OR NaN-aware, OR-scoped Margulis via `fabric_scope`, UA SWE extending to 1982; PR #101/#135, #237) | Done |
+| **SWE target builder** (NaN-aware five-source bound; Margulis contributes via geometry-driven partial coverage (#309), UA SWE extending to 1982; PR #101/#135, #237) | Done |
 | Margulis WUS-SR per-WY granule consolidation | Done (PR #101/#135) |
 
 ## Known Gaps

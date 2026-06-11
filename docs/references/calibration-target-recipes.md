@@ -450,8 +450,9 @@ semantics of every contributing source.
 - Daymet: NA (CONUS + parts of Canada/Mexico). HI/PR deferred.
 - SNODAS: CONUS only.
 - ERA5-Land: global; this pipeline fetches CONUS+contributing-watersheds.
-- Margulis WUS-SR: Western US ranges; **Oregon fabric only** in this
-  pipeline (`catalog/sources.yml[margulis_wus_sr].fabric_scope.fabrics: ["or"]`).
+- Margulis WUS-SR: Western US ranges. Partial fabric coverage is
+  geometry-driven (#309): the aggregator emits NaN at HRUs outside the
+  source grid and the NaN-aware combine uses it only where finite.
 
 **Aggregator outputs**
 
@@ -484,19 +485,18 @@ Per-HRU per-day:
    defined whenever ≥1 source is finite at that cell. The companion
    `n_sources` diagnostic carries the count.
 
-**Fabric scope enforcement**
+**Partial spatial coverage (#309)**
 
-The target builder reads `project.config["fabric"].get("token")`.
-Each requested source's `catalog.source(src).get("fabric_scope")` is
-honoured — sources whose `fabrics` list does not contain the project
-token are silently dropped (with a clear log line). A missing project
-token causes every fabric-scoped source to be dropped, which is the
-safe default for non-Oregon projects that accidentally inherit the
-five-source SWE default from `defaults.py` (which reduces to four —
-daymet, snodas, era5_land, ua_swe — once OR-only Margulis is dropped).
-Typos like
-`fabric.token: oregon` (instead of `or`) raise rather than silently
-filtering, validated against `catalog.FABRIC_SCOPE_TOKENS`.
+There is no per-source opt-in: the aggregation driver classifies each
+fabric batch against the source grid bbox, skips non-overlapping
+batches (logging an HRU-coverage diagnostic), and reindexes the
+per-year NC to the full fabric with honest NaN at uncovered HRUs. The
+target builder's only filter is availability (a requested source with
+no aggregated NCs is dropped with a WARNING); the NaN-aware combine
+then uses each source exactly where it is finite. Expect a bound seam
+at a partial source's coverage edge — HRUs just inside get a bound
+informed by one more source than HRUs just outside. That is what the
+data supports; the agg-time coverage log tells you where the seam is.
 
 **NN-fill (when applied)**
 
@@ -572,7 +572,7 @@ rm -r <project>/targets/.swe_intermediates/
 check magnitudes (typical CONUS Mar-1 peak upper bound ~2–4 in),
 verify `n_sources` matches expectations across the period, then
 extend to the full window. The smoke-test cost is small and
-surfaces unit / fabric_scope / coverage bugs cheaply.
+surfaces unit / coverage bugs cheaply.
 
 **NN-fill is per-year.** Each year's intermediate runs its own
 cKDTree donor walk, so an HRU that's all-NaN throughout year *Y*

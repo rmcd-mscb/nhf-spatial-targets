@@ -48,7 +48,7 @@ If you have Python experience but limited software-engineering background and wa
 Project-wide conventions — the pre-commit quality gate, transformation policy
 (pre-aggregation / post-aggregation / per-HRU / target-stage), `stat_method`
 choice between `mean` and `masked_mean`, manifest read-merge-write rule,
-`fabric_scope` semantics, CF-1.6 NetCDF policy, canonical `id_col`-ascending
+partial-coverage aggregation semantics, CF-1.6 NetCDF policy, canonical `id_col`-ascending
 row order at emission, test-coverage rule, and git workflow — live in
 [`CLAUDE.md`](CLAUDE.md). Despite the filename it applies equally to human
 contributors; the AI assistant just happens to be the most disciplined reader.
@@ -76,10 +76,10 @@ from the same NCs) bypass the adapter and call the driver directly.
 
 1. **Catalog entry** — add the source to [`catalog/sources.yml`](catalog/sources.yml)
    with `access`, `variables` (with `units` and `long_name`), `period`,
-   `time_step`, and `status`. If the source is restricted to specific
-   fabrics, add a `fabric_scope:` block (see `CLAUDE.md` §Data & Catalog
-   Conventions). Catalog units are the single source of truth — never
-   hardcode units in code.
+   `time_step`, and `status`. Partial spatial coverage needs no catalog
+   markup — the aggregation driver handles it geometrically (#309).
+   Catalog units are the single source of truth — never hardcode units
+   in code.
 2. **Fetch module** — write `src/nhf_spatial_targets/fetch/<source_key>.py`.
    Download to `<datastore>/<source_key>/`, then route consolidation
    through [`fetch/consolidate.py:apply_cf_metadata`](src/nhf_spatial_targets/fetch/consolidate.py)
@@ -218,12 +218,10 @@ come up.
    to `slurm/project_<fabric>/` and update the `PROJECT_DIR` default at the
    top of each wrapper. The fabric-independent body scripts in
    `slurm/shared/` need no changes.
-2. **Fabric-scoped sources** — if the new fabric should be allowed to use a
-   fabric-restricted source (currently Margulis WUS-SR is OR-only), extend
-   the `FABRIC_SCOPE_TOKENS` set and the matching `validate_fabric_scope`
-   check in [`src/nhf_spatial_targets/catalog.py`](src/nhf_spatial_targets/catalog.py),
-   then add the new token to the source's `fabric_scope.fabrics` list in
-   `catalog/sources.yml`. See `CLAUDE.md` §Data & Catalog Conventions.
+2. **Partially-covering sources need no opt-in** — the aggregation driver
+   classifies each fabric batch against the source grid bbox and emits
+   honest NaN for uncovered HRUs (#309); a source with zero overlap is
+   skipped with an INFO log. See `CLAUDE.md` §Data & Catalog Conventions.
 3. **No source-code changes for routine fabric swaps** — the aggregator
    recomputes weight caches automatically against the new fabric geometry.
    The fabric file just needs a polygon geometry column and a unique

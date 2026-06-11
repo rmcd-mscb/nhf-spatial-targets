@@ -144,7 +144,6 @@ def test_margulis_consolidate_step_records_output_checksums(tmp_path: Path) -> N
         "2000/2000",
         catalog.source("margulis_wus_sr"),
         year_records,
-        {"fabrics": ["or"], "notes": "test"},
         (-124.0, 42.0, -116.0, 46.0),
     )
     _assert_outputs_match(_consolidate_step(workdir, "margulis_wus_sr"), [nc])
@@ -235,7 +234,6 @@ def test_margulis_consolidate_step_omits_records_without_existing_nc(
         "2000/2002",
         catalog.source("margulis_wus_sr"),
         year_records,
-        {"fabrics": ["or"], "notes": "test"},
         (-124.0, 42.0, -116.0, 46.0),
     )
     step = _consolidate_step(workdir, "margulis_wus_sr")

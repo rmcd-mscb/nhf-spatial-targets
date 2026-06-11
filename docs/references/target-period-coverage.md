@@ -42,7 +42,7 @@ as of 2026-05-17.
 | daymet | 1980–2024 | 45 | ORNL distribution |
 | snodas | 2004–2012 | 9 | **aggregation-side gap** — fetched 2004–2024 (21 yrs on disk) but aggregator only ran for 2004–2012; needs re-aggregation. Full archive starts 2003-09-30 |
 | era5_land_sd | — | — | not yet aggregated (variable available in monthly NCs; aggregator needs the one-line `variables` tuple extension) |
-| margulis_wus_sr | — | — | not yet aggregated; daily NCs 1985–2020 fetched; Oregon-only fabric_scope |
+| margulis_wus_sr | — | — | not yet aggregated; daily NCs 1985–2020 fetched; Western-US coverage (NaN elsewhere, #309) |
 
 ## Per-target max-overlap
 
@@ -142,7 +142,7 @@ Two source aggregations not yet on disk; max-overlap deferred:
 | daymet | 1980–2024 |
 | snodas | 2004–2012 (aggregated; **2004–2024 if re-aggregated against full fetched archive**) |
 | era5_land sd | 1979–2025 (variable on disk; needs aggregator's `variables` tuple extension) |
-| margulis_wus_sr | 1985–2020 (daily NCs on disk; needs aggregator + fabric_scope filter) |
+| margulis_wus_sr | 1985–2020 (daily NCs on disk; needs aggregator run) |
 | **Intersection (non-OR fabric, post-re-aggregation)** | **2004–2024** (21 years) |
 | **Intersection (OR fabric)** | **2004–2020** (margulis caps at 2020) |
 
@@ -151,8 +151,8 @@ Two source aggregations not yet on disk; max-overlap deferred:
   weren't covered by the initial aggregation pass).
 - Implement era5_land sd + margulis aggregators (tracked under
   umbrella issue [#101](https://github.com/rmcd-mscb/nhf-spatial-targets/issues/101)).
-- Build `targets/swe.py` with fabric_scope filter (gfv2 is non-OR →
-  3-source bound).
+- Build `targets/swe.py` (done; Margulis contributes NaN-aware at the
+  HRUs its Western-US domain covers, #309).
 
 ## normalize_period vs period (recharge, soil_moisture)
 

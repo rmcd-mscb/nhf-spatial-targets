@@ -150,3 +150,12 @@ downloads are already present, so you skip `fetch`, run `agg-*` (or `agg-all`) t
 this fabric's aggregated NCs, then `rebuild-manifest` to project them into
 `manifest.json`. (`rebuild-manifest` subsumed the former `reconcile-manifest`, removed
 in #279; see [Architecture · Reconcile manifest](architecture/reconcile-manifest.md).)
+
+## Retired config keys
+
+`fabric.token` was removed in #309 along with the catalog `fabric_scope`
+mechanism — partial fabric coverage is now geometry-driven at aggregation
+time, so there is nothing to opt into. An existing `config.yml` that still
+carries `token:` under `fabric:` gets a
+`[warning] unknown config key: fabric.token` from `validate`; delete the
+line (and any pasted `# token: or` stub) — no behavior depends on it.
