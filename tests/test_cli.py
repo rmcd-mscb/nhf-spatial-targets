@@ -998,8 +998,9 @@ def test_run_target_nickname_maps_to_long_key(tmp_path):
     assert mock_dispatch.call_args[0][0] == "recharge"
 
 
-def test_run_unknown_nickname_still_errors(tmp_path):
-    """A token that is neither a config key nor a nickname exits 1."""
+def test_run_unknown_nickname_still_errors(tmp_path, capsys):
+    """A token that is neither a config key nor a nickname exits 1, and the
+    error echoes the token the user typed (not a nickname expansion)."""
     workdir = _make_minimal_project(
         tmp_path,
         "targets:\n  runoff:\n    enabled: true\n    period: 2000-01-01/2000-12-31\n",
@@ -1008,6 +1009,7 @@ def test_run_unknown_nickname_still_errors(tmp_path):
     with pytest.raises(SystemExit) as exc:
         _run("run", "--project-dir", str(workdir), "--target", "bogus")
     assert exc.value.code == 1
+    assert "Unknown target: bogus" in capsys.readouterr().err
 
 
 def test_project_dir_short_alias_on_fetch(tmp_path):
@@ -1061,3 +1063,48 @@ def test_maintenance_subapp_hosts_all_four_verbs():
 
     for verb in ("check-config", "check-manifest", "rebuild-manifest", "rechunk"):
         assert verb in maintenance_app
+
+
+@pytest.mark.parametrize("verb", ["check-manifest", "rebuild-manifest", "rechunk"])
+def test_maintenance_verbs_parse_through_the_app(verb, tmp_path):
+    """Each verb's cyclopts signature binds -d; a missing project exits 2.
+
+    check-config gets full token-level coverage in test_upgrade_config.py;
+    these smokes pin the parse path of the other three (a broken Parameter
+    annotation would otherwise only surface at runtime).
+    """
+    missing = tmp_path / "no-such-project"
+    with pytest.raises(SystemExit) as exc:
+        app(["maintenance", verb, "-d", str(missing)], exit_on_error=False)
+    assert exc.value.code == 2
+
+
+def test_release_publish_old_scope_spelling_rejected(tmp_path):
+    """--scope source (singular, pre-#319) is no longer a valid choice."""
+    from cyclopts.exceptions import CoercionError
+
+    with pytest.raises(CoercionError):
+        app(
+            ["release", "publish", "-d", str(tmp_path), "--scope", "source"],
+            exit_on_error=False,
+        )
+
+
+def test_release_publish_old_source_key_flag_rejected(tmp_path):
+    """--source-key (pre-#319) is no longer a recognized option."""
+    from cyclopts.exceptions import UnknownOptionError
+
+    with pytest.raises(UnknownOptionError):
+        app(
+            [
+                "release",
+                "publish",
+                "-d",
+                str(tmp_path),
+                "--scope",
+                "sources",
+                "--source-key",
+                "era5_land",
+            ],
+            exit_on_error=False,
+        )

@@ -10,7 +10,7 @@ The CLI is split across per-stage submodules:
   check-manifest / rebuild-manifest / rechunk)
 - ``cli.run``         — root-level commands (init / validate / run /
   materialize-credentials)
-- ``cli._params``     — shared ``Annotated[..., Parameter(...)]`` aliases
+- ``cli._params``     — shared ``Parameter`` aliases (used inside ``Annotated``)
 
 The package re-exports ``app`` (the root cyclopts ``App``), ``main``
 (``app.meta``, the ``pyproject.toml`` script entry), ``_dispatch``,

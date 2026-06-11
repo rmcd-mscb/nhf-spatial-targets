@@ -78,6 +78,7 @@ def run(
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
+    requested = target
     if target is not None:
         target = _TARGET_NICKNAMES.get(target, target)
 
@@ -94,7 +95,8 @@ def run(
 
     for name in to_run:
         if name not in targets_cfg:
-            print(f"Error: Unknown target: {name}", file=sys.stderr)
+            # Report the token the user typed, not the nickname expansion.
+            print(f"Error: Unknown target: {requested or name}", file=sys.stderr)
             sys.exit(1)
         print(f"Building target: {name}")
         try:

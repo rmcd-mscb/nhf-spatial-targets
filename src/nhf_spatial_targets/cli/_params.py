@@ -1,4 +1,4 @@
-"""Shared cyclopts Parameter aliases for the CLI sub-app commands.
+"""Shared cyclopts Parameter aliases for CLI commands (root app and sub-apps).
 
 Each command annotates its matching parameter as
 ``Annotated[<type>, _*_PARAM] = <default>``. Cyclopts reads name +
