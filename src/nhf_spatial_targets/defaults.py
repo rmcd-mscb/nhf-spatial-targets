@@ -17,6 +17,18 @@ from __future__ import annotations
 import copy
 from collections.abc import Iterator
 
+#: Top-level config keys that are *known* but intentionally not part of the
+#: core pipeline :data:`DEFAULTS` schema, and whose sub-structure is free-form
+#: (so it must not be introspected for unknown-key warnings). Currently just
+#: ``representative_points`` — a notebook-facing key (consumed by
+#: ``notebooks/_helpers.load_representative_points``, shipped as a stub by
+#: ``init_run._CONFIG_TEMPLATE`` and discoverable via
+#: ``upgrade_config.OPTIONAL_CONFIG_FEATURES``). Its value is
+#: ``{<target>: {<label>: [lon, lat], ...}, ...}`` with free-form target names
+#: and label strings, so ``find_unknown_keys`` recognises the top-level key but
+#: does not descend into it.
+_OPAQUE_TOPLEVEL_KEYS: frozenset[str] = frozenset({"representative_points"})
+
 # ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------
@@ -210,7 +222,10 @@ def find_unknown_keys(user: dict | None) -> list[str]:
     """Return dotted paths for user-set keys not present in :data:`DEFAULTS`.
 
     Catches typos like ``runoff.nn_fil``. Lists are leaves (their items are
-    not introspected). Top-level keys not in DEFAULTS are reported as-is.
+    not introspected). Top-level keys not in DEFAULTS are reported as-is,
+    except the free-form notebook-facing keys in
+    :data:`_OPAQUE_TOPLEVEL_KEYS` (e.g. ``representative_points``), which are
+    recognised and left un-introspected.
     """
     user = user or {}
     return list(_walk_unknown(DEFAULTS, user, prefix=()))
@@ -275,6 +290,11 @@ def _walk_unknown(defaults: dict, user: dict, prefix: tuple[str, ...]) -> Iterat
         return
     for k, uv in user.items():
         path = (*prefix, k)
+        # A known free-form top-level key (e.g. representative_points): not in
+        # DEFAULTS, but recognised so it isn't flagged as a typo, and not
+        # descended into because its sub-keys are intentionally free-form.
+        if not prefix and k in _OPAQUE_TOPLEVEL_KEYS:
+            continue
         if k not in defaults:
             yield ".".join(path)
             continue

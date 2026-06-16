@@ -129,6 +129,15 @@ duplicate kept drifting out of step with the template.
 `maintenance check-config` is **report-only** — it never mutates an operator's
 `config.yml`; it prints what's missing and the literal block to paste.
 
+**Also register the key with `validate`'s unknown-key linter.** `validate`
+warns on any top-level key absent from `defaults.py:DEFAULTS` (typo guard). A
+new key that belongs in the core schema goes in `DEFAULTS` with its default.
+A **notebook-facing / free-form key** (one consumed outside the core pipeline,
+with a free-form sub-structure — e.g. `representative_points`) instead goes in
+`defaults.py:_OPAQUE_TOPLEVEL_KEYS`, so the linter recognises it without
+descending into its arbitrary sub-keys. Skipping this makes `validate` emit a
+misleading "unknown config key (typo?)" warning for a blessed key.
+
 ## Manifest & config durability
 
 Project artifacts split into two kinds with opposite durability rules. Never

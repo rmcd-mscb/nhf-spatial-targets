@@ -115,6 +115,31 @@ def test_find_unknown_keys_returns_typos():
     assert "targets.runoff.nn_fil" in unknown
 
 
+def test_find_unknown_keys_allows_representative_points():
+    """The notebook-facing representative_points key is recognised, and its
+    free-form sub-structure (target names + label strings) is not flagged."""
+    user = {
+        "datastore": "/data",
+        "fabric": {"path": "/p", "id_col": "nhm_id"},
+        "representative_points": {
+            "swe": {"Cascades": [-121.7, 45.4]},
+            "sca": {"Willamette HW": [-121.85, 44.10]},
+        },
+    }
+    unknown = find_unknown_keys(user)
+    assert not any(p.startswith("representative_points") for p in unknown)
+
+
+def test_find_unknown_keys_still_flags_real_typo_alongside_opaque_key():
+    """The opaque-key allowance does not suppress genuine typos elsewhere."""
+    user = {
+        "representative_points": {"swe": {"A": [-121.0, 45.0]}},
+        "targets": {"runoff": {"nn_fil": True}},  # typo
+    }
+    unknown = find_unknown_keys(user)
+    assert "targets.runoff.nn_fil" in unknown
+
+
 def test_missing_required_reports_paths():
     """Missing required keys return their dotted paths."""
     user = {"fabric": {"id_col": "nhm_id"}}  # no datastore, no fabric.path
