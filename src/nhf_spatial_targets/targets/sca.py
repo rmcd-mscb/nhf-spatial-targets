@@ -31,18 +31,21 @@ finite-contribution diagnostic. Two sources are registered today:
   where MOD10C1 (2000+) is the other source.
 
 **Per-year source coverage gaps.** The two sources have non-overlapping
-reach (mod10c1 2000–2025, ua_swe 1982–2022), so a period that spans their
-union (e.g. 1982–2024) has years where only one source is present. A source
-absent for a given year contributes an all-NaN interval for that year
-(:func:`_all_nan_interval`) rather than aborting the build, and the NaN-aware
-combine resolves the year to whatever source(s) remain (#334):
+reach (mod10c1 2000–present, ua_swe 1982–2022), so a period that spans their
+union has years where only one source is present. A source absent for a given
+year contributes an all-NaN interval for that year (:func:`_all_nan_interval`)
+rather than aborting the build, and the NaN-aware combine resolves the year to
+whatever source(s) remain (#334). For an example 1982–2024 build:
 
   - 1982–1999: ua_swe-only (degenerate ``[v, v]`` pre-2000 record)
   - 2000–2022: both sources (real two-source width)
-  - 2023–2024: mod10c1-only
+  - 2023+: mod10c1-only (until ua_swe is extended past 2022)
 
-A source with **no** aggregated NCs at all is still a loud build failure (it
-is a missing prerequisite, not a coverage gap).
+Two cases stay loud rather than NaN-filled: a source with **no** aggregated
+NCs at all (a missing prerequisite, not a coverage gap — surfaces as
+``FileNotFoundError``), and a year where **every** source is outside coverage
+(the period lies entirely outside all sources — almost always a
+misconfiguration, raised in :func:`_load_sca_year`).
 
 **July/August forced-zero (calcSCA).** Summer is forced to
 ``(lower, upper) = (0, 0)``, gated by ``forced_zero_combined`` (default
@@ -91,6 +94,7 @@ import xarray as xr
 
 from nhf_spatial_targets.targets._adapter import SourceLoaderResult, TargetAdapter
 from nhf_spatial_targets.targets._io import (
+    OutsideCoverageError,
     check_hru_coords,
     read_aggregated_source,
     reindex_to_day_start,
@@ -223,14 +227,6 @@ _INTERVAL_LOADERS: dict[str, Callable[..., _SourceInterval]] = {
     _MOD10C1_KEY: _load_mod10c1_interval,
     _UA_SWE_KEY: _load_ua_swe_interval,
 }
-
-#: Substring of the ``read_aggregated_source`` ValueError raised when a year is
-#: entirely outside a source's coverage (``targets/_io.py``). A per-year SCA
-#: build catches this to substitute an all-NaN interval (#334), the same way
-#: ``targets/swe.py`` keeps the multi-source SWE build robust to a source's
-#: per-year absence. A ``FileNotFoundError`` (the source has *no* aggregated
-#: NCs at all) is deliberately NOT caught — that stays a loud build failure.
-_OUTSIDE_COVERAGE_MARKER = "entirely outside source coverage"
 
 
 def _all_nan_interval(
@@ -367,6 +363,7 @@ def _load_sca_year(
     # aggregated directory (FileNotFoundError) is NOT swallowed here — that
     # stays a loud build failure naming the corrective `agg` command.
     intervals: dict[str, _SourceInterval] = {}
+    covered = 0
     for key in sources:
         try:
             intervals[key] = _INTERVAL_LOADERS[key](
@@ -377,9 +374,8 @@ def _load_sca_year(
                 id_col=id_col,
                 sca_cfg=sca_cfg,
             )
-        except ValueError as exc:
-            if _OUTSIDE_COVERAGE_MARKER not in str(exc):
-                raise
+            covered += 1
+        except OutsideCoverageError:
             logger.info(
                 "sca year %d: source '%s' has no aggregated coverage; "
                 "contributes NaN to this year's bound",
@@ -387,6 +383,18 @@ def _load_sca_year(
                 key,
             )
             intervals[key] = _all_nan_interval(year_master_idx, fabric_hru_ids, id_col)
+
+    # No source covers this year at all. A partial gap (>=1 source present) is a
+    # legitimate NaN-fill; zero coverage means the period lies entirely outside
+    # every source — almost always a misconfiguration. Fail loudly rather than
+    # silently writing an all-NaN year, mirroring targets/swe.py:_load_year.
+    if covered == 0:
+        raise ValueError(
+            f"sca year {year}: no configured source ({sources}) has aggregated "
+            f"coverage for this year. The requested snow_covered_area.period "
+            f"likely lies entirely outside every source's coverage — narrow the "
+            f"period or aggregate a source that spans it."
+        )
 
     # forced_zero_combined=False: zero the mod10c1 contribution in summer
     # BEFORE the combine, so ua_swe's (un-zeroed) fraction survives into the
