@@ -1554,6 +1554,58 @@ def test_min_sources_two_in_july_single_source_stays_nan(tmp_path: Path):
         assert (ds["n_sources"].values == 1).all()
 
 
+def test_two_source_build_spans_coverage_gap(tmp_path: Path):
+    """Regression for #334: a period spanning years where only ONE of the two
+    sources has aggregated coverage must build — the absent source contributes
+    NaN for that year — rather than aborting with ``entirely outside source
+    coverage``.
+
+    The two SCA sources have non-overlapping reach in production (mod10c1
+    2000+, ua_swe 1982–2022); pairing them is the whole point of #237. Here we
+    write both sources for 2004–2006 then carve a gap: mod10c1 absent in 2004,
+    ua_swe absent in 2006, leaving 2005 as the only overlap year.
+
+      - 2004: ua_swe only  -> degenerate [0.5, 0.5], n_sources=1
+      - 2005: both sources -> [0.50, 0.64],          n_sources=2
+      - 2006: mod10c1 only -> [0.54, 0.64],          n_sources=1
+    """
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_sca_project(
+        tmp_path,
+        period="2004-01-01/2006-12-31",
+        sources=("mod10c1_v061", "ua_swe"),
+        snow_native=60.0,
+        ci_native=90.0,
+        ua_swe_scf=0.5,
+    )
+    # Carve the coverage gap by deleting per-year NCs.
+    agg = workdir / "data" / "aggregated"
+    (agg / "mod10c1_v061" / "mod10c1_v061_2004_agg.nc").unlink()
+    (agg / "ua_swe" / "ua_swe_2006_agg.nc").unlink()
+
+    project = load(workdir)
+    build(project)  # must not raise
+
+    with _open_sca(project) as ds:
+        # 2004: ua_swe only (mod10c1 absent -> NaN contribution).
+        d04 = ds.sel(time="2004-03-15")
+        np.testing.assert_allclose(d04["lower_bound"].values, 0.50, rtol=1e-5)
+        np.testing.assert_allclose(d04["upper_bound"].values, 0.50, rtol=1e-5)
+        assert (d04["n_sources"].values == 1).all()
+        # 2005: both sources -> real two-source width.
+        d05 = ds.sel(time="2005-03-15")
+        np.testing.assert_allclose(d05["lower_bound"].values, 0.50, rtol=1e-5)
+        np.testing.assert_allclose(d05["upper_bound"].values, 0.64, rtol=1e-5)
+        assert (d05["n_sources"].values == 2).all()
+        # 2006: mod10c1 only (ua_swe absent -> NaN contribution).
+        d06 = ds.sel(time="2006-03-15")
+        np.testing.assert_allclose(d06["lower_bound"].values, 0.54, rtol=1e-5)
+        np.testing.assert_allclose(d06["upper_bound"].values, 0.64, rtol=1e-5)
+        assert (d06["n_sources"].values == 1).all()
+
+
 def test_resolved_combine_knobs_stamped_on_nc(tmp_path: Path):
     """The resolved forced_zero_combined / min_sources_for_bound knobs survive
     the per-year-stitch path onto the final NC as global attrs (the manifest
