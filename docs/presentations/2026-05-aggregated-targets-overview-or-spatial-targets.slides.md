@@ -75,7 +75,7 @@ style: |
 
 #### Project: `or-spatial-targets` · 16,814 HRUs · PNW · EPSG:5070
 
-Sibling to the [`gfv2-spatial-targets` overview](2026-05-aggregated-targets-overview-gfv2-spatial-targets.slides.md) — same pipeline, regional fabric. This deck zooms straight to the **aggregated** and **final-target** outputs for the five implemented Oregon targets.
+Sibling to the [`gfv2-spatial-targets` overview](2026-05-aggregated-targets-overview-gfv2-spatial-targets.slides.md) — same pipeline, regional fabric. This deck zooms straight to the **aggregated** and **final-target** outputs for the six implemented Oregon targets.
 
 <span class="footnote">
 USGS National Hydrologic Model · TM 6-B10 (Hay et al. 2022) · sibling deck has Part 1 (repo intro) + Part 2 (aggregation pipeline) if needed
@@ -83,10 +83,10 @@ USGS National Hydrologic Model · TM 6-B10 (Hay et al. 2022) · sibling deck has
 
 <!--
 Session goal: walk the six implemented OR targets (runoff/aet/rch/som/sca/swe),
-using the per-source aggregated NCs and the combined target NCs. SCA went live
-2026-05-24 in #210 immediately after PRMSobjfun.f90 delivery; gfv2 still ships
-5 (sca build pending). Margulis WUS-SR makes SWE a 4-source bound on OR — the
-other flagship delta from gfv2.
+using the per-source aggregated NCs and the combined target NCs. SCA is now a
+2-source bound (MOD10C1 CI-interval + UA SWE fraction, #237/#334), 1982-2024;
+gfv2 still ships 5 (sca build pending). Margulis WUS-SR + UA SWE make SWE a
+5-source bound on OR — the flagship deltas from gfv2.
 -->
 
 ---
@@ -102,8 +102,8 @@ other flagship delta from gfv2.
 | **Fabric file** | `model_layers_9_nhru.parquet` | `gfv2_fabric.gpkg` |
 | **Equal-area CRS** | EPSG:5070 (CONUS Albers) | EPSG:5070 |
 | **Targets built** | **6** (runoff / aet / rch / som / **sca** / swe) | 5 (sca not built) |
-| **SWE target bound** | **4 sources** (Daymet · SNODAS · ERA5-Land · Margulis WUS-SR)⁶ | **4 sources** (Daymet · SNODAS · ERA5-Land · UA SWE; Margulis omitted) |
-| **SCA** | **Built** — 25-yr daily, 2000-2024, single-source CI-bounded (#210) | Builder live (#210), build pending for gfv2 fabric |
+| **SWE target bound** | **5 sources** (Daymet · SNODAS · ERA5-Land · Margulis WUS-SR · UA SWE)⁶ | **4 sources** (Daymet · SNODAS · ERA5-Land · UA SWE; Margulis omitted) |
+| **SCA** | **Built** — 43-yr daily, 1982-2024, **2-source** (MOD10C1 CI-bound + UA SWE fraction; #237/#334) | Builder live (#210), build pending for gfv2 fabric |
 
 | Target | Sources (active in OR build) | Period | Step |
 |---|---|---|---|
@@ -111,11 +111,11 @@ other flagship delta from gfv2.
 | AET | MOD16A2 v061 · SSEBop · MWBM ClimGrid | 2000-01 .. 2024-12² | Monthly |
 | Recharge | Reitz 2017 · ERA5-Land³ | 2000 .. 2013 | Annual |
 | Soil moisture | MERRA-2 · NLDAS-MOSAIC · NLDAS-NOAH⁴ | 1980-01 .. 2024-12 | Monthly + annual |
-| **SCA** | MOD10C1 v061 (single-source, CI-bounded) | 2000-01 .. 2024-12⁵ | Daily |
-| **SWE** | Daymet · SNODAS · ERA5-Land · **Margulis WUS-SR** | 1980-01 .. 2024-12 | Daily |
+| **SCA** | MOD10C1 v061 (CI-bounded) · UA SWE (depth-derived fraction) | 1982-01 .. 2024-12⁵ | Daily |
+| **SWE** | Daymet · SNODAS · ERA5-Land · **Margulis WUS-SR** · **UA SWE** | 1980-01 .. 2024-12 | Daily |
 
 <span class="footnote">
-¹ Runoff bound width varies across the 1979-2024 window — 2 sources 1979-1999 (ERA5+MWBM), 3 sources 2000-2020 (all), 2 sources 2021-2024 (ERA5+GLDAS; MWBM ends 2020). ² AET likewise — 3 sources 2000-2020, 2 sources 2021-2023 (MOD16A2+SSEBop), 1 source 2024 (MOD16A2 only; SSEBop ends 2023, bound collapses to a point estimate that year). ³ WaterGAP 2.2d excluded on OR — see slide 3.3A. ⁴ NCEP/NCAR excluded on OR — see slide 3.4A. Both exclusions inherit the gfv2 coarse-grid rationale (PNW shares the intermountain-west terrain). ⁵ SCA period extends 15 yr past TM 6-B10's 2000-2010 default — MOD10C1 v061 now extends through 2025; capped at 2024-12 to match AET/SOM/SWE. ⁶ UA SWE (NSIDC-0719) is aggregated on OR — it is the 5th panel in the aggregated/consolidated SWE figures (#237) — but is **not yet** listed in OR's `config.yml → targets.snow_water_equivalent.sources`, so the current OR target bound is 4-source. Margulis WUS-SR contributes by **geometry** (honest NaN outside its Western-US grid); #309 removed the former `fabric_scope` / `fabric.token` token gate. The gfv2 sibling makes the opposite 4th-source choice (UA SWE in, Margulis out).
+¹ Runoff bound width varies across the 1979-2024 window — 2 sources 1979-1999 (ERA5+MWBM), 3 sources 2000-2020 (all), 2 sources 2021-2024 (ERA5+GLDAS; MWBM ends 2020). ² AET likewise — 3 sources 2000-2020, 2 sources 2021-2023 (MOD16A2+SSEBop), 1 source 2024 (MOD16A2 only; SSEBop ends 2023, bound collapses to a point estimate that year). ³ WaterGAP 2.2d excluded on OR — see slide 3.3A. ⁴ NCEP/NCAR excluded on OR — see slide 3.4A. Both exclusions inherit the gfv2 coarse-grid rationale (PNW shares the intermountain-west terrain). ⁵ SCA now spans 1982-2024: UA SWE (NSIDC-0719) reaches back to WY 1982, widening the pre-2000 bound where MOD10C1 (2000+) is the other source (#237); the cross-source coverage gap is spanned NaN-aware (#334). Capped at 2024-12 to match AET/SOM/SWE. ⁶ OR's SWE bound is now **5-source**: UA SWE (NSIDC-0719) was added to `config.yml → targets.snow_water_equivalent.sources` (#237), joining Daymet · SNODAS · ERA5-Land · Margulis WUS-SR. UA SWE is CONUS-wide and reaches before SNODAS's 2003 start, widening the pre-2003 bound. Margulis WUS-SR contributes by **geometry** (honest NaN outside its Western-US grid; #309 removed the former `fabric_scope`/`fabric.token` gate). The gfv2 sibling ships 4 (UA SWE in, Margulis out); OR has both.
 </span>
 
 <!--
@@ -715,16 +715,17 @@ modeller-side decision — we emit both NCs.
 <div class="text-cols">
 <div>
 
-**Source** (single):
-- **MOD10C1 v061** `Day_CMG_Snow_Cover` + `Day_CMG_Clear_Index` — 2000–present
+**Sources** (2):
+- **MOD10C1 v061** `Day_CMG_Snow_Cover` + `Day_CMG_Clear_Index` — 2000–present (CI-bounded)
+- **UA SWE** (NSIDC-0719) `snow_covered_fraction` — 1982–2022 (depth-thresholded binary, area-weighted)
 
-**Method.** Per-pixel **CI > 0.70** filter (TM 6-B10). Aggregated NCs carry CI-gated SCA as a daily 0–1 fraction.
+**Method.** MOD10C1: per-pixel **CI > 0.70** filter (TM 6-B10). UA SWE: depth-derived fraction, no CI gate (physical). NaN-aware combine; UA SWE reaches back to **1982**, MOD10C1 from 2000, gap spanned NaN-aware (#334).
 
 </div>
 <div>
 
 <div class="callout">
-<strong>Built.</strong> <code>targets/sca.py</code> is live as of <strong>#210</strong> (merged 2026-05-24) with year-chunked intermediates fingerprinted by <strong>#213</strong>. Single-source CI-bounded formula from <code>PRMSobjfun.f90:calcSCA</code> (lines 1052-1061): when HRU-mean CI ≥ 0.70, <code>lower = CI · SCA<sub>obs</sub></code>, <code>upper = lower + (1 − CI)</code>; July/August forced to (0, 0); CI-failing HRU-days NaN.
+<strong>Built — now 2-source.</strong> <code>targets/sca.py</code> (live #210; 2-source via <strong>#237</strong>, coverage-gap fix <strong>#334</strong>; year-chunked intermediates fingerprinted by #213). <strong>MOD10C1</strong> interval from <code>PRMSobjfun.f90:calcSCA</code> (lines 1052-1061): when HRU-mean CI ≥ 0.70, <code>lower = CI · SCA<sub>obs</sub></code>, <code>upper = lower + (1 − CI)</code>. <strong>UA SWE</strong> adds a degenerate <code>[v, v]</code> interval (no CI gate). Combined NaN-aware (lower = min, upper = max); July/August forced to (0, 0).
 </div>
 
 </div>
@@ -752,7 +753,7 @@ summer snowpack.
 ![](../figures/aggregated/or-spatial-targets/snow_covered_area_normalized_comparison.png)
 ![](../figures/aggregated/or-spatial-targets/snow_covered_area_time_series.png)
 
-<span class="caption">Top: aggregated HRU SCA fraction, MOD10C1 v061 (CI > 70 % gate), 0–1 scale. Bottom: representative HRU time series.</span>
+<span class="caption">Top: aggregated HRU SCA fraction, <strong>MOD10C1 v061 only</strong> (CI > 70 % gate), 0–1 scale. Bottom: representative HRU time series.</span>
 
 </div>
 <div class="notes">
@@ -765,8 +766,8 @@ summer snowpack.
 
 </div>
 
-- Single source (MOD10C1 v061) — figures are within-source diagnostics, not cross-source.
-- Strong seasonal cycle in snowy HRUs; near-zero year-round in southern CONUS.
+- Figure shows **MOD10C1 only** — the UA SWE `snow_covered_fraction` panel for the aggregated inspect notebook is a pending follow-up (#334). UA SWE **is** aggregated on disk (1982–2022) and **is** in the target bound (3.5C).
+- Strong seasonal cycle in snowy Cascades / Blue Mountain HRUs; near-zero year-round in low-elevation valley HRUs.
 
 </div>
 </div>
@@ -803,10 +804,10 @@ coverage filter.
 
 </div>
 
-- **25 yr daily build, 2000-2024** — deliberate extension beyond TM 6-B10's v005-era 2000-2010 window (see meta-table footnote ⁵).
-- Single-source `n_sources ∈ {0, 1}` — `lower`/`upper` NaN exactly where the HRU-mean CI gate (≥ 0.70) failed.
-- CI-gate is the binding coverage constraint: **44.5%** of all (HRU, day) cells produce a finite bound; the rest are NaN (cloud cover). `sca_targets_nn_filled.nc` companion is doing heavy lifting compared to SWE's 2-source-min bound.
-- Bound width = `1 − CI_hru` ∈ [0, 0.3] (algebraic identity from calcSCA); narrow bounds = high-confidence days.
+- **43-yr daily build, 1982-2024** — UA SWE reaches back to 1982; MOD10C1 from 2000 (footnote ⁵).
+- **2-source** `n_sources ∈ {0, 1, 2}`: **2.6%** no-data · **73.7%** single-source (UA SWE-only pre-2000, CI-failed MOD10C1 cells, MOD10C1-only 2023–24) · **23.8%** two-source (2000–2022 CI-passing).
+- Adding UA SWE collapsed the cloud-driven NaN gap: **97.4%** of (HRU, day) cells now produce a finite bound — up from **44.5%** single-source. The honest-NaN `sca_targets.nc` is the calibration target; `nn_fill` now closes only the residual **2.6%**.
+- Where MOD10C1 contributes, bound width = `1 − CI_hru` ∈ [0, 0.3] (calcSCA identity); a UA SWE-only cell is a degenerate point `[v, v]`.
 
 </div>
 </div>
@@ -837,13 +838,12 @@ HRUs and questionable for Cascades-crest HRUs that hold late-summer snowpack.
 <div class="text-cols">
 <div>
 
-**Target sources** (4, daily):
+**Target sources** (5, daily):
 - **Daymet v4 R1** `swe` — 1980–2024
 - **SNODAS** `swe` — 2003–present
 - **ERA5-Land** `sd` — 1979–present
 - **Margulis WUS-SR** `SWE` — 1985–2021 *(WUS-only; honest NaN outside its grid, #309)*
-
-**Aggregated menu adds a 5th:** **UA SWE** (NSIDC-0719) `swe` — CONUS-wide, reaches pre-2003 (#237). On disk + shown in the figures, but not yet in OR's target `sources`.
+- **UA SWE** (NSIDC-0719) `swe` — CONUS-wide, 1982–2022; reaches before SNODAS's 2003 start (#237)
 
 </div>
 <div>
@@ -891,7 +891,7 @@ memory at fabric scale. Mention if anyone asks why SWE took longer than runoff.
 - **Margulis WUS-SR** `SWE` — 1985–2021 *(WUS-only, honest NaN elsewhere)*
 - **UA SWE** `swe` — CONUS-wide, pre-2003 (#237)
 
-UA SWE is the 5th panel here but **not** in the OR target bound (target = 4; see prior slide). Source-of-truth: target NC `source` attr / `n_sources` max = 4.
+UA SWE is now **in** the OR target bound (#237) — a true 5-source combine. Source-of-truth: target NC `source` attr / `n_sources` max = **5**.
 
 </div>
 </div>
@@ -928,11 +928,11 @@ That's why SNODAS is the trailing item on the SWE list.
 
 </div>
 
-- **4-source bound across OR** (Daymet · SNODAS · ERA5-Land · Margulis WUS-SR) — verified from the target NC `source` attr / `n_sources` max. Margulis contributes by **geometry**: area-weighted where its WUS grid covers an HRU, honest NaN elsewhere (#309 removed the former `fabric_scope`/`fabric.token` gate). Sibling gfv2 makes the opposite 4th-source choice — UA SWE in, Margulis out.
+- **5-source bound across OR** (Daymet · SNODAS · ERA5-Land · Margulis WUS-SR · UA SWE) — verified from the target NC `source` attr / `n_sources` max = 5. Distribution: 5 sources at **36.4%** of (HRU, day) cells, 4 at **46.1%**, ≤3 the rest (thinner pre-2003 and at the Margulis WUS edge). Margulis contributes by **geometry**: area-weighted where its WUS grid covers an HRU, honest NaN elsewhere (#309 removed the former `fabric_scope`/`fabric.token` gate). Sibling gfv2 ships 4 (UA SWE in, Margulis out); OR has both.
 - Margulis (500 m) is the highest-resolution SWE product in the bound; it tightens the upper-bound envelope dramatically inside its high-elevation footprint where Daymet / SNODAS / ERA5-Land disagree most.
 
 <div class="callout">
-<strong>Discussion hook.</strong> UA SWE (NSIDC-0719) is aggregated on OR and is a wired <code>targets/swe.py</code> contributor — and the only source reaching before SNODAS's 2003 start — but OR's <code>config.yml</code> hasn't added it to <code>targets.snow_water_equivalent.sources</code> yet. Adding it would make a 5-source OR bound and widen the pre-2003 window. Add it for the next OR target rebuild?
+<strong>Resolved.</strong> UA SWE (NSIDC-0719) was added to OR's <code>targets.snow_water_equivalent.sources</code> (#237) — the bound is now <strong>5-source</strong> and the only source reaching before SNODAS's 2003 start, widening the pre-2003 window. <code>n_sources</code> max = 5 confirmed on the rebuilt NC.
 </div>
 
 
