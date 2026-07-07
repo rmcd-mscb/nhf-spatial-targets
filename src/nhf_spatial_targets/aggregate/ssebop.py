@@ -123,6 +123,9 @@ def _process_batch(
         try:
             with os.fdopen(tmp_fd, "w") as f:
                 weights.to_csv(f, index=False)
+            from nhf_spatial_targets.io_nc import apply_umask_mode
+
+            apply_umask_mode(tmp_path)
             Path(tmp_path).replace(wp)
         except Exception:
             Path(tmp_path).unlink(missing_ok=True)

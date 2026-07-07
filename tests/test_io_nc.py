@@ -326,3 +326,39 @@ def test_chunk_aligned_per_hru_read_budget(tmp_path: Path):
         scattered = rng.choice(n_hru, size=100, replace=False)
         for h in scattered:
             np.testing.assert_array_equal(v[:, int(h)], data[:, int(h)])
+
+
+# --- output permissions (shared-filesystem group readability) -----------
+
+
+def test_atomic_to_netcdf_honors_umask_not_mkstemp_0600(tmp_path):
+    """Published NC honors the process umask, not mkstemp's hardcoded 0600.
+
+    Regression for owner-only (-rw-------) aggregated/target NCs on the shared
+    HPC filesystem: ``tempfile.mkstemp`` creates the tempfile at 0600 and the
+    netCDF4/HDF5 backend truncates it in place, so without an explicit chmod the
+    final file stays owner-only regardless of umask. ``apply_umask_mode`` must
+    relax it to ``0o666 & ~umask``.
+    """
+    import os
+    import stat
+
+    from nhf_spatial_targets.io_nc import atomic_to_netcdf
+
+    ds = xr.Dataset({"x": ("t", np.arange(3.0))})
+    old = os.umask(0o002)
+    try:
+        out = tmp_path / "grouped.nc"
+        atomic_to_netcdf(ds, out)
+        mode = stat.S_IMODE(out.stat().st_mode)
+        assert mode == 0o664, oct(mode)
+        # And under a restrictive umask the group bit is still what umask allows
+        # (0640), never the mkstemp 0600 the bug produced.
+        os.umask(0o027)
+        out2 = tmp_path / "grouped2.nc"
+        atomic_to_netcdf(ds, out2)
+        mode2 = stat.S_IMODE(out2.stat().st_mode)
+        assert mode2 == 0o640, oct(mode2)
+        assert mode2 & stat.S_IRGRP, "output must be group-readable"
+    finally:
+        os.umask(old)

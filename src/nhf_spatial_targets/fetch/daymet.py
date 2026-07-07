@@ -508,6 +508,9 @@ def _update_manifest(
         try:
             with os.fdopen(tmp_fd, "w") as f:
                 json.dump(manifest, f, indent=2)
+            from nhf_spatial_targets.io_nc import apply_umask_mode
+
+            apply_umask_mode(tmp_path)
             Path(tmp_path).replace(manifest_path)
         except BaseException:
             Path(tmp_path).unlink(missing_ok=True)

@@ -170,6 +170,9 @@ def _atomic_dump(path: Path, data) -> None:
     try:
         with os.fdopen(tmp_fd, "w") as f:
             f.write(buf.getvalue())
+        from nhf_spatial_targets.io_nc import apply_umask_mode
+
+        apply_umask_mode(tmp_path)
         Path(tmp_path).replace(path)
     except Exception:
         Path(tmp_path).unlink(missing_ok=True)
