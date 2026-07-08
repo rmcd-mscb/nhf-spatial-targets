@@ -268,10 +268,13 @@ def apply_umask_mode(path: Path | str) -> None:
     664) instead of the mkstemp default of 600.
 
     umask has no read-only accessor, so it is read via the set-and-restore
-    idiom. This runs on the writer's main thread after ``to_netcdf`` returns, so
-    the transient ``umask(0)`` window races nothing. chmod failures are left to
-    propagate — a silently owner-only output on a shared filesystem is worse
-    than a loud failure.
+    idiom. ``os.umask`` is *process*-global, not thread-local, so the transient
+    ``umask(0)`` window is only race-free because every caller invokes this
+    serially on the main thread after its write completes — keep it that way. A
+    future writer that calls this from a worker thread while another thread is
+    creating a file could see the ``umask(0)`` window and emit a world-writable
+    file. chmod failures are left to propagate — a silently owner-only output on
+    a shared filesystem is worse than a loud failure.
     """
     current = os.umask(0)
     os.umask(current)

@@ -362,3 +362,36 @@ def test_atomic_to_netcdf_honors_umask_not_mkstemp_0600(tmp_path):
         assert mode2 & stat.S_IRGRP, "output must be group-readable"
     finally:
         os.umask(old)
+
+
+def test_apply_umask_mode_mask_arithmetic(tmp_path):
+    """apply_umask_mode sets 0o666 & ~umask, not a hardcoded mode."""
+    import os
+    import stat
+
+    from nhf_spatial_targets.io_nc import apply_umask_mode
+
+    cases = {0o002: 0o664, 0o027: 0o640, 0o000: 0o666}
+    for umask, expected in cases.items():
+        old = os.umask(umask)
+        try:
+            f = tmp_path / f"m_{umask:04o}"
+            f.write_text("x")
+            os.chmod(f, 0o600)  # simulate the mkstemp default
+            apply_umask_mode(f)
+            got = stat.S_IMODE(f.stat().st_mode)
+            assert got == expected, f"umask {umask:04o}: {got:04o} != {expected:04o}"
+        finally:
+            os.umask(old)
+
+
+def test_apply_umask_mode_raises_on_missing_path(tmp_path):
+    """The loud-failure contract: a chmod that fails propagates, never silent.
+
+    Regression guard for the design promise that a failed permission relax is
+    surfaced (not swallowed) so an owner-only output can't ship unnoticed.
+    """
+    from nhf_spatial_targets.io_nc import apply_umask_mode
+
+    with pytest.raises(FileNotFoundError):
+        apply_umask_mode(tmp_path / "does_not_exist.nc")

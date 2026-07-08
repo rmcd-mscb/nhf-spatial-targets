@@ -196,6 +196,32 @@ def test_put_source_round_trips(reg_path: Path) -> None:
     }
 
 
+def test_put_source_output_is_group_readable(reg_path: Path) -> None:
+    """The registry .yml lands group-readable (0o666 & ~umask), not 0600.
+
+    _atomic_dump writes via mkstemp (mode 0600); guards that the registry write
+    path calls apply_umask_mode so the shared release registry is group-readable.
+    """
+    import os
+    import stat
+
+    old = os.umask(0o002)
+    try:
+        registry.put_source(
+            "era5_land",
+            sb_id="s",
+            uploaded_utc="2026-05-28T01:00:00+00:00",
+            file_count=1,
+            total_bytes=1,
+            manifest_sha256="ab",
+            path=reg_path,
+        )
+        mode = stat.S_IMODE(reg_path.stat().st_mode)
+        assert mode == 0o664, oct(mode)
+    finally:
+        os.umask(old)
+
+
 def test_put_source_preserves_sibling_sources(reg_path: Path) -> None:
     """Writing one source must not drop a previously-written sibling (#97)."""
     registry.put_source(

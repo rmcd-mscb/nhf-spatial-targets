@@ -47,6 +47,27 @@ def sample_output(tmp_path: Path) -> Path:
     return p
 
 
+def test_atomic_write_manifest_is_group_readable(manifest_path: Path) -> None:
+    """manifest.json lands group-readable (0o666 & ~umask), not mkstemp's 0600.
+
+    The manifest writer creates its tempfile with mkstemp (mode 0600); without
+    apply_umask_mode the published manifest would be owner-only on the shared
+    filesystem. Guards that the non-NC write path actually calls the helper.
+    """
+    import os
+    import stat
+
+    from nhf_spatial_targets.release.lineage import atomic_write_manifest
+
+    old = os.umask(0o002)
+    try:
+        atomic_write_manifest(manifest_path, {"sources": {}, "steps": []})
+        mode = stat.S_IMODE(manifest_path.stat().st_mode)
+        assert mode == 0o664, oct(mode)
+    finally:
+        os.umask(old)
+
+
 # ---------------------------------------------------------------------------
 # File-entry shape
 # ---------------------------------------------------------------------------
