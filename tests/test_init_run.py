@@ -148,3 +148,17 @@ def test_init_config_template_carries_sca_multi_source_knobs(tmp_path):
     assert sca["depth_threshold_mm"] == 1.0
     assert sca["forced_zero_combined"] is True
     assert sca["min_sources_for_bound"] == 1
+
+
+def test_init_config_template_snow_targets_default_nn_fill_false(tmp_path):
+    """Snow targets seed nn_fill=false in a new project's config: SCA and SWE are
+    spatially discontinuous, orographically-controlled fields where nearest-
+    neighbour spatial fill would borrow an unrelated donor HRU's snow state, so
+    honest NaN is the calibration target. Non-snow targets keep nn_fill=true."""
+    workdir = tmp_path / "ws"
+    init_project(workdir)
+    cfg = yaml.safe_load((workdir / "config.yml").read_text())
+    assert cfg["targets"]["snow_covered_area"]["nn_fill"] is False
+    assert cfg["targets"]["snow_water_equivalent"]["nn_fill"] is False
+    # Policy is snow-specific — a non-snow target still seeds nn_fill=true.
+    assert cfg["targets"]["runoff"]["nn_fill"] is True
