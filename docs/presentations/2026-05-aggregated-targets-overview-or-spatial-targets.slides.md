@@ -753,7 +753,7 @@ summer snowpack.
 ![](../figures/aggregated/or-spatial-targets/snow_covered_area_normalized_comparison.png)
 ![](../figures/aggregated/or-spatial-targets/snow_covered_area_time_series.png)
 
-<span class="caption">Top: aggregated HRU SCA fraction, <strong>MOD10C1 v061 only</strong> (CI > 70 % gate), 0–1 scale. Bottom: representative HRU time series.</span>
+<span class="caption">Top: aggregated HRU SCA — <strong>MOD10C1</strong> CI-filtered monthly-mean SCA (left) + <strong>UA SWE</strong> snow_covered_fraction (right); both 0–1, both feed the 2-source target. Bottom: representative HRU time series (MOD10C1).</span>
 
 </div>
 <div class="notes">
@@ -766,7 +766,7 @@ summer snowpack.
 
 </div>
 
-- Figure shows **MOD10C1 only** — the UA SWE `snow_covered_fraction` panel for the aggregated inspect notebook is a pending follow-up (#334). UA SWE **is** aggregated on disk (1982–2022) and **is** in the target bound (3.5C).
+- Both aggregated sources now shown (#237/#334): MOD10C1 CI-filtered SCA is sparse in Feb (cloud-gated NaN), while UA SWE's depth-derived `snow_covered_fraction` fills the Cascades / Blue Mountain snow field — visual evidence for why the 2-source pairing lifts finite coverage to 97.4% (3.5C).
 - Strong seasonal cycle in snowy Cascades / Blue Mountain HRUs; near-zero year-round in low-elevation valley HRUs.
 
 </div>
