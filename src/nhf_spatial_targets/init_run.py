@@ -141,6 +141,13 @@ targets:
     # allowed). 2: NaN the combined bound where fewer than 2 sources are finite.
     min_sources_for_bound: 1
     output_file: sca_targets.nc
+    # nn_fill defaults false for snow targets: SCA is a spatially discontinuous,
+    # orographically-controlled field, so nearest-neighbour spatial fill would
+    # borrow an unrelated donor HRU's snow state. Honest NaN is the calibration
+    # target (PRMS skips NaN cells). Set true only if a gap-free field is
+    # genuinely required downstream.
+    nn_fill: false
+    nn_max_candidates: 10
 
   snow_water_equivalent:
     enabled: true
@@ -155,7 +162,10 @@ targets:
     prms_variable: pkwater_equiv
     range_method: multi_source_minmax
     output_file: swe_targets.nc
-    nn_fill: true
+    # nn_fill defaults false for snow targets (see snow_covered_area above): SWE
+    # is elevation-driven and discontinuous, so spatial NN fill would borrow an
+    # unrelated donor HRU's snowpack. Honest NaN is the calibration target.
+    nn_fill: false
     nn_max_candidates: 10
 
 # ---------------------------------------------------------------------------

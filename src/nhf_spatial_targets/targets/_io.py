@@ -32,6 +32,24 @@ from nhf_spatial_targets.workspace import Project
 logger = logging.getLogger(__name__)
 
 
+class OutsideCoverageError(ValueError):
+    """A requested period is entirely outside a source's aggregated coverage.
+
+    Raised by :func:`read_aggregated_source` when a source has per-year NCs on
+    disk but none of them overlap the requested period (distinct from
+    ``FileNotFoundError``, which means the source has *no* aggregated NCs at
+    all). A ``ValueError`` subclass so existing ``except ValueError`` handlers
+    and ``pytest.raises(ValueError, ...)`` keep catching it unchanged.
+
+    Multi-source target builders (``targets/sca.py``, ``targets/swe.py``) catch
+    this *specific* type to let an out-of-coverage source contribute NaN for
+    that year instead of aborting the whole build, while a ``FileNotFoundError``
+    (a missing prerequisite) still propagates as a hard failure. Catching by
+    type replaces the former substring match on the message string, so the
+    raise site and both catch sites can no longer drift apart.
+    """
+
+
 _AGG_READ_CHUNK_BYTES = 256 * 1024 * 1024
 
 
@@ -94,9 +112,9 @@ def read_aggregated_source(
     ------
     FileNotFoundError
         If the source's aggregated directory contains no per-year NCs.
-    ValueError
+    OutsideCoverageError
         If the requested period falls entirely outside the source's
-        per-year coverage.
+        per-year coverage (a ``ValueError`` subclass).
     """
     agg_dir = project.aggregated_dir() / source_key
     pattern = f"{source_key}_*_agg.nc"
@@ -166,7 +184,7 @@ def read_aggregated_source(
         first_year = paths[0].name.rsplit("_", 2)[-2]
         last_year = paths[-1].name.rsplit("_", 2)[-2]
         ds.close()
-        raise ValueError(
+        raise OutsideCoverageError(
             f"Requested period {period[0]} .. {period[1]} is entirely "
             f"outside source coverage for '{source_key}' "
             f"(years {first_year} .. {last_year})."

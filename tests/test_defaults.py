@@ -39,6 +39,21 @@ def test_runoff_defaults_nn_fill_on_by_default():
     assert DEFAULTS["targets"]["runoff"]["chunk_months"] == 12
 
 
+def test_snow_defaults_nn_fill_off_by_default():
+    """Snow targets default nn_fill OFF: SCA/SWE are spatially discontinuous,
+    orographically-controlled fields where nearest-neighbour spatial fill would
+    borrow an unrelated donor HRU's snow state, so honest NaN is the calibration
+    target. The policy is snow-specific — non-snow targets keep nn_fill=True."""
+    assert DEFAULTS["targets"]["snow_covered_area"]["nn_fill"] is False
+    assert DEFAULTS["targets"]["snow_water_equivalent"]["nn_fill"] is False
+    # A project that omits nn_fill for a snow target inherits False.
+    merged = apply_defaults(
+        {"datastore": "/d", "fabric": {"path": "/p", "id_col": "nhm_id"}}
+    )
+    assert merged["targets"]["snow_covered_area"]["nn_fill"] is False
+    assert merged["targets"]["snow_water_equivalent"]["nn_fill"] is False
+
+
 def test_fabric_area_crs_default_is_conus_albers():
     assert DEFAULTS["fabric"]["area_crs"] == "EPSG:5070"
 

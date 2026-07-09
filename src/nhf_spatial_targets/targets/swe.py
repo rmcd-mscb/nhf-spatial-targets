@@ -78,6 +78,7 @@ from nhf_spatial_targets.targets._adapter import (
 )
 from nhf_spatial_targets.targets._combine import multi_source_nanminmax
 from nhf_spatial_targets.targets._io import (
+    OutsideCoverageError,
     check_hru_coords,
     read_aggregated_source,
     reindex_to_day_start,
@@ -289,15 +290,13 @@ def _load_year(
                 (year_start, year_end),
                 chunks={"time": 365, id_col: -1},
             )
-        except ValueError as exc:
-            if "entirely outside source coverage" in str(exc):
-                logger.info(
-                    "swe year %d: source '%s' has no data; contributes NaN",
-                    year,
-                    src_label,
-                )
-                continue
-            raise
+        except OutsideCoverageError:
+            logger.info(
+                "swe year %d: source '%s' has no data; contributes NaN",
+                year,
+                src_label,
+            )
+            continue
         check_hru_coords(da_native, fabric_hru_ids, id_col, src_label)
         da_mm = shim.to_common_units(da_native)
         da_in = mm_to_inches(da_mm)

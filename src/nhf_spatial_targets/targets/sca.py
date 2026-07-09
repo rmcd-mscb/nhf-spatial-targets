@@ -30,6 +30,23 @@ finite-contribution diagnostic. Two sources are registered today:
   weighted. ua_swe reaches back to WY 1982, widening the pre-2000 bound
   where MOD10C1 (2000+) is the other source.
 
+**Per-year source coverage gaps.** The two sources have non-overlapping
+reach (mod10c1 2000–present, ua_swe 1982–2022), so a period that spans their
+union has years where only one source is present. A source absent for a given
+year contributes an all-NaN interval for that year (:func:`_all_nan_interval`)
+rather than aborting the build, and the NaN-aware combine resolves the year to
+whatever source(s) remain (#334). For an example 1982–2024 build:
+
+  - 1982–1999: ua_swe-only (degenerate ``[v, v]`` pre-2000 record)
+  - 2000–2022: both sources (real two-source width)
+  - 2023+: mod10c1-only (until ua_swe is extended past 2022)
+
+Two cases stay loud rather than NaN-filled: a source with **no** aggregated
+NCs at all (a missing prerequisite, not a coverage gap — surfaces as
+``FileNotFoundError``), and a year where **every** source is outside coverage
+(the period lies entirely outside all sources — almost always a
+misconfiguration, raised in :func:`_load_sca_year`).
+
 **July/August forced-zero (calcSCA).** Summer is forced to
 ``(lower, upper) = (0, 0)``, gated by ``forced_zero_combined`` (default
 True):
@@ -77,6 +94,7 @@ import xarray as xr
 
 from nhf_spatial_targets.targets._adapter import SourceLoaderResult, TargetAdapter
 from nhf_spatial_targets.targets._io import (
+    OutsideCoverageError,
     check_hru_coords,
     read_aggregated_source,
     reindex_to_day_start,
@@ -211,6 +229,34 @@ _INTERVAL_LOADERS: dict[str, Callable[..., _SourceInterval]] = {
 }
 
 
+def _all_nan_interval(
+    year_master_idx: pd.DatetimeIndex,
+    fabric_hru_ids: np.ndarray,
+    id_col: str,
+) -> _SourceInterval:
+    """An all-NaN ``_SourceInterval`` for a source absent this whole year.
+
+    Shaped ``(time=year_master_idx, id_col=fabric_hru_ids)`` to align exactly
+    with the finite sources under :func:`_combine_intervals`' ``xr.concat``
+    (the finite loaders' coords pass :func:`check_hru_coords` against
+    ``fabric_hru_ids``, so reusing it here guarantees coord-identical concat).
+    ``lower``/``upper`` are NaN — the source contributes nothing — and
+    ``forces_summer_zero`` is all-False, so an absent source never triggers the
+    calcSCA July/August forced-zero.
+    """
+    shape = (len(year_master_idx), len(fabric_hru_ids))
+    coords = {"time": year_master_idx, id_col: fabric_hru_ids}
+    dims = ("time", id_col)
+    nan = np.full(shape, np.nan, dtype=np.float32)
+    return _SourceInterval(
+        lower=xr.DataArray(nan.copy(), coords=coords, dims=dims),
+        upper=xr.DataArray(nan.copy(), coords=coords, dims=dims),
+        forces_summer_zero=xr.DataArray(
+            np.zeros(shape, dtype=bool), coords=coords, dims=dims
+        ),
+    )
+
+
 def _combine_intervals(
     intervals: dict[str, _SourceInterval], *, min_sources_for_bound: int
 ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray]:
@@ -309,17 +355,46 @@ def _load_sca_year(
     forced_zero_combined = bool(sca_cfg.get("forced_zero_combined", True))
     min_sources = int(sca_cfg.get("min_sources_for_bound", 1))
 
-    intervals = {
-        key: _INTERVAL_LOADERS[key](
-            project=project,
-            period=period,
-            year_master_idx=year_master_idx,
-            fabric_hru_ids=fabric_hru_ids,
-            id_col=id_col,
-            sca_cfg=sca_cfg,
+    # Load each source's interval. A source whose aggregated coverage doesn't
+    # span THIS year contributes an all-NaN interval rather than aborting the
+    # whole build (#334) — the combine is NaN-aware so the year resolves to the
+    # other source(s). This is what lets a 2000+ source (mod10c1) pair with a
+    # 1982+ source (ua_swe) across their non-overlapping reach. A missing
+    # aggregated directory (FileNotFoundError) is NOT swallowed here — that
+    # stays a loud build failure naming the corrective `agg` command.
+    intervals: dict[str, _SourceInterval] = {}
+    covered = 0
+    for key in sources:
+        try:
+            intervals[key] = _INTERVAL_LOADERS[key](
+                project=project,
+                period=period,
+                year_master_idx=year_master_idx,
+                fabric_hru_ids=fabric_hru_ids,
+                id_col=id_col,
+                sca_cfg=sca_cfg,
+            )
+            covered += 1
+        except OutsideCoverageError:
+            logger.info(
+                "sca year %d: source '%s' has no aggregated coverage; "
+                "contributes NaN to this year's bound",
+                year,
+                key,
+            )
+            intervals[key] = _all_nan_interval(year_master_idx, fabric_hru_ids, id_col)
+
+    # No source covers this year at all. A partial gap (>=1 source present) is a
+    # legitimate NaN-fill; zero coverage means the period lies entirely outside
+    # every source — almost always a misconfiguration. Fail loudly rather than
+    # silently writing an all-NaN year, mirroring targets/swe.py:_load_year.
+    if covered == 0:
+        raise ValueError(
+            f"sca year {year}: no configured source ({sources}) has aggregated "
+            f"coverage for this year. The requested snow_covered_area.period "
+            f"likely lies entirely outside every source's coverage — narrow the "
+            f"period or aggregate a source that spans it."
         )
-        for key in sources
-    }
 
     # forced_zero_combined=False: zero the mod10c1 contribution in summer
     # BEFORE the combine, so ua_swe's (un-zeroed) fraction survives into the

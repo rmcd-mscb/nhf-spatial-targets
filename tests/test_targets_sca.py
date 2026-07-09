@@ -1554,6 +1554,161 @@ def test_min_sources_two_in_july_single_source_stays_nan(tmp_path: Path):
         assert (ds["n_sources"].values == 1).all()
 
 
+def test_two_source_build_spans_coverage_gap(tmp_path: Path):
+    """Regression for #334: a period spanning years where only ONE of the two
+    sources has aggregated coverage must build — the absent source contributes
+    NaN for that year — rather than aborting with ``entirely outside source
+    coverage``.
+
+    The two SCA sources have non-overlapping reach in production (mod10c1
+    2000+, ua_swe 1982–2022); pairing them is the whole point of #237. Here we
+    write both sources for 2004–2006 then carve a gap: mod10c1 absent in 2004,
+    ua_swe absent in 2006, leaving 2005 as the only overlap year.
+
+      - 2004: ua_swe only  -> degenerate [0.5, 0.5], n_sources=1
+      - 2005: both sources -> [0.50, 0.64],          n_sources=2
+      - 2006: mod10c1 only -> [0.54, 0.64],          n_sources=1
+    """
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_sca_project(
+        tmp_path,
+        period="2004-01-01/2006-12-31",
+        sources=("mod10c1_v061", "ua_swe"),
+        snow_native=60.0,
+        ci_native=90.0,
+        ua_swe_scf=0.5,
+    )
+    # Carve the coverage gap by deleting per-year NCs.
+    agg = workdir / "data" / "aggregated"
+    (agg / "mod10c1_v061" / "mod10c1_v061_2004_agg.nc").unlink()
+    (agg / "ua_swe" / "ua_swe_2006_agg.nc").unlink()
+
+    project = load(workdir)
+    build(project)  # must not raise
+
+    with _open_sca(project) as ds:
+        # 2004: ua_swe only (mod10c1 absent -> NaN contribution).
+        d04 = ds.sel(time="2004-03-15")
+        np.testing.assert_allclose(d04["lower_bound"].values, 0.50, rtol=1e-5)
+        np.testing.assert_allclose(d04["upper_bound"].values, 0.50, rtol=1e-5)
+        assert (d04["n_sources"].values == 1).all()
+        # 2005: both sources -> real two-source width.
+        d05 = ds.sel(time="2005-03-15")
+        np.testing.assert_allclose(d05["lower_bound"].values, 0.50, rtol=1e-5)
+        np.testing.assert_allclose(d05["upper_bound"].values, 0.64, rtol=1e-5)
+        assert (d05["n_sources"].values == 2).all()
+        # 2006: mod10c1 only (ua_swe absent -> NaN contribution).
+        d06 = ds.sel(time="2006-03-15")
+        np.testing.assert_allclose(d06["lower_bound"].values, 0.54, rtol=1e-5)
+        np.testing.assert_allclose(d06["upper_bound"].values, 0.64, rtol=1e-5)
+        assert (d06["n_sources"].values == 1).all()
+
+
+def test_period_entirely_outside_all_sources_raises(tmp_path: Path):
+    """A period that lies entirely outside EVERY source's coverage must raise,
+    not silently write an all-NaN target (#334 review).
+
+    The coverage-gap fix substitutes an all-NaN interval for a source absent in
+    a given year. Without a backstop, a period outside *all* sources would
+    swallow every source's coverage error and emit a silently all-NaN NC —
+    a regression from the pre-fix loud failure. Mirrors
+    ``targets/swe.py:_load_year``'s "no source contributed" guard.
+    """
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    # NCs are written only for 2005; point the period at 2000, which neither
+    # source covers (files exist, so this is a coverage miss, not FileNotFound).
+    workdir = _make_sca_project(
+        tmp_path,
+        period="2005-01-01/2005-12-31",
+        sources=("mod10c1_v061", "ua_swe"),
+        snow_native=60.0,
+        ci_native=90.0,
+        ua_swe_scf=0.5,
+    )
+    cfg_path = workdir / "config.yml"
+    cfg = yaml.safe_load(cfg_path.read_text())
+    cfg["targets"]["snow_covered_area"]["period"] = "2000-01-01/2000-12-31"
+    cfg_path.write_text(yaml.safe_dump(cfg))
+    project = load(workdir)
+    with pytest.raises(ValueError, match="no configured source"):
+        build(project)
+
+
+def test_two_source_missing_directory_still_raises_filenotfound(tmp_path: Path):
+    """In a TWO-source build, a source whose aggregated directory is entirely
+    empty must still surface a loud FileNotFoundError — a missing prerequisite,
+    NOT a coverage gap to be NaN-filled.
+
+    The single-source guard lives in ``test_missing_aggregated_file_surfaces_
+    clear_error``; this locks the same invariant in the multi-source regime the
+    #334 fix actually traverses (the new per-source try/except catches only the
+    coverage error, never FileNotFoundError).
+    """
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_sca_project(
+        tmp_path,
+        period="2005-01-01/2005-12-31",
+        sources=("mod10c1_v061", "ua_swe"),
+        snow_native=60.0,
+        ci_native=90.0,
+        ua_swe_scf=0.5,
+    )
+    # Remove ALL ua_swe NCs so its directory has no per-year files at all.
+    ua_dir = workdir / "data" / "aggregated" / "ua_swe"
+    for nc in ua_dir.glob("*.nc"):
+        nc.unlink()
+    project = load(workdir)
+    with pytest.raises(FileNotFoundError, match="ua_swe"):
+        build(project)
+
+
+def test_gap_year_under_min_sources_two_masks_single_source(tmp_path: Path):
+    """A coverage-gap year combined with ``min_sources_for_bound=2``: the lone
+    surviving source is NaN'd (width not guaranteed) while ``n_sources`` still
+    records its single finite contribution. The overlap year keeps its bound.
+
+    Distinct from ``test_min_sources_for_bound_two_nans_single_source_cell``,
+    which drives the single-source cell via a NaN-VALUED present source; here
+    the source is ABSENT for the year (the #334 all-NaN-interval path).
+    """
+    from nhf_spatial_targets.targets.sca import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_sca_project(
+        tmp_path,
+        period="2004-01-01/2005-12-31",
+        sources=("mod10c1_v061", "ua_swe"),
+        snow_native=60.0,
+        ci_native=90.0,
+        ua_swe_scf=0.5,
+        min_sources_for_bound=2,
+    )
+    # mod10c1 absent in 2004 -> only ua_swe finite that year.
+    (
+        workdir / "data" / "aggregated" / "mod10c1_v061" / "mod10c1_v061_2004_agg.nc"
+    ).unlink()
+    project = load(workdir)
+    build(project)
+    with _open_sca(project) as ds:
+        # 2004: single surviving source -> min=2 masks the bound to NaN,
+        # but n_sources still counts the one finite contribution.
+        d04 = ds.sel(time="2004-03-15")
+        assert np.isnan(d04["lower_bound"].values).all()
+        assert np.isnan(d04["upper_bound"].values).all()
+        assert (d04["n_sources"].values == 1).all()
+        # 2005: both present -> min=2 keeps the two-source bound.
+        d05 = ds.sel(time="2005-03-15")
+        np.testing.assert_allclose(d05["lower_bound"].values, 0.50, rtol=1e-5)
+        np.testing.assert_allclose(d05["upper_bound"].values, 0.64, rtol=1e-5)
+        assert (d05["n_sources"].values == 2).all()
+
+
 def test_resolved_combine_knobs_stamped_on_nc(tmp_path: Path):
     """The resolved forced_zero_combined / min_sources_for_bound knobs survive
     the per-year-stitch path onto the final NC as global attrs (the manifest
