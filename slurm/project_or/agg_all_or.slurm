@@ -30,6 +30,12 @@
 
 set -euo pipefail
 
+# Group-writable output on the shared HPC filesystem — SLURM does not
+# inherit the login-shell umask. Belt-and-suspenders with os.umask(0o002)
+# in the CLI (see io_nc.apply_umask_mode for why umask alone is not enough
+# for the mkstemp-based atomic NetCDF writers).
+umask 002
+
 PROJECT_DIR="${PROJECT_DIR:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/or-spatial-targets}"
 # Resolve the repo from the submit cwd (sbatch spool-copies the script — #174).
 REPO_DIR="${REPO_DIR:-$(git -C "${SLURM_SUBMIT_DIR:-$PWD}" rev-parse --show-toplevel 2>/dev/null || true)}"

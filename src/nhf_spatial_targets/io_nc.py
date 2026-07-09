@@ -257,6 +257,30 @@ def build_encoding(
     return encoding
 
 
+def apply_umask_mode(path: Path | str) -> None:
+    """Reset *path*'s permissions to ``0o666 & ~umask``.
+
+    ``tempfile.mkstemp`` hardcodes mode 0600, and the netCDF4/HDF5 backend
+    truncates the tempfile *in place* rather than recreating it, so a NetCDF
+    written into an mkstemp tempfile keeps owner-only perms regardless of the
+    process umask. Call this on the tempfile before the atomic rename so the
+    published file is group/world-readable per the process umask (umask 002 ->
+    664) instead of the mkstemp default of 600.
+
+    umask has no read-only accessor, so it is read via the set-and-restore
+    idiom. ``os.umask`` is *process*-global, not thread-local, so the transient
+    ``umask(0)`` window is only race-free because every caller invokes this
+    serially on the main thread after its write completes — keep it that way. A
+    future writer that calls this from a worker thread while another thread is
+    creating a file could see the ``umask(0)`` window and emit a world-writable
+    file. chmod failures are left to propagate — a silently owner-only output on
+    a shared filesystem is worse than a loud failure.
+    """
+    current = os.umask(0)
+    os.umask(current)
+    os.chmod(path, 0o666 & ~current)
+
+
 def atomic_to_netcdf(
     ds: xr.Dataset,
     path: Path | str,
@@ -267,7 +291,10 @@ def atomic_to_netcdf(
     """Write *ds* to *path* atomically: tempfile in the same dir, then rename.
 
     A sibling tempfile keeps the rename on the same filesystem (atomic). On any
-    exception the tempfile is removed so no partial NetCDF is left behind.
+    exception the tempfile is removed so no partial NetCDF is left behind. The
+    tempfile's mkstemp-default 0600 mode is relaxed to honor the process umask
+    (see :func:`apply_umask_mode`) before the rename, so the published NetCDF is
+    group-readable on shared filesystems.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -276,6 +303,7 @@ def atomic_to_netcdf(
     tmp_path = Path(tmp_name)
     try:
         ds.to_netcdf(tmp_path, format=format, encoding=encoding)
+        apply_umask_mode(tmp_path)
         tmp_path.replace(path)
     except BaseException:
         tmp_path.unlink(missing_ok=True)

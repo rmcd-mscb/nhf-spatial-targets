@@ -22,6 +22,7 @@ intercepts continue to work after the split.
 
 from __future__ import annotations
 
+import os
 from importlib.metadata import version as _pkg_version
 from typing import Annotated
 
@@ -65,6 +66,13 @@ def launcher(
     verbose: Annotated[bool, Parameter(name=["--verbose", "-v"])] = False,
 ):
     """Global options for nhf-targets."""
+    # Group-writable default so pipeline outputs (NetCDFs, manifests) land
+    # readable to the impd group on the shared HPC filesystem. SLURM does not
+    # inherit the login-shell umask, so this must be set in-process rather than
+    # relying on the operator's shell. Credential writes chmod 0600 explicitly,
+    # so this does not loosen them. See io_nc.apply_umask_mode for why the
+    # umask alone is insufficient for the mkstemp-based atomic writers.
+    os.umask(0o002)
     setup_logging(verbose)
     app(tokens)  # dispatch remaining tokens to the root app
 

@@ -113,10 +113,48 @@ zlib decompression of the chunk offsets the chunk-locality gain for the
 single-HRU pattern. Disk pressure on the shared filesystem was the motivating
 concern, and that is where the policy pays off.
 
+## Output file permissions (shared-filesystem readability)
+
+The **`mkstemp`-based** atomic writers create their tempfile with
+`tempfile.mkstemp`, which hardcodes mode **0600**, and the netCDF4/HDF5 backend
+truncates that tempfile *in place* rather than recreating it — so the published
+NC inherits 0600 **regardless of the process umask**. On the shared HPC
+filesystem that made outputs unreadable to the `impd` group. Setting `umask`
+alone does **not** fix this: mkstemp ignores umask.
+
+The fix is two layers:
+
+- `io_nc.apply_umask_mode(path)` chmods the tempfile to `0o666 & ~umask` before
+  the atomic rename. Every `mkstemp`-based atomic writer calls it:
+  `atomic_to_netcdf` (aggregated + target NCs), `fetch/consolidate.py`
+  (datastore consolidated NCs), the per-source and canonical manifest writers
+  (`release/lineage.py:atomic_write_manifest`, the `fetch/*` and
+  `aggregate/_driver.py` manifest writes), the release registry
+  (`release/registry.py`), and the gdptools weight-cache CSV writers
+  (`aggregate/_driver.py`, `aggregate/ssebop.py`). The **plain-path** writers —
+  the rule is *any writer that passes a not-yet-existing `.tmp`/output path to
+  `to_netcdf` / `write_text` rather than an `mkstemp` fd* (today: `era5_land`,
+  `snodas`, `ua_swe` NCs, `gldas`, `pangaea`, `reitz2017`, `rechunk`, and
+  `validate`'s `fabric.json` `write_text`) — create a *new* file on write, so
+  the kernel applies `0o666 & ~umask` at creation and they need no chmod. (Note
+  `fabric.json` is a plain `write_text`, not tempfile+rename, so its mode is
+  only umask-correct on *first* creation; an existing file is truncated in
+  place, preserving its mode.) Credential files (`credentials.py`) and
+  `config.effective.yml` set their mode explicitly and are intentionally
+  excluded.
+- The CLI launcher sets `os.umask(0o002)` in-process, and the SLURM scripts set
+  `umask 002`. SLURM does not inherit the login-shell umask, so the in-process
+  umask is what makes batch runs land at **664**. Credential writes are
+  unaffected — they `chmod 0600` explicitly.
+
+Net result: pipeline NCs land as `-rw-rw-r--` (664) under the default umask.
+chmod failures propagate — a silently owner-only output is worse than a loud
+failure.
+
 ## Cross-references
 
 - [`io_nc.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/io_nc.py) — `build_encoding` /
-  `atomic_to_netcdf` (the single policy home).
+  `atomic_to_netcdf` / `apply_umask_mode` (the single policy home).
 - [`rechunk.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/src/nhf_spatial_targets/rechunk.py) — the backfill CLI.
 - [transformation-pipeline.md](transformation-pipeline.md) — *where* transforms
   live (this doc is *how* NCs are encoded); canonical `id_col`-ascending row

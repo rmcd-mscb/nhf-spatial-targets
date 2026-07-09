@@ -62,6 +62,12 @@
 
 set -euo pipefail
 
+# Group-writable output on the shared HPC filesystem — SLURM does not
+# inherit the login-shell umask. Belt-and-suspenders with os.umask(0o002)
+# in the CLI (see io_nc.apply_umask_mode for why umask alone is not enough
+# for the mkstemp-based atomic NetCDF writers).
+umask 002
+
 # Flush Python stdout per-line so SLURM logs (--output=...) update in
 # real time instead of dumping batches when the 8 KB block buffer fills.
 export PYTHONUNBUFFERED=1

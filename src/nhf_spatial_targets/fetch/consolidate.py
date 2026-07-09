@@ -150,6 +150,9 @@ def _write_netcdf(
             kwargs["encoding"] = encoding
         with ProgressBar():
             ds.to_netcdf(tmp_path, **kwargs)
+        from nhf_spatial_targets.io_nc import apply_umask_mode
+
+        apply_umask_mode(tmp_path)
         tmp_path.replace(out_path)
     except BaseException as exc:
         tmp_path.unlink(missing_ok=True)

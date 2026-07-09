@@ -189,6 +189,9 @@ def update_manifest(
         try:
             with os.fdopen(tmp_fd, "w") as f:
                 json.dump(manifest, f, indent=2)
+            from nhf_spatial_targets.io_nc import apply_umask_mode
+
+            apply_umask_mode(tmp_path)
             Path(tmp_path).replace(manifest_path)
         except Exception:
             Path(tmp_path).unlink(missing_ok=True)
@@ -938,6 +941,9 @@ def compute_or_load_weights(
     try:
         with os.fdopen(tmp_fd, "w") as f:
             weights.to_csv(f, index=False)
+        from nhf_spatial_targets.io_nc import apply_umask_mode
+
+        apply_umask_mode(tmp_path)
         Path(tmp_path).replace(wp)
     except Exception:
         Path(tmp_path).unlink(missing_ok=True)

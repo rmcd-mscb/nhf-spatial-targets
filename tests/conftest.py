@@ -28,6 +28,24 @@ import yaml
 from nhf_spatial_targets.workspace import Project
 
 
+@pytest.fixture(autouse=True)
+def _restore_umask():
+    """Snapshot and restore the process umask around every test.
+
+    ``os.umask`` is process-global. The CLI launcher sets ``os.umask(0o002)``
+    (intended, permanent in production) and several tests set their own umask to
+    probe file modes — either would otherwise leak the mutated umask into
+    unrelated later tests, making permission assertions order-dependent. This
+    autouse fixture contains that blast radius.
+    """
+    original = os.umask(0o022)
+    try:
+        os.umask(original)
+        yield
+    finally:
+        os.umask(original)
+
+
 @pytest.fixture()
 def no_system_cred_checks():
     """Suppress ~/.cdsapirc and ~/.netrc existence checks (for validate_workspace tests)."""
