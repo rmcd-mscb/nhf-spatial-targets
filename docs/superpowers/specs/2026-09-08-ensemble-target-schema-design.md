@@ -125,13 +125,34 @@ def complete_years_window(da: xr.DataArray, cadence: str) -> slice
 The trim is load-bearing, not defensive. ERA5-Land's record ends mid-year and
 recharge sums months to an annual total, so an untrimmed partial trailing year
 produces a spuriously low annual sum that becomes the per-HRU minimum and
-compresses every other year toward 1.0. The guard applies uniformly rather than
-only to sums — reasoning per-reduction about which are safe is more fragile than
-always trimming.
+compresses every other year toward 1.0.
 
-Provenance: the NC records `normalize_period = "per_source_por"` plus one
-`normalize_window_<source_key>` attr per member, so the file states exactly what
-each member was scaled against.
+**The trim applies uniformly to every source and every reduction** (decided
+2026-09-08), not only to the annual sums where it is strictly load-bearing.
+Reasoning per-reduction about which are safe is more fragile than always
+trimming, and a single rule makes two sources' normalized series directly
+comparable.
+
+### 4.1 Complete years as the pipeline's definition of "period of record"
+
+`complete_years_window` is the **single definition of a source's period of
+record** wherever the pipeline computes one, not a helper local to
+normalization. A source's POR is its complete-year span; a partial leading or
+trailing year is coverage, not record.
+
+This is a consistency rule, not a change to target contents. Specifically:
+
+- The output time axis is still driven by the target's configured `period`. The
+  POR trim narrows *normalization windows*, never the emitted time range.
+- The NC records the trimmed window per member as
+  `normalize_window_<source_key>`, so the file states the POR it actually used.
+- Catalog `period:` fields in `sources.yml` are prose documentation of upstream
+  coverage and are **not** authoritative for this computation, which is derived
+  from the aggregated NCs on disk. Auditing those fields for complete-year
+  consistency is out of scope here (§12).
+
+The NC also records `normalize_period = "per_source_por"` at the global level,
+so the mode is visible without inspecting the per-member window attrs.
 
 `parse_period` and `validate` must both recognize the sentinel rather than
 attempting to parse it as a date range.
@@ -156,6 +177,14 @@ can still turn it on deliberately for diagnostics.
 `emit_members` is an **output switch, not a science switch.** Members are always
 computed — they are the input to every reduction. The flag decides only whether
 they are also written to disk. Bounds are byte-identical either way.
+
+The `_CONFIG_TEMPLATE` stub must say this in the comment an operator actually
+reads, not only here. Required content: (a) members are always computed, the
+flag only controls whether they are written; (b) turning it off does not change
+`lower_bound` / `upper_bound` / `n_sources` / `ensemble_mean` / `ensemble_std`;
+(c) the reason to turn it off is file size on large fabrics, with the gfv2 daily
+SWE figure as the concrete example; (d) `members_emitted` records the choice in
+the output NC. `tests/test_init_run.py` asserts the stub is present.
 
 It is per-target rather than per-project because the split is between cadences
 *within* a project: on gfv2 members are cheap and useful for monthly AET
@@ -262,9 +291,22 @@ why our MOD16A2 resampler differs from the notebook's),
 3. Oregon project config + SLURM `--mem` bumps — no `src/` changes.
 4. Notebook-feedback issues (§7) — filed, not edited, since it is their notebook.
 
-## 12. Out of scope
+## 12. Out of scope — tracked as separate issues
 
-**Per-year target file layout.** The year-chunked driver already writes per-year
+| Issue | Item |
+|---|---|
+| [#339](https://github.com/rmcd-mscb/nhf-spatial-targets/issues/339) | Release payload rglobs `targets/` and stages per-year build intermediates as published targets |
+| [#340](https://github.com/rmcd-mscb/nhf-spatial-targets/issues/340) | Per-year target file layout for daily targets |
+| [#341](https://github.com/rmcd-mscb/nhf-spatial-targets/issues/341) | Notebook feedback: MOD16A2 resampling prose/code mismatch, ERA5-Land `sd` description, per-HRU print string |
+| [#342](https://github.com/rmcd-mscb/nhf-spatial-targets/issues/342) | CF: daily targets carry `cell_methods "time: point"` alongside `time_bnds` |
+
+Not yet filed, pending a scope decision (§4.1): auditing `catalog/sources.yml`
+`period:` fields for complete-year consistency with the pipeline's POR
+definition.
+
+Detail on the two largest deferred items:
+
+**Per-year target file layout (#340).** The year-chunked driver already writes per-year
 NCs to `targets/.<target>_intermediates/` and stitches them; publishing those
 directly instead would make every gfv2 SWE file independently loadable
 (~1.2 GB each) at identical total footprint. Deferred to its own spec because it
@@ -274,10 +316,10 @@ and would — and `_preflight_provenance_complete` compares those two sets. It
 needs the projection extended, its test extended, and the release payload taught
 to tell a published per-year target from a build intermediate.
 
-**Release payload stages build intermediates (pre-existing bug).**
+**Release payload stages build intermediates (#339).**
 `.swe_intermediates/` and `.sca_intermediates/` live inside `targets/`, and
 `payload._nc_files` is `rglob("*.nc")` with no dot-directory filter anywhere in
 `release/`. `plan_fabric_child` would therefore stage the OR project's ~45 SWE
 and ~44 SCA per-year intermediates as published target files, none of which have
 a `target` step in the manifest. Not yet confirmed by a dry-run publish whether
-the gate blocks the release or the intermediates ship. Its own issue.
+the gate blocks the release or the intermediates ship.
