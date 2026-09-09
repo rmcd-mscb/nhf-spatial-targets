@@ -435,6 +435,17 @@ def write_bounds_target(
     filled_ds, nn_diag = nn_fill_bounds(
         ds_loaded, centroids_xy, max_candidates=nn_max_candidates
     )
+    if emit_members:
+        # nn_fill_bounds returns ds.copy() with only lower_bound/upper_bound
+        # overwritten, so members + ensemble_mean/ensemble_std would
+        # otherwise ride along into the companion completely unfilled. Drop
+        # them: the NN-filled companion carries only the filled bounds,
+        # n_sources, and the nn_filled flag (spec Sec 3.6) — NN-filling an
+        # individual member would fabricate a source observation at an HRU
+        # that source never covered.
+        filled_ds = filled_ds.drop_vars(
+            [*members, "ensemble_mean", "ensemble_std"], errors="ignore"
+        )
     nn_diag.attrs.update(
         {
             "units": "1",

@@ -2495,3 +2495,49 @@ def test_write_bounds_target_raises_when_emit_requested_without_members(
             n_sources_count=1,
             **kwargs,
         )
+
+
+def test_write_bounds_target_nn_filled_companion_excludes_members(tmp_path: Path):
+    """The NN-filled companion never carries members/ensemble stats (spec Sec 3.6).
+
+    nn_fill_bounds returns ds.copy() with only lower_bound/upper_bound
+    overwritten, so without an explicit drop the companion would silently
+    carry the raw, UNFILLED member values alongside the filled bounds. This
+    guards write_bounds_target's post-nn_fill_bounds drop_vars step.
+    """
+    from nhf_spatial_targets.targets._combine import multi_source_nanminmax
+    from nhf_spatial_targets.targets._writers import write_bounds_target
+
+    workdir = make_minimal_project(tmp_path)
+    project = load(workdir)
+    members = {
+        "era5_land": _member([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]),
+        "mwbm_climgrid": _member([[3.0, 4.0, np.nan], [3.0, 4.0, np.nan]]),
+    }
+    lower, upper, n_sources = multi_source_nanminmax(members)
+
+    kwargs = _bounds_call_kwargs(tmp_path, members, emit_members=True)
+    kwargs["nn_fill"] = True
+    write_bounds_target(
+        project=project,
+        lower=lower,
+        upper=upper,
+        n_sources=n_sources,
+        n_sources_count=2,
+        **kwargs,
+    )
+
+    main_path = kwargs["output_path"]
+    nn_path = main_path.with_name(main_path.stem + "_nn_filled" + main_path.suffix)
+    with xr.open_dataset(main_path) as ds_main:
+        # The primary output keeps the full member decomposition.
+        assert "era5_land" in ds_main.data_vars
+        assert "ensemble_mean" in ds_main.data_vars
+    with xr.open_dataset(nn_path) as ds_nn:
+        assert set(ds_nn.data_vars) == {
+            "lower_bound",
+            "upper_bound",
+            "n_sources",
+            "nn_filled",
+            "crs",
+        }
