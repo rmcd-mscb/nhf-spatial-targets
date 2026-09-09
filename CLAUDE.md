@@ -267,6 +267,18 @@ Full architectural reference: `docs/architecture/transformation-pipeline.md`.
   (`np.fmin`/`np.fmax` or xarray `.min/max(skipna=True)` along a stacked
   source dim) so a bound is well-defined whenever ≥1 source is finite at the
   HRU/time. The bound is NaN only when *every* source is NaN there.
+- **`normalize_period: per_source_por` sentinel (issue #338, recharge and
+  soil_moisture):** in place of one shared normalization window, each
+  source normalizes over its own period of record (widest span of complete
+  calendar years in its own series). The loader must read each source's
+  whole record (not the configured `period`) and derive completeness from
+  the raw, pre-reindex/pre-resample series — reindexing pads uncovered
+  timesteps with NaN at real timestamps, and resampling to a coarser
+  cadence collapses a ragged partial year into one indistinguishable step,
+  either of which defeats a naive completeness check. See "Per-source POR
+  normalization" in `docs/architecture/transformation-pipeline.md`. Each
+  source's derived window is recorded as a `normalize_window_<source_key>`
+  attr on the target NC.
 
 **Per-source ensemble members (`targets.<target>.emit_members`).** Every
 multi-source `SourceLoaderResult` carries `members: dict[str, xr.DataArray]`

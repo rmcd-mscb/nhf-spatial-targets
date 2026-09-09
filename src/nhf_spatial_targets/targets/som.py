@@ -38,6 +38,7 @@ import pandas as pd
 import xarray as xr
 
 from nhf_spatial_targets.normalize.methods import (
+    complete_years_window,
     normalize_0_1_by_calendar_month_over_window,
     normalize_0_1_over_window,
 )
@@ -47,6 +48,7 @@ from nhf_spatial_targets.targets._adapter import (
 )
 from nhf_spatial_targets.targets._combine import multi_source_nanminmax
 from nhf_spatial_targets.targets._io import (
+    PER_SOURCE_POR,
     check_hru_coords,
     parse_period,
     read_aggregated_source,
@@ -120,9 +122,23 @@ def _read_monthly_sources(
     fabric_hru_ids,
     id_col: str,
     master_monthly: pd.DatetimeIndex,
-) -> dict[str, xr.DataArray]:
+    read_period: tuple[str, str] | None = None,
+) -> tuple[dict[str, xr.DataArray], dict[str, xr.DataArray]]:
+    """Read each source's monthly series.
+
+    Returns ``(sources_monthly, sources_raw)``. ``sources_monthly`` is
+    reindexed onto ``master_monthly`` (the output axis); ``sources_raw`` is
+    the pre-reindex series exactly as read.
+
+    ``read_period`` defaults to ``period``. Under ``per_source_por`` the
+    caller passes a wide range so each source's whole record is present in
+    ``sources_raw`` — the reindexed series cannot be used to judge record
+    completeness, because it pads uncovered months with NaN at real
+    timestamps and a distinct-month count then reads them as covered.
+    """
     shims = shims_by_key(SHIMS)
     sources_monthly: dict[str, xr.DataArray] = {}
+    sources_raw: dict[str, xr.DataArray] = {}
     for src in sources:
         if src not in shims:
             raise ValueError(
@@ -134,13 +150,14 @@ def _read_monthly_sources(
             project,
             shim.source_key,
             shim.aggregated_var,
-            period,
+            read_period or period,
             chunks={"time": 12, id_col: -1},
         )
         check_hru_coords(da_native, fabric_hru_ids, id_col, src)
         da_monthly_native = shim.to_common_units(da_native)
+        sources_raw[src] = da_monthly_native
         sources_monthly[src] = reindex_to_month_start(da_monthly_native, master_monthly)
-    return sources_monthly
+    return sources_monthly, sources_raw
 
 
 def _load_monthly(
@@ -156,18 +173,21 @@ def _load_monthly(
     """Monthly-variant loader: per-calendar-month normalize over window."""
     som_cfg = project.target(adapter.config_key)
     raw_norm_period = som_cfg.get("normalize_period") or som_cfg["period"]
-    normalize_period = parse_period(raw_norm_period)
+    per_source_por = raw_norm_period == PER_SOURCE_POR
+    normalize_period = None if per_source_por else parse_period(raw_norm_period)
+    read_period = ("1900-01-01", "2200-12-31") if per_source_por else None
     sources = list(som_cfg["sources"])
 
     logger.info(
         "Building SOM monthly target: %d sources (%s), period %s..%s, "
-        "normalize_period %s..%s, fabric=%s",
+        "normalize_period %s, fabric=%s",
         len(sources),
         ",".join(sources),
         period[0],
         period[1],
-        normalize_period[0],
-        normalize_period[1],
+        raw_norm_period
+        if per_source_por
+        else f"{normalize_period[0]}..{normalize_period[1]}",
         project.config["fabric"]["path"],
     )
 
@@ -178,27 +198,32 @@ def _load_monthly(
             "freq='MS'. Check the date range."
         )
 
-    sources_monthly = _read_monthly_sources(
+    _, sources_raw = _read_monthly_sources(
         project=project,
         period=period,
         sources=sources,
         fabric_hru_ids=fabric_hru_ids,
         id_col=id_col,
         master_monthly=master_monthly,
+        read_period=read_period,
     )
 
     sources_monthly_norm: dict[str, xr.DataArray] = {}
-    for src, da in sources_monthly.items():
-        window = da.sel(time=slice(normalize_period[0], normalize_period[1]))
+    normalize_windows: dict[str, str] = {}
+    for src, da_raw in sources_raw.items():
+        if per_source_por:
+            win_start, win_end = complete_years_window(da_raw, "monthly")
+            normalize_windows[src] = f"{win_start}/{win_end}"
+        else:
+            win_start, win_end = normalize_period
+        window = da_raw.sel(time=slice(win_start, win_end))
         if window.sizes.get("time", 0) == 0:
             raise ValueError(
-                f"soil_moisture.normalize_period {raw_norm_period} yields no "
-                f"monthly timesteps for source '{src}' (period intersection "
-                f"with source's monthly index is empty)."
+                f"soil_moisture: source '{src}' has no monthly timesteps in "
+                f"its normalization window {win_start}..{win_end}."
             )
-        sources_monthly_norm[src] = normalize_0_1_by_calendar_month_over_window(
-            da, window
-        )
+        normed = normalize_0_1_by_calendar_month_over_window(da_raw, window)
+        sources_monthly_norm[src] = reindex_to_month_start(normed, master_monthly)
     shims = shims_by_key(SHIMS)
     label_members(sources_monthly_norm, shims)
     lo_m, up_m, ns_m = multi_source_nanminmax(sources_monthly_norm)
@@ -208,6 +233,8 @@ def _load_monthly(
         "normalize_period": raw_norm_period,
         "normalize_method": "per_calendar_month",
     }
+    for src, window_str in normalize_windows.items():
+        extra_attrs[f"normalize_window_{src}"] = window_str
     return SourceLoaderResult(
         lower=lo_m,
         upper=up_m,
@@ -233,36 +260,48 @@ def _load_annual(
     """Annual-variant loader: monthly → annual mean, then whole-period normalize."""
     som_cfg = project.target(adapter.config_key)
     raw_norm_period = som_cfg.get("normalize_period") or som_cfg["period"]
-    normalize_period = parse_period(raw_norm_period)
+    per_source_por = raw_norm_period == PER_SOURCE_POR
+    normalize_period = None if per_source_por else parse_period(raw_norm_period)
+    read_period = ("1900-01-01", "2200-12-31") if per_source_por else None
     sources = list(som_cfg["sources"])
 
     master_monthly = pd.date_range(period[0], period[1], freq="MS")
-    sources_monthly = _read_monthly_sources(
+    master_annual = pd.date_range(period[0], period[1], freq="YS")
+    _, sources_raw = _read_monthly_sources(
         project=project,
         period=period,
         sources=sources,
         fabric_hru_ids=fabric_hru_ids,
         id_col=id_col,
         master_monthly=master_monthly,
+        read_period=read_period,
     )
 
-    sources_annual = {
-        src: da.resample(time="YS").mean(skipna=True)
-        for src, da in sources_monthly.items()
-    }
     sources_annual_norm: dict[str, xr.DataArray] = {}
-    for src, da in sources_annual.items():
-        window = da.sel(time=slice(normalize_period[0], normalize_period[1]))
+    normalize_windows: dict[str, str] = {}
+    for src, da_raw in sources_raw.items():
+        # The completeness window is derived from the RAW MONTHLY series,
+        # not the resampled annual series: resample(time="YS") emits one
+        # step for a partial year exactly as for a complete one, so
+        # complete_years_window at "annual" cadence structurally cannot
+        # detect an incomplete trailing/leading year (see its docstring).
+        if per_source_por:
+            win_start, win_end = complete_years_window(da_raw, "monthly")
+            normalize_windows[src] = f"{win_start}/{win_end}"
+        else:
+            win_start, win_end = normalize_period
+        annual = da_raw.resample(time="YS").mean(skipna=True)
+        window = annual.sel(time=slice(win_start, win_end))
         if window.sizes.get("time", 0) == 0:
             raise ValueError(
-                f"soil_moisture.normalize_period {raw_norm_period} yields no "
-                f"annual timesteps for source '{src}' after annual aggregation."
+                f"soil_moisture: source '{src}' has no annual timesteps in "
+                f"its normalization window {win_start}..{win_end}."
             )
-        sources_annual_norm[src] = normalize_0_1_over_window(da, window)
+        normed = normalize_0_1_over_window(annual, window)
+        sources_annual_norm[src] = normed.reindex(time=master_annual)
     shims = shims_by_key(SHIMS)
     label_members(sources_annual_norm, shims)
     lo_a, up_a, ns_a = multi_source_nanminmax(sources_annual_norm)
-    master_annual = pd.date_range(period[0], period[1], freq="YS")
 
     extra_attrs = {
         "source": "; ".join(shims[s].description for s in sources),
@@ -270,6 +309,8 @@ def _load_annual(
         "normalize_method": "whole_period",
         "annual_aggregation": "mean",
     }
+    for src, window_str in normalize_windows.items():
+        extra_attrs[f"normalize_window_{src}"] = window_str
     return SourceLoaderResult(
         lower=lo_a,
         upper=up_a,

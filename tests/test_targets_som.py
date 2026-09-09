@@ -523,3 +523,228 @@ def test_build_nn_fill_actually_fills_nan_cells(tmp_path: Path):
         assert np.isfinite(filled["lower_bound"].values[:, 1]).all()
         assert (filled["nn_filled"].values[:, 1] == 1).all()
         assert (filled["nn_filled"].values[:, 0] == 0).all()
+
+
+# ---------------------------------------------------------------------------
+# per_source_por sentinel (#338)
+# ---------------------------------------------------------------------------
+
+
+def test_som_monthly_per_source_por_uses_each_sources_own_complete_years(
+    tmp_path, monkeypatch
+):
+    """Under the sentinel each source normalizes over its own trimmed record.
+
+    merra2 covers 1980-06..2020-12 (a ragged leading partial year) and
+    nldas_mosaic covers 1979-01..2020-12 (a full record), so the two
+    sources must NOT share a window. Also pins the read window: under the
+    sentinel each source must be read over its whole record
+    (1900-01-01/2200-12-31), not the configured period -- otherwise POR
+    derivation would silently truncate to the configured window.
+    """
+    from nhf_spatial_targets.targets import som as som_mod
+    from nhf_spatial_targets.workspace import load
+
+    seen_periods: dict[str, tuple[str, str]] = {}
+
+    def fake_read(project, source_key, var, period, chunks=None):
+        seen_periods[source_key] = period
+        spans = {
+            "merra2": ("1980-06-01", "2020-12-01"),
+            "nldas_mosaic": ("1979-01-01", "2020-12-01"),
+        }
+        start, end = spans[source_key]
+        times = pd.date_range(start, end, freq="MS")
+        values = np.linspace(1.0, 2.0, len(times), dtype=np.float32)
+        return xr.DataArray(
+            np.repeat(values[:, None], 3, axis=1),
+            dims=("time", "nhm_id"),
+            coords={"time": times, "nhm_id": [1, 2, 3]},
+            attrs={"units": "1"},
+        )
+
+    monkeypatch.setattr(som_mod, "read_aggregated_source", fake_read)
+    monkeypatch.setattr(som_mod, "check_hru_coords", lambda *a, **k: None)
+
+    workdir = _make_som_project(
+        tmp_path,
+        period="1979-01-01/2020-12-31",
+        normalize_period="per_source_por",
+        sources=["merra2", "nldas_mosaic"],
+    )
+    project = load(workdir)
+
+    result = som_mod._load_monthly(
+        project=project,
+        adapter=som_mod.ADAPTER_MONTHLY,
+        period=("1979-01-01", "2020-12-31"),
+        hru_meta=None,
+        fabric_hru_ids=np.array([1, 2, 3]),
+        id_col="nhm_id",
+        year_context=None,
+    )
+
+    assert seen_periods["merra2"] == ("1900-01-01", "2200-12-31")
+    assert seen_periods["nldas_mosaic"] == ("1900-01-01", "2200-12-31")
+
+    attrs = result.extra_attrs
+    assert attrs["normalize_period"] == "per_source_por"
+    # merra2's record starts mid-1980 -- 1980 is a ragged leading partial
+    # year (7 of 12 months) and must be excluded.
+    assert attrs["normalize_window_merra2"] == "1981-01-01/2020-12-31"
+    assert attrs["normalize_window_nldas_mosaic"] == "1979-01-01/2020-12-31"
+
+
+def test_som_annual_per_source_por_uses_each_sources_own_complete_years(
+    tmp_path, monkeypatch
+):
+    """Annual variant: the per-source window must come from the RAW MONTHLY
+    series, not the resampled annual means.
+
+    Same source spans as the monthly test above, asserted through
+    ``_load_annual``. If the window were (wrongly) derived from the
+    resampled annual series, ``complete_years_window(..., "annual")``
+    would accept 1980 as complete (resample emits one annual step
+    regardless of how many raw months fed it), so a match against the
+    monthly-derived window here proves the annual loader reused the
+    monthly-cadence derivation rather than deriving its own from the
+    annual means.
+    """
+    from nhf_spatial_targets.targets import som as som_mod
+    from nhf_spatial_targets.workspace import load
+
+    def fake_read(project, source_key, var, period, chunks=None):
+        spans = {
+            "merra2": ("1980-06-01", "2020-12-01"),
+            "nldas_mosaic": ("1979-01-01", "2020-12-01"),
+        }
+        start, end = spans[source_key]
+        times = pd.date_range(start, end, freq="MS")
+        values = np.linspace(1.0, 2.0, len(times), dtype=np.float32)
+        return xr.DataArray(
+            np.repeat(values[:, None], 3, axis=1),
+            dims=("time", "nhm_id"),
+            coords={"time": times, "nhm_id": [1, 2, 3]},
+            attrs={"units": "1"},
+        )
+
+    monkeypatch.setattr(som_mod, "read_aggregated_source", fake_read)
+    monkeypatch.setattr(som_mod, "check_hru_coords", lambda *a, **k: None)
+
+    workdir = _make_som_project(
+        tmp_path,
+        period="1979-01-01/2020-12-31",
+        normalize_period="per_source_por",
+        sources=["merra2", "nldas_mosaic"],
+    )
+    project = load(workdir)
+
+    result = som_mod._load_annual(
+        project=project,
+        adapter=som_mod.ADAPTER_ANNUAL,
+        period=("1979-01-01", "2020-12-31"),
+        hru_meta=None,
+        fabric_hru_ids=np.array([1, 2, 3]),
+        id_col="nhm_id",
+        year_context=None,
+    )
+
+    attrs = result.extra_attrs
+    assert attrs["normalize_period"] == "per_source_por"
+    assert attrs["normalize_window_merra2"] == "1981-01-01/2020-12-31"
+    assert attrs["normalize_window_nldas_mosaic"] == "1979-01-01/2020-12-31"
+
+
+def test_som_explicit_normalize_period_reads_configured_period(tmp_path, monkeypatch):
+    """Converse of the per-source-POR read-window test.
+
+    Under an EXPLICIT normalize_period (not the sentinel), the read window
+    passed to read_aggregated_source must be the configured output
+    period -- NOT the wide (1900/2200) range used under the sentinel.
+    Pins both branches of the read-window logic for the monthly variant.
+    """
+    from nhf_spatial_targets.targets import som as som_mod
+    from nhf_spatial_targets.workspace import load
+
+    seen_periods: dict[str, tuple[str, str]] = {}
+
+    def fake_read(project, source_key, var, period, chunks=None):
+        seen_periods[source_key] = period
+        times = pd.date_range("2000-01-01", "2002-12-01", freq="MS")
+        values = np.linspace(1.0, 2.0, len(times), dtype=np.float32)
+        return xr.DataArray(
+            np.repeat(values[:, None], 3, axis=1),
+            dims=("time", "nhm_id"),
+            coords={"time": times, "nhm_id": [1, 2, 3]},
+            attrs={"units": "1"},
+        )
+
+    monkeypatch.setattr(som_mod, "read_aggregated_source", fake_read)
+    monkeypatch.setattr(som_mod, "check_hru_coords", lambda *a, **k: None)
+
+    workdir = _make_som_project(
+        tmp_path,
+        period="2000-01-01/2002-12-31",
+        sources=["merra2"],
+    )
+    project = load(workdir)
+
+    som_mod._load_monthly(
+        project=project,
+        adapter=som_mod.ADAPTER_MONTHLY,
+        period=("2000-01-01", "2002-12-31"),
+        hru_meta=None,
+        fabric_hru_ids=np.array([1, 2, 3]),
+        id_col="nhm_id",
+        year_context=None,
+    )
+
+    assert seen_periods["merra2"] == ("2000-01-01", "2002-12-31")
+
+
+def test_som_per_source_por_excludes_leading_partial_year(tmp_path, monkeypatch):
+    """Regression: NaN padding from reindex-to-period must not fake
+    completeness.
+
+    merra2's real record starts 1980-06 (a ragged leading partial year),
+    but the configured ``period`` starts 1980-01. If the window were
+    derived from the reindexed series (padded with NaN at real
+    timestamps for Jan-May 1980), a distinct-month count would see all
+    12 months of 1980 and wrongly call it complete. Deriving from the
+    RAW pre-reindex series must exclude 1980.
+    """
+    from nhf_spatial_targets.targets import som as som_mod
+    from nhf_spatial_targets.workspace import load
+
+    def fake_read(project, source_key, var, period, chunks=None):
+        times = pd.date_range("1980-06-01", "1982-12-01", freq="MS")
+        values = np.linspace(1.0, 2.0, len(times), dtype=np.float32)
+        return xr.DataArray(
+            np.repeat(values[:, None], 3, axis=1),
+            dims=("time", "nhm_id"),
+            coords={"time": times, "nhm_id": [1, 2, 3]},
+            attrs={"units": "1"},
+        )
+
+    monkeypatch.setattr(som_mod, "read_aggregated_source", fake_read)
+    monkeypatch.setattr(som_mod, "check_hru_coords", lambda *a, **k: None)
+
+    workdir = _make_som_project(
+        tmp_path,
+        period="1980-01-01/1982-12-31",
+        normalize_period="per_source_por",
+        sources=["merra2"],
+    )
+    project = load(workdir)
+
+    result = som_mod._load_monthly(
+        project=project,
+        adapter=som_mod.ADAPTER_MONTHLY,
+        period=("1980-01-01", "1982-12-31"),
+        hru_meta=None,
+        fabric_hru_ids=np.array([1, 2, 3]),
+        id_col="nhm_id",
+        year_context=None,
+    )
+
+    assert result.extra_attrs["normalize_window_merra2"] == "1981-01-01/1982-12-31"
