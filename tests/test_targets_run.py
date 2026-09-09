@@ -175,7 +175,7 @@ def test_build_output_schema(tmp_path: Path):
         assert "centroid_lat" in ds.coords or "centroid_lat" in ds.variables
         assert "centroid_lon" in ds.coords or "centroid_lon" in ds.variables
         assert ds["lower_bound"].attrs["units"] == "cfs"
-        assert ds.attrs["Conventions"] == "CF-1.6"
+        assert ds.attrs["Conventions"] == "CF-1.8"
         assert ds["time"].attrs["bounds"] == "time_bnds"
         assert "time_bnds" in ds.variables
 

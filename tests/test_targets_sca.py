@@ -279,7 +279,7 @@ def test_build_output_schema(tmp_path: Path):
         assert ds["lower_bound"].attrs["units"] == "1"
         assert ds["upper_bound"].attrs["units"] == "1"
         assert ds["lower_bound"].attrs["cell_methods"] == "time: point"
-        assert ds.attrs["Conventions"] == "CF-1.6"
+        assert ds.attrs["Conventions"] == "CF-1.8"
         assert ds["time"].attrs["bounds"] == "time_bnds"
         assert "time_bnds" in ds.variables
         assert ds["n_sources"].dtype == np.int8

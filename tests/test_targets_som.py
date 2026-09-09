@@ -203,7 +203,7 @@ def test_build_monthly_output_schema(tmp_path: Path):
         assert "lower_bound" in ds and "upper_bound" in ds
         assert "n_sources" in ds
         assert ds["lower_bound"].attrs["units"] == "1"
-        assert ds.attrs["Conventions"] == "CF-1.6"
+        assert ds.attrs["Conventions"] == "CF-1.8"
         assert ds.attrs["normalize_method"] == "per_calendar_month"
         # 36 monthly timesteps for 2000-2002
         assert ds.sizes["time"] == 36
@@ -222,7 +222,7 @@ def test_build_annual_output_schema(tmp_path: Path):
         assert "lower_bound" in ds and "upper_bound" in ds
         assert "n_sources" in ds
         assert ds["lower_bound"].attrs["units"] == "1"
-        assert ds.attrs["Conventions"] == "CF-1.6"
+        assert ds.attrs["Conventions"] == "CF-1.8"
         assert ds.attrs["normalize_method"] == "whole_period"
         assert ds.attrs["annual_aggregation"] == "mean"
         # 3 annual timesteps for 2000-2002

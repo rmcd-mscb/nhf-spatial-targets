@@ -261,7 +261,7 @@ def test_build_output_schema(tmp_path: Path):
         assert "n_sources" in ds
         assert ds["lower_bound"].attrs["units"] == "1"
         assert ds["upper_bound"].attrs["units"] == "1"
-        assert ds.attrs["Conventions"] == "CF-1.6"
+        assert ds.attrs["Conventions"] == "CF-1.8"
         assert ds["time"].attrs["bounds"] == "time_bnds"
         assert "time_bnds" in ds.variables
         # 10 annual timesteps for 2000-2009

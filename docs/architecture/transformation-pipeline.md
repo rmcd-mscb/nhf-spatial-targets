@@ -202,6 +202,20 @@ aggregation. So this is necessarily post-aggregation by definition. Lives
 in `targets/run.py` (`multi_source_runoff_bounds`) and any future per-target
 combiner.
 
+### Member emission is output-only (issue #338)
+
+Per-source ensemble members (the per-HRU-per-time value each contributing
+source produced, before the multi-source combine) and the derived
+`ensemble_mean` / `ensemble_std` are always **computed** as the input to
+`multi_source_nanminmax` / `ensemble_stats` — the bounds are a reduction
+over exactly these members. Whether the writer also **emits** them as named
+data variables on the target NC (`write_bounds_target(..., emit_members=True)`)
+is a separate, purely cosmetic decision: `lower_bound` / `upper_bound` /
+`n_sources` are byte-identical whether or not `emit_members` is set. Emitting
+members does not move a transformation earlier or later in the pipeline and
+does not change any computed value — it only decides whether the members
+that already existed in memory are also written to disk.
+
 ## Diagnostic outputs are allowed
 
 Strict reading of the principle would say "the aggregator must not derive
