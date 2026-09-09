@@ -323,6 +323,12 @@ def complete_years_window(da: xr.DataArray, cadence: str) -> tuple[str, str]:
         spanned — the trim addresses ragged record ends, which is where
         every source in the catalog is actually ragged.
 
+    At ``annual`` cadence a year is "complete" as soon as it has any
+    timestep at all (``required = 1``), so this function structurally
+    cannot detect an incomplete year from an annual series. When that
+    distinction matters, derive the window from the pre-resample monthly
+    series instead and reuse it for the annual reduction.
+
     Raises
     ------
     ValueError
@@ -339,8 +345,12 @@ def complete_years_window(da: xr.DataArray, cadence: str) -> tuple[str, str]:
             f"complete_years_window: expected 'time' dim, got {tuple(da.dims)!r}."
         )
     required = _STEPS_PER_YEAR[cadence]
-    years = pd.DatetimeIndex(da["time"].values).year
-    counts = pd.Series(1, index=years).groupby(level=0).sum()
+    idx = pd.DatetimeIndex(da["time"].values)
+    if cadence == "monthly":
+        periods = pd.Series(idx.month, index=idx.year)
+    else:
+        periods = pd.Series(idx.year, index=idx.year)
+    counts = periods.groupby(level=0).nunique()
     complete = counts[counts >= required].index
     if len(complete) == 0:
         raise ValueError(

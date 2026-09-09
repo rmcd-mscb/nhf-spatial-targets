@@ -435,3 +435,20 @@ def test_complete_years_window_raises_when_no_complete_year():
     da = _monthly_da("2000-03-01", "2000-09-01")
     with pytest.raises(ValueError, match="no complete calendar year"):
         complete_years_window(da, "monthly")
+
+
+def test_complete_years_window_counts_distinct_periods_not_rows():
+    from nhf_spatial_targets.normalize.methods import complete_years_window
+
+    # 12 duplicate 2000-01-01 timestamps look like 12 rows but cover only
+    # one distinct month, so 2000 must NOT count as a complete year. 2001
+    # is a genuine 12-month record and should be the only complete year.
+    dup_2000 = pd.DatetimeIndex(["2000-01-01"] * 12)
+    real_2001 = pd.date_range("2001-01-01", "2001-12-01", freq="MS")
+    times = dup_2000.append(real_2001)
+    da = xr.DataArray(
+        np.ones((len(times), 2), dtype=np.float32),
+        dims=("time", "nhm_id"),
+        coords={"time": times, "nhm_id": [1, 2]},
+    )
+    assert complete_years_window(da, "monthly") == ("2001-01-01", "2001-12-31")
