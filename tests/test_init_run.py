@@ -171,3 +171,12 @@ def test_config_template_documents_emit_members(tmp_path):
     # The comment must explain that this is an output switch, not a
     # science switch -- the operator-facing rationale, not just the key.
     assert "always computed" in _CONFIG_TEMPLATE
+
+
+def test_config_template_documents_per_source_por_sentinel(tmp_path):
+    from nhf_spatial_targets.init_run import _CONFIG_TEMPLATE
+
+    assert "per_source_por" in _CONFIG_TEMPLATE
+    # The comment must explain WHY partial years are trimmed, not just the
+    # key -- the operator-facing rationale.
+    assert "Partial leading/trailing years are trimmed first" in _CONFIG_TEMPLATE

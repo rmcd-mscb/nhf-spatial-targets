@@ -2649,3 +2649,11 @@ def test_stitch_preserves_member_variables_across_years(tmp_path: Path):
         assert len(ds.time) == 365 + 366
     finally:
         ds.close()
+
+
+def test_parse_period_rejects_the_sentinel_with_a_pointed_message():
+    """parse_period must not be handed the sentinel -- callers branch first."""
+    from nhf_spatial_targets.targets._io import PER_SOURCE_POR, parse_period
+
+    with pytest.raises(ValueError, match="per_source_por is a sentinel"):
+        parse_period(PER_SOURCE_POR)

@@ -112,6 +112,14 @@ targets:
     range_method: normalized_minmax
     normalize: true
     normalize_period: "2000-01-01/2009-12-31"
+    # normalize_period accepts either an explicit "YYYY-MM-DD/YYYY-MM-DD"
+    # window applied to every source, or the sentinel `per_source_por`,
+    # which normalizes each source over its OWN complete-year period of
+    # record. Partial leading/trailing years are trimmed first: an
+    # unfinished year's annual sum would otherwise become that HRU's
+    # minimum and compress every other year. The per-source windows are
+    # recorded in the output NC as normalize_window_<source_key>.
+    #   normalize_period: per_source_por
     output_file: recharge_targets.nc
     # emit_members: true   # see aet: above
 
@@ -130,6 +138,14 @@ targets:
     range_method: normalized_minmax
     normalize: true
     normalize_by: calendar_month
+    # normalize_period accepts either an explicit "YYYY-MM-DD/YYYY-MM-DD"
+    # window applied to every source, or the sentinel `per_source_por`,
+    # which normalizes each source over its OWN complete-year period of
+    # record. Partial leading/trailing years are trimmed first: an
+    # unfinished year's annual sum would otherwise become that HRU's
+    # minimum and compress every other year. The per-source windows are
+    # recorded in the output NC as normalize_window_<source_key>.
+    #   normalize_period: per_source_por
     output_file: soil_moisture_targets.nc
     # emit_members: true   # see aet: above
 
