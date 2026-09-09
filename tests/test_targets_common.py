@@ -2230,3 +2230,91 @@ def test_common_global_attrs_omits_sources_when_empty(tmp_path: Path):
     attrs = _common_global_attrs(project, sca.ADAPTER, "2000-01-01/2010-12-31")
     assert attrs["range_method"] == "modis_ci"
     assert "source_keys" not in attrs
+
+
+# ---------------------------------------------------------------------------
+# ensemble_stats (issue #338 — per-source ensemble members + stats)
+# ---------------------------------------------------------------------------
+
+
+def _member(values: list[list[float]]) -> xr.DataArray:
+    """Build a (time=2, nhm_id=3) float32 member array from nested lists."""
+    return xr.DataArray(
+        np.array(values, dtype=np.float32),
+        dims=("time", "nhm_id"),
+        coords={
+            "time": pd.date_range("2000-01-01", periods=2, freq="MS"),
+            "nhm_id": [1, 2, 3],
+        },
+    )
+
+
+def test_ensemble_stats_mean_and_std_across_three_members():
+    from nhf_spatial_targets.targets._combine import (
+        ensemble_stats,
+        multi_source_nanminmax,
+    )
+
+    members = {
+        "a": _member([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]),
+        "b": _member([[3.0, 4.0, 5.0], [3.0, 4.0, 5.0]]),
+        "c": _member([[5.0, 6.0, 7.0], [5.0, 6.0, 7.0]]),
+    }
+    _, _, n_sources = multi_source_nanminmax(members)
+    mean, std = ensemble_stats(members, n_sources)
+
+    # mean of (1, 3, 5) == 3; population std (ddof=0) of (1, 3, 5) == 1.632993
+    assert np.allclose(mean.values[0], [3.0, 4.0, 5.0])
+    assert np.allclose(std.values[0], [1.6329932, 1.6329932, 1.6329932])
+
+
+def test_ensemble_stats_masks_std_where_fewer_than_two_sources():
+    from nhf_spatial_targets.targets._combine import (
+        ensemble_stats,
+        multi_source_nanminmax,
+    )
+
+    nan = float("nan")
+    members = {
+        # HRU 1: three finite. HRU 2: two finite. HRU 3: one finite.
+        "a": _member([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]),
+        "b": _member([[3.0, 4.0, nan], [3.0, 4.0, nan]]),
+        "c": _member([[5.0, nan, nan], [5.0, nan, nan]]),
+    }
+    _, _, n_sources = multi_source_nanminmax(members)
+    mean, std = ensemble_stats(members, n_sources)
+
+    assert list(n_sources.values[0]) == [3, 2, 1]
+    # Mean is defined wherever >=1 source is finite.
+    assert np.allclose(mean.values[0], [3.0, 3.0, 3.0])
+    # std defined at n>=2; population std of (2, 4) is 1.0. NaN at n == 1.
+    assert np.isclose(std.values[0][0], 1.6329932)
+    assert np.isclose(std.values[0][1], 1.0)
+    assert np.isnan(std.values[0][2])
+
+
+def test_ensemble_stats_all_nan_cell_yields_nan_mean_and_std():
+    from nhf_spatial_targets.targets._combine import (
+        ensemble_stats,
+        multi_source_nanminmax,
+    )
+
+    nan = float("nan")
+    members = {
+        "a": _member([[nan, nan, nan], [nan, nan, nan]]),
+        "b": _member([[nan, nan, nan], [nan, nan, nan]]),
+    }
+    _, _, n_sources = multi_source_nanminmax(members)
+    mean, std = ensemble_stats(members, n_sources)
+
+    assert int(n_sources.values[0][0]) == 0
+    assert np.isnan(mean.values[0][0])
+    assert np.isnan(std.values[0][0])
+
+
+def test_ensemble_stats_rejects_empty_members():
+    from nhf_spatial_targets.targets._combine import ensemble_stats
+
+    dummy = _member([[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]])
+    with pytest.raises(ValueError, match="empty members dict"):
+        ensemble_stats({}, dummy)
