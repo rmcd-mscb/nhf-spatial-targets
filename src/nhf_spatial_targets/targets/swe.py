@@ -384,9 +384,10 @@ def build(project: Project) -> None:
     (availability) runs inside the loader so it is
     visible in test fixtures that drive the loader directly without the
     full driver. Per-year contributions follow the period-union
-    semantics — sources whose coverage doesn't include a given year are
-    silently skipped (with a log line) and contribute NaN to that
-    year's bound.
+    semantics — a source whose coverage doesn't include a given year
+    still contributes an all-NaN member for that year (logged, not
+    skipped) so the member schema stays constant across years for the
+    ``join="exact"`` per-year stitch.
     """
     from nhf_spatial_targets.targets._driver import build as run_driver
 
