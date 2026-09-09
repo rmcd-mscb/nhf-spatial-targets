@@ -14,7 +14,14 @@
 
 ## Global Constraints
 
-- **Do NOT run the full pytest suite locally.** This is an HPC login node; the repo convention is `pixi run -e dev fmt && pixi run -e dev lint` locally, then push and let GitHub Actions run the suite. Targeted single-test runs (`pixi run -e dev test -k <name>`) are allowed and are what this plan's "run the test" steps mean.
+- **Do NOT run the full pytest suite locally.** This is an HPC login node; the repo convention is `pixi run -e dev fmt && pixi run -e dev lint` locally, then push and let GitHub Actions run the suite.
+- **Targeted test command.** `pixi run -e dev test` is `pytest tests/ -n auto ...`, so appending `-k` still collects the whole suite under xdist (~3.5 min). Every "run the test" step in this plan means the file-scoped form instead:
+
+  ```bash
+  pixi run -e dev pytest tests/<file>.py -k <pattern> -q
+  ```
+
+  That is ~2s of pytest (~55s wall, dominated by pixi env resolution). Where a step below writes `pixi run -e dev test -k <pattern>`, use the file-scoped form against the test file that task touches.
 - **Always commit via `pixi run git commit`, never bare `git commit`.** A PreToolUse hook blocks the bare form.
 - **Never commit to `main`.** Each PR below gets its own branch off `main`, named `<type>/338-<slug>`.
 - Stage files explicitly by path. Never `git add -A` or `git add .`.
