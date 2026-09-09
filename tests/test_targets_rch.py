@@ -439,3 +439,115 @@ def test_build_nn_fill_actually_fills_nan_cells(tmp_path: Path):
         assert np.isfinite(filled["lower_bound"].values[:, 1]).all()
         assert (filled["nn_filled"].values[:, 1] == 1).all()
         assert (filled["nn_filled"].values[:, 0] == 0).all()
+
+
+def test_recharge_per_source_por_uses_each_sources_own_complete_years(
+    tmp_path, monkeypatch
+):
+    """Under the sentinel each source normalizes over its own trimmed record.
+
+    reitz2017 covers 2000-2013 and era5_land 1998-2015, so the two sources
+    must NOT share a window. The recorded per-source window attrs prove it.
+    """
+    from nhf_spatial_targets.targets import rch as rch_mod
+    from nhf_spatial_targets.workspace import load
+
+    def fake_read(project, source_key, var, period, chunks=None):
+        spans = {
+            "reitz2017": (2000, 2013),
+            "era5_land": (1998, 2015),
+        }
+        y0, y1 = spans[source_key]
+        if source_key == "era5_land":
+            times = pd.date_range(f"{y0}-01-01", f"{y1}-12-01", freq="MS")
+        else:
+            times = pd.date_range(f"{y0}-01-01", f"{y1}-01-01", freq="YS")
+        values = np.linspace(1.0, 2.0, len(times), dtype=np.float32)
+        return xr.DataArray(
+            np.repeat(values[:, None], 3, axis=1),
+            dims=("time", "nhm_id"),
+            coords={"time": times, "nhm_id": [1, 2, 3]},
+            attrs={"units": "m"},
+        )
+
+    monkeypatch.setattr(rch_mod, "read_aggregated_source", fake_read)
+    monkeypatch.setattr(rch_mod, "check_hru_coords", lambda *a, **k: None)
+
+    workdir = _make_rch_project(
+        tmp_path,
+        period="2000-01-01/2013-12-31",
+        normalize_period="per_source_por",
+        sources=["reitz2017", "era5_land"],
+    )
+    project = load(workdir)
+
+    result = rch_mod._load(
+        project=project,
+        adapter=rch_mod.ADAPTER,
+        period=("2000-01-01", "2013-12-31"),
+        hru_meta=None,
+        fabric_hru_ids=np.array([1, 2, 3]),
+        id_col="nhm_id",
+        year_context=None,
+    )
+
+    attrs = result.extra_attrs
+    assert attrs["normalize_period"] == "per_source_por"
+    assert attrs["normalize_window_reitz2017"] == "2000-01-01/2013-12-31"
+    assert attrs["normalize_window_era5_land"] == "1998-01-01/2015-12-31"
+
+
+def test_recharge_per_source_por_excludes_ragged_trailing_partial_year(
+    tmp_path, monkeypatch
+):
+    """A monthly-native source's window must be derived pre-resample.
+
+    era5_land's shim resamples monthly -> annual via sum, which collapses
+    a ragged trailing partial year into a single (spuriously low) annual
+    timestep. complete_years_window run on the POST-shim annual series
+    cannot see that the trailing year is partial (any single timestep
+    counts as a complete "annual" year) and would wrongly include it,
+    poisoning normalize_0_1_over_window's per-HRU minimum. The window
+    must instead be derived from the NATIVE monthly series, which sees
+    the trailing year has only 6 of 12 months and excludes it.
+    """
+    from nhf_spatial_targets.targets import rch as rch_mod
+    from nhf_spatial_targets.workspace import load
+
+    def fake_read(project, source_key, var, period, chunks=None):
+        # era5_land: 2000 and 2001 are full 12-month years; 2002 stops in
+        # June (6 months) -- a ragged trailing partial year.
+        times = pd.date_range("2000-01-31", "2001-12-31", freq="ME").append(
+            pd.date_range("2002-01-31", "2002-06-30", freq="ME")
+        )
+        values = np.linspace(1.0, 2.0, len(times), dtype=np.float32)
+        return xr.DataArray(
+            np.repeat(values[:, None], 3, axis=1),
+            dims=("time", "nhm_id"),
+            coords={"time": times, "nhm_id": [1, 2, 3]},
+            attrs={"units": "m"},
+        )
+
+    monkeypatch.setattr(rch_mod, "read_aggregated_source", fake_read)
+    monkeypatch.setattr(rch_mod, "check_hru_coords", lambda *a, **k: None)
+
+    workdir = _make_rch_project(
+        tmp_path,
+        period="2000-01-01/2002-12-31",
+        normalize_period="per_source_por",
+        sources=["era5_land"],
+    )
+    project = load(workdir)
+
+    result = rch_mod._load(
+        project=project,
+        adapter=rch_mod.ADAPTER,
+        period=("2000-01-01", "2002-12-31"),
+        hru_meta=None,
+        fabric_hru_ids=np.array([1, 2, 3]),
+        id_col="nhm_id",
+        year_context=None,
+    )
+
+    # The ragged 2002 partial year must be excluded from the window.
+    assert result.extra_attrs["normalize_window_era5_land"] == "2000-01-01/2001-12-31"

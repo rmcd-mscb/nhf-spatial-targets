@@ -73,6 +73,18 @@ class SourceShim:
         updated for. ``None`` opts out of the check (used for
         synthetic source keys whose aggregated variable is not the
         same name as anything in the catalog).
+    native_cadence
+        Optional cadence (``"monthly"`` or ``"annual"``) of the source's
+        aggregated series *before* ``to_common_units`` runs. Needed when
+        a caller must reason about record completeness — e.g. deriving a
+        per-source period-of-record window — because a shim that
+        resamples monthly data to an annual sum (``resample(time="YS")
+        .sum()``) hides a ragged trailing/leading partial year behind a
+        single annual timestep;  a completeness check run on the
+        *post-shim* annual series can't see the partial year and will
+        wrongly call it complete. ``None`` (the default) means the
+        caller does not need this distinction; the other target
+        builders that don't derive per-source windows leave it unset.
     """
 
     source_key: str
@@ -82,6 +94,7 @@ class SourceShim:
     config_label: str | None = None
     catalog_source_key: str | None = None
     expected_cf_units: str | None = None
+    native_cadence: str | None = None
 
 
 def shims_by_key(shims: "tuple[SourceShim, ...]") -> "dict[str, SourceShim]":
