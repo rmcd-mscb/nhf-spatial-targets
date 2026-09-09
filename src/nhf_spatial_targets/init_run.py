@@ -76,6 +76,7 @@ targets:
     nn_fill: true
     nn_max_candidates: 10
     chunk_months: 12
+    # emit_members: true   # see aet: above
 
   aet:
     enabled: true
@@ -87,6 +88,17 @@ targets:
     prms_variable: hru_actet
     range_method: multi_source_minmax
     output_file: aet_targets.nc
+    # emit_members: true
+    #   Whether to write the per-source ensemble members (one variable per
+    #   source key) and the derived ensemble_mean / ensemble_std into the
+    #   target NC. This is an OUTPUT switch, not a science switch: the
+    #   members are always computed -- they are the input from which
+    #   lower_bound / upper_bound / n_sources are derived -- so turning this
+    #   off changes none of those values, it only stops them being written.
+    #   Turn it off when file size matters: on the ~361k-HRU national fabric
+    #   a daily SWE target grows from ~12 GB to ~36-48 GB with members. On a
+    #   regional fabric the cost is negligible and true is the right choice.
+    #   The output NC records the choice as the `members_emitted` global attr.
 
   recharge:
     enabled: true
@@ -101,6 +113,7 @@ targets:
     normalize: true
     normalize_period: "2000-01-01/2009-12-31"
     output_file: recharge_targets.nc
+    # emit_members: true   # see aet: above
 
   soil_moisture:
     enabled: true
@@ -118,6 +131,7 @@ targets:
     normalize: true
     normalize_by: calendar_month
     output_file: soil_moisture_targets.nc
+    # emit_members: true   # see aet: above
 
   snow_covered_area:
     enabled: true
@@ -148,6 +162,9 @@ targets:
     # genuinely required downstream.
     nn_fill: false
     nn_max_candidates: 10
+    # emit_members: false   # see aet: above; off by default for SCA -- its
+    #   bounds are a MOD10C1 CI interval, not a member min/max, so emitted
+    #   members would not reconstruct the bounds. Set true for diagnostics.
 
   snow_water_equivalent:
     enabled: true
@@ -167,6 +184,7 @@ targets:
     # unrelated donor HRU's snowpack. Honest NaN is the calibration target.
     nn_fill: false
     nn_max_candidates: 10
+    # emit_members: true   # see aet: above
 
 # ---------------------------------------------------------------------------
 # Inspection-notebook overrides (optional)

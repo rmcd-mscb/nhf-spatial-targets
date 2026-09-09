@@ -72,6 +72,7 @@ DEFAULTS: dict = {
             "nn_fill": True,
             "nn_max_candidates": 10,
             "chunk_months": 12,
+            "emit_members": True,
         },
         "aet": {
             "enabled": True,
@@ -84,6 +85,7 @@ DEFAULTS: dict = {
             "nn_fill": True,
             "nn_max_candidates": 10,
             "chunk_months": 12,
+            "emit_members": True,
         },
         "recharge": {
             "enabled": True,
@@ -97,6 +99,7 @@ DEFAULTS: dict = {
             "output_file": "recharge_targets.nc",
             "nn_fill": True,
             "nn_max_candidates": 10,
+            "emit_members": True,
         },
         "soil_moisture": {
             "enabled": True,
@@ -115,6 +118,7 @@ DEFAULTS: dict = {
             "output_file": "soil_moisture_targets.nc",
             "nn_fill": True,
             "nn_max_candidates": 10,
+            "emit_members": True,
         },
         "snow_covered_area": {
             "enabled": True,
@@ -142,6 +146,10 @@ DEFAULTS: dict = {
             # state. Honest NaN is the calibration target (PRMS skips NaN cells).
             "nn_fill": False,
             "nn_max_candidates": 10,
+            # SCA's bounds are a MOD10C1 CI interval, not a member min/max,
+            # so emitted members would not reconstruct the bounds. Default
+            # off; an operator can still enable it for diagnostics.
+            "emit_members": False,
         },
         "snow_water_equivalent": {
             "enabled": True,
@@ -162,6 +170,7 @@ DEFAULTS: dict = {
             # fill would borrow an unrelated donor HRU's snowpack.
             "nn_fill": False,
             "nn_max_candidates": 10,
+            "emit_members": True,
         },
     },
     # ScienceBase data-release metadata. Optional — all leaves carry safe

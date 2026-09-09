@@ -268,6 +268,23 @@ Full architectural reference: `docs/architecture/transformation-pipeline.md`.
   source dim) so a bound is well-defined whenever ≥1 source is finite at the
   HRU/time. The bound is NaN only when *every* source is NaN there.
 
+**Per-source ensemble members (`targets.<target>.emit_members`).** Every
+multi-source `SourceLoaderResult` carries `members: dict[str, xr.DataArray]`
+(one array per source key) alongside the combined `lower`/`upper` bounds --
+the members are **always computed**, since they are the input the bounds are
+derived from. `emit_members` (config key, `defaults.py`, per target) is an
+**output switch only**: `True` writes one variable per source key plus
+`ensemble_mean` / `ensemble_std` into the target NC via
+`targets/_writers.py:write_bounds_target`; `False` skips writing them. It
+changes no bound value, only file size -- a daily SWE target on the
+~361k-HRU national fabric grows from ~12 GB to ~36-48 GB with members
+written. Defaults `True` for the five `multi_source_minmax` targets
+(runoff, aet, recharge, soil_moisture, snow_water_equivalent) and `False`
+for `snow_covered_area`, whose bounds are a MOD10C1 confidence-interval
+rather than a member min/max, so emitted members would not reconstruct
+them. The output NC always stamps `members_emitted` recording the choice
+actually made for that file.
+
 **`stat_method` choice: `mean` vs `masked_mean`.** gdptools' area-weighted
 mean comes in two flavours, and the right choice depends on whether the
 source has explicit per-pixel masking:

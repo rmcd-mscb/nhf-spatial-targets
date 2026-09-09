@@ -163,6 +163,25 @@ OPTIONAL_CONFIG_FEATURES: list[OptionalConfigFeature] = [
         added="2026-06-10 (#237)",
         why="zero-width-bound policy for the multi-source SCA bound (#237)",
     ),
+    OptionalConfigFeature(
+        name="targets.<target>.emit_members",
+        detect=r"(?m)^\s*#?\s*emit_members\s*:",
+        block=(
+            "# Whether to write per-source ensemble members (one variable per\n"
+            "# source key) plus ensemble_mean / ensemble_std into the target NC.\n"
+            "# Output switch only: members are always computed, so turning this\n"
+            "# off changes no bound value. Defaults true (false for\n"
+            "# snow_covered_area). Turn off where file size matters -- daily SWE\n"
+            "# on the national fabric grows from ~12 GB to ~36-48 GB.\n"
+            "#\n"
+            "#   emit_members: true\n"
+        ),
+        added="2026-09-08 (#338)",
+        why=(
+            "Retains the per-source ensemble alongside the bounds so a "
+            "calibration consumer can see which source produced each bound."
+        ),
+    ),
 ]
 
 
