@@ -2407,6 +2407,11 @@ def test_write_bounds_target_emits_members_and_stats(tmp_path: Path):
         "era5_land": _member([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]),
         "mwbm_climgrid": _member([[3.0, 4.0, 5.0], [3.0, 4.0, 5.0]]),
     }
+    # Known input attrs, distinct from the writer's own units/long_name
+    # (issue #338 fix round 2, finding 4): rename(key) alone reuses the
+    # caller's Variable object, so a bare `member.attrs = {...}` after it
+    # would corrupt these in place. Asserted unchanged after the call below.
+    members["era5_land"].attrs = {"units": "mm", "long_name": "orig era5_land"}
     lower, upper, n_sources = multi_source_nanminmax(members)
 
     kwargs = _bounds_call_kwargs(tmp_path, members, emit_members=True)
@@ -2418,6 +2423,13 @@ def test_write_bounds_target_emits_members_and_stats(tmp_path: Path):
         n_sources_count=2,
         **kwargs,
     )
+
+    # The caller's own member DataArray must be untouched by member
+    # emission -- write_bounds_target must not mutate its input.
+    assert members["era5_land"].attrs == {
+        "units": "mm",
+        "long_name": "orig era5_land",
+    }
 
     ds = xr.open_dataset(kwargs["output_path"])
     try:

@@ -370,11 +370,16 @@ def write_bounds_target(
         data_vars["ensemble_mean"] = mean
         data_vars["ensemble_std"] = std
         for key, member_da in members.items():
-            # rename() gives a new DataArray object (its own .attrs dict)
-            # sharing the input's data buffer, instead of .copy()'s full
-            # deep copy -- material on daily SWE per-year chunks, where a
-            # deep copy of every member would double peak member memory.
-            member = member_da.rename(key)
+            # rename(key) alone is NOT enough: DataArray.rename(str) with
+            # no attrs given reuses the SAME underlying Variable object, so
+            # `member.attrs = {...}` below would mutate member_da.attrs in
+            # place -- i.e. corrupt the loader's own member DataArray that
+            # the caller still holds a reference to (issue #338 fix round
+            # 2, finding 4). .copy(deep=False) after rename() decouples the
+            # Variable (and its attrs dict) while still sharing the
+            # underlying data buffer, keeping the memory win .copy()
+            # (a full deep copy) would have given up.
+            member = member_da.rename(key).copy(deep=False)
             member.attrs = {
                 "units": bounds_units,
                 "long_name": member_da.attrs.get("long_name")
