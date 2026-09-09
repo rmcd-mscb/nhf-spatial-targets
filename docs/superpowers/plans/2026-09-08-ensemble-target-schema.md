@@ -1981,7 +1981,14 @@ pixi run rebuild-manifest -- --project-dir /caldera/hovenweep/projects/usgs/wate
 
 - [ ] **Step 8: Commit the SLURM changes and open the PR**
 
-The project `config.yml` lives outside the repo and is not committed. Only the SLURM scripts are version-controlled.
+The project `config.yml` lives outside the repo and is not committed, so it will
+not appear in this PR's diff. Paste the config diff into the PR body so the
+change is reviewable. Versioning project intent artifacts properly is tracked
+as [#343](https://github.com/rmcd-mscb/nhf-spatial-targets/issues/343); if that
+has landed by the time this task runs, cite the project-repo commit SHA instead
+of pasting the diff.
+
+Only the SLURM scripts are version-controlled here.
 
 ```bash
 pixi run -e dev fmt && pixi run -e dev lint
