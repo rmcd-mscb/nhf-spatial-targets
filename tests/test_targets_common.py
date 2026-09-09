@@ -2425,7 +2425,7 @@ def test_write_bounds_target_emits_members_and_stats(tmp_path: Path):
         assert "mwbm_climgrid" in ds.data_vars
         assert "ensemble_mean" in ds.data_vars
         assert "ensemble_std" in ds.data_vars
-        assert ds.attrs["source_keys"] == "era5_land,mwbm_climgrid"
+        assert ds.attrs["member_keys"] == "era5_land,mwbm_climgrid"
         assert ds.attrs["members_emitted"] == "true"
         assert ds.attrs["Conventions"] == "CF-1.8"
         assert ds["era5_land"].attrs["units"] == "cfs"
@@ -2437,6 +2437,13 @@ def test_write_bounds_target_emits_members_and_stats(tmp_path: Path):
         assert np.allclose(ds["lower_bound"].values[0], [1.0, 2.0, 3.0])
         assert np.allclose(ds["upper_bound"].values[0], [3.0, 4.0, 5.0])
         assert ds["era5_land"].dtype == np.float32
+        # rename(), not copy(), backs the emitted member (issue #338 fix
+        # round 1, finding 4): confirm the on-disk values still match the
+        # input member exactly.
+        assert np.allclose(ds["era5_land"].values, [[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]])
+        assert np.allclose(
+            ds["mwbm_climgrid"].values, [[3.0, 4.0, 5.0], [3.0, 4.0, 5.0]]
+        )
     finally:
         ds.close()
 
@@ -2469,8 +2476,12 @@ def test_write_bounds_target_omits_members_when_disabled(tmp_path: Path):
         assert "ensemble_mean" not in ds.data_vars
         assert "ensemble_std" not in ds.data_vars
         assert set(ds.data_vars) == {"lower_bound", "upper_bound", "n_sources", "crs"}
-        # source_keys is provenance and is recorded either way.
-        assert ds.attrs["source_keys"] == "era5_land,mwbm_climgrid"
+        # member_keys is provenance and is recorded either way, distinct
+        # from the config-sourced source_keys attr (_common_global_attrs)
+        # which this writer must never touch (issue #338 fix round 1,
+        # finding 1).
+        assert ds.attrs["member_keys"] == "era5_land,mwbm_climgrid"
+        assert "source_keys" not in ds.attrs
         assert ds.attrs["members_emitted"] == "false"
     finally:
         ds.close()
@@ -2541,3 +2552,9 @@ def test_write_bounds_target_nn_filled_companion_excludes_members(tmp_path: Path
             "nn_filled",
             "crs",
         }
+        # issue #338 fix round 1, finding 2: the companion carries no
+        # member data vars, so it must not claim members_emitted="true"
+        # (that would read as "emitted and then lost") and must not carry
+        # member_keys (which would name variables absent from this file).
+        assert ds_nn.attrs["members_emitted"] == "false"
+        assert "member_keys" not in ds_nn.attrs

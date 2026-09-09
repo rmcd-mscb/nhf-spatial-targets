@@ -18,9 +18,9 @@ All data source metadata lives in [`catalog/sources.yml`](https://github.com/rmc
 
 When a catalog declaration contradicts an on-disk NetCDF attribute (e.g. a source labels units one way internally and the catalog corrects it), **the catalog wins**. See [`docs/architecture/transformation-pipeline.md`](architecture/transformation-pipeline.md) for the full rule.
 
-## CF-1.6 compliance is required
+## CF compliance is required
 
-Every NetCDF the pipeline writes must be CF-1.6 compliant. Use `fetch/consolidate.py:apply_cf_metadata` as the single entry point for setting `Conventions=CF-1.6`, variable `units` / `long_name` / `cell_methods` / `grid_mapping`, coordinate `standard_name` / `units` / `axis`, and the WGS84 `crs` ancillary variable.
+Every NetCDF the pipeline writes must be CF compliant. Consolidated and aggregated NCs are CF-1.6; target NCs (`<project>/targets/`) are CF-1.8 (issue #338), which lets a target NC carry per-source ensemble member variables plus derived `ensemble_mean` / `ensemble_std` alongside `lower_bound` / `upper_bound` / `n_sources`. Use `fetch/consolidate.py:apply_cf_metadata` as the single entry point for setting `Conventions=CF-1.6`, variable `units` / `long_name` / `cell_methods` / `grid_mapping`, coordinate `standard_name` / `units` / `axis`, and the WGS84 `crs` ancillary variable, for consolidated/aggregated NCs.
 
 **Never write a NetCDF with a bare `ds.to_netcdf(...)`.** Route every pipeline-written NC through [`io_nc.build_encoding`](api/io-nc.md) + `atomic_to_netcdf` so it gets the canonical chunking + zlib + pinned-time encoding. Full policy in [`docs/architecture/nc-encoding-policy.md`](architecture/nc-encoding-policy.md).
 

@@ -179,14 +179,14 @@
       "url": "targets/runoff_targets.nc",
       "type": "WWW:DOWNLOAD-1.0-http--download",
       "name": "targets/runoff_targets.nc",
-      "description": "Calibration-target dataset (CF-1.6 NetCDF).",
+      "description": "Calibration-target dataset (CF-1.8 NetCDF).",
       "function": "download"
     },
     "targets/swe_targets.nc": {
       "url": "targets/swe_targets.nc",
       "type": "WWW:DOWNLOAD-1.0-http--download",
       "name": "targets/swe_targets.nc",
-      "description": "Calibration-target dataset (CF-1.6 NetCDF).",
+      "description": "Calibration-target dataset (CF-1.8 NetCDF).",
       "function": "download"
     },
     "manifest.json": {

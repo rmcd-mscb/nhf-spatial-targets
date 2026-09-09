@@ -258,9 +258,16 @@ def write_bounds_target(
         without an adapter still work.
     members
         Per-source contributions keyed by source key, from
-        ``SourceLoaderResult.members``. Recorded as the ``source_keys``
-        global attr whenever present, and written as named data
-        variables when ``emit_members`` is True.
+        ``SourceLoaderResult.members``. Recorded as the ``member_keys``
+        global attr whenever present (the EFFECTIVE, post-availability-
+        filter member list), and written as named data variables when
+        ``emit_members`` is True. Deliberately distinct from
+        ``source_keys``, which ``_driver._common_global_attrs`` already
+        stamps from the CONFIGURED ``targets.<t>.sources`` list and which
+        the publish gate (``release.publish._config_product_problems``)
+        compares against config with strict equality — overwriting it
+        here would silently redefine it to the effective subset and break
+        that gate the moment a source is unavailable for a given build.
     emit_members
         Whether to write the members and the derived ``ensemble_mean`` /
         ``ensemble_std`` variables. Purely an output switch: the bounds
@@ -363,8 +370,11 @@ def write_bounds_target(
         data_vars["ensemble_mean"] = mean
         data_vars["ensemble_std"] = std
         for key, member_da in members.items():
-            member = member_da.copy()
-            member.name = key
+            # rename() gives a new DataArray object (its own .attrs dict)
+            # sharing the input's data buffer, instead of .copy()'s full
+            # deep copy -- material on daily SWE per-year chunks, where a
+            # deep copy of every member would double peak member memory.
+            member = member_da.rename(key)
             member.attrs = {
                 "units": bounds_units,
                 "long_name": member_da.attrs.get("long_name")
@@ -377,7 +387,14 @@ def write_bounds_target(
     extra_global_attrs = dict(extra_global_attrs)
     extra_global_attrs["members_emitted"] = "true" if emit_members else "false"
     if members:
-        extra_global_attrs["source_keys"] = ",".join(members)
+        # member_keys is the EFFECTIVE (post-availability-filter) member
+        # list -- deliberately NOT source_keys, which
+        # _driver._common_global_attrs already stamps from the CONFIGURED
+        # targets.<t>.sources list and which the publish gate compares
+        # against config with strict equality (release/publish.py
+        # _config_product_problems). Overwriting source_keys here would
+        # silently redefine it to the effective subset and break that gate.
+        extra_global_attrs["member_keys"] = ",".join(members)
 
     ds = xr.Dataset(
         data_vars,
@@ -460,6 +477,14 @@ def write_bounds_target(
     filled_attrs = dict(extra_global_attrs)
     filled_attrs["nn_fill_max_candidates"] = nn_max_candidates
     filled_attrs["nn_fill_distance_crs"] = project.area_crs
+    if emit_members:
+        # The companion carries no member data vars (dropped above), so it
+        # must not claim members_emitted="true" -- that would read as
+        # "emitted and then lost" instead of "never emitted here", exactly
+        # the ambiguity the attr exists to resolve. member_keys names
+        # variables that are not on this file, so drop it too.
+        filled_attrs["members_emitted"] = "false"
+        filled_attrs.pop("member_keys", None)
     nn_path = output_path.with_name(
         output_path.stem + "_nn_filled" + output_path.suffix
     )

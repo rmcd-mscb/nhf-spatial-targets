@@ -57,7 +57,7 @@ An HRU polygon set (e.g. GFv1.1, GFv2.0, or a custom delineation). Rarely requir
 The project's full conventions doc lives at [`CLAUDE.md`](conventions.md) (despite the name, it applies equally to human contributors). Key invariants:
 
 - All source metadata in [`catalog/sources.yml`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/catalog/sources.yml) — no hardcoded URLs / product names in Python.
-- All pipeline-written NetCDFs are CF-1.6 compliant and routed through [`io_nc.build_encoding`](api/io-nc.md) + `atomic_to_netcdf`.
+- All pipeline-written NetCDFs are CF compliant and routed through [`io_nc.build_encoding`](api/io-nc.md) + `atomic_to_netcdf`. Consolidated/aggregated NCs are CF-1.6; target NCs are CF-1.8 (issue #338).
 - Canonical row order on every fabric-aligned artifact is `id_col` ascending, enforced at emission.
 - Manifest writes are flock-guarded read-merge-write (concurrency safety for SLURM arrays).
 - Year-chunked target intermediates have fingerprint global attrs for cache invalidation.
