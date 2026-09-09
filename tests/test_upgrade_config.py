@@ -90,6 +90,44 @@ def test_check_drift_release_detects_live_block(tmp_path):
     assert "release" not in {f.name for f in check_drift(tmp_path)}
 
 
+def test_check_drift_normalize_period_reports_preexisting_explicit_window(
+    tmp_path,
+):
+    """The regression this covers: `normalize_period` already exists in every
+    project that enables recharge/soil_moisture (they default on), with an
+    explicit "YYYY-MM-DD/YYYY-MM-DD" window -- NOT the per_source_por
+    sentinel. A `detect` regex that matches the bare key would silently mark
+    those operators as already in sync, so they'd never be nudged toward
+    per_source_por. This must still be reported as missing."""
+    _write_minimal_config(
+        tmp_path,
+        body=('targets:\n  recharge:\n    normalize_period: "2000-01-01/2013-12-31"\n'),
+    )
+    missing_names = {f.name for f in check_drift(tmp_path)}
+    assert "targets.<target>.normalize_period: per_source_por" in missing_names
+
+
+def test_check_drift_normalize_period_clean_when_commented_stub_present(tmp_path):
+    """Operator pasted the check-config stub -- counts as in-sync, same as
+    every other feature's commented-stub form."""
+    _write_minimal_config(
+        tmp_path,
+        body=("targets:\n  recharge:\n    #   normalize_period: per_source_por\n"),
+    )
+    missing_names = {f.name for f in check_drift(tmp_path)}
+    assert "targets.<target>.normalize_period: per_source_por" not in missing_names
+
+
+def test_check_drift_normalize_period_clean_when_sentinel_adopted(tmp_path):
+    """Live adoption of the sentinel (quoted or bare) counts as in-sync."""
+    _write_minimal_config(
+        tmp_path,
+        body=("targets:\n  recharge:\n    normalize_period: per_source_por\n"),
+    )
+    missing_names = {f.name for f in check_drift(tmp_path)}
+    assert "targets.<target>.normalize_period: per_source_por" not in missing_names
+
+
 # --- registry shape ---------------------------------------------------------
 
 
@@ -139,6 +177,8 @@ def test_cli_exits_zero_when_in_sync(tmp_path, capsys):
         "# depth_threshold_mm: 1.0\n"
         "# forced_zero_combined: true\n"
         "# min_sources_for_bound: 1\n"
+        "# emit_members: true\n"
+        "# normalize_period: per_source_por\n"
     )
     # Cyclopts wraps even successful returns in SystemExit(0).
     with pytest.raises(SystemExit) as exc:
@@ -300,3 +340,10 @@ def test_cli_exits_one_on_malformed_config(tmp_path, capsys):
     assert exc.value.code == 1
     err = capsys.readouterr().err
     assert "parse config.yml" in err
+
+
+def test_emit_members_is_tracked_as_an_optional_config_feature():
+    from nhf_spatial_targets.upgrade_config import OPTIONAL_CONFIG_FEATURES
+
+    names = {f.name for f in OPTIONAL_CONFIG_FEATURES}
+    assert "targets.<target>.emit_members" in names

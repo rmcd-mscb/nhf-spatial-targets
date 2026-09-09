@@ -187,3 +187,31 @@ def test_required_paths_includes_datastore_and_fabric_path():
     """REQUIRED is the canonical list of always-required dotted paths."""
     assert ("datastore",) in REQUIRED
     assert ("fabric", "path") in REQUIRED
+
+
+def test_emit_members_defaults_true_for_bounds_targets():
+    from nhf_spatial_targets.defaults import apply_defaults
+
+    merged = apply_defaults({})
+    for target in (
+        "runoff",
+        "aet",
+        "recharge",
+        "soil_moisture",
+        "snow_water_equivalent",
+    ):
+        assert merged["targets"][target]["emit_members"] is True, target
+
+
+def test_emit_members_defaults_false_for_snow_covered_area():
+    from nhf_spatial_targets.defaults import apply_defaults
+
+    merged = apply_defaults({})
+    assert merged["targets"]["snow_covered_area"]["emit_members"] is False
+
+
+def test_emit_members_is_a_known_key_for_the_unknown_key_linter():
+    from nhf_spatial_targets.defaults import find_unknown_keys
+
+    unknown = find_unknown_keys({"targets": {"aet": {"emit_members": False}}})
+    assert unknown == []

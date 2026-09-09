@@ -52,7 +52,7 @@ is the dominant, repeated pattern; the snapshot read is occasional.
 |---|---|---|---|
 | **Consolidated** (`<datastore>/<src>/`) | `fetch/consolidate.py` | `"consolidated"` — **seam owned by issue #158** (per-source spatial tiling of `(time, y, x)` grids). `build_encoding` raises `NotImplementedError` until #158 lands. | Different shape (gridded, not HRU), different policy (tile `y`/`x`). |
 | **Aggregated** (`<project>/data/aggregated/<src>/`) | `aggregate/_driver.py::_atomic_write_netcdf` | `"aggregated"`, `hru_dim=id_col`, `timesteps_per_file=ds.sizes["time"]`. Native dtype preserved. | daymet (zarr) + ssebop (STAC) are **left as-is** — already chunked, remote-sourced. The `crs` grid-mapping container is skipped (never compressed/filled). |
-| **Target** (`<project>/targets/`) | `targets/_writers.py::write_target_nc` | `"target"`, `hru_dim=sort_dim`. float32 bounds, int8 diagnostics. | The streaming `stitch_year_chunks_to_target` (daily SWE) is a separate concern — see ST3b. |
+| **Target** (`<project>/targets/`) | `targets/_writers.py::write_target_nc` | `"target"`, `hru_dim=sort_dim`. float32 bounds, int8 diagnostics. | The streaming `stitch_year_chunks_to_target` (daily SWE) is a separate concern — see ST3b. Target NCs are CF-1.8 (issue #338); consolidated/aggregated stay CF-1.6. |
 
 ### `_FillValue` policy (dtype-driven, in `io_nc._fill_value_for`)
 
@@ -62,6 +62,22 @@ is the dominant, repeated pattern; the snapshot read is occasional.
 
 This matches the pre-#165 `targets/_writers.py` writer for the float and int8
 cases; the int16 path is the aggregate-layer convention.
+
+### Target-layer `target_dtypes` is derived, not a fixed name list (issue #338)
+
+`write_target_nc` (and `_intermediates.py::stitch_year_chunks_to_target`) build
+`target_dtypes` by walking `ds.data_vars` rather than enumerating
+`("lower_bound", "upper_bound", "n_sources", "nn_filled")` by name:
+`n_sources` / `nn_filled` get `int8`, and every other data variable — bounds,
+per-source ensemble members (one per contributing source key), and the
+derived `ensemble_mean` / `ensemble_std` — gets `float32`. The `crs`
+grid-mapping container is excluded (it is a 0-dim int32 container minted
+before the dtype map is built and carries no encoding). This keeps a new
+target-layer variable from silently falling through to on-disk `float64`:
+whatever a target builder adds to the Dataset is covered automatically. The
+same derivation drives the `grid_mapping="crs"` attr loop, which likewise
+iterates `ds.data_vars` (skipping only `crs` itself) instead of a fixed name
+list.
 
 ## Reading aggregated NCs
 

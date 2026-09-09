@@ -287,6 +287,13 @@ def reindex_to_day_start(
     return canon.reindex(time=master_index)
 
 
+#: Sentinel value for ``<target>.normalize_period`` meaning "normalize each
+#: source over its own complete-year period of record" rather than over one
+#: shared window. Handled by the recharge / soil-moisture builders before
+#: they reach :func:`parse_period`.
+PER_SOURCE_POR = "per_source_por"
+
+
 def parse_period(period_str: str) -> tuple[str, str]:
     """Parse 'YYYY-MM-DD/YYYY-MM-DD' (or 'YYYY/YYYY') into ``(start, end)``.
 
@@ -295,9 +302,16 @@ def parse_period(period_str: str) -> tuple[str, str]:
     into the two endpoints needed to slice ``read_aggregated_source``'s
     output.
     """
+    if period_str == PER_SOURCE_POR:
+        raise ValueError(
+            "parse_period: per_source_por is a sentinel, not a date range. "
+            "The caller must branch on it and derive each source's window "
+            "via normalize.methods.complete_years_window."
+        )
     if "/" not in period_str:
         raise ValueError(
-            f"Invalid period {period_str!r}. Expected 'YYYY-MM-DD/YYYY-MM-DD'."
+            f"Invalid period {period_str!r}. Expected 'YYYY-MM-DD/YYYY-MM-DD' "
+            f"or the sentinel {PER_SOURCE_POR!r}."
         )
     start, end = period_str.split("/", 1)
     return start.strip(), end.strip()

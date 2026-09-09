@@ -226,7 +226,7 @@ Modeled on the three-point "Config schema additions" checklist above:
 - When adding a new source, add it to `catalog/sources.yml` first, then write the fetch module
 - Mark superseded sources with `superseded_by:` key and `status: superseded`
 - Sources need not cover the whole fabric. The aggregation driver classifies each spatial batch against the source grid bbox (`aggregate/_driver.py:_covered_batch_ids`), skips non-overlapping batches, reindexes every per-year NC to the full fabric so uncovered HRUs are honest NaN, and logs a per-source HRU-coverage diagnostic. A source with zero fabric overlap is skipped with an INFO log. Target-stage multi-source combines are NaN-aware, so a partial source (e.g. Margulis WUS-SR, Western US only) contributes exactly where it has data. The former `fabric_scope` / `fabric.token` token gate was removed in #309; raw downloads remain fabric-independent and shared via the datastore
-- **CF-1.6 compliance is required for every NetCDF the pipeline writes** — consolidated source NCs in `<datastore>/<source>/{daily,monthly}/`, aggregated NCs in `<project>/data/aggregated/`, and final target NCs in `<project>/targets/`. Use `fetch/consolidate.py:apply_cf_metadata` as the single entry point for setting `Conventions=CF-1.6`, variable `units` / `long_name` / `cell_methods` / `grid_mapping` from the catalog, coordinate `standard_name` / `units` / `axis`, and the WGS84 `crs` ancillary variable. Do not set these attrs by hand in source-specific code — read everything from `catalog/sources.yml` so a unit correction in the catalog flows through every NC on the next consolidate. Each fetch/consolidate module should have a test that asserts the output NC carries the required CF-1.6 attribute set.
+- **CF compliance is required for every NetCDF the pipeline writes** — consolidated source NCs in `<datastore>/<source>/{daily,monthly}/`, aggregated NCs in `<project>/data/aggregated/`, and final target NCs in `<project>/targets/`. Consolidated and aggregated NCs stay **CF-1.6**; target NCs (written by `targets/_writers.py:write_target_nc` / `write_bounds_target` and `targets/_intermediates.py:stitch_year_chunks_to_target`) are **CF-1.8** (issue #338), so a target NC can carry per-source ensemble member variables (one per contributing source key, named by that key) plus derived `ensemble_mean` / `ensemble_std` diagnostics alongside `lower_bound` / `upper_bound` / `n_sources` — do not assume every target NC's `Conventions` attr reads CF-1.6. Use `fetch/consolidate.py:apply_cf_metadata` as the single entry point for setting `Conventions=CF-1.6`, variable `units` / `long_name` / `cell_methods` / `grid_mapping` from the catalog, coordinate `standard_name` / `units` / `axis`, and the WGS84 `crs` ancillary variable, for consolidated/aggregated NCs. Do not set these attrs by hand in source-specific code — read everything from `catalog/sources.yml` so a unit correction in the catalog flows through every NC on the next consolidate. Each fetch/consolidate module should have a test that asserts the output NC carries the required CF-1.6 attribute set.
 - **Never write a NetCDF with a bare `ds.to_netcdf(...)`.** Route every pipeline-written NC (aggregated, target) through `io_nc.build_encoding` + `io_nc.atomic_to_netcdf` so it gets the canonical chunking + zlib + pinned-time encoding. The full per-layer policy, the HDF5 partial-chunk rationale, and the `nhf-targets maintenance rechunk` backfill are in [docs/architecture/nc-encoding-policy.md](docs/architecture/nc-encoding-policy.md). `build_encoding(layer="consolidated", ...)` is a seam owned by issue #158 and currently raises; daymet/ssebop aggregated outputs are intentionally left unchunked.
 - **Canonical row order on every fabric-aligned artifact is `id_col` ascending**, enforced at emission (issue #93). Aggregator (`aggregate/_driver.py`, `aggregate/ssebop.py`) sorts `year_ds` by `id_col` immediately before `_atomic_write_netcdf`; target writers call `write_target_nc(..., sort_dim=project.id_col)`. `validate` records `id_col_sorted: bool` on `fabric.json` / `manifest.json` and warns when the source `.gpkg` is not monotonic (it does not fail — the aggregator canonicalizes anyway). `read_aggregated_source` keeps a defensive `.sortby(id_col)` for pre-#93 NCs already on disk. Downstream code may rely on positional alignment without runtime checks; full reasoning is in [docs/architecture/transformation-pipeline.md](docs/architecture/transformation-pipeline.md#canonical-row-order-on-emission).
 
@@ -267,6 +267,35 @@ Full architectural reference: `docs/architecture/transformation-pipeline.md`.
   (`np.fmin`/`np.fmax` or xarray `.min/max(skipna=True)` along a stacked
   source dim) so a bound is well-defined whenever ≥1 source is finite at the
   HRU/time. The bound is NaN only when *every* source is NaN there.
+- **`normalize_period: per_source_por` sentinel (issue #338, recharge and
+  soil_moisture):** in place of one shared normalization window, each
+  source normalizes over its own period of record (widest span of complete
+  calendar years in its own series). The loader must read each source's
+  whole record (not the configured `period`) and derive completeness from
+  the raw, pre-reindex/pre-resample series — reindexing pads uncovered
+  timesteps with NaN at real timestamps, and resampling to a coarser
+  cadence collapses a ragged partial year into one indistinguishable step,
+  either of which defeats a naive completeness check. See "Per-source POR
+  normalization" in `docs/architecture/transformation-pipeline.md`. Each
+  source's derived window is recorded as a `normalize_window_<source_key>`
+  attr on the target NC.
+
+**Per-source ensemble members (`targets.<target>.emit_members`).** Every
+multi-source `SourceLoaderResult` carries `members: dict[str, xr.DataArray]`
+(one array per source key) alongside the combined `lower`/`upper` bounds --
+the members are **always computed**, since they are the input the bounds are
+derived from. `emit_members` (config key, `defaults.py`, per target) is an
+**output switch only**: `True` writes one variable per source key plus
+`ensemble_mean` / `ensemble_std` into the target NC via
+`targets/_writers.py:write_bounds_target`; `False` skips writing them. It
+changes no bound value, only file size -- a daily SWE target on the
+~361k-HRU national fabric grows from ~12 GB to ~36-48 GB with members
+written. Defaults `True` for the five `multi_source_minmax` targets
+(runoff, aet, recharge, soil_moisture, snow_water_equivalent) and `False`
+for `snow_covered_area`, whose bounds are a MOD10C1 confidence-interval
+rather than a member min/max, so emitted members would not reconstruct
+them. The output NC always stamps `members_emitted` recording the choice
+actually made for that file.
 
 **`stat_method` choice: `mean` vs `masked_mean`.** gdptools' area-weighted
 mean comes in two flavours, and the right choice depends on whether the

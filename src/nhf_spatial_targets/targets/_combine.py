@@ -107,3 +107,47 @@ def build_n_sources_attrs(
         "flag_meanings": " ".join(flag_labels[: n_sources_count + 1]),
         "coordinates": ancillary_coords,
     }
+
+
+def ensemble_stats(
+    members: dict[str, xr.DataArray],
+    n_sources: xr.DataArray,
+) -> tuple[xr.DataArray, xr.DataArray]:
+    """NaN-aware ensemble mean and population standard deviation.
+
+    Both are reduced over a stacked ``source`` dim with ``skipna=True``, so
+    the mean is defined wherever at least one source is finite.
+
+    ``std`` is masked to NaN wherever ``n_sources < 2``. With a single finite
+    source the population standard deviation is exactly 0, which a downstream
+    calibration weight would read as perfect inter-source agreement rather
+    than as "only one source was available here". Masking makes the
+    distinction explicit; ``n_sources`` remains the authoritative coverage
+    diagnostic.
+
+    Parameters
+    ----------
+    members
+        Mapping from source key to per-source DataArray. All must share
+        dims and coords (typically ``(time, id_col)``).
+    n_sources
+        Per-cell finite-source count from
+        :func:`multi_source_nanminmax`, used for the ``std`` mask.
+
+    Returns
+    -------
+    mean, std
+        ``(time, id_col)`` arrays matching the members' shape.
+
+    Raises
+    ------
+    ValueError
+        If ``members`` is empty.
+    """
+    keys = list(members.keys())
+    if not keys:
+        raise ValueError("ensemble_stats: empty members dict")
+    stacked = xr.concat([members[k] for k in keys], dim=xr.Variable("source", keys))
+    mean = stacked.mean(dim="source", skipna=True)
+    std = stacked.std(dim="source", skipna=True, ddof=0).where(n_sources >= 2)
+    return mean, std

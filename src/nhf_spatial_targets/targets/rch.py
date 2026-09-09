@@ -35,19 +35,24 @@ import logging
 import pandas as pd
 import xarray as xr
 
-from nhf_spatial_targets.normalize.methods import normalize_0_1_over_window
+from nhf_spatial_targets.normalize.methods import (
+    complete_years_window,
+    normalize_0_1_over_window,
+)
 from nhf_spatial_targets.targets._adapter import (
     SourceLoaderResult,
     TargetAdapter,
 )
 from nhf_spatial_targets.targets._combine import multi_source_nanminmax
 from nhf_spatial_targets.targets._io import (
+    PER_SOURCE_POR,
     check_hru_coords,
     parse_period,
     read_aggregated_source,
 )
 from nhf_spatial_targets.targets._shims import (
     SourceShim,
+    label_members,
     shims_by_key,
 )
 from nhf_spatial_targets.workspace import Project
@@ -112,18 +117,21 @@ SHIMS: tuple[SourceShim, ...] = (
         aggregated_var="total_recharge",
         description="Reitz 2017 total_recharge (m/year → mm/year)",
         to_common_units=reitz_to_mm_per_year,
+        native_cadence="annual",
     ),
     SourceShim(
         source_key="watergap22d",
         aggregated_var="qrdif",
         description=("WaterGAP 2.2d qrdif (kg/m²/s monthly rate, summed to mm/year)"),
         to_common_units=watergap22d_to_mm_per_year,
+        native_cadence="monthly",
     ),
     SourceShim(
         source_key="era5_land",
         aggregated_var="ssro",
         description="ERA5-Land ssro (m/month, summed to mm/year)",
         to_common_units=era5_ssro_to_mm_per_year,
+        native_cadence="monthly",
     ),
 )
 
@@ -144,18 +152,21 @@ def _load(
     year_context=None,
 ) -> SourceLoaderResult:
     rch_cfg = project.target(adapter.config_key)
-    normalize_period = parse_period(rch_cfg["normalize_period"])
+    raw_norm_period = rch_cfg["normalize_period"]
+    per_source_por = raw_norm_period == PER_SOURCE_POR
+    normalize_period = None if per_source_por else parse_period(raw_norm_period)
     sources = list(rch_cfg["sources"])
 
     logger.info(
         "Building recharge target: %d sources (%s), period %s..%s, "
-        "normalize_period %s..%s, fabric=%s",
+        "normalize_period %s, fabric=%s",
         len(sources),
         ",".join(sources),
         period[0],
         period[1],
-        normalize_period[0],
-        normalize_period[1],
+        raw_norm_period
+        if per_source_por
+        else f"{normalize_period[0]}..{normalize_period[1]}",
         project.config["fabric"]["path"],
     )
 
@@ -168,6 +179,7 @@ def _load(
 
     shims = shims_by_key(SHIMS)
     sources_normalized: dict[str, xr.DataArray] = {}
+    normalize_windows: dict[str, str] = {}
     for src in sources:
         if src not in shims:
             raise ValueError(
@@ -177,9 +189,14 @@ def _load(
         shim = shims[src]
         # Period for read: union of output period and normalize_period so we
         # have enough data to (a) emit on the output period and (b) compute
-        # min/max over the normalize_period.
-        read_start = min(period[0], normalize_period[0])
-        read_end = max(period[1], normalize_period[1])
+        # min/max over the normalize_period. Under the per-source-POR
+        # sentinel there is no shared normalize_period to union against —
+        # read the source's whole record so its own POR can be derived.
+        if per_source_por:
+            read_start, read_end = "1900-01-01", "2200-12-31"
+        else:
+            read_start = min(period[0], normalize_period[0])
+            read_end = max(period[1], normalize_period[1])
         da_native = read_aggregated_source(
             project,
             shim.source_key,
@@ -189,10 +206,36 @@ def _load(
         )
         check_hru_coords(da_native, fabric_hru_ids, id_col, src)
         da_annual_mm = shim.to_common_units(da_native)
-        window = da_annual_mm.sel(time=slice(normalize_period[0], normalize_period[1]))
+        if per_source_por:
+            # Derive completeness from the NATIVE series, not da_annual_mm.
+            # A shim that resamples monthly -> annual (watergap22d,
+            # era5_land) collapses a ragged trailing/leading partial year
+            # into a single annual timestep; checking completeness on the
+            # post-shim annual series can't see that and would count the
+            # partial year as whole. native_cadence records the pre-shim
+            # cadence so completeness is judged on the real per-period
+            # timestep count.
+            if shim.native_cadence is None:
+                raise ValueError(
+                    f"recharge: source '{src}' has no SourceShim."
+                    "native_cadence set, required for per_source_por "
+                    "normalization. Set native_cadence on the SHIMS entry."
+                )
+            win_start, win_end = complete_years_window(da_native, shim.native_cadence)
+            normalize_windows[src] = f"{win_start}/{win_end}"
+        else:
+            win_start, win_end = normalize_period
+        window = da_annual_mm.sel(time=slice(win_start, win_end))
         if window.sizes.get("time", 0) == 0:
+            if per_source_por:
+                raise ValueError(
+                    f"recharge: source '{src}' has no complete calendar "
+                    "year in its record under per_source_por normalization "
+                    f"(source covers {da_annual_mm.time.values[0]} .. "
+                    f"{da_annual_mm.time.values[-1]})."
+                )
             raise ValueError(
-                f"recharge.normalize_period {rch_cfg['normalize_period']} "
+                f"recharge.normalize_period {raw_norm_period} "
                 f"yields no annual timesteps for source '{src}'. "
                 f"Source covers {da_annual_mm.time.values[0]} .. "
                 f"{da_annual_mm.time.values[-1]}."
@@ -200,12 +243,15 @@ def _load(
         da_normalized = normalize_0_1_over_window(da_annual_mm, window)
         sources_normalized[src] = da_normalized.reindex(time=master_idx)
 
+    label_members(sources_normalized, shims)
     lower, upper, n_sources = multi_source_nanminmax(sources_normalized)
 
     extra_attrs = {
         "source": "; ".join(shims[s].description for s in sources),
-        "normalize_period": rch_cfg["normalize_period"],
+        "normalize_period": raw_norm_period,
     }
+    for src, window_str in normalize_windows.items():
+        extra_attrs[f"normalize_window_{src}"] = window_str
 
     return SourceLoaderResult(
         lower=lower,
@@ -215,6 +261,7 @@ def _load(
         time_index=master_idx,
         time_offset_unit=pd.offsets.YearBegin(1),
         extra_attrs=extra_attrs,
+        members=sources_normalized,
     )
 
 

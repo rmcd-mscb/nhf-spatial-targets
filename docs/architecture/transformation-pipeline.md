@@ -194,6 +194,47 @@ reflect HRU-scale extremes. So this lives in `normalize/methods.py`
 (`normalize_0_1`, `normalize_by_calendar_month`) and operates on the
 already-aggregated per-HRU time series.
 
+### Per-source POR normalization (`per_source_por`, issue #338)
+
+`normalize_period` normally names one shared window: every contributing
+source's min/max is computed over the same calendar range. A target may
+instead set `normalize_period: per_source_por` (the sentinel exported as
+`targets._io.PER_SOURCE_POR`). Under it, each source normalizes over **its
+own** period of record — the widest span of *complete calendar years* in
+that source's own series — rather than a window shared across sources.
+This is still a per-HRU, post-aggregation operation; the sentinel only
+changes which window bounds the min/max, not where the transform lives.
+
+Two things make deriving that window subtle enough to document explicitly
+(implemented in `targets/rch.py` and `targets/som.py`, both `_load*`
+loaders):
+
+- **Read over the source's whole record, not the configured output
+  period.** Under the sentinel, the loader widens its `read_aggregated_source`
+  call to `("1900-01-01", "2200-12-31")` instead of the configured period.
+  Reading only the configured period and then judging completeness on the
+  *reindexed* series is wrong: reindexing pads months/years the source
+  doesn't cover with NaN **at real timestamps**, and a distinct-period
+  count then reads the padding as real coverage. `complete_years_window`
+  must run on the raw, pre-reindex series.
+- **Derive the window at the source's native cadence, not after a
+  resample.** `resample(time="YS").mean()` (or an annual-sum shim) emits
+  exactly one step per year whether that year was complete or ragged, so
+  `complete_years_window(..., "annual")` run on a resampled series cannot
+  see a partial leading/trailing year at all — see that function's own
+  docstring. Recharge's `SourceShim.native_cadence` field and soil
+  moisture's monthly-native sources both exist to route completeness
+  detection to the pre-resample series.
+
+The sentinel narrows *normalization windows only*: it never narrows the
+emitted time axis. A target still emits on the full configured `period`;
+sources with a POR shorter than that period simply normalize over less
+data while still contributing values across the full output period. Each
+source's derived window is recorded as a `normalize_window_<source_key>`
+attr on the target NC, while `normalize_period` itself stays the literal
+string `"per_source_por"` (not resolved to a concrete range) so the
+sentinel is visible in the output, not silently replaced.
+
 ### Multi-source min/max bounds
 
 Different sources have different native grids. To take min/max across
@@ -201,6 +242,20 @@ sources you must first put both onto the common HRU fabric, which is
 aggregation. So this is necessarily post-aggregation by definition. Lives
 in `targets/run.py` (`multi_source_runoff_bounds`) and any future per-target
 combiner.
+
+### Member emission is output-only (issue #338)
+
+Per-source ensemble members (the per-HRU-per-time value each contributing
+source produced, before the multi-source combine) and the derived
+`ensemble_mean` / `ensemble_std` are always **computed** as the input to
+`multi_source_nanminmax` / `ensemble_stats` — the bounds are a reduction
+over exactly these members. Whether the writer also **emits** them as named
+data variables on the target NC (`write_bounds_target(..., emit_members=True)`)
+is a separate, purely cosmetic decision: `lower_bound` / `upper_bound` /
+`n_sources` are byte-identical whether or not `emit_members` is set. Emitting
+members does not move a transformation earlier or later in the pipeline and
+does not change any computed value — it only decides whether the members
+that already existed in memory are also written to disk.
 
 ## Diagnostic outputs are allowed
 

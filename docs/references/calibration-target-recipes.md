@@ -262,6 +262,13 @@ per the body text). Per-HRU per-year: `lower_bound = min(norm_reitz, norm_waterg
 magnitude — which is fortunate because the three products measure conceptually different
 fluxes.
 
+`recharge.normalize_period` also accepts the `per_source_por` sentinel (#338):
+instead of one shared window, each source normalises over its own period of
+record (widest span of complete calendar years in its own series — see
+`transformation-pipeline.md`'s "Per-source POR normalization" section). Each
+source's derived window is recorded as `normalize_window_<source_key>` on the
+target NC.
+
 **Conceptual note on what each source measures**
 
 - Reitz `total_recharge`: empirical regression estimate of total groundwater recharge.
@@ -342,6 +349,12 @@ month over the 1982–2010 calibration period (all Januaries together, all Febru
 together, etc.) — confirmed in TM 6-B10 Appendix 1. Annual target: normalise over
 the full 1982–2010 period. Per-HRU: `lower_bound = min(norm_merra, norm_nldas_noah,
 norm_nldas_mosaic, norm_ncep)`, `upper_bound = max(...)`.
+
+`soil_moisture.normalize_period` also accepts the `per_source_por` sentinel
+(#338), with the same per-source-window meaning as recharge above. Both the
+monthly (per-calendar-month) and annual variants derive each source's window
+from its raw monthly series before any resample or reindex, and record it as
+`normalize_window_<source_key>` on the corresponding target NC.
 
 The per-source normalisation is what makes GWETTOP (plant-available, 0.1–0.9 typical)
 combinable with VWC (0.05–0.45 typical) — the constant offset cancels.

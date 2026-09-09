@@ -162,3 +162,21 @@ def test_init_config_template_snow_targets_default_nn_fill_false(tmp_path):
     assert cfg["targets"]["snow_water_equivalent"]["nn_fill"] is False
     # Policy is snow-specific — a non-snow target still seeds nn_fill=true.
     assert cfg["targets"]["runoff"]["nn_fill"] is True
+
+
+def test_config_template_documents_emit_members(tmp_path):
+    from nhf_spatial_targets.init_run import _CONFIG_TEMPLATE
+
+    assert "emit_members" in _CONFIG_TEMPLATE
+    # The comment must explain that this is an output switch, not a
+    # science switch -- the operator-facing rationale, not just the key.
+    assert "always computed" in _CONFIG_TEMPLATE
+
+
+def test_config_template_documents_per_source_por_sentinel(tmp_path):
+    from nhf_spatial_targets.init_run import _CONFIG_TEMPLATE
+
+    assert "per_source_por" in _CONFIG_TEMPLATE
+    # The comment must explain WHY partial years are trimmed, not just the
+    # key -- the operator-facing rationale.
+    assert "Partial leading/trailing years are trimmed first" in _CONFIG_TEMPLATE

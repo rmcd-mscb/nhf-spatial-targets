@@ -460,7 +460,7 @@ These data are distributed by the NASA National Snow and Ice Data Center Distrib
                 <gco:CharacterString>targets/runoff_targets.nc</gco:CharacterString>
               </gmd:name>
               <gmd:description>
-                <gco:CharacterString>Calibration-target dataset (CF-1.6 NetCDF).</gco:CharacterString>
+                <gco:CharacterString>Calibration-target dataset (CF-1.8 NetCDF).</gco:CharacterString>
               </gmd:description>
               <gmd:function>
                 <gmd:CI_OnLineFunctionCode codeList="http://www.isotc211.org/2005/resources/Codelist/gmxCodelists.xml#CI_OnLineFunctionCode" codeSpace="ISOTC211/19115" codeListValue="download">download</gmd:CI_OnLineFunctionCode>
@@ -479,7 +479,7 @@ These data are distributed by the NASA National Snow and Ice Data Center Distrib
                 <gco:CharacterString>targets/swe_targets.nc</gco:CharacterString>
               </gmd:name>
               <gmd:description>
-                <gco:CharacterString>Calibration-target dataset (CF-1.6 NetCDF).</gco:CharacterString>
+                <gco:CharacterString>Calibration-target dataset (CF-1.8 NetCDF).</gco:CharacterString>
               </gmd:description>
               <gmd:function>
                 <gmd:CI_OnLineFunctionCode codeList="http://www.isotc211.org/2005/resources/Codelist/gmxCodelists.xml#CI_OnLineFunctionCode" codeSpace="ISOTC211/19115" codeListValue="download">download</gmd:CI_OnLineFunctionCode>

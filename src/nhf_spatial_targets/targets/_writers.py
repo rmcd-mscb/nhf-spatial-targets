@@ -1,9 +1,9 @@
-"""Atomic CF-1.6 target-NC writers (single-file + bounds-with-NN-fill).
+"""Atomic CF-1.8 target-NC writers (single-file + bounds-with-NN-fill).
 
 Two writers, both invoked from the per-target driver:
 
 - :func:`write_target_nc` writes a pre-assembled Dataset atomically with
-  CF-1.6 global attrs, the canonical encoding from
+  CF-1.8 global attrs, the canonical encoding from
   :func:`io_nc.build_encoding`, and an explicit sort-on-emission for the
   HRU dimension (issue #93).
 - :func:`write_bounds_target` is the higher-level helper used by every
@@ -71,7 +71,7 @@ def write_target_nc(
     extra_global_attrs: dict | None = None,
     sort_dim: str | None = None,
 ) -> None:
-    """Write a target Dataset to NetCDF atomically with CF-1.6 metadata.
+    """Write a target Dataset to NetCDF atomically with CF-1.8 metadata.
 
     The Dataset is expected to already carry the data variables, ancillary
     coordinates (``time_bnds``, ``centroid_lat``, ``centroid_lon``), and
@@ -104,7 +104,7 @@ def write_target_nc(
     ds = ds.copy()
     if sort_dim is not None:
         ds = ds.sortby(sort_dim)
-    ds.attrs.setdefault("Conventions", "CF-1.6")
+    ds.attrs.setdefault("Conventions", "CF-1.8")
     ds.attrs["title"] = title
     ds.attrs["history"] = (
         f"{datetime.now(timezone.utc).isoformat()} created by "
@@ -126,8 +126,11 @@ def write_target_nc(
     _crs_attrs = dict(_wgs84.to_cf())
     _crs_attrs.setdefault("crs_wkt", _wgs84.to_wkt())
     ds["crs"] = xr.DataArray(np.int32(0), attrs=_crs_attrs)
-    for _v in ("lower_bound", "upper_bound", "n_sources", "nn_filled"):
-        if _v in ds.data_vars:
+    # Every data variable except the grid-mapping container itself points at
+    # the crs variable. Iterating data_vars rather than a fixed name list
+    # keeps ensemble members and statistics covered as the schema grows.
+    for _v in ds.data_vars:
+        if _v != "crs":
             ds[_v].attrs["grid_mapping"] = "crs"
     # CF §3: the HRU index coordinate is an identifier, not a measurement —
     # label it and carry no units.
@@ -140,11 +143,14 @@ def write_target_nc(
     # Pin the on-disk dtype for each known target var: float32 bounds, int8
     # diagnostics. build_encoding derives _FillValue / shuffle from the dtype
     # (NaN + no-shuffle for floats, no-fill + shuffle for the int8 diagnostics).
-    target_dtypes = {
-        v: "float32" for v in ("lower_bound", "upper_bound") if v in ds.data_vars
-    }
+    # int8 for the two flag diagnostics, float32 for every other data
+    # variable (bounds, ensemble members, ensemble statistics). Derived from
+    # data_vars rather than a fixed list so a new variable cannot silently
+    # fall through to float64 on disk. `crs` is a 0-dim int32 grid-mapping
+    # container minted above and carries no encoding.
+    target_dtypes = {v: "int8" for v in ("n_sources", "nn_filled") if v in ds.data_vars}
     target_dtypes.update(
-        {v: "int8" for v in ("n_sources", "nn_filled") if v in ds.data_vars}
+        {v: "float32" for v in ds.data_vars if v not in target_dtypes and v != "crs"}
     )
 
     if sort_dim is not None:
@@ -183,6 +189,8 @@ def write_bounds_target(
     nn_max_candidates: int,
     id_col: str,
     target_key: str | None = None,
+    members: dict[str, xr.DataArray] | None = None,
+    emit_members: bool = False,
 ) -> None:
     """Assemble + write a bounds-target Dataset, with optional NN-fill companion.
 
@@ -248,7 +256,33 @@ def write_bounds_target(
         build the lineage step ``command`` field as ``run-<target_key>``.
         Falls back to ``"target"`` when ``None`` so out-of-pipeline callers
         without an adapter still work.
+    members
+        Per-source contributions keyed by source key, from
+        ``SourceLoaderResult.members``. Recorded as the ``member_keys``
+        global attr whenever present (the EFFECTIVE, post-availability-
+        filter member list), and written as named data variables when
+        ``emit_members`` is True. Deliberately distinct from
+        ``source_keys``, which ``_driver._common_global_attrs`` already
+        stamps from the CONFIGURED ``targets.<t>.sources`` list and which
+        the publish gate (``release.publish._config_product_problems``)
+        compares against config with strict equality — overwriting it
+        here would silently redefine it to the effective subset and break
+        that gate the moment a source is unavailable for a given build.
+    emit_members
+        Whether to write the members and the derived ``ensemble_mean`` /
+        ``ensemble_std`` variables. Purely an output switch: the bounds
+        and ``n_sources`` are byte-identical either way. Raises when
+        True and ``members`` is empty, rather than silently ignoring the
+        operator's config.
     """
+    if emit_members and not members:
+        raise ValueError(
+            "write_bounds_target: emit_members is True but no members were "
+            "supplied by the target's source_loader. Set emit_members=False "
+            "for targets without a member decomposition (e.g. SCA, whose "
+            "bounds are a CI interval rather than a member min/max)."
+        )
+
     # Avoid a circular-import by deferring this helper-internal import.
     from nhf_spatial_targets.normalize.methods import nn_fill_bounds
 
@@ -305,12 +339,79 @@ def write_bounds_target(
     )
     n_sources.attrs.update(build_n_sources_attrs(n_sources_count))
 
+    data_vars: dict[str, xr.DataArray] = {
+        "lower_bound": lower,
+        "upper_bound": upper,
+        "n_sources": n_sources,
+    }
+    if emit_members:
+        from nhf_spatial_targets.targets._combine import ensemble_stats
+
+        mean, std = ensemble_stats(members, n_sources)
+        mean.name = "ensemble_mean"
+        std.name = "ensemble_std"
+        mean.attrs = {
+            "units": bounds_units,
+            "long_name": f"ensemble mean of {bounds_long_name_kind}",
+            "cell_methods": cell_methods,
+            "coordinates": "centroid_lat centroid_lon",
+            "ancillary_variables": "n_sources",
+        }
+        std.attrs = {
+            "units": bounds_units,
+            "long_name": (
+                f"ensemble standard deviation of {bounds_long_name_kind} "
+                "(population, NaN where n_sources < 2)"
+            ),
+            "cell_methods": cell_methods,
+            "coordinates": "centroid_lat centroid_lon",
+            "ancillary_variables": "n_sources",
+        }
+        data_vars["ensemble_mean"] = mean
+        data_vars["ensemble_std"] = std
+        for key, member_da in members.items():
+            # rename(key) alone is NOT enough: DataArray.rename(str) with
+            # no attrs given reuses the SAME underlying Variable object, so
+            # `member.attrs = {...}` below would mutate member_da.attrs in
+            # place -- i.e. corrupt the loader's own member DataArray that
+            # the caller still holds a reference to (issue #338 fix round
+            # 2, finding 4). .copy(deep=False) after rename() decouples the
+            # Variable (and its attrs dict) while still sharing the
+            # underlying data buffer, keeping the memory win .copy()
+            # (a full deep copy) would have given up.
+            member = member_da.rename(key).copy(deep=False)
+            # long_name always describes the TARGET-units quantity the
+            # emitted variable actually holds (issue #338 fix round 3,
+            # finding 1) -- the shim's own description (e.g. "ERA5-Land
+            # ssro (m/month, summed to mm/year)") documents the SOURCE's
+            # native units, which contradicts `units` below once the
+            # value has been converted. Preserve that description under
+            # a separate provenance attr instead of discarding it.
+            source_description = member_da.attrs.get("long_name")
+            member.attrs = {
+                "units": bounds_units,
+                "long_name": f"{key} contribution to {bounds_long_name_kind}",
+                "cell_methods": cell_methods,
+                "coordinates": "centroid_lat centroid_lon",
+            }
+            if source_description:
+                member.attrs["source_description"] = source_description
+            data_vars[key] = member
+
+    extra_global_attrs = dict(extra_global_attrs)
+    extra_global_attrs["members_emitted"] = "true" if emit_members else "false"
+    if members:
+        # member_keys is the EFFECTIVE (post-availability-filter) member
+        # list -- deliberately NOT source_keys, which
+        # _driver._common_global_attrs already stamps from the CONFIGURED
+        # targets.<t>.sources list and which the publish gate compares
+        # against config with strict equality (release/publish.py
+        # _config_product_problems). Overwriting source_keys here would
+        # silently redefine it to the effective subset and break that gate.
+        extra_global_attrs["member_keys"] = ",".join(members)
+
     ds = xr.Dataset(
-        {
-            "lower_bound": lower,
-            "upper_bound": upper,
-            "n_sources": n_sources,
-        },
+        data_vars,
         coords={
             "time": time_index,
             id_col: lower[id_col],
@@ -365,6 +466,15 @@ def write_bounds_target(
     filled_ds, nn_diag = nn_fill_bounds(
         ds_loaded, centroids_xy, max_candidates=nn_max_candidates
     )
+    if emit_members:
+        # nn_fill_bounds returns ds.copy() with only lower_bound/upper_bound
+        # overwritten, so members + ensemble_mean/ensemble_std would
+        # otherwise ride along into the companion completely unfilled. Drop
+        # them: the NN-filled companion carries only the filled bounds,
+        # n_sources, and the nn_filled flag (spec Sec 3.6) — NN-filling an
+        # individual member would fabricate a source observation at an HRU
+        # that source never covered.
+        filled_ds = filled_ds.drop_vars([*members, "ensemble_mean", "ensemble_std"])
     nn_diag.attrs.update(
         {
             "units": "1",
@@ -379,6 +489,14 @@ def write_bounds_target(
     filled_attrs = dict(extra_global_attrs)
     filled_attrs["nn_fill_max_candidates"] = nn_max_candidates
     filled_attrs["nn_fill_distance_crs"] = project.area_crs
+    if emit_members:
+        # The companion carries no member data vars (dropped above), so it
+        # must not claim members_emitted="true" -- that would read as
+        # "emitted and then lost" instead of "never emitted here", exactly
+        # the ambiguity the attr exists to resolve. member_keys names
+        # variables that are not on this file, so drop it too.
+        filled_attrs["members_emitted"] = "false"
+        filled_attrs.pop("member_keys", None)
     nn_path = output_path.with_name(
         output_path.stem + "_nn_filled" + output_path.suffix
     )

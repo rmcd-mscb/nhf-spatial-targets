@@ -163,6 +163,47 @@ OPTIONAL_CONFIG_FEATURES: list[OptionalConfigFeature] = [
         added="2026-06-10 (#237)",
         why="zero-width-bound policy for the multi-source SCA bound (#237)",
     ),
+    OptionalConfigFeature(
+        name="targets.<target>.emit_members",
+        detect=r"(?m)^\s*#?\s*emit_members\s*:",
+        block=(
+            "    # emit_members: true\n"
+            "    #   Whether to write the per-source ensemble members (one variable per\n"
+            "    #   source key) and the derived ensemble_mean / ensemble_std into the\n"
+            "    #   target NC. This is an OUTPUT switch, not a science switch: the\n"
+            "    #   members are always computed -- they are the input from which\n"
+            "    #   lower_bound / upper_bound / n_sources are derived -- so turning this\n"
+            "    #   off changes none of those values, it only stops them being written.\n"
+            "    #   Turn it off when file size matters: on the ~361k-HRU national fabric\n"
+            "    #   a daily SWE target grows from ~12 GB to ~36-48 GB with members. On a\n"
+            "    #   regional fabric the cost is negligible and true is the right choice.\n"
+            "    #   The output NC records the choice as the `members_emitted` global attr.\n"
+        ),
+        added="2026-09-08 (#338)",
+        why=(
+            "Retains the per-source ensemble alongside the bounds so a "
+            "calibration consumer can see which source produced each bound."
+        ),
+    ),
+    OptionalConfigFeature(
+        name="targets.<target>.normalize_period: per_source_por",
+        detect=r"(?m)^\s*#?\s*normalize_period\s*:\s*[\"']?per_source_por",
+        block=(
+            '    # normalize_period accepts either an explicit "YYYY-MM-DD/YYYY-MM-DD"\n'
+            "    # window applied to every source, or the sentinel `per_source_por`,\n"
+            "    # which normalizes each source over its OWN complete-year period of\n"
+            "    # record. Partial leading/trailing years are trimmed first: an\n"
+            "    # unfinished year's annual sum would otherwise become that HRU's\n"
+            "    # minimum and compress every other year. The per-source windows are\n"
+            "    # recorded in the output NC as normalize_window_<source_key>.\n"
+            "    #   normalize_period: per_source_por\n"
+        ),
+        added="2026-09-08 (#338)",
+        why=(
+            "Lets recharge / soil_moisture normalize each source over its "
+            "own period of record instead of one shared window (#338)."
+        ),
+    ),
 ]
 
 

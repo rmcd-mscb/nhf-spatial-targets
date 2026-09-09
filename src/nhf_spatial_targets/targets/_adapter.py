@@ -333,6 +333,14 @@ class SourceLoaderResult:
         transforms — currently only used by SCA to pass the per-cell
         ``valid`` mask under ``forced_zero_validity_var=="valid"``.
         Empty dict by default.
+    members
+        Optional per-source contributions keyed by source key, in the
+        order the target config lists them. This is the same dict the
+        loader reduces to ``lower`` / ``upper``; carrying it through lets
+        the writer emit the ensemble members and derive
+        ``ensemble_mean`` / ``ensemble_std`` without recomputing.
+        ``None`` means the target has no member decomposition (SCA, whose
+        bounds are a CI interval rather than a member min/max).
     """
 
     lower: "xr.DataArray"
@@ -343,3 +351,4 @@ class SourceLoaderResult:
     time_offset_unit: "object"  # pd.offsets.*
     extra_attrs: dict
     extras: dict = field(default_factory=dict)
+    members: "dict[str, xr.DataArray] | None" = None

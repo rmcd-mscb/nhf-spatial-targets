@@ -139,6 +139,7 @@ def _apply_forced_zero(
         time_offset_unit=result.time_offset_unit,
         extra_attrs=result.extra_attrs,
         extras=result.extras,
+        members=result.members,
     )
 
 
@@ -253,6 +254,8 @@ def build_single_shot(
         nn_max_candidates=int(target_cfg["nn_max_candidates"]),
         id_col=id_col,
         target_key=adapter.target_key,
+        members=result.members,
+        emit_members=bool(target_cfg["emit_members"]),
     )
 
 
@@ -380,6 +383,8 @@ def _build_year_chunked(
             nn_max_candidates=nn_max_candidates,
             id_col=id_col,
             target_key=adapter.target_key,
+            members=result.members,
+            emit_members=bool(target_cfg["emit_members"]),
         )
 
     # Prune orphans + compute stitch input from year_specs (#211).

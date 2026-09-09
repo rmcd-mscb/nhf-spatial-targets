@@ -21,6 +21,8 @@ from dataclasses import dataclass
 
 import xarray as xr
 
+from nhf_spatial_targets.normalize.methods import PORCadence
+
 
 @dataclass(frozen=True)
 class SourceShim:
@@ -73,6 +75,18 @@ class SourceShim:
         updated for. ``None`` opts out of the check (used for
         synthetic source keys whose aggregated variable is not the
         same name as anything in the catalog).
+    native_cadence
+        Optional cadence (``"monthly"`` or ``"annual"``) of the source's
+        aggregated series *before* ``to_common_units`` runs. Needed when
+        a caller must reason about record completeness — e.g. deriving a
+        per-source period-of-record window — because a shim that
+        resamples monthly data to an annual sum (``resample(time="YS")
+        .sum()``) hides a ragged trailing/leading partial year behind a
+        single annual timestep; a completeness check run on the
+        *post-shim* annual series can't see the partial year and will
+        wrongly call it complete. ``None`` (the default) means the
+        caller does not need this distinction; the other target
+        builders that don't derive per-source windows leave it unset.
     """
 
     source_key: str
@@ -82,6 +96,7 @@ class SourceShim:
     config_label: str | None = None
     catalog_source_key: str | None = None
     expected_cf_units: str | None = None
+    native_cadence: PORCadence | None = None
 
 
 def shims_by_key(shims: "tuple[SourceShim, ...]") -> "dict[str, SourceShim]":
@@ -201,3 +216,37 @@ def validate_source_units(
                 f"{shim.expected_cf_units!r}. Update the shim if the "
                 f"units changed intentionally, or correct the catalog."
             )
+
+
+def label_members(
+    members: dict[str, "xr.DataArray"],
+    shims: dict[str, SourceShim],
+) -> dict[str, "xr.DataArray"]:
+    """Stamp each member's ``long_name`` from its shim ``description``.
+
+    ``write_bounds_target`` later reads this stamped ``long_name`` off
+    each member DataArray and moves it to that variable's
+    ``source_description`` attr, replacing ``long_name`` itself with a
+    target-units-specific string (``f"{key} contribution to
+    {bounds_long_name_kind}"``) -- see ``targets/_writers.py``. Setting
+    the shim description here keeps the human-readable source label in
+    the single place that already owns it (the SHIMS registry) instead
+    of duplicating a label map in the writer.
+
+    **This function mutates ``members``' DataArrays in place** (each
+    ``da.attrs["long_name"]`` is overwritten) and returns the same dict
+    it was given -- the return value is a convenience alias for chaining
+    at the call site, not a copy. Callers that need an unmodified copy
+    of the input must copy before calling.
+
+    A key present in ``members`` but absent from ``shims`` is silently
+    left untouched (no ``long_name`` is stamped) rather than raising.
+    Every caller builds ``members`` from the same ``shims`` dict it
+    passes here, so in practice a miss would indicate a real bug
+    upstream; this function does not itself detect that case.
+    """
+    for key, da in members.items():
+        shim = shims.get(key)
+        if shim is not None:
+            da.attrs["long_name"] = shim.description
+    return members

@@ -465,7 +465,7 @@ def stitch_year_chunks_to_target(
         # multi-year.
         for per_year_attr in ("year_chunk", "frac_valid_bound"):
             ds.attrs.pop(per_year_attr, None)
-        ds.attrs.setdefault("Conventions", "CF-1.6")
+        ds.attrs.setdefault("Conventions", "CF-1.8")
         ds.attrs["title"] = title
         ds.attrs["history"] = (
             f"{datetime.now(timezone.utc).isoformat()} stitched from "
@@ -478,10 +478,14 @@ def stitch_year_chunks_to_target(
             ds.attrs.update(extra_global_attrs)
 
         target_dtypes = {
-            v: "float32" for v in ("lower_bound", "upper_bound") if v in ds.data_vars
+            v: "int8" for v in ("n_sources", "nn_filled") if v in ds.data_vars
         }
         target_dtypes.update(
-            {v: "int8" for v in ("n_sources", "nn_filled") if v in ds.data_vars}
+            {
+                v: "float32"
+                for v in ds.data_vars
+                if v not in target_dtypes and v != "crs"
+            }
         )
         encoding = build_encoding(
             ds,

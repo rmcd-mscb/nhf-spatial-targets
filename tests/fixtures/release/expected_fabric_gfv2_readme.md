@@ -29,8 +29,8 @@ Provide calibration targets aggregated to the gfv2 fabric for parameter estimati
 - `fabric.gpkg` — Hydrologic fabric GeoPackage.
 - `aggregated/era5_land/era5_land_2003.nc` — Source dataset area-weighted to the fabric (CF-1.6 NetCDF).
 - `aggregated/snodas/snodas_2003.nc` — Source dataset area-weighted to the fabric (CF-1.6 NetCDF).
-- `targets/runoff_targets.nc` — Calibration-target dataset (CF-1.6 NetCDF).
-- `targets/swe_targets.nc` — Calibration-target dataset (CF-1.6 NetCDF).
+- `targets/runoff_targets.nc` — Calibration-target dataset (CF-1.8 NetCDF).
+- `targets/swe_targets.nc` — Calibration-target dataset (CF-1.8 NetCDF).
 - `manifest.json` — Provenance manifest.
 
 ## Use constraints

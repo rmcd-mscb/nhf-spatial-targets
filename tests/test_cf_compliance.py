@@ -1,4 +1,8 @@
-"""CF-1.6 regression tests for the aggregation + target NetCDF writers.
+"""CF regression tests for the aggregation + target NetCDF writers.
+
+Aggregated NCs stay CF-1.6; target NCs are CF-1.8 (issue #338), so the
+target-writer tests in this file assert CF §-numbered structural rules that
+hold under both conventions rather than a specific ``Conventions`` string.
 
 Covers the defects a ``cfchecks`` shakedown found at the shared write-sites
 (issues #178 / #182). Each test reproduces the pre-fix structure and asserts

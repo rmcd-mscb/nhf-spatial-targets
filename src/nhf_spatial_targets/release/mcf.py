@@ -634,7 +634,7 @@ def _file_description(name: str) -> str:
     if name.startswith("aggregated/"):
         return "Source dataset area-weighted to the fabric (CF-1.6 NetCDF)."
     if name.startswith("targets/"):
-        return "Calibration-target dataset (CF-1.6 NetCDF)."
+        return "Calibration-target dataset (CF-1.8 NetCDF)."
     if name == "manifest.json":
         return "Provenance manifest."
     if name.endswith(".csv") or name == "SHA256SUMS":

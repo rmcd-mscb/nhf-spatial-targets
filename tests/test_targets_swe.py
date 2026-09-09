@@ -337,7 +337,7 @@ def test_build_output_schema(tmp_path: Path):
         assert ds["lower_bound"].attrs["units"] == "inches"
         assert ds["upper_bound"].attrs["units"] == "inches"
         assert ds["lower_bound"].attrs["cell_methods"] == "time: point"
-        assert ds.attrs["Conventions"] == "CF-1.6"
+        assert ds.attrs["Conventions"] == "CF-1.8"
         assert ds["time"].attrs["bounds"] == "time_bnds"
         assert "time_bnds" in ds.variables
 
@@ -546,6 +546,11 @@ def test_build_per_year_n_sources_varies_with_source_coverage(tmp_path: Path):
     """When SNODAS only covers 2004 (not 2003), the per-year build
     drops it for 2003 (n_sources=3) and includes it for 2004 (n_sources=4).
     Verifies the per-year period-union semantics work as advertised.
+
+    Also asserts on the ``snodas`` member variable directly at the year
+    boundary (not just ``n_sources``): a stitch bug that wrote misaligned
+    or garbage member values across the year-chunk boundary could still
+    pass an n_sources-only check.
     """
     from nhf_spatial_targets.targets.swe import build
     from nhf_spatial_targets.workspace import load
@@ -568,6 +573,17 @@ def test_build_per_year_n_sources_varies_with_source_coverage(tmp_path: Path):
             f"2003-12-31 should have 3 sources (snodas missing), got {ns_2003}"
         )
         assert (ns_2004 == 4).all(), f"2004-01-01 should have 4 sources, got {ns_2004}"
+
+        snodas_2003_vals = ds["snodas"].sel(time="2003-12-31").values
+        snodas_2004_vals = ds["snodas"].sel(time="2004-01-01").values
+        assert np.isnan(snodas_2003_vals).all(), (
+            "snodas member should be all-NaN at 2003-12-31 (source absent "
+            f"that year), got {snodas_2003_vals}"
+        )
+        assert np.isfinite(snodas_2004_vals).all(), (
+            "snodas member should be finite at 2004-01-01 (source present "
+            f"that year), got {snodas_2004_vals}"
+        )
 
 
 def test_build_year_chunked_idempotent_skips_existing_intermediates(
@@ -962,3 +978,47 @@ def test_build_partial_coverage_source_contributes_only_where_finite(tmp_path: P
             200.0 / 25.4,
             rtol=1e-5,
         )
+
+
+def test_load_year_emits_all_nan_member_for_uncovered_source(tmp_path, monkeypatch):
+    """A source with no data for a year still appears as an all-NaN member.
+
+    The per-year NCs are stitched with join="exact", so the member set must
+    not vary from year to year (#338).
+    """
+    import numpy as np
+    import pandas as pd
+
+    from nhf_spatial_targets.targets import swe as swe_mod
+    from nhf_spatial_targets.targets._io import OutsideCoverageError
+
+    def fake_read(project, source_key, var, period, chunks=None):
+        if source_key == "snodas":
+            raise OutsideCoverageError("no snodas for this year")
+        times = pd.date_range("2003-01-01", "2003-12-31", freq="D")
+        return xr.DataArray(
+            np.full((len(times), 3), 100.0, dtype=np.float32),
+            dims=("time", "nhm_id"),
+            coords={"time": times, "nhm_id": [1, 2, 3]},
+            attrs={"units": "mm"},
+        )
+
+    monkeypatch.setattr(swe_mod, "read_aggregated_source", fake_read)
+    monkeypatch.setattr(swe_mod, "check_hru_coords", lambda *a, **k: None)
+    monkeypatch.setattr(
+        swe_mod, "_resolve_sources", lambda project: (["snodas", "era5_land"], [])
+    )
+
+    result = swe_mod._load_year(
+        project=None,
+        adapter=swe_mod.ADAPTER,
+        period=("2003-01-01", "2003-12-31"),
+        hru_meta=None,
+        fabric_hru_ids=np.array([1, 2, 3]),
+        id_col="nhm_id",
+        year_context=(2003, "2003-01-01", "2003-12-31"),
+    )
+
+    assert set(result.members) == {"snodas", "era5_land"}
+    assert np.isnan(result.members["snodas"].values).all()
+    assert not np.isnan(result.members["era5_land"].values).any()

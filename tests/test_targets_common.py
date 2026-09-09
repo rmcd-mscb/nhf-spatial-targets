@@ -387,7 +387,7 @@ def test_write_target_nc_round_trips_via_xarray(tmp_path: Path):
     write_target_nc(ds, out, title="Test runoff target")
     assert out.exists()
     with xr.open_dataset(out, decode_cf=True) as got:
-        assert got.attrs["Conventions"] == "CF-1.6"
+        assert got.attrs["Conventions"] == "CF-1.8"
         assert got.attrs["title"] == "Test runoff target"
         assert "lower_bound" in got.data_vars
         assert "upper_bound" in got.data_vars
@@ -1279,7 +1279,7 @@ def _write_year_chunk_nc(
         },
         coords={"time": times, "nhm_id": hrus},
         attrs={
-            "Conventions": "CF-1.6",
+            "Conventions": "CF-1.8",
             "title": f"per-year SWE chunk {year}",
             "year_chunk": year,
             **(extra_attrs or {}),
@@ -1386,7 +1386,7 @@ def test_stitch_strips_year_chunk_attr(tmp_path: Path):
 
 
 def test_stitch_applies_canonical_attrs_and_history(tmp_path: Path):
-    """The stitched file gets CF-1.6, title, history, institution,
+    """The stitched file gets CF-1.8, title, history, institution,
     and extra_global_attrs overlay."""
     from nhf_spatial_targets.targets._intermediates import stitch_year_chunks_to_target
 
@@ -1406,7 +1406,7 @@ def test_stitch_applies_canonical_attrs_and_history(tmp_path: Path):
         assert ds.attrs["title"] == "canonical SWE target"
         assert ds.attrs["period"] == "2003/2003"
         assert ds.attrs["source"] == "x; y"
-        assert ds.attrs["Conventions"] == "CF-1.6"
+        assert ds.attrs["Conventions"] == "CF-1.8"
         assert ds.attrs["institution"] == "USGS"
         assert "stitched from 1 per-year NCs" in ds.attrs["history"]
 
@@ -2230,3 +2230,439 @@ def test_common_global_attrs_omits_sources_when_empty(tmp_path: Path):
     attrs = _common_global_attrs(project, sca.ADAPTER, "2000-01-01/2010-12-31")
     assert attrs["range_method"] == "modis_ci"
     assert "source_keys" not in attrs
+
+
+# ---------------------------------------------------------------------------
+# ensemble_stats (issue #338 — per-source ensemble members + stats)
+# ---------------------------------------------------------------------------
+
+
+def _member(values: list[list[float]]) -> xr.DataArray:
+    """Build a (time=2, nhm_id=3) float32 member array from nested lists."""
+    return xr.DataArray(
+        np.array(values, dtype=np.float32),
+        dims=("time", "nhm_id"),
+        coords={
+            "time": pd.date_range("2000-01-01", periods=2, freq="MS"),
+            "nhm_id": [1, 2, 3],
+        },
+    )
+
+
+def test_ensemble_stats_mean_and_std_across_three_members():
+    from nhf_spatial_targets.targets._combine import (
+        ensemble_stats,
+        multi_source_nanminmax,
+    )
+
+    members = {
+        "a": _member([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]),
+        "b": _member([[3.0, 4.0, 5.0], [3.0, 4.0, 5.0]]),
+        "c": _member([[5.0, 6.0, 7.0], [5.0, 6.0, 7.0]]),
+    }
+    _, _, n_sources = multi_source_nanminmax(members)
+    mean, std = ensemble_stats(members, n_sources)
+
+    # mean of (1, 3, 5) == 3; population std (ddof=0) of (1, 3, 5) == 1.632993
+    assert np.allclose(mean.values[0], [3.0, 4.0, 5.0])
+    assert np.allclose(std.values[0], [1.6329932, 1.6329932, 1.6329932])
+
+
+def test_ensemble_stats_masks_std_where_fewer_than_two_sources():
+    from nhf_spatial_targets.targets._combine import (
+        ensemble_stats,
+        multi_source_nanminmax,
+    )
+
+    nan = float("nan")
+    members = {
+        # HRU 1: three finite. HRU 2: two finite. HRU 3: one finite.
+        "a": _member([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]),
+        "b": _member([[3.0, 4.0, nan], [3.0, 4.0, nan]]),
+        "c": _member([[5.0, nan, nan], [5.0, nan, nan]]),
+    }
+    _, _, n_sources = multi_source_nanminmax(members)
+    mean, std = ensemble_stats(members, n_sources)
+
+    assert list(n_sources.values[0]) == [3, 2, 1]
+    # Mean is defined wherever >=1 source is finite.
+    assert np.allclose(mean.values[0], [3.0, 3.0, 3.0])
+    # std defined at n>=2; population std of (2, 4) is 1.0. NaN at n == 1.
+    assert np.isclose(std.values[0][0], 1.6329932)
+    assert np.isclose(std.values[0][1], 1.0)
+    assert np.isnan(std.values[0][2])
+
+
+def test_ensemble_stats_all_nan_cell_yields_nan_mean_and_std():
+    from nhf_spatial_targets.targets._combine import (
+        ensemble_stats,
+        multi_source_nanminmax,
+    )
+
+    nan = float("nan")
+    members = {
+        "a": _member([[nan, nan, nan], [nan, nan, nan]]),
+        "b": _member([[nan, nan, nan], [nan, nan, nan]]),
+    }
+    _, _, n_sources = multi_source_nanminmax(members)
+    mean, std = ensemble_stats(members, n_sources)
+
+    assert int(n_sources.values[0][0]) == 0
+    assert np.isnan(mean.values[0][0])
+    assert np.isnan(std.values[0][0])
+
+
+def test_ensemble_stats_rejects_empty_members():
+    from nhf_spatial_targets.targets._combine import ensemble_stats
+
+    dummy = _member([[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]])
+    with pytest.raises(ValueError, match="empty members dict"):
+        ensemble_stats({}, dummy)
+
+
+def test_source_loader_result_members_defaults_to_none():
+    from nhf_spatial_targets.targets._adapter import SourceLoaderResult
+
+    da = _member([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]])
+    result = SourceLoaderResult(
+        lower=da,
+        upper=da,
+        n_sources=da,
+        n_sources_count=1,
+        time_index=pd.date_range("2000-01-01", periods=2, freq="MS"),
+        time_offset_unit=pd.offsets.MonthBegin(1),
+        extra_attrs={},
+    )
+    assert result.members is None
+
+
+def test_label_members_stamps_long_name_from_shim_description():
+    from nhf_spatial_targets.targets._shims import SourceShim, label_members
+
+    shims = {
+        "era5_land": SourceShim(
+            source_key="era5_land",
+            aggregated_var="ro",
+            description="ERA5-Land runoff (m/month -> mm/month)",
+            to_common_units=lambda da: da,
+        )
+    }
+    members = {"era5_land": _member([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]])}
+    labeled = label_members(members, shims)
+
+    assert (
+        labeled["era5_land"].attrs["long_name"]
+        == "ERA5-Land runoff (m/month -> mm/month)"
+    )
+    # Same dict object semantics: keys preserved, values still DataArrays.
+    assert list(labeled) == ["era5_land"]
+
+
+def test_label_members_ignores_keys_absent_from_shims():
+    from nhf_spatial_targets.targets._shims import label_members
+
+    members = {"unknown_src": _member([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]])}
+    labeled = label_members(members, {})
+    assert "long_name" not in labeled["unknown_src"].attrs
+
+
+def _bounds_call_kwargs(tmp_path: Path, members, emit_members: bool) -> dict:
+    """Minimal kwargs for a write_bounds_target call over 2 months x 3 HRUs."""
+    time_index = pd.date_range("2000-01-01", periods=2, freq="MS")
+    hru_meta = pd.DataFrame(
+        {
+            "centroid_lat": [45.0, 45.1, 45.2],
+            "centroid_lon": [-120.0, -120.1, -120.2],
+            "centroid_x": [0.0, 1.0, 2.0],
+            "centroid_y": [0.0, 1.0, 2.0],
+        },
+        index=pd.Index([1, 2, 3], name="nhm_id"),
+    )
+    return {
+        "time_index": time_index,
+        "time_offset_unit": pd.offsets.MonthBegin(1),
+        "bounds_units": "cfs",
+        "bounds_long_name_kind": "monthly runoff",
+        "cell_methods": "time: sum",
+        "output_path": tmp_path / "runoff_targets.nc",
+        "title": "test target",
+        "nn_title": "test target (NN-filled)",
+        "extra_global_attrs": {"source": "a; b"},
+        "hru_meta": hru_meta,
+        "nn_fill": False,
+        "nn_max_candidates": 10,
+        "id_col": "nhm_id",
+        "members": members,
+        "emit_members": emit_members,
+    }
+
+
+def test_write_bounds_target_emits_members_and_stats(tmp_path: Path):
+    from nhf_spatial_targets.targets._combine import multi_source_nanminmax
+    from nhf_spatial_targets.targets._writers import write_bounds_target
+
+    workdir = make_minimal_project(tmp_path)
+    project = load(workdir)
+    members = {
+        "era5_land": _member([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]),
+        "mwbm_climgrid": _member([[3.0, 4.0, 5.0], [3.0, 4.0, 5.0]]),
+    }
+    # Known input attrs, distinct from the writer's own units/long_name
+    # (issue #338 fix round 2, finding 4): rename(key) alone reuses the
+    # caller's Variable object, so a bare `member.attrs = {...}` after it
+    # would corrupt these in place. Asserted unchanged after the call below.
+    members["era5_land"].attrs = {"units": "mm", "long_name": "orig era5_land"}
+    lower, upper, n_sources = multi_source_nanminmax(members)
+
+    kwargs = _bounds_call_kwargs(tmp_path, members, emit_members=True)
+    write_bounds_target(
+        project=project,
+        lower=lower,
+        upper=upper,
+        n_sources=n_sources,
+        n_sources_count=2,
+        **kwargs,
+    )
+
+    # The caller's own member DataArray must be untouched by member
+    # emission -- write_bounds_target must not mutate its input.
+    assert members["era5_land"].attrs == {
+        "units": "mm",
+        "long_name": "orig era5_land",
+    }
+
+    ds = xr.open_dataset(kwargs["output_path"])
+    try:
+        assert "era5_land" in ds.data_vars
+        assert "mwbm_climgrid" in ds.data_vars
+        assert "ensemble_mean" in ds.data_vars
+        assert "ensemble_std" in ds.data_vars
+        assert ds.attrs["member_keys"] == "era5_land,mwbm_climgrid"
+        assert ds.attrs["members_emitted"] == "true"
+        assert ds.attrs["Conventions"] == "CF-1.8"
+        assert ds["era5_land"].attrs["units"] == "cfs"
+        # long_name describes the TARGET quantity (units == "cfs" above),
+        # not the source's native units -- the shim description is kept
+        # separately under source_description so it isn't lost (issue
+        # #338 fix round 3, finding 1).
+        assert (
+            ds["era5_land"].attrs["long_name"]
+            == "era5_land contribution to monthly runoff"
+        )
+        assert ds["era5_land"].attrs["source_description"] == "orig era5_land"
+        assert ds["ensemble_std"].attrs["ancillary_variables"] == "n_sources"
+        # mean of (1, 3) == 2; population std == 1
+        assert np.allclose(ds["ensemble_mean"].values[0], [2.0, 3.0, 4.0])
+        assert np.allclose(ds["ensemble_std"].values[0], [1.0, 1.0, 1.0])
+        # lower/upper unchanged by member emission
+        assert np.allclose(ds["lower_bound"].values[0], [1.0, 2.0, 3.0])
+        assert np.allclose(ds["upper_bound"].values[0], [3.0, 4.0, 5.0])
+        assert ds["era5_land"].dtype == np.float32
+        # rename(), not copy(), backs the emitted member (issue #338 fix
+        # round 1, finding 4): confirm the on-disk values still match the
+        # input member exactly.
+        assert np.allclose(ds["era5_land"].values, [[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]])
+        assert np.allclose(
+            ds["mwbm_climgrid"].values, [[3.0, 4.0, 5.0], [3.0, 4.0, 5.0]]
+        )
+    finally:
+        ds.close()
+
+
+def test_write_bounds_target_omits_members_when_disabled(tmp_path: Path):
+    from nhf_spatial_targets.targets._combine import multi_source_nanminmax
+    from nhf_spatial_targets.targets._writers import write_bounds_target
+
+    workdir = make_minimal_project(tmp_path)
+    project = load(workdir)
+    members = {
+        "era5_land": _member([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]),
+        "mwbm_climgrid": _member([[3.0, 4.0, 5.0], [3.0, 4.0, 5.0]]),
+    }
+    lower, upper, n_sources = multi_source_nanminmax(members)
+
+    kwargs = _bounds_call_kwargs(tmp_path, members, emit_members=False)
+    write_bounds_target(
+        project=project,
+        lower=lower,
+        upper=upper,
+        n_sources=n_sources,
+        n_sources_count=2,
+        **kwargs,
+    )
+
+    ds = xr.open_dataset(kwargs["output_path"])
+    try:
+        assert "era5_land" not in ds.data_vars
+        assert "ensemble_mean" not in ds.data_vars
+        assert "ensemble_std" not in ds.data_vars
+        assert set(ds.data_vars) == {"lower_bound", "upper_bound", "n_sources", "crs"}
+        # member_keys is provenance and is recorded either way, distinct
+        # from the config-sourced source_keys attr (_common_global_attrs)
+        # which this writer must never touch (issue #338 fix round 1,
+        # finding 1).
+        assert ds.attrs["member_keys"] == "era5_land,mwbm_climgrid"
+        assert "source_keys" not in ds.attrs
+        assert ds.attrs["members_emitted"] == "false"
+    finally:
+        ds.close()
+
+
+def test_write_bounds_target_raises_when_emit_requested_without_members(
+    tmp_path: Path,
+):
+    from nhf_spatial_targets.targets._writers import write_bounds_target
+
+    workdir = make_minimal_project(tmp_path)
+    project = load(workdir)
+    da = _member([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]])
+
+    kwargs = _bounds_call_kwargs(tmp_path, None, emit_members=True)
+    with pytest.raises(ValueError, match="emit_members is True but no members"):
+        write_bounds_target(
+            project=project,
+            lower=da,
+            upper=da,
+            n_sources=da.astype("int8"),
+            n_sources_count=1,
+            **kwargs,
+        )
+
+
+def test_write_bounds_target_nn_filled_companion_excludes_members(tmp_path: Path):
+    """The NN-filled companion never carries members/ensemble stats (spec Sec 3.6).
+
+    nn_fill_bounds returns ds.copy() with only lower_bound/upper_bound
+    overwritten, so without an explicit drop the companion would silently
+    carry the raw, UNFILLED member values alongside the filled bounds. This
+    guards write_bounds_target's post-nn_fill_bounds drop_vars step.
+    """
+    from nhf_spatial_targets.targets._combine import multi_source_nanminmax
+    from nhf_spatial_targets.targets._writers import write_bounds_target
+
+    workdir = make_minimal_project(tmp_path)
+    project = load(workdir)
+    members = {
+        "era5_land": _member([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]),
+        "mwbm_climgrid": _member([[3.0, 4.0, np.nan], [3.0, 4.0, np.nan]]),
+    }
+    lower, upper, n_sources = multi_source_nanminmax(members)
+
+    kwargs = _bounds_call_kwargs(tmp_path, members, emit_members=True)
+    kwargs["nn_fill"] = True
+    write_bounds_target(
+        project=project,
+        lower=lower,
+        upper=upper,
+        n_sources=n_sources,
+        n_sources_count=2,
+        **kwargs,
+    )
+
+    main_path = kwargs["output_path"]
+    nn_path = main_path.with_name(main_path.stem + "_nn_filled" + main_path.suffix)
+    with xr.open_dataset(main_path) as ds_main:
+        # The primary output keeps the full member decomposition.
+        assert "era5_land" in ds_main.data_vars
+        assert "ensemble_mean" in ds_main.data_vars
+    with xr.open_dataset(nn_path) as ds_nn:
+        assert set(ds_nn.data_vars) == {
+            "lower_bound",
+            "upper_bound",
+            "n_sources",
+            "nn_filled",
+            "crs",
+        }
+        # issue #338 fix round 1, finding 2: the companion carries no
+        # member data vars, so it must not claim members_emitted="true"
+        # (that would read as "emitted and then lost") and must not carry
+        # member_keys (which would name variables absent from this file).
+        assert ds_nn.attrs["members_emitted"] == "false"
+        assert "member_keys" not in ds_nn.attrs
+
+
+def _write_year_chunk_with_members(
+    path: Path,
+    year: int,
+    *,
+    member_values: dict[str, float],
+    hrus: list[int] | None = None,
+) -> None:
+    """Per-year intermediate carrying member variables as well as bounds.
+
+    A NaN member value writes an all-NaN member, which is what
+    `swe.py:_load_year` emits for a source with no data that year.
+    """
+    if hrus is None:
+        hrus = [1, 2, 3]
+    times = pd.date_range(f"{year}-01-01", f"{year}-12-31", freq="D")
+    shape = (len(times), len(hrus))
+    data_vars = {
+        "lower_bound": (("time", "nhm_id"), np.full(shape, 1.0, dtype=np.float32)),
+        "upper_bound": (("time", "nhm_id"), np.full(shape, 2.0, dtype=np.float32)),
+        "n_sources": (("time", "nhm_id"), np.full(shape, 2, dtype=np.int8)),
+    }
+    for key, value in member_values.items():
+        data_vars[key] = (
+            ("time", "nhm_id"),
+            np.full(shape, value, dtype=np.float32),
+        )
+    ds = xr.Dataset(
+        data_vars,
+        coords={"time": times, "nhm_id": hrus},
+        attrs={"Conventions": "CF-1.8", "title": f"chunk {year}", "year_chunk": year},
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ds.to_netcdf(path)
+
+
+def test_stitch_preserves_member_variables_across_years(tmp_path: Path):
+    """Members present in every year stitch into the canonical target."""
+    from nhf_spatial_targets.targets._intermediates import stitch_year_chunks_to_target
+
+    workdir = make_minimal_project(tmp_path)
+    project = load(workdir)
+    inter = tmp_path / "intermediates"
+    # 2003: snodas has no data (all-NaN member). 2004: both sources present.
+    _write_year_chunk_with_members(
+        inter / "swe_targets_2003.nc",
+        2003,
+        member_values={"snodas": float("nan"), "era5_land": 1.5},
+    )
+    _write_year_chunk_with_members(
+        inter / "swe_targets_2004.nc",
+        2004,
+        member_values={"snodas": 3.0, "era5_land": 1.5},
+    )
+
+    out = tmp_path / "swe_targets.nc"
+    stitch_year_chunks_to_target(
+        sorted(inter.glob("*.nc")),
+        out,
+        title="SWE",
+        extra_global_attrs={"source_keys": "snodas,era5_land"},
+        sort_dim="nhm_id",
+        project=project,
+    )
+
+    ds = xr.open_dataset(out)
+    try:
+        assert "snodas" in ds.data_vars
+        assert "era5_land" in ds.data_vars
+        assert ds["snodas"].dtype == np.float32
+        assert ds["era5_land"].dtype == np.float32
+        # The absent-source year is honest NaN, not dropped or zero-filled.
+        assert np.isnan(ds["snodas"].sel(time="2003-06-15").values).all()
+        assert np.allclose(ds["snodas"].sel(time="2004-06-15").values, 3.0)
+        # 2003 is a common year (365 days); 2004 is a leap year (366).
+        assert len(ds.time) == 365 + 366
+    finally:
+        ds.close()
+
+
+def test_parse_period_rejects_the_sentinel_with_a_pointed_message():
+    """parse_period must not be handed the sentinel -- callers branch first."""
+    from nhf_spatial_targets.targets._io import PER_SOURCE_POR, parse_period
+
+    with pytest.raises(ValueError, match="per_source_por is a sentinel"):
+        parse_period(PER_SOURCE_POR)

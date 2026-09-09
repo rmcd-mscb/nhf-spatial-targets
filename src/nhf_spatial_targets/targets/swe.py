@@ -69,6 +69,8 @@ from __future__ import annotations
 
 import logging
 
+import dask.array as dask_array
+import numpy as np
 import pandas as pd
 import xarray as xr
 
@@ -85,6 +87,7 @@ from nhf_spatial_targets.targets._io import (
 )
 from nhf_spatial_targets.targets._shims import (
     SourceShim,
+    label_members,
     shims_by_config_label,
     validate_source_units,
 )
@@ -280,6 +283,7 @@ def _load_year(
         )
 
     year_sources: dict[str, xr.DataArray] = {}
+    covered: list[str] = []
     for src_label in sources:
         shim = shims[src_label]
         try:
@@ -296,19 +300,40 @@ def _load_year(
                 year,
                 src_label,
             )
+            # Emit an all-NaN member rather than omitting the key: the
+            # per-year NCs are stitched with join="exact", so every year
+            # must carry the same member variables (#338). Dask-backed,
+            # not np.full: every covered member is lazy dask, and a
+            # materialized (n_days, n_hru) float32 block costs ~528 MB on
+            # the 361k-HRU national fabric per absent source (issue #338
+            # fix round 3, finding 4). Cannot use xr.full_like(<a covered
+            # member>) -- this branch can run before any covered source
+            # has been read, so no member may exist yet to copy from.
+            year_sources[src_label] = xr.DataArray(
+                dask_array.full(
+                    (len(year_master_idx), len(fabric_hru_ids)),
+                    np.nan,
+                    dtype="float32",
+                    chunks=(365, len(fabric_hru_ids)),
+                ),
+                dims=("time", id_col),
+                coords={"time": year_master_idx, id_col: fabric_hru_ids},
+            )
             continue
         check_hru_coords(da_native, fabric_hru_ids, id_col, src_label)
         da_mm = shim.to_common_units(da_native)
         da_in = mm_to_inches(da_mm)
         year_sources[src_label] = reindex_to_day_start(da_in, year_master_idx)
+        covered.append(src_label)
 
-    if not year_sources:
+    if not covered:
         raise ValueError(
             f"swe year {year}: no source contributed any data for the year. "
             f"Either the period is set outside every source's coverage or "
             f"every aggregated NC is missing for this year."
         )
 
+    label_members(year_sources, shims)
     lower, upper, n_sources = multi_source_nanminmax(year_sources)
 
     extra_attrs = {
@@ -323,6 +348,7 @@ def _load_year(
         time_index=year_master_idx,
         time_offset_unit=pd.offsets.Day(1),
         extra_attrs=extra_attrs,
+        members=year_sources,
     )
 
 
@@ -358,7 +384,7 @@ def build(project: Project) -> None:
     Reads each enabled source's per-year aggregated NCs, harmonizes time
     coords onto a master day-start index over
     ``snow_water_equivalent.period``, converts each to inches, combines
-    via NaN-aware min/max, and writes a CF-1.6 NetCDF. If
+    via NaN-aware min/max, and writes a CF-1.8 NetCDF. If
     ``snow_water_equivalent.nn_fill`` is True, additionally writes
     ``<output>_nn_filled.nc``.
 
@@ -366,9 +392,10 @@ def build(project: Project) -> None:
     (availability) runs inside the loader so it is
     visible in test fixtures that drive the loader directly without the
     full driver. Per-year contributions follow the period-union
-    semantics — sources whose coverage doesn't include a given year are
-    silently skipped (with a log line) and contribute NaN to that
-    year's bound.
+    semantics — a source whose coverage doesn't include a given year
+    still contributes an all-NaN member for that year (logged, not
+    skipped) so the member schema stays constant across years for the
+    ``join="exact"`` per-year stitch.
     """
     from nhf_spatial_targets.targets._driver import build as run_driver
 

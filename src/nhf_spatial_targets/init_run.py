@@ -76,6 +76,7 @@ targets:
     nn_fill: true
     nn_max_candidates: 10
     chunk_months: 12
+    # emit_members: true   # see aet: below
 
   aet:
     enabled: true
@@ -87,6 +88,17 @@ targets:
     prms_variable: hru_actet
     range_method: multi_source_minmax
     output_file: aet_targets.nc
+    # emit_members: true
+    #   Whether to write the per-source ensemble members (one variable per
+    #   source key) and the derived ensemble_mean / ensemble_std into the
+    #   target NC. This is an OUTPUT switch, not a science switch: the
+    #   members are always computed -- they are the input from which
+    #   lower_bound / upper_bound / n_sources are derived -- so turning this
+    #   off changes none of those values, it only stops them being written.
+    #   Turn it off when file size matters: on the ~361k-HRU national fabric
+    #   a daily SWE target grows from ~12 GB to ~36-48 GB with members. On a
+    #   regional fabric the cost is negligible and true is the right choice.
+    #   The output NC records the choice as the `members_emitted` global attr.
 
   recharge:
     enabled: true
@@ -100,7 +112,16 @@ targets:
     range_method: normalized_minmax
     normalize: true
     normalize_period: "2000-01-01/2009-12-31"
+    # normalize_period accepts either an explicit "YYYY-MM-DD/YYYY-MM-DD"
+    # window applied to every source, or the sentinel `per_source_por`,
+    # which normalizes each source over its OWN complete-year period of
+    # record. Partial leading/trailing years are trimmed first: an
+    # unfinished year's annual sum would otherwise become that HRU's
+    # minimum and compress every other year. The per-source windows are
+    # recorded in the output NC as normalize_window_<source_key>.
+    #   normalize_period: per_source_por
     output_file: recharge_targets.nc
+    # emit_members: true   # see aet: above
 
   soil_moisture:
     enabled: true
@@ -117,7 +138,16 @@ targets:
     range_method: normalized_minmax
     normalize: true
     normalize_by: calendar_month
+    # normalize_period accepts either an explicit "YYYY-MM-DD/YYYY-MM-DD"
+    # window applied to every source, or the sentinel `per_source_por`,
+    # which normalizes each source over its OWN complete-year period of
+    # record. Partial leading/trailing years are trimmed first: an
+    # unfinished year's annual sum would otherwise become that HRU's
+    # minimum and compress every other year. The per-source windows are
+    # recorded in the output NC as normalize_window_<source_key>.
+    #   normalize_period: per_source_por
     output_file: soil_moisture_targets.nc
+    # emit_members: true   # see aet: above
 
   snow_covered_area:
     enabled: true
@@ -148,6 +178,10 @@ targets:
     # genuinely required downstream.
     nn_fill: false
     nn_max_candidates: 10
+    # emit_members: false   # see aet: above; off by default for SCA -- its
+    #   bounds are a MOD10C1 CI interval, not a member min/max, so SCA
+    #   produces no members at all. Setting this true does not add a
+    #   diagnostics output -- it raises and fails the build. Leave false.
 
   snow_water_equivalent:
     enabled: true
@@ -167,6 +201,7 @@ targets:
     # unrelated donor HRU's snowpack. Honest NaN is the calibration target.
     nn_fill: false
     nn_max_candidates: 10
+    # emit_members: true   # see aet: above
 
 # ---------------------------------------------------------------------------
 # Inspection-notebook overrides (optional)
