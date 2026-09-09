@@ -184,7 +184,7 @@ OPTIONAL_CONFIG_FEATURES: list[OptionalConfigFeature] = [
     ),
     OptionalConfigFeature(
         name="targets.<target>.normalize_period: per_source_por",
-        detect=r"(?m)^\s*#?\s*normalize_period\s*:",
+        detect=r"(?m)^\s*#?\s*normalize_period\s*:\s*[\"']?per_source_por",
         block=(
             '    # normalize_period accepts either an explicit "YYYY-MM-DD/YYYY-MM-DD"\n'
             "    # window applied to every source, or the sentinel `per_source_por`,\n"

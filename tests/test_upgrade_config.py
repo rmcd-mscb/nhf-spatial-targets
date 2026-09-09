@@ -90,6 +90,44 @@ def test_check_drift_release_detects_live_block(tmp_path):
     assert "release" not in {f.name for f in check_drift(tmp_path)}
 
 
+def test_check_drift_normalize_period_reports_preexisting_explicit_window(
+    tmp_path,
+):
+    """The regression this covers: `normalize_period` already exists in every
+    project that enables recharge/soil_moisture (they default on), with an
+    explicit "YYYY-MM-DD/YYYY-MM-DD" window -- NOT the per_source_por
+    sentinel. A `detect` regex that matches the bare key would silently mark
+    those operators as already in sync, so they'd never be nudged toward
+    per_source_por. This must still be reported as missing."""
+    _write_minimal_config(
+        tmp_path,
+        body=('targets:\n  recharge:\n    normalize_period: "2000-01-01/2013-12-31"\n'),
+    )
+    missing_names = {f.name for f in check_drift(tmp_path)}
+    assert "targets.<target>.normalize_period: per_source_por" in missing_names
+
+
+def test_check_drift_normalize_period_clean_when_commented_stub_present(tmp_path):
+    """Operator pasted the check-config stub -- counts as in-sync, same as
+    every other feature's commented-stub form."""
+    _write_minimal_config(
+        tmp_path,
+        body=("targets:\n  recharge:\n    #   normalize_period: per_source_por\n"),
+    )
+    missing_names = {f.name for f in check_drift(tmp_path)}
+    assert "targets.<target>.normalize_period: per_source_por" not in missing_names
+
+
+def test_check_drift_normalize_period_clean_when_sentinel_adopted(tmp_path):
+    """Live adoption of the sentinel (quoted or bare) counts as in-sync."""
+    _write_minimal_config(
+        tmp_path,
+        body=("targets:\n  recharge:\n    normalize_period: per_source_por\n"),
+    )
+    missing_names = {f.name for f in check_drift(tmp_path)}
+    assert "targets.<target>.normalize_period: per_source_por" not in missing_names
+
+
 # --- registry shape ---------------------------------------------------------
 
 
