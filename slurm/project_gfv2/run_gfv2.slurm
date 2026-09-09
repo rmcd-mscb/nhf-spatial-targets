@@ -5,7 +5,11 @@
 #SBATCH --array=0-5
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=32G
+#SBATCH --mem=64G
+# --mem=64G: write_bounds_target calls ds.compute() (full materialization, no
+# streaming) and nn_fill_bounds then makes a second full copy. With ensemble
+# members emitted (#338) the gfv2 soil-moisture monthly target peaks near 11 GB;
+# 64G leaves headroom without the in-code streaming refactor that --mem avoids.
 #SBATCH --time=4:00:00
 #SBATCH --output=logs/run_%a_%A.out
 #SBATCH --error=logs/run_%a_%A.err
