@@ -452,7 +452,10 @@ def test_recharge_per_source_por_uses_each_sources_own_complete_years(
     from nhf_spatial_targets.targets import rch as rch_mod
     from nhf_spatial_targets.workspace import load
 
+    seen_periods: dict[str, tuple[str, str]] = {}
+
     def fake_read(project, source_key, var, period, chunks=None):
+        seen_periods[source_key] = period
         spans = {
             "reitz2017": (2000, 2013),
             "era5_land": (1998, 2015),
@@ -490,6 +493,12 @@ def test_recharge_per_source_por_uses_each_sources_own_complete_years(
         id_col="nhm_id",
         year_context=None,
     )
+
+    # Under the sentinel the loader must read each source's WHOLE record
+    # (not the configured period), or POR derivation would silently
+    # truncate to the configured window instead of the source's real span.
+    assert seen_periods["reitz2017"] == ("1900-01-01", "2200-12-31")
+    assert seen_periods["era5_land"] == ("1900-01-01", "2200-12-31")
 
     attrs = result.extra_attrs
     assert attrs["normalize_period"] == "per_source_por"
@@ -551,3 +560,55 @@ def test_recharge_per_source_por_excludes_ragged_trailing_partial_year(
 
     # The ragged 2002 partial year must be excluded from the window.
     assert result.extra_attrs["normalize_window_era5_land"] == "2000-01-01/2001-12-31"
+
+
+def test_recharge_explicit_window_reads_union_of_period_and_normalize_period(
+    tmp_path, monkeypatch
+):
+    """Converse of the per-source-POR read-window test.
+
+    Under an EXPLICIT normalize_period (not the sentinel), the read window
+    passed to read_aggregated_source must be the union of the output
+    period and the normalize_period -- NOT the wide (1900/2200) range used
+    under the sentinel. Pins both branches of the read-window logic.
+    """
+    from nhf_spatial_targets.targets import rch as rch_mod
+    from nhf_spatial_targets.workspace import load
+
+    seen_periods: dict[str, tuple[str, str]] = {}
+
+    def fake_read(project, source_key, var, period, chunks=None):
+        seen_periods[source_key] = period
+        times = pd.date_range("2000-01-01", "2005-01-01", freq="YS")
+        values = np.linspace(1.0, 2.0, len(times), dtype=np.float32)
+        return xr.DataArray(
+            np.repeat(values[:, None], 3, axis=1),
+            dims=("time", "nhm_id"),
+            coords={"time": times, "nhm_id": [1, 2, 3]},
+            attrs={"units": "m"},
+        )
+
+    monkeypatch.setattr(rch_mod, "read_aggregated_source", fake_read)
+    monkeypatch.setattr(rch_mod, "check_hru_coords", lambda *a, **k: None)
+
+    # period starts later than normalize_period, and normalize_period ends
+    # earlier than period -- the union must widen on BOTH ends.
+    workdir = _make_rch_project(
+        tmp_path,
+        period="2002-01-01/2005-12-31",
+        normalize_period="2000-01-01/2003-12-31",
+        sources=["reitz2017"],
+    )
+    project = load(workdir)
+
+    rch_mod._load(
+        project=project,
+        adapter=rch_mod.ADAPTER,
+        period=("2002-01-01", "2005-12-31"),
+        hru_meta=None,
+        fabric_hru_ids=np.array([1, 2, 3]),
+        id_col="nhm_id",
+        year_context=None,
+    )
+
+    assert seen_periods["reitz2017"] == ("2000-01-01", "2005-12-31")

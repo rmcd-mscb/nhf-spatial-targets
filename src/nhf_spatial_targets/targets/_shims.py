@@ -80,7 +80,7 @@ class SourceShim:
         per-source period-of-record window — because a shim that
         resamples monthly data to an annual sum (``resample(time="YS")
         .sum()``) hides a ragged trailing/leading partial year behind a
-        single annual timestep;  a completeness check run on the
+        single annual timestep; a completeness check run on the
         *post-shim* annual series can't see the partial year and will
         wrongly call it complete. ``None`` (the default) means the
         caller does not need this distinction; the other target
