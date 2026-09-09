@@ -1392,13 +1392,12 @@ pixi run git commit -m "feat(#338): add complete_years_window POR helper"
 
 **Files:**
 - Modify: `src/nhf_spatial_targets/targets/_io.py:290` (`parse_period`)
-- Modify: `src/nhf_spatial_targets/validate.py`
 - Modify: `src/nhf_spatial_targets/init_run.py`, `src/nhf_spatial_targets/upgrade_config.py`
-- Test: `tests/test_targets_common.py`, `tests/test_validate.py`
+- Test: `tests/test_targets_common.py`
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: module constant `PER_SOURCE_POR = "per_source_por"` in `targets/_io.py`; `parse_period` raises a sentinel-aware error rather than a generic one.
+- Produces: module constant `PER_SOURCE_POR = "per_source_por"` in `targets/_io.py`; `parse_period` raises a sentinel-aware error rather than a generic one, and its generic "Invalid period" error names the sentinel as a valid alternative.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1413,28 +1412,16 @@ def test_parse_period_rejects_the_sentinel_with_a_pointed_message():
         parse_period(PER_SOURCE_POR)
 ```
 
-Append to `tests/test_validate.py` (follow the module's existing project-fixture style):
+**No `validate.py` change is required.** Verified 2026-09-09: `validate.py` performs no
+period-string validation at all — it neither imports `parse_period` nor references `period`
+anywhere. `normalize_period` reaches `parse_period` from exactly three call sites (`rch.py:148`,
+`som.py:159`, `som.py:236`), all of which Tasks 8 and 9 branch on the sentinel before parsing.
+There is no linter to teach, and adding a period-format validator would be new scope the spec
+does not ask for.
 
-```python
-def test_validate_accepts_per_source_por_sentinel(tmp_path):
-    """normalize_period: per_source_por must not be reported as malformed."""
-    from nhf_spatial_targets.validate import _check_period_strings
-
-    problems = _check_period_strings(
-        {
-            "targets": {
-                "recharge": {
-                    "enabled": True,
-                    "period": "2000-01-01/2013-12-31",
-                    "normalize_period": "per_source_por",
-                }
-            }
-        }
-    )
-    assert problems == []
-```
-
-If `validate.py` has no `_check_period_strings`, locate the function that validates `period` / `normalize_period` strings and target that instead; the assertion is that the sentinel produces no problem entry.
+A typo such as `per_source_por` therefore surfaces at build time from `parse_period`, which is the
+right layer — so that error message must name the sentinel as a valid alternative, making the typo
+self-diagnosing. That requirement is folded into Step 3 below.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -1456,6 +1443,17 @@ In `src/nhf_spatial_targets/targets/_io.py`, above `parse_period`:
 PER_SOURCE_POR = "per_source_por"
 ```
 
+Also amend `parse_period`'s existing "Invalid period" error so it names the sentinel as a valid
+alternative — that is what makes a typo like `per_source_por` self-diagnosing, since no earlier
+layer validates the string:
+
+```python
+    raise ValueError(
+        f"Invalid period {period_str!r}. Expected 'YYYY-MM-DD/YYYY-MM-DD' "
+        f"or the sentinel {PER_SOURCE_POR!r}."
+    )
+```
+
 Add to the top of `parse_period`'s body, before the `"/" not in period_str` check:
 
 ```python
@@ -1467,20 +1465,7 @@ Add to the top of `parse_period`'s body, before the `"/" not in period_str` chec
         )
 ```
 
-- [ ] **Step 4: Teach `validate` the sentinel**
-
-In `src/nhf_spatial_targets/validate.py`, wherever `normalize_period` is parsed or format-checked, short-circuit on the sentinel:
-
-```python
-from nhf_spatial_targets.targets._io import PER_SOURCE_POR
-
-...
-    if normalize_period == PER_SOURCE_POR:
-        # Valid: each source derives its own window at build time.
-        continue
-```
-
-- [ ] **Step 5: Document the sentinel in the config template and upgrade path**
+- [ ] **Step 4: Document the sentinel in the config template and upgrade path**
 
 In `init_run.py:_CONFIG_TEMPLATE`, under `recharge:` and `soil_moisture:`, add:
 
@@ -1497,7 +1482,7 @@ In `init_run.py:_CONFIG_TEMPLATE`, under `recharge:` and `soil_moisture:`, add:
 
 Add a matching `OptionalConfigFeature` entry named `targets.<target>.normalize_period: per_source_por` with `detect=r"(?m)^\s*#?\s*normalize_period\s*:"`, `added="2026-09-08 (#338)"`.
 
-- [ ] **Step 6: Run the tests**
+- [ ] **Step 5: Run the tests**
 
 ```bash
 pixi run -e dev test -k "per_source_por or validate" -v
@@ -1505,13 +1490,13 @@ pixi run -e dev test -k "per_source_por or validate" -v
 
 Expected: PASS.
 
-- [ ] **Step 7: Format, lint, commit**
+- [ ] **Step 6: Format, lint, commit**
 
 ```bash
 pixi run -e dev fmt && pixi run -e dev lint
-git add src/nhf_spatial_targets/targets/_io.py src/nhf_spatial_targets/validate.py \
+git add src/nhf_spatial_targets/targets/_io.py \
         src/nhf_spatial_targets/init_run.py src/nhf_spatial_targets/upgrade_config.py \
-        tests/test_targets_common.py tests/test_validate.py
+        tests/test_targets_common.py
 pixi run git commit -m "feat(#338): recognize per_source_por normalize_period sentinel"
 ```
 
