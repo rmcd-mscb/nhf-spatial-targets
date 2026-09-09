@@ -1675,115 +1675,98 @@ pixi run git commit -m "feat(#338): per-source POR normalization for recharge"
 ### Task 9: Soil-moisture per-source POR normalization
 
 **Files:**
-- Modify: `src/nhf_spatial_targets/targets/som.py` (`_load_monthly` lines ~145-218, `_load_annual` lines ~220-278)
+- Modify: `src/nhf_spatial_targets/targets/som.py` (`_read_monthly_sources`, `_load_monthly`, `_load_annual`)
 - Test: `tests/test_targets_som.py`
 
 **Interfaces:**
-- Consumes: `complete_years_window` (Task 6), `PER_SOURCE_POR` (Task 7).
-- Produces: the same `normalize_window_<source_key>` attrs on both SOM variants.
+- Consumes: `complete_years_window` (Task 6), `PER_SOURCE_POR` (Task 7), and the read-window pattern established in Task 8.
+- Produces: `normalize_window_<source_key>` attrs on both SOM variants.
 
-- [ ] **Step 1: Write the failing tests**
+#### The trap this task must avoid — read before writing code
 
-Append to `tests/test_targets_som.py`, mirroring the module's existing fixture style:
+An earlier draft of this task said to derive each source's window from `sources_monthly[src]`.
+**That is wrong and would have shipped a silently incorrect window.** Verified 2026-09-09:
+
+`_read_monthly_sources` (a) reads with the **configured period**, not the source's whole record,
+and (b) ends with `reindex_to_month_start(da, master_monthly)`, which pads months the source does
+not cover with **NaN at real timestamps**. So a source whose record starts 1980-06, under a period
+starting 1980-01, comes back with twelve 1980 rows — seven real, five NaN. `complete_years_window`
+counts twelve distinct months and calls 1980 complete:
+
+```
+raw record             : ('1981-01-01', '1982-12-31')   <- correct
+after reindex to period: ('1980-01-01', '1982-12-31')   <- wrong; NaN padding defeats the check
+1980 real months: 7     1980 rows after reindex: 12
+```
+
+The window must therefore be derived from the **raw, pre-reindex series, read over the source's
+whole record** — the same correction Task 8 applied to recharge.
+
+- [ ] **Step 1: Give `_read_monthly_sources` a separate read window and return the raw series**
+
+Change the signature to accept an optional `read_period` and return the pre-reindex dict alongside
+the reindexed one:
 
 ```python
-def test_som_monthly_per_source_por_records_per_source_windows(
-    tmp_path, monkeypatch
-):
-    """Monthly SOM under the sentinel trims each source to complete years."""
-    import numpy as np
+def _read_monthly_sources(
+    *,
+    project: Project,
+    period: tuple[str, str],
+    sources: list[str],
+    fabric_hru_ids,
+    id_col: str,
+    master_monthly: pd.DatetimeIndex,
+    read_period: tuple[str, str] | None = None,
+) -> tuple[dict[str, xr.DataArray], dict[str, xr.DataArray]]:
+    """Read each source's monthly series.
 
-    from nhf_spatial_targets.targets import som as som_mod
+    Returns ``(sources_monthly, sources_raw)``. ``sources_monthly`` is
+    reindexed onto ``master_monthly`` (the output axis); ``sources_raw`` is
+    the pre-reindex series exactly as read.
 
-    result = som_mod._load_monthly(
-        project=_som_project(tmp_path, normalize_period="per_source_por"),
-        adapter=som_mod.ADAPTER_MONTHLY,
-        period=("1980-01-01", "2020-12-31"),
-        hru_meta=None,
-        fabric_hru_ids=np.array([1, 2, 3]),
-        id_col="nhm_id",
-        year_context=None,
-    )
-
-    attrs = result.extra_attrs
-    assert attrs["normalize_period"] == "per_source_por"
-    assert attrs["normalize_method"] == "per_calendar_month"
-    # merra2 fixture covers 1980-06 .. 2020-12, so 1980 is incomplete.
-    assert attrs["normalize_window_merra2"] == "1981-01-01/2020-12-31"
-
-
-def test_som_annual_per_source_por_records_per_source_windows(
-    tmp_path, monkeypatch
-):
-    """Annual SOM under the sentinel trims on the annual-mean series."""
-    import numpy as np
-
-    from nhf_spatial_targets.targets import som as som_mod
-
-    result = som_mod._load_annual(
-        project=_som_project(tmp_path, normalize_period="per_source_por"),
-        adapter=som_mod.ADAPTER_ANNUAL,
-        period=("1980-01-01", "2020-12-31"),
-        hru_meta=None,
-        fabric_hru_ids=np.array([1, 2, 3]),
-        id_col="nhm_id",
-        year_context=None,
-    )
-
-    assert result.extra_attrs["normalize_period"] == "per_source_por"
-    assert "normalize_window_merra2" in result.extra_attrs
+    ``read_period`` defaults to ``period``. Under ``per_source_por`` the
+    caller passes a wide range so each source's whole record is present in
+    ``sources_raw`` — the reindexed series cannot be used to judge record
+    completeness, because it pads uncovered months with NaN at real
+    timestamps and a distinct-month count then reads them as covered.
+    """
 ```
 
-Write `_som_project(tmp_path, normalize_period=...)` and the monkeypatched `read_aggregated_source` in the same style as Task 8's recharge helper: `sources` of `["merra2", "nldas_mosaic"]`, a `merra2` fixture spanning 1980-06 .. 2020-12 monthly and an `nldas_mosaic` fixture spanning 1979-01 .. 2020-12 monthly. Reuse the module's existing helper if one already exists.
+Body: pass `read_period or period` to `read_aggregated_source`, keep `da_monthly_native` in a
+`sources_raw` dict, and return both dicts.
 
-- [ ] **Step 2: Run the tests to verify they fail**
-
-```bash
-pixi run -e dev test -k som_monthly_per_source_por -v
-```
-
-Expected: FAIL — the sentinel reaches `parse_period`.
-
-- [ ] **Step 3: Branch `_load_monthly` on the sentinel**
-
-In `som.py:_load_monthly`, replace:
-
-```python
-    raw_norm_period = som_cfg.get("normalize_period") or som_cfg["period"]
-    normalize_period = parse_period(raw_norm_period)
-```
-
-with:
+- [ ] **Step 2: Update `_load_monthly`**
 
 ```python
     raw_norm_period = som_cfg.get("normalize_period") or som_cfg["period"]
     per_source_por = raw_norm_period == PER_SOURCE_POR
     normalize_period = None if per_source_por else parse_period(raw_norm_period)
+    read_period = ("1900-01-01", "2200-12-31") if per_source_por else None
 ```
 
-Replace the normalization loop:
-
-```python
-    sources_monthly_norm: dict[str, xr.DataArray] = {}
-    for src, da in sources_monthly.items():
-        window = da.sel(time=slice(normalize_period[0], normalize_period[1]))
-```
-
-with:
+Pass `read_period=read_period` into `_read_monthly_sources` and unpack both dicts. Then normalize
+from the RAW series and reindex afterwards:
 
 ```python
     sources_monthly_norm: dict[str, xr.DataArray] = {}
     normalize_windows: dict[str, str] = {}
-    for src, da in sources_monthly.items():
+    for src, da_raw in sources_raw.items():
         if per_source_por:
-            win_start, win_end = complete_years_window(da, "monthly")
+            win_start, win_end = complete_years_window(da_raw, "monthly")
             normalize_windows[src] = f"{win_start}/{win_end}"
         else:
             win_start, win_end = normalize_period
-        window = da.sel(time=slice(win_start, win_end))
+        window = da_raw.sel(time=slice(win_start, win_end))
+        if window.sizes.get("time", 0) == 0:
+            raise ValueError(
+                f"soil_moisture: source '{src}' has no monthly timesteps in "
+                f"its normalization window {win_start}..{win_end}."
+            )
+        normed = normalize_0_1_by_calendar_month_over_window(da_raw, window)
+        sources_monthly_norm[src] = reindex_to_month_start(normed, master_monthly)
 ```
 
-Extend `extra_attrs` after it is built:
+Add the per-source attrs after `extra_attrs` is built:
 
 ```python
     for src, window_str in normalize_windows.items():
@@ -1792,42 +1775,38 @@ Extend `extra_attrs` after it is built:
 
 Update the log line so it does not index `normalize_period` when the sentinel is active.
 
-- [ ] **Step 4: Apply the same branch to `_load_annual`**
+- [ ] **Step 3: Update `_load_annual`**
 
-Same structure as `_load_monthly`, with one important difference: **derive the window from the MONTHLY series, not the annual one.**
-
-`resample(time="YS").mean()` emits one step for a partial year just as it does for a complete one, so an incomplete trailing year survives as a mean over fewer months. Running `complete_years_window` on the annual series would therefore see one step per year and keep the partial year. The monthly series is where incompleteness is still visible.
-
-Replace:
-
-```python
-    sources_annual_norm: dict[str, xr.DataArray] = {}
-    for src, da in sources_annual.items():
-        window = da.sel(time=slice(normalize_period[0], normalize_period[1]))
-```
-
-with:
+Same read/window derivation as Step 2 — **derive the window from the raw MONTHLY series with
+cadence `"monthly"`**, not from the annual means. `resample(time="YS").mean()` emits one step for a
+partial year exactly as for a complete one, so the annual series cannot reveal incompleteness (see
+`complete_years_window`'s own docstring caveat).
 
 ```python
     sources_annual_norm: dict[str, xr.DataArray] = {}
     normalize_windows: dict[str, str] = {}
-    for src, da in sources_annual.items():
+    for src, da_raw in sources_raw.items():
         if per_source_por:
-            # Derive from the pre-resample monthly series: an incomplete
-            # year still has one annual step, so the annual series cannot
-            # reveal that the year is partial.
-            win_start, win_end = complete_years_window(
-                sources_monthly[src], "monthly"
-            )
+            win_start, win_end = complete_years_window(da_raw, "monthly")
             normalize_windows[src] = f"{win_start}/{win_end}"
         else:
             win_start, win_end = normalize_period
-        window = da.sel(time=slice(win_start, win_end))
+        annual = da_raw.resample(time="YS").mean(skipna=True)
+        window = annual.sel(time=slice(win_start, win_end))
+        if window.sizes.get("time", 0) == 0:
+            raise ValueError(
+                f"soil_moisture: source '{src}' has no annual timesteps in "
+                f"its normalization window {win_start}..{win_end}."
+            )
+        normed = normalize_0_1_over_window(annual, window)
+        sources_annual_norm[src] = normed.reindex(time=master_annual)
 ```
 
-and extend `extra_attrs` the same way as in `_load_monthly`.
+Note `SourceShim.native_cadence` is deliberately NOT used here: all four SOM sources are natively
+monthly and `_read_monthly_sources` guarantees a monthly series by construction, so the cadence is
+known statically. Recharge needed the field only because its sources are heterogeneous.
 
-- [ ] **Step 5: Add the imports**
+- [ ] **Step 4: Add the imports**
 
 ```python
 from nhf_spatial_targets.normalize.methods import (
@@ -1838,21 +1817,45 @@ from nhf_spatial_targets.normalize.methods import (
 from nhf_spatial_targets.targets._io import PER_SOURCE_POR
 ```
 
-- [ ] **Step 6: Run the SOM tests**
+- [ ] **Step 5: Write the tests**
+
+In `tests/test_targets_som.py`, reusing its existing `_make_som_project` / `_write_monthly_nc` /
+`_write_synthetic_fabric` fixtures and monkeypatching `som_mod.read_aggregated_source` the way
+`tests/test_targets_rch.py` does:
+
+1. **Monthly variant, differing per-source windows.** Two sources with different records (e.g.
+   `merra2` 1980-06..2020-12, `nldas_mosaic` 1979-01..2020-12); assert
+   `normalize_window_merra2 == "1981-01-01/2020-12-31"` and
+   `normalize_window_nldas_mosaic == "1979-01-01/2020-12-31"`. The merra2 value is the regression:
+   its record starts mid-1980, so 1980 must be excluded.
+2. **Annual variant** — same setup, assert the same per-source windows, proving the window came
+   from the monthly series and not the annual means.
+3. **Read window pinned on both branches** — record the `period` passed to the monkeypatched read
+   and assert it is `("1900-01-01", "2200-12-31")` under the sentinel, and the configured period
+   otherwise. (Task 8's review found this exact gap; do not repeat it.)
+4. **NaN padding does not fake completeness** — the regression that motivated this rewrite. Give a
+   source a record starting mid-year, with `period` starting in January of that year, and assert
+   the recorded window excludes that first year.
+
+- [ ] **Step 6: Run the tests**
 
 ```bash
-pixi run -e dev test -k targets_som -v
+pixi run -e dev pytest tests/test_targets_som.py -q
+pixi run -e dev pytest tests/test_targets_rch.py tests/test_targets_common.py -q
 ```
 
-Expected: PASS.
+Every pre-existing explicit-window SOM test must still pass unchanged.
 
 - [ ] **Step 7: Update the docs**
 
-- `docs/architecture/transformation-pipeline.md`: in the per-HRU transforms section, document `per_source_por` and state that the trim narrows normalization windows only and never the emitted time axis.
-- `docs/references/calibration-target-recipes.md`: note the sentinel for the recharge and soil-moisture recipes.
+- `docs/architecture/transformation-pipeline.md`: document `per_source_por` in the per-HRU
+  transforms section, and state that the trim narrows normalization windows only, never the emitted
+  time axis.
+- `docs/references/calibration-target-recipes.md`: note the sentinel for the recharge and
+  soil-moisture recipes.
 - `CLAUDE.md`: mention the sentinel alongside `normalize_period`.
 
-- [ ] **Step 8: Format, lint, commit, push, open PR**
+- [ ] **Step 8: Format, lint, commit**
 
 ```bash
 pixi run -e dev fmt && pixi run -e dev lint
@@ -1860,24 +1863,6 @@ git add src/nhf_spatial_targets/targets/som.py tests/test_targets_som.py \
         docs/architecture/transformation-pipeline.md \
         docs/references/calibration-target-recipes.md CLAUDE.md
 pixi run git commit -m "feat(#338): per-source POR normalization for soil moisture"
-git push -u origin feature/338-per-source-por
-gh pr create --title "feat(#338): per-source period-of-record normalization" \
-  --body "Implements PR 2 of docs/superpowers/specs/2026-09-08-ensemble-target-schema-design.md.
-
-Adds the normalize_period: per_source_por sentinel. Each source is normalized
-over its own complete-calendar-year period of record, with partial leading and
-trailing years trimmed by normalize.methods.complete_years_window. The trim
-applies uniformly to every cadence, not only the annual sums where it is
-load-bearing, so two sources' normalized series stay comparable.
-
-The trim narrows normalization windows only; the emitted time axis is still
-driven by the target's configured period. Per-source windows are recorded as
-normalize_window_<source_key> global attrs.
-
-Refs #338
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)"
-gh pr checks --watch
 ```
 
 ---
