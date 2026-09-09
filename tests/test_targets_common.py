@@ -2570,3 +2570,82 @@ def test_write_bounds_target_nn_filled_companion_excludes_members(tmp_path: Path
         # member_keys (which would name variables absent from this file).
         assert ds_nn.attrs["members_emitted"] == "false"
         assert "member_keys" not in ds_nn.attrs
+
+
+def _write_year_chunk_with_members(
+    path: Path,
+    year: int,
+    *,
+    member_values: dict[str, float],
+    hrus: list[int] | None = None,
+) -> None:
+    """Per-year intermediate carrying member variables as well as bounds.
+
+    A NaN member value writes an all-NaN member, which is what
+    `swe.py:_load_year` emits for a source with no data that year.
+    """
+    if hrus is None:
+        hrus = [1, 2, 3]
+    times = pd.date_range(f"{year}-01-01", f"{year}-12-31", freq="D")
+    shape = (len(times), len(hrus))
+    data_vars = {
+        "lower_bound": (("time", "nhm_id"), np.full(shape, 1.0, dtype=np.float32)),
+        "upper_bound": (("time", "nhm_id"), np.full(shape, 2.0, dtype=np.float32)),
+        "n_sources": (("time", "nhm_id"), np.full(shape, 2, dtype=np.int8)),
+    }
+    for key, value in member_values.items():
+        data_vars[key] = (
+            ("time", "nhm_id"),
+            np.full(shape, value, dtype=np.float32),
+        )
+    ds = xr.Dataset(
+        data_vars,
+        coords={"time": times, "nhm_id": hrus},
+        attrs={"Conventions": "CF-1.8", "title": f"chunk {year}", "year_chunk": year},
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ds.to_netcdf(path)
+
+
+def test_stitch_preserves_member_variables_across_years(tmp_path: Path):
+    """Members present in every year stitch into the canonical target."""
+    from nhf_spatial_targets.targets._intermediates import stitch_year_chunks_to_target
+
+    workdir = make_minimal_project(tmp_path)
+    project = load(workdir)
+    inter = tmp_path / "intermediates"
+    # 2003: snodas has no data (all-NaN member). 2004: both sources present.
+    _write_year_chunk_with_members(
+        inter / "swe_targets_2003.nc",
+        2003,
+        member_values={"snodas": float("nan"), "era5_land": 1.5},
+    )
+    _write_year_chunk_with_members(
+        inter / "swe_targets_2004.nc",
+        2004,
+        member_values={"snodas": 3.0, "era5_land": 1.5},
+    )
+
+    out = tmp_path / "swe_targets.nc"
+    stitch_year_chunks_to_target(
+        sorted(inter.glob("*.nc")),
+        out,
+        title="SWE",
+        extra_global_attrs={"source_keys": "snodas,era5_land"},
+        sort_dim="nhm_id",
+        project=project,
+    )
+
+    ds = xr.open_dataset(out)
+    try:
+        assert "snodas" in ds.data_vars
+        assert "era5_land" in ds.data_vars
+        assert ds["snodas"].dtype == np.float32
+        assert ds["era5_land"].dtype == np.float32
+        # The absent-source year is honest NaN, not dropped or zero-filled.
+        assert np.isnan(ds["snodas"].sel(time="2003-06-15").values).all()
+        assert np.allclose(ds["snodas"].sel(time="2004-06-15").values, 3.0)
+        # 2003 is a common year (365 days); 2004 is a leap year (366).
+        assert len(ds.time) == 365 + 366
+    finally:
+        ds.close()

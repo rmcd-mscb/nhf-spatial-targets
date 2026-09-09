@@ -962,3 +962,47 @@ def test_build_partial_coverage_source_contributes_only_where_finite(tmp_path: P
             200.0 / 25.4,
             rtol=1e-5,
         )
+
+
+def test_load_year_emits_all_nan_member_for_uncovered_source(tmp_path, monkeypatch):
+    """A source with no data for a year still appears as an all-NaN member.
+
+    The per-year NCs are stitched with join="exact", so the member set must
+    not vary from year to year (#338).
+    """
+    import numpy as np
+    import pandas as pd
+
+    from nhf_spatial_targets.targets import swe as swe_mod
+    from nhf_spatial_targets.targets._io import OutsideCoverageError
+
+    def fake_read(project, source_key, var, period, chunks=None):
+        if source_key == "snodas":
+            raise OutsideCoverageError("no snodas for this year")
+        times = pd.date_range("2003-01-01", "2003-12-31", freq="D")
+        return xr.DataArray(
+            np.full((len(times), 3), 100.0, dtype=np.float32),
+            dims=("time", "nhm_id"),
+            coords={"time": times, "nhm_id": [1, 2, 3]},
+            attrs={"units": "mm"},
+        )
+
+    monkeypatch.setattr(swe_mod, "read_aggregated_source", fake_read)
+    monkeypatch.setattr(swe_mod, "check_hru_coords", lambda *a, **k: None)
+    monkeypatch.setattr(
+        swe_mod, "_resolve_sources", lambda project: (["snodas", "era5_land"], [])
+    )
+
+    result = swe_mod._load_year(
+        project=None,
+        adapter=swe_mod.ADAPTER,
+        period=("2003-01-01", "2003-12-31"),
+        hru_meta=None,
+        fabric_hru_ids=np.array([1, 2, 3]),
+        id_col="nhm_id",
+        year_context=(2003, "2003-01-01", "2003-12-31"),
+    )
+
+    assert set(result.members) == {"snodas", "era5_land"}
+    assert np.isnan(result.members["snodas"].values).all()
+    assert not np.isnan(result.members["era5_land"].values).any()
