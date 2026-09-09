@@ -275,6 +275,14 @@ def write_bounds_target(
         True and ``members`` is empty, rather than silently ignoring the
         operator's config.
     """
+    if emit_members and not members:
+        raise ValueError(
+            "write_bounds_target: emit_members is True but no members were "
+            "supplied by the target's source_loader. Set emit_members=False "
+            "for targets without a member decomposition (e.g. SCA, whose "
+            "bounds are a CI interval rather than a member min/max)."
+        )
+
     # Avoid a circular-import by deferring this helper-internal import.
     from nhf_spatial_targets.normalize.methods import nn_fill_bounds
 
@@ -330,14 +338,6 @@ def write_bounds_target(
         }
     )
     n_sources.attrs.update(build_n_sources_attrs(n_sources_count))
-
-    if emit_members and not members:
-        raise ValueError(
-            "write_bounds_target: emit_members is True but no members were "
-            "supplied by the target's source_loader. Set emit_members=False "
-            "for targets without a member decomposition (e.g. SCA, whose "
-            "bounds are a CI interval rather than a member min/max)."
-        )
 
     data_vars: dict[str, xr.DataArray] = {
         "lower_bound": lower,
@@ -474,9 +474,7 @@ def write_bounds_target(
         # n_sources, and the nn_filled flag (spec Sec 3.6) — NN-filling an
         # individual member would fabricate a source observation at an HRU
         # that source never covered.
-        filled_ds = filled_ds.drop_vars(
-            [*members, "ensemble_mean", "ensemble_std"], errors="ignore"
-        )
+        filled_ds = filled_ds.drop_vars([*members, "ensemble_mean", "ensemble_std"])
     nn_diag.attrs.update(
         {
             "units": "1",

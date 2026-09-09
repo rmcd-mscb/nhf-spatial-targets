@@ -452,3 +452,55 @@ def test_complete_years_window_counts_distinct_periods_not_rows():
         coords={"time": times, "nhm_id": [1, 2]},
     )
     assert complete_years_window(da, "monthly") == ("2001-01-01", "2001-12-31")
+
+
+def _monthly_da_with_interior_gap() -> xr.DataArray:
+    """2000-2002 complete, 2003 has only 3 months, 2004-2005 complete.
+
+    Reproduces the PR-review repro for finding #1: a partial year
+    *interior* to the record, which the contiguous window still spans.
+    """
+    complete_years = pd.date_range("2000-01-01", "2002-12-01", freq="MS")
+    gap_year = pd.date_range("2003-01-01", "2003-03-01", freq="MS")
+    tail_years = pd.date_range("2004-01-01", "2005-12-01", freq="MS")
+    times = complete_years.append(gap_year).append(tail_years)
+    return xr.DataArray(
+        np.ones((len(times), 2), dtype=np.float32),
+        dims=("time", "nhm_id"),
+        coords={"time": times, "nhm_id": [1, 2]},
+    )
+
+
+def test_complete_years_window_warns_on_interior_gap_year(caplog):
+    """An incomplete year interior to the record is still spanned by the
+    returned window (documented behavior), but must now emit a WARNING
+    naming the specific gap year and its observed timestep count --
+    silent inclusion is exactly what let a 3-month year become a
+    per-HRU normalization minimum undetected (finding #1)."""
+    import logging
+
+    from nhf_spatial_targets.normalize.methods import complete_years_window
+
+    da = _monthly_da_with_interior_gap()
+    with caplog.at_level(
+        logging.WARNING, logger="nhf_spatial_targets.normalize.methods"
+    ):
+        window = complete_years_window(da, "monthly")
+
+    assert window == ("2000-01-01", "2005-12-31")
+    assert "2003" in caplog.text
+    assert any(record.levelno == logging.WARNING for record in caplog.records)
+
+
+def test_complete_years_window_no_warning_when_fully_covered(caplog):
+    import logging
+
+    from nhf_spatial_targets.normalize.methods import complete_years_window
+
+    da = _monthly_da("2000-01-01", "2013-12-01")
+    with caplog.at_level(
+        logging.WARNING, logger="nhf_spatial_targets.normalize.methods"
+    ):
+        complete_years_window(da, "monthly")
+
+    assert not any(record.levelno == logging.WARNING for record in caplog.records)

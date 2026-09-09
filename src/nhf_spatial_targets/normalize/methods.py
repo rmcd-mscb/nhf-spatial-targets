@@ -3,12 +3,23 @@
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 
 logger = logging.getLogger(__name__)
+
+#: Cadences supported by :func:`complete_years_window`. Narrower than
+#: ``targets._adapter.Cadence`` (which also allows ``"daily"``) -- daily
+#: series are not supported here. Defined in this module rather than
+#: imported from ``targets._adapter`` to avoid a circular import: the
+#: existing dependency direction is targets -> normalize (see
+#: ``targets/_writers.py``'s deferred import of ``nn_fill_bounds`` for the
+#: same reason). ``targets._shims.SourceShim.native_cadence`` imports this
+#: type instead of duplicating it.
+PORCadence = Literal["monthly", "annual"]
 
 
 def normalize_0_1(da: xr.DataArray, dim: str = "time") -> xr.DataArray:
@@ -293,7 +304,7 @@ def nn_fill_bounds(
 _STEPS_PER_YEAR = {"monthly": 12, "annual": 1}
 
 
-def complete_years_window(da: xr.DataArray, cadence: str) -> tuple[str, str]:
+def complete_years_window(da: xr.DataArray, cadence: PORCadence) -> tuple[str, str]:
     """Return ``(start, end)`` spanning only ``da``'s complete calendar years.
 
     This is the pipeline's definition of a source's **period of record**: a
@@ -321,19 +332,34 @@ def complete_years_window(da: xr.DataArray, cadence: str) -> tuple[str, str]:
         ``end`` is 31 December of the last complete year. The window is
         contiguous, so an incomplete year *interior* to the record is still
         spanned — the trim addresses ragged record ends, which is where
-        every source in the catalog is actually ragged.
-
-    At ``annual`` cadence a year is "complete" as soon as it has any
-    timestep at all (``required = 1``), so this function structurally
-    cannot detect an incomplete year from an annual series. When that
-    distinction matters, derive the window from the pre-resample monthly
-    series instead and reuse it for the annual reduction.
+        every source in the catalog is actually ragged. Any such interior
+        gap year is logged (see Notes) but not excluded from the window.
 
     Raises
     ------
     ValueError
         If ``cadence`` is unknown, ``da`` has no ``time`` dim, or no
         calendar year in ``da`` is complete.
+
+    Notes
+    -----
+    At ``annual`` cadence a year is "complete" as soon as it has any
+    timestep at all (``required = 1``), so this function structurally
+    cannot detect an incomplete year from an annual series. When that
+    distinction matters, derive the window from the pre-resample monthly
+    series instead and reuse it for the annual reduction.
+
+    A calendar year strictly between ``complete.min()`` and
+    ``complete.max()`` that is itself incomplete (or entirely missing) is
+    still spanned by the returned window -- see Returns above -- and a
+    ``logging.WARNING`` naming the specific year(s) and their observed
+    timestep counts is emitted so the operator can judge whether the gap
+    is acceptable. This matters most for ``per_source_por`` normalization
+    (recharge, soil_moisture): a 3-month interior year's annual sum
+    becomes the per-HRU minimum and silently compresses every other
+    year's normalized value toward 1.0. The function warns rather than
+    raises because a genuinely gappy source may still be an operator-
+    acceptable build.
     """
     if cadence not in _STEPS_PER_YEAR:
         raise ValueError(
@@ -357,5 +383,22 @@ def complete_years_window(da: xr.DataArray, cadence: str) -> tuple[str, str]:
             "complete_years_window: no complete calendar year in the source "
             f"record (cadence={cadence!r} needs {required} timesteps per year; "
             f"observed per-year counts: {counts.to_dict()})."
+        )
+    span = range(int(complete.min()), int(complete.max()) + 1)
+    gap_years = [year for year in span if year not in complete]
+    if gap_years:
+        gap_counts = {year: int(counts.get(year, 0)) for year in gap_years}
+        logger.warning(
+            "complete_years_window: year(s) %s fall inside the returned "
+            "window [%d, %d] but are NOT complete at cadence=%r (needs "
+            "%d timesteps/year; observed counts: %s). These interior "
+            "gap years will contribute to any downstream normalization "
+            "min/max computed over this window.",
+            gap_years,
+            int(complete.min()),
+            int(complete.max()),
+            cadence,
+            required,
+            gap_counts,
         )
     return f"{int(complete.min())}-01-01", f"{int(complete.max())}-12-31"

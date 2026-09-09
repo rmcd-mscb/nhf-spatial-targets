@@ -167,14 +167,17 @@ OPTIONAL_CONFIG_FEATURES: list[OptionalConfigFeature] = [
         name="targets.<target>.emit_members",
         detect=r"(?m)^\s*#?\s*emit_members\s*:",
         block=(
-            "# Whether to write per-source ensemble members (one variable per\n"
-            "# source key) plus ensemble_mean / ensemble_std into the target NC.\n"
-            "# Output switch only: members are always computed, so turning this\n"
-            "# off changes no bound value. Defaults true (false for\n"
-            "# snow_covered_area). Turn off where file size matters -- daily SWE\n"
-            "# on the national fabric grows from ~12 GB to ~36-48 GB.\n"
-            "#\n"
-            "#   emit_members: true\n"
+            "    # emit_members: true\n"
+            "    #   Whether to write the per-source ensemble members (one variable per\n"
+            "    #   source key) and the derived ensemble_mean / ensemble_std into the\n"
+            "    #   target NC. This is an OUTPUT switch, not a science switch: the\n"
+            "    #   members are always computed -- they are the input from which\n"
+            "    #   lower_bound / upper_bound / n_sources are derived -- so turning this\n"
+            "    #   off changes none of those values, it only stops them being written.\n"
+            "    #   Turn it off when file size matters: on the ~361k-HRU national fabric\n"
+            "    #   a daily SWE target grows from ~12 GB to ~36-48 GB with members. On a\n"
+            "    #   regional fabric the cost is negligible and true is the right choice.\n"
+            "    #   The output NC records the choice as the `members_emitted` global attr.\n"
         ),
         added="2026-09-08 (#338)",
         why=(

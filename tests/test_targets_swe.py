@@ -546,6 +546,11 @@ def test_build_per_year_n_sources_varies_with_source_coverage(tmp_path: Path):
     """When SNODAS only covers 2004 (not 2003), the per-year build
     drops it for 2003 (n_sources=3) and includes it for 2004 (n_sources=4).
     Verifies the per-year period-union semantics work as advertised.
+
+    Also asserts on the ``snodas`` member variable directly at the year
+    boundary (not just ``n_sources``): a stitch bug that wrote misaligned
+    or garbage member values across the year-chunk boundary could still
+    pass an n_sources-only check.
     """
     from nhf_spatial_targets.targets.swe import build
     from nhf_spatial_targets.workspace import load
@@ -568,6 +573,17 @@ def test_build_per_year_n_sources_varies_with_source_coverage(tmp_path: Path):
             f"2003-12-31 should have 3 sources (snodas missing), got {ns_2003}"
         )
         assert (ns_2004 == 4).all(), f"2004-01-01 should have 4 sources, got {ns_2004}"
+
+        snodas_2003_vals = ds["snodas"].sel(time="2003-12-31").values
+        snodas_2004_vals = ds["snodas"].sel(time="2004-01-01").values
+        assert np.isnan(snodas_2003_vals).all(), (
+            "snodas member should be all-NaN at 2003-12-31 (source absent "
+            f"that year), got {snodas_2003_vals}"
+        )
+        assert np.isfinite(snodas_2004_vals).all(), (
+            "snodas member should be finite at 2004-01-01 (source present "
+            f"that year), got {snodas_2004_vals}"
+        )
 
 
 def test_build_year_chunked_idempotent_skips_existing_intermediates(

@@ -21,6 +21,8 @@ from dataclasses import dataclass
 
 import xarray as xr
 
+from nhf_spatial_targets.normalize.methods import PORCadence
+
 
 @dataclass(frozen=True)
 class SourceShim:
@@ -94,7 +96,7 @@ class SourceShim:
     config_label: str | None = None
     catalog_source_key: str | None = None
     expected_cf_units: str | None = None
-    native_cadence: str | None = None
+    native_cadence: PORCadence | None = None
 
 
 def shims_by_key(shims: "tuple[SourceShim, ...]") -> "dict[str, SourceShim]":
@@ -222,13 +224,26 @@ def label_members(
 ) -> dict[str, "xr.DataArray"]:
     """Stamp each member's ``long_name`` from its shim ``description``.
 
-    The target writer emits members as named data variables and reads
-    ``long_name`` off each one. Setting it here keeps the human-readable
-    source label in the single place that already owns it (the SHIMS
-    registry) instead of duplicating a label map in the writer.
+    ``write_bounds_target`` later reads this stamped ``long_name`` off
+    each member DataArray and moves it to that variable's
+    ``source_description`` attr, replacing ``long_name`` itself with a
+    target-units-specific string (``f"{key} contribution to
+    {bounds_long_name_kind}"``) -- see ``targets/_writers.py``. Setting
+    the shim description here keeps the human-readable source label in
+    the single place that already owns it (the SHIMS registry) instead
+    of duplicating a label map in the writer.
 
-    Members whose key is absent from ``shims`` are left untouched.
-    Returns the same dict for call-site convenience.
+    **This function mutates ``members``' DataArrays in place** (each
+    ``da.attrs["long_name"]`` is overwritten) and returns the same dict
+    it was given -- the return value is a convenience alias for chaining
+    at the call site, not a copy. Callers that need an unmodified copy
+    of the input must copy before calling.
+
+    A key present in ``members`` but absent from ``shims`` is silently
+    left untouched (no ``long_name`` is stamped) rather than raising.
+    Every caller builds ``members`` from the same ``shims`` dict it
+    passes here, so in practice a miss would indicate a real bug
+    upstream; this function does not itself detect that case.
     """
     for key, da in members.items():
         shim = shims.get(key)
