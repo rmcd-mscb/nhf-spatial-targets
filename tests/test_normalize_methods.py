@@ -380,3 +380,58 @@ def test_normalize_0_1_by_calendar_month_over_window_raises_when_window_lacks_ti
     bad_window = xr.DataArray(np.array([1.0]), dims=("nhm_id",), coords={"nhm_id": [1]})
     with pytest.raises(ValueError, match="window must also have 'time' dim"):
         normalize_0_1_by_calendar_month_over_window(da, bad_window)
+
+
+def _monthly_da(start: str, end: str) -> xr.DataArray:
+    times = pd.date_range(start, end, freq="MS")
+    return xr.DataArray(
+        np.ones((len(times), 2), dtype=np.float32),
+        dims=("time", "nhm_id"),
+        coords={"time": times, "nhm_id": [1, 2]},
+    )
+
+
+def _annual_da(start_year: int, end_year: int) -> xr.DataArray:
+    times = pd.date_range(f"{start_year}-01-01", f"{end_year}-01-01", freq="YS")
+    return xr.DataArray(
+        np.ones((len(times), 2), dtype=np.float32),
+        dims=("time", "nhm_id"),
+        coords={"time": times, "nhm_id": [1, 2]},
+    )
+
+
+def test_complete_years_window_trims_partial_trailing_year_monthly():
+    from nhf_spatial_targets.normalize.methods import complete_years_window
+
+    # 1979-01 .. 2025-06: 2025 has only 6 months, so it is not a complete year.
+    da = _monthly_da("1979-01-01", "2025-06-01")
+    assert complete_years_window(da, "monthly") == ("1979-01-01", "2024-12-31")
+
+
+def test_complete_years_window_trims_partial_leading_year_monthly():
+    from nhf_spatial_targets.normalize.methods import complete_years_window
+
+    da = _monthly_da("1979-07-01", "2020-12-01")
+    assert complete_years_window(da, "monthly") == ("1980-01-01", "2020-12-31")
+
+
+def test_complete_years_window_keeps_a_fully_covered_record():
+    from nhf_spatial_targets.normalize.methods import complete_years_window
+
+    da = _monthly_da("2000-01-01", "2013-12-01")
+    assert complete_years_window(da, "monthly") == ("2000-01-01", "2013-12-31")
+
+
+def test_complete_years_window_annual_cadence_needs_one_step_per_year():
+    from nhf_spatial_targets.normalize.methods import complete_years_window
+
+    da = _annual_da(2000, 2013)
+    assert complete_years_window(da, "annual") == ("2000-01-01", "2013-12-31")
+
+
+def test_complete_years_window_raises_when_no_complete_year():
+    from nhf_spatial_targets.normalize.methods import complete_years_window
+
+    da = _monthly_da("2000-03-01", "2000-09-01")
+    with pytest.raises(ValueError, match="no complete calendar year"):
+        complete_years_window(da, "monthly")

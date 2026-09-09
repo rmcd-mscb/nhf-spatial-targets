@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 
 logger = logging.getLogger(__name__)
@@ -286,3 +287,65 @@ def nn_fill_bounds(
         name="nn_filled",
     )
     return out, nn_diag
+
+
+#: Timesteps a complete calendar year must contain, by cadence.
+_STEPS_PER_YEAR = {"monthly": 12, "annual": 1}
+
+
+def complete_years_window(da: xr.DataArray, cadence: str) -> tuple[str, str]:
+    """Return ``(start, end)`` spanning only ``da``'s complete calendar years.
+
+    This is the pipeline's definition of a source's **period of record**: a
+    partial leading or trailing year is coverage, not record. A source whose
+    monthly data runs 1979-01 .. 2025-06 has a POR of 1979-2024.
+
+    The trim is load-bearing for annual-sum normalization. Summing a
+    half-finished year yields a spuriously low annual total that becomes the
+    per-HRU minimum, compressing every other year toward 1.0. It is applied
+    uniformly to every cadence and reduction rather than only to sums, so
+    that two sources' normalized series remain directly comparable.
+
+    Parameters
+    ----------
+    da
+        DataArray with a ``time`` dimension.
+    cadence
+        ``"monthly"`` or ``"annual"``. Determines how many timesteps a
+        complete year must contain.
+
+    Returns
+    -------
+    (start, end)
+        ISO ``YYYY-MM-DD`` strings suitable for ``da.sel(time=slice(...))``.
+        ``end`` is 31 December of the last complete year. The window is
+        contiguous, so an incomplete year *interior* to the record is still
+        spanned — the trim addresses ragged record ends, which is where
+        every source in the catalog is actually ragged.
+
+    Raises
+    ------
+    ValueError
+        If ``cadence`` is unknown, ``da`` has no ``time`` dim, or no
+        calendar year in ``da`` is complete.
+    """
+    if cadence not in _STEPS_PER_YEAR:
+        raise ValueError(
+            f"complete_years_window: unknown cadence {cadence!r}. "
+            f"Expected one of {sorted(_STEPS_PER_YEAR)}."
+        )
+    if "time" not in da.dims:
+        raise ValueError(
+            f"complete_years_window: expected 'time' dim, got {tuple(da.dims)!r}."
+        )
+    required = _STEPS_PER_YEAR[cadence]
+    years = pd.DatetimeIndex(da["time"].values).year
+    counts = pd.Series(1, index=years).groupby(level=0).sum()
+    complete = counts[counts >= required].index
+    if len(complete) == 0:
+        raise ValueError(
+            "complete_years_window: no complete calendar year in the source "
+            f"record (cadence={cadence!r} needs {required} timesteps per year; "
+            f"observed per-year counts: {counts.to_dict()})."
+        )
+    return f"{int(complete.min())}-01-01", f"{int(complete.max())}-12-31"
