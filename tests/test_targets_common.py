@@ -2318,3 +2318,49 @@ def test_ensemble_stats_rejects_empty_members():
     dummy = _member([[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]])
     with pytest.raises(ValueError, match="empty members dict"):
         ensemble_stats({}, dummy)
+
+
+def test_source_loader_result_members_defaults_to_none():
+    from nhf_spatial_targets.targets._adapter import SourceLoaderResult
+
+    da = _member([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]])
+    result = SourceLoaderResult(
+        lower=da,
+        upper=da,
+        n_sources=da,
+        n_sources_count=1,
+        time_index=pd.date_range("2000-01-01", periods=2, freq="MS"),
+        time_offset_unit=pd.offsets.MonthBegin(1),
+        extra_attrs={},
+    )
+    assert result.members is None
+
+
+def test_label_members_stamps_long_name_from_shim_description():
+    from nhf_spatial_targets.targets._shims import SourceShim, label_members
+
+    shims = {
+        "era5_land": SourceShim(
+            source_key="era5_land",
+            aggregated_var="ro",
+            description="ERA5-Land runoff (m/month -> mm/month)",
+            to_common_units=lambda da: da,
+        )
+    }
+    members = {"era5_land": _member([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]])}
+    labeled = label_members(members, shims)
+
+    assert (
+        labeled["era5_land"].attrs["long_name"]
+        == "ERA5-Land runoff (m/month -> mm/month)"
+    )
+    # Same dict object semantics: keys preserved, values still DataArrays.
+    assert list(labeled) == ["era5_land"]
+
+
+def test_label_members_ignores_keys_absent_from_shims():
+    from nhf_spatial_targets.targets._shims import label_members
+
+    members = {"unknown_src": _member([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]])}
+    labeled = label_members(members, {})
+    assert "long_name" not in labeled["unknown_src"].attrs

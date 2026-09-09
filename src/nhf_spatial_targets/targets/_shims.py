@@ -201,3 +201,24 @@ def validate_source_units(
                 f"{shim.expected_cf_units!r}. Update the shim if the "
                 f"units changed intentionally, or correct the catalog."
             )
+
+
+def label_members(
+    members: dict[str, "xr.DataArray"],
+    shims: dict[str, SourceShim],
+) -> dict[str, "xr.DataArray"]:
+    """Stamp each member's ``long_name`` from its shim ``description``.
+
+    The target writer emits members as named data variables and reads
+    ``long_name`` off each one. Setting it here keeps the human-readable
+    source label in the single place that already owns it (the SHIMS
+    registry) instead of duplicating a label map in the writer.
+
+    Members whose key is absent from ``shims`` are left untouched.
+    Returns the same dict for call-site convenience.
+    """
+    for key, da in members.items():
+        shim = shims.get(key)
+        if shim is not None:
+            da.attrs["long_name"] = shim.description
+    return members

@@ -139,6 +139,7 @@ def _apply_forced_zero(
         time_offset_unit=result.time_offset_unit,
         extra_attrs=result.extra_attrs,
         extras=result.extras,
+        members=result.members,
     )
 
 

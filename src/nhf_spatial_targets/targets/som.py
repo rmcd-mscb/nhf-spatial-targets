@@ -54,6 +54,7 @@ from nhf_spatial_targets.targets._io import (
 )
 from nhf_spatial_targets.targets._shims import (
     SourceShim,
+    label_members,
     shims_by_key,
 )
 from nhf_spatial_targets.workspace import Project
@@ -198,9 +199,10 @@ def _load_monthly(
         sources_monthly_norm[src] = normalize_0_1_by_calendar_month_over_window(
             da, window
         )
+    shims = shims_by_key(SHIMS)
+    label_members(sources_monthly_norm, shims)
     lo_m, up_m, ns_m = multi_source_nanminmax(sources_monthly_norm)
 
-    shims = shims_by_key(SHIMS)
     extra_attrs = {
         "source": "; ".join(shims[s].description for s in sources),
         "normalize_period": raw_norm_period,
@@ -214,6 +216,7 @@ def _load_monthly(
         time_index=master_monthly,
         time_offset_unit=pd.offsets.MonthBegin(1),
         extra_attrs=extra_attrs,
+        members=sources_monthly_norm,
     )
 
 
@@ -256,10 +259,11 @@ def _load_annual(
                 f"annual timesteps for source '{src}' after annual aggregation."
             )
         sources_annual_norm[src] = normalize_0_1_over_window(da, window)
+    shims = shims_by_key(SHIMS)
+    label_members(sources_annual_norm, shims)
     lo_a, up_a, ns_a = multi_source_nanminmax(sources_annual_norm)
     master_annual = pd.date_range(period[0], period[1], freq="YS")
 
-    shims = shims_by_key(SHIMS)
     extra_attrs = {
         "source": "; ".join(shims[s].description for s in sources),
         "normalize_period": raw_norm_period,
@@ -274,6 +278,7 @@ def _load_annual(
         time_index=master_annual,
         time_offset_unit=pd.offsets.YearBegin(1),
         extra_attrs=extra_attrs,
+        members=sources_annual_norm,
     )
 
 

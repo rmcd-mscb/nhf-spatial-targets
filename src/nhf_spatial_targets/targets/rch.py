@@ -48,6 +48,7 @@ from nhf_spatial_targets.targets._io import (
 )
 from nhf_spatial_targets.targets._shims import (
     SourceShim,
+    label_members,
     shims_by_key,
 )
 from nhf_spatial_targets.workspace import Project
@@ -200,6 +201,7 @@ def _load(
         da_normalized = normalize_0_1_over_window(da_annual_mm, window)
         sources_normalized[src] = da_normalized.reindex(time=master_idx)
 
+    label_members(sources_normalized, shims)
     lower, upper, n_sources = multi_source_nanminmax(sources_normalized)
 
     extra_attrs = {
@@ -215,6 +217,7 @@ def _load(
         time_index=master_idx,
         time_offset_unit=pd.offsets.YearBegin(1),
         extra_attrs=extra_attrs,
+        members=sources_normalized,
     )
 
 

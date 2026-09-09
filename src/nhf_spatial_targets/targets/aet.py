@@ -49,6 +49,7 @@ from nhf_spatial_targets.targets._io import (
 )
 from nhf_spatial_targets.targets._shims import (
     SourceShim,
+    label_members,
     shims_by_key,
     validate_source_units,
 )
@@ -253,6 +254,7 @@ def _load(
         da_in_day = mm_per_month_to_inches_per_day(da_mm)
         sources_in_day[src] = reindex_to_month_start(da_in_day, master_idx)
 
+    label_members(sources_in_day, shims)
     lower, upper, n_sources = multi_source_nanminmax(sources_in_day)
 
     extra_attrs = {
@@ -267,6 +269,7 @@ def _load(
         time_index=master_idx,
         time_offset_unit=pd.offsets.MonthBegin(1),
         extra_attrs=extra_attrs,
+        members=sources_in_day,
     )
 
 
