@@ -69,7 +69,6 @@ from __future__ import annotations
 
 import logging
 
-import dask.array as dask_array
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -284,6 +283,7 @@ def _load_year(
 
     year_sources: dict[str, xr.DataArray] = {}
     covered: list[str] = []
+    uncovered: list[str] = []
     for src_label in sources:
         shim = shims[src_label]
         try:
@@ -300,25 +300,7 @@ def _load_year(
                 year,
                 src_label,
             )
-            # Emit an all-NaN member rather than omitting the key: the
-            # per-year NCs are stitched with join="exact", so every year
-            # must carry the same member variables (#338). Dask-backed,
-            # not np.full: every covered member is lazy dask, and a
-            # materialized (n_days, n_hru) float32 block costs ~528 MB on
-            # the 361k-HRU national fabric per absent source (issue #338
-            # fix round 3, finding 4). Cannot use xr.full_like(<a covered
-            # member>) -- this branch can run before any covered source
-            # has been read, so no member may exist yet to copy from.
-            year_sources[src_label] = xr.DataArray(
-                dask_array.full(
-                    (len(year_master_idx), len(fabric_hru_ids)),
-                    np.nan,
-                    dtype="float32",
-                    chunks=(365, len(fabric_hru_ids)),
-                ),
-                dims=("time", id_col),
-                coords={"time": year_master_idx, id_col: fabric_hru_ids},
-            )
+            uncovered.append(src_label)
             continue
         check_hru_coords(da_native, fabric_hru_ids, id_col, src_label)
         da_mm = shim.to_common_units(da_native)
@@ -332,6 +314,31 @@ def _load_year(
             f"Either the period is set outside every source's coverage or "
             f"every aggregated NC is missing for this year."
         )
+
+    # Every source with no data for this year gets an all-NaN member rather
+    # than being omitted: the per-year NCs are stitched with join="exact", so
+    # every year must carry the same member variables (#338).
+    #
+    # The placeholder is built with xr.full_like() from a COVERED member, not
+    # from scratch. multi_source_nanminmax validates members with
+    # DataArray.equals(), which is stricter than value equality -- it also
+    # compares the HRU coord's own attached coords and attrs. A real
+    # aggregated source's id_col carries lat/lon ancillary coords and a
+    # long_name; a hand-built coords={id_col: fabric_hru_ids} array carries
+    # neither, so the combine rejected it with "HRU coords differ" on any year
+    # where some source was absent (#345). full_like inherits the coords
+    # exactly, and stays lazy dask when the template is dask-backed, so the
+    # memory property that motivated the dask placeholder is preserved.
+    #
+    # This runs after the loop because a covered member must exist to copy
+    # from; the `not covered` guard above guarantees one does.
+    if uncovered:
+        template = year_sources[covered[0]]
+        for src_label in uncovered:
+            year_sources[src_label] = xr.full_like(template, np.nan, dtype="float32")
+        # Restore config order so member_keys and the emitted variable order
+        # stay stable regardless of which sources happened to be absent.
+        year_sources = {s: year_sources[s] for s in sources}
 
     label_members(year_sources, shims)
     lower, upper, n_sources = multi_source_nanminmax(year_sources)

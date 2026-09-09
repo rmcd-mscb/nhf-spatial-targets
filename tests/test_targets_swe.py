@@ -1022,3 +1022,77 @@ def test_load_year_emits_all_nan_member_for_uncovered_source(tmp_path, monkeypat
     assert set(result.members) == {"snodas", "era5_land"}
     assert np.isnan(result.members["snodas"].values).all()
     assert not np.isnan(result.members["era5_land"].values).any()
+
+
+def test_load_year_nan_member_matches_real_source_coords(tmp_path, monkeypatch):
+    """The all-NaN placeholder must satisfy multi_source_nanminmax's coord check.
+
+    Regression for #345. A real aggregated NC's ``id_col`` carries ``lat`` /
+    ``lon`` ancillary coords and a ``long_name``; ``multi_source_nanminmax``
+    validates members with ``DataArray.equals()``, which compares those too --
+    not just the values ``check_hru_coords`` compares. A placeholder built from
+    scratch with ``coords={id_col: fabric_hru_ids}`` therefore passed
+    ``check_hru_coords`` but was rejected by the combine with "HRU coords
+    differ", failing every year in which any source was absent.
+
+    The earlier fixture could not catch this because it returned a bare
+    DataArray with no ancillary coords, so real and synthetic members matched
+    trivially. This one models what the aggregator actually writes.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from nhf_spatial_targets.targets import swe as swe_mod
+    from nhf_spatial_targets.targets._io import OutsideCoverageError
+
+    hrus = [1, 2, 3]
+
+    def fake_read(project, source_key, var, period, chunks=None):
+        if source_key == "snodas":
+            raise OutsideCoverageError("no snodas for this year")
+        times = pd.date_range("2003-01-01", "2003-12-31", freq="D")
+        da = xr.DataArray(
+            np.full((len(times), len(hrus)), 100.0, dtype=np.float32),
+            dims=("time", "nhm_id"),
+            coords={"time": times, "nhm_id": hrus},
+            attrs={"units": "mm"},
+        )
+        # What the aggregator really emits: lat/lon rides on the HRU dim, and
+        # the HRU coord carries its own attrs.
+        da = da.assign_coords(
+            lat=("nhm_id", [45.0, 45.1, 45.2]),
+            lon=("nhm_id", [-120.0, -120.1, -120.2]),
+        )
+        da["nhm_id"].attrs = {"feature_id": "nhm_id", "long_name": "HRU Index"}
+        return da
+
+    monkeypatch.setattr(swe_mod, "read_aggregated_source", fake_read)
+    monkeypatch.setattr(swe_mod, "check_hru_coords", lambda *a, **k: None)
+    monkeypatch.setattr(
+        swe_mod, "_resolve_sources", lambda project: (["snodas", "era5_land"], [])
+    )
+
+    # Before the fix this raised ValueError("HRU coords differ ...").
+    result = swe_mod._load_year(
+        project=None,
+        adapter=swe_mod.ADAPTER,
+        period=("2003-01-01", "2003-12-31"),
+        hru_meta=None,
+        fabric_hru_ids=np.array(hrus),
+        id_col="nhm_id",
+        year_context=(2003, "2003-01-01", "2003-12-31"),
+    )
+
+    placeholder = result.members["snodas"]
+    real = result.members["era5_land"]
+
+    # The exact comparison multi_source_nanminmax performs.
+    assert placeholder["nhm_id"].equals(real["nhm_id"])
+    # Ancillary coords carried over, not dropped.
+    assert "lat" in placeholder.coords and "lon" in placeholder.coords
+    # Still an honest all-NaN member of the right dtype and shape.
+    assert np.isnan(placeholder.values).all()
+    assert placeholder.dtype == np.float32
+    assert placeholder.shape == real.shape
+    # Config order preserved for member_keys / emitted variable order.
+    assert list(result.members) == ["snodas", "era5_land"]
