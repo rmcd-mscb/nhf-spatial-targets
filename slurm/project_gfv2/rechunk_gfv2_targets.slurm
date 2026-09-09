@@ -23,6 +23,13 @@
 # 21635275); 160G leaves headroom on the 512 GB cn nodes. A project whose
 # largest target is smaller can drop this back down.
 #
+# CAVEAT: the ~55 GB figure above is bounds-only (3 vars). A members-on SWE
+# target (#338 `emit_members: true`, the default for SWE) adds one variable
+# per contributing source plus ensemble_mean/std -- 9 vars total, ~165 GB
+# decompressed on gfv2 -- and will exceed this --mem=160G. Set
+# `snow_water_equivalent.emit_members: false` in config.yml before rechunking
+# a members-on gfv2 SWE target, or raise --mem accordingly.
+#
 # USAGE
 #   mkdir -p logs
 #   sbatch rechunk_gfv2_targets.slurm

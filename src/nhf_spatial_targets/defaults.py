@@ -147,8 +147,10 @@ DEFAULTS: dict = {
             "nn_fill": False,
             "nn_max_candidates": 10,
             # SCA's bounds are a MOD10C1 CI interval, not a member min/max,
-            # so emitted members would not reconstruct the bounds. Default
-            # off; an operator can still enable it for diagnostics.
+            # so it produces no member decomposition -- source_loader always
+            # returns members=None for SCA. Setting this true is not a
+            # diagnostics opt-in: write_bounds_target raises ValueError and
+            # the whole build fails. Leave this False.
             "emit_members": False,
         },
         "snow_water_equivalent": {

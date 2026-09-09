@@ -2441,6 +2441,15 @@ def test_write_bounds_target_emits_members_and_stats(tmp_path: Path):
         assert ds.attrs["members_emitted"] == "true"
         assert ds.attrs["Conventions"] == "CF-1.8"
         assert ds["era5_land"].attrs["units"] == "cfs"
+        # long_name describes the TARGET quantity (units == "cfs" above),
+        # not the source's native units -- the shim description is kept
+        # separately under source_description so it isn't lost (issue
+        # #338 fix round 3, finding 1).
+        assert (
+            ds["era5_land"].attrs["long_name"]
+            == "era5_land contribution to monthly runoff"
+        )
+        assert ds["era5_land"].attrs["source_description"] == "orig era5_land"
         assert ds["ensemble_std"].attrs["ancillary_variables"] == "n_sources"
         # mean of (1, 3) == 2; population std == 1
         assert np.allclose(ds["ensemble_mean"].values[0], [2.0, 3.0, 4.0])

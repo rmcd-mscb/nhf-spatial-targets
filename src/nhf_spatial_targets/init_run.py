@@ -76,7 +76,7 @@ targets:
     nn_fill: true
     nn_max_candidates: 10
     chunk_months: 12
-    # emit_members: true   # see aet: above
+    # emit_members: true   # see aet: below
 
   aet:
     enabled: true
@@ -179,8 +179,9 @@ targets:
     nn_fill: false
     nn_max_candidates: 10
     # emit_members: false   # see aet: above; off by default for SCA -- its
-    #   bounds are a MOD10C1 CI interval, not a member min/max, so emitted
-    #   members would not reconstruct the bounds. Set true for diagnostics.
+    #   bounds are a MOD10C1 CI interval, not a member min/max, so SCA
+    #   produces no members at all. Setting this true does not add a
+    #   diagnostics output -- it raises and fails the build. Leave false.
 
   snow_water_equivalent:
     enabled: true

@@ -170,9 +170,10 @@ Two additions, each through the three-point checklist in CLAUDE.md
 | `targets.<t>.normalize_period: per_source_por` | n/a (existing key, new value) | recharge, soil moisture |
 
 `snow_covered_area` defaults to `false` because SCA's bounds are a MOD10C1 CI
-interval, not a member min/max. Emitting members there would ship variables that
-do not reconstruct the bounds, inviting a reader to assume they do. An operator
-can still turn it on deliberately for diagnostics.
+interval, not a member min/max -- its `source_loader` never returns a member
+decomposition (`members` is always `None`). Setting this key `true` for SCA is
+not a diagnostics opt-in: `write_bounds_target` raises `ValueError` and the
+whole build fails. Leave it `false`.
 
 `emit_members` is an **output switch, not a science switch.** Members are always
 computed — they are the input to every reduction. The flag decides only whether

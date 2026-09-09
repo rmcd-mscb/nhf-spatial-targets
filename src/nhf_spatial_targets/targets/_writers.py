@@ -380,13 +380,22 @@ def write_bounds_target(
             # underlying data buffer, keeping the memory win .copy()
             # (a full deep copy) would have given up.
             member = member_da.rename(key).copy(deep=False)
+            # long_name always describes the TARGET-units quantity the
+            # emitted variable actually holds (issue #338 fix round 3,
+            # finding 1) -- the shim's own description (e.g. "ERA5-Land
+            # ssro (m/month, summed to mm/year)") documents the SOURCE's
+            # native units, which contradicts `units` below once the
+            # value has been converted. Preserve that description under
+            # a separate provenance attr instead of discarding it.
+            source_description = member_da.attrs.get("long_name")
             member.attrs = {
                 "units": bounds_units,
-                "long_name": member_da.attrs.get("long_name")
-                or (f"{key} contribution to {bounds_long_name_kind}"),
+                "long_name": f"{key} contribution to {bounds_long_name_kind}",
                 "cell_methods": cell_methods,
                 "coordinates": "centroid_lat centroid_lon",
             }
+            if source_description:
+                member.attrs["source_description"] = source_description
             data_vars[key] = member
 
     extra_global_attrs = dict(extra_global_attrs)

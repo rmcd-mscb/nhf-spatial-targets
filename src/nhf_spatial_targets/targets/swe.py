@@ -69,6 +69,7 @@ from __future__ import annotations
 
 import logging
 
+import dask.array as dask_array
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -301,12 +302,19 @@ def _load_year(
             )
             # Emit an all-NaN member rather than omitting the key: the
             # per-year NCs are stitched with join="exact", so every year
-            # must carry the same member variables (#338).
+            # must carry the same member variables (#338). Dask-backed,
+            # not np.full: every covered member is lazy dask, and a
+            # materialized (n_days, n_hru) float32 block costs ~528 MB on
+            # the 361k-HRU national fabric per absent source (issue #338
+            # fix round 3, finding 4). Cannot use xr.full_like(<a covered
+            # member>) -- this branch can run before any covered source
+            # has been read, so no member may exist yet to copy from.
             year_sources[src_label] = xr.DataArray(
-                np.full(
+                dask_array.full(
                     (len(year_master_idx), len(fabric_hru_ids)),
                     np.nan,
-                    dtype=np.float32,
+                    dtype="float32",
+                    chunks=(365, len(fabric_hru_ids)),
                 ),
                 dims=("time", id_col),
                 coords={"time": year_master_idx, id_col: fabric_hru_ids},
@@ -376,7 +384,7 @@ def build(project: Project) -> None:
     Reads each enabled source's per-year aggregated NCs, harmonizes time
     coords onto a master day-start index over
     ``snow_water_equivalent.period``, converts each to inches, combines
-    via NaN-aware min/max, and writes a CF-1.6 NetCDF. If
+    via NaN-aware min/max, and writes a CF-1.8 NetCDF. If
     ``snow_water_equivalent.nn_fill`` is True, additionally writes
     ``<output>_nn_filled.nc``.
 
