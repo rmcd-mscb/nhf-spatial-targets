@@ -194,7 +194,7 @@ def test_render_group_with_project_dir_uses_temp(render, tmp_path, monkeypatch):
     )
     seen: list[Path] = []
 
-    def fake_execute(nb, startup, timeout):
+    def fake_execute(nb, startup, timeout, startup_timeout):
         # Confirm the executor sees a temp path, NOT the committed notebook,
         # and that the temp's PROJECT_DIR is already swapped at this point.
         assert nb != nb_path
@@ -251,3 +251,31 @@ def test_render_group_logs_logical_notebook_not_temp(
     import re as _re
 
     assert not _re.search(r"inspect_consolidated_aet\.[A-Za-z0-9_]+\.ipynb", out), out
+
+
+def test_execute_passes_kernel_startup_timeout(monkeypatch, tmp_path):
+    """`_execute` must bound kernel startup, not only per-cell execution.
+
+    Regression for #348. `ExecutePreprocessor.timeout` bounds a single cell;
+    `ExecutePreprocessor.startup_timeout` bounds how long nbclient waits for
+    the kernel to come up and defaults to 60s. On a cold caldera compute node
+    a kernel starting from this repo's pixi env exceeds that, so every figure
+    render died on its first notebook -- while the generous `--timeout` made
+    it look as though an hour was allowed. Both flags must reach nbconvert.
+    """
+    import scripts.render_figures as render
+
+    captured: dict = {}
+
+    def fake_run(cmd, check, cwd, env):
+        captured["cmd"] = cmd
+
+    monkeypatch.setattr(render.subprocess, "run", fake_run)
+    render._execute(tmp_path / "nb.ipynb", tmp_path / "startup.py", 3600, 300)
+
+    cmd = captured["cmd"]
+    assert "--ExecutePreprocessor.timeout=3600" in cmd
+    assert "--ExecutePreprocessor.startup_timeout=300" in cmd
+    # The two are distinct settings; a fix that renamed rather than added
+    # would still satisfy one assertion but not both.
+    assert sum(a.startswith("--ExecutePreprocessor.") for a in cmd) == 3
