@@ -50,6 +50,11 @@ DEFAULT_CALDERA_PROJECT = Path(
 
 _AREA_CACHE: dict[int, pd.Series] = {}
 
+#: Cache for :func:`lookup_hrus_by_points`, keyed on
+#: ``(id(fabric_gdf), sorted point items)``. Same in-place-mutation
+#: caveat as :data:`_AREA_CACHE`.
+_HRU_LOOKUP_CACHE: dict[tuple, dict[str, object]] = {}
+
 
 def _fabric_area(fabric_gdf: gpd.GeoDataFrame) -> pd.Series:
     """Return the per-HRU EPSG:5070 area for ``fabric_gdf``, cached.
@@ -297,7 +302,22 @@ def lookup_hrus_by_points(
 
     Raises ``ValueError`` if any point falls outside the fabric — better
     to fail early than silently drop a regime from the time-series cell.
+
+    Cached on ``(id(fabric_gdf), points)``. Each uncached call costs
+    three things that do not scale down with the four points asked for:
+    a reprojection from EPSG:4326 into the fabric's CRS (which on a
+    projected fabric pulls a PROJ datum-shift grid off the shared
+    filesystem), a ``reset_index()`` copy of the entire fabric including
+    geometry, and an ``sjoin`` that builds a spatial index over every
+    polygon. The notebooks call this twice per target — once for the
+    bounds series and once for the member series (issue #351) — so the
+    cache halves that, and it costs nothing when the answer is already
+    known.
     """
+    cache_key = (id(fabric_gdf), tuple(sorted(points.items())))
+    if cache_key in _HRU_LOOKUP_CACHE:
+        return dict(_HRU_LOOKUP_CACHE[cache_key])
+
     pts = gpd.GeoDataFrame(
         {"label": list(points.keys())},
         geometry=[Point(lon, lat) for lon, lat in points.values()],
@@ -312,7 +332,9 @@ def lookup_hrus_by_points(
             f"REPRESENTATIVE_POINTS lie outside the fabric: {missing}. "
             f"Pick coordinates inside the fabric's CONUS extent."
         )
-    return dict(zip(joined["label"], joined[id_col].tolist()))
+    result = dict(zip(joined["label"], joined[id_col].tolist()))
+    _HRU_LOOKUP_CACHE[cache_key] = result
+    return dict(result)
 
 
 def select_month(da: xr.DataArray, year: int, month: int) -> xr.DataArray:

@@ -600,3 +600,45 @@ def test_plot_member_panels_picks_a_grid_that_fills(helpers, tiny_fabric):
     assert shape_for(4) == 2  # 2x2, no empty slot
     assert shape_for(3) == 3  # 3x1, no empty slot
     assert shape_for(6) == 3  # 3x2, no empty slot
+
+
+def test_lookup_hrus_by_points_caches_the_join(helpers, tiny_fabric, monkeypatch):
+    """Repeat lookups must not rebuild the spatial index.
+
+    Each call reprojects the points (pulling a PROJ datum grid off the
+    shared filesystem), copies the whole fabric via reset_index(), and
+    sjoins against every polygon. The notebooks now call this twice per
+    target -- once for the bounds series, once for the member series.
+    """
+    import geopandas as gpd
+
+    calls = {"n": 0}
+    real_sjoin = gpd.sjoin
+
+    def counting_sjoin(*args, **kwargs):
+        calls["n"] += 1
+        return real_sjoin(*args, **kwargs)
+
+    monkeypatch.setattr(gpd, "sjoin", counting_sjoin)
+    helpers._HRU_LOOKUP_CACHE.clear()
+
+    points = {"A": (0.5, 0.5)}
+    first = helpers.lookup_hrus_by_points(tiny_fabric, points)
+    second = helpers.lookup_hrus_by_points(tiny_fabric, points)
+
+    assert first == second
+    assert calls["n"] == 1
+
+
+def test_lookup_hrus_by_points_cache_keys_on_the_points(helpers, tiny_fabric):
+    helpers._HRU_LOOKUP_CACHE.clear()
+    a = helpers.lookup_hrus_by_points(tiny_fabric, {"A": (0.5, 0.5)})
+    b = helpers.lookup_hrus_by_points(tiny_fabric, {"B": (2.5, 0.5)})
+    assert a != b
+    assert list(a) == ["A"] and list(b) == ["B"]
+
+
+def test_lookup_hrus_by_points_still_raises_for_a_point_outside(helpers, tiny_fabric):
+    helpers._HRU_LOOKUP_CACHE.clear()
+    with pytest.raises(ValueError, match="outside the fabric"):
+        helpers.lookup_hrus_by_points(tiny_fabric, {"nope": (99.0, 99.0)})
