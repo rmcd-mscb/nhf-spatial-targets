@@ -543,3 +543,35 @@ def test_plot_hru_choropleth_still_says_longitude_for_geographic_crs(
     xlabel = ax.get_xlabel()
     plt.close(fig)
     assert xlabel == "Longitude"
+
+
+def test_member_argextreme_treats_negligible_spread_as_no_spread(helpers):
+    """Float noise must not be promoted to a driver.
+
+    Measured on the real Oregon SWE target: on 2010-08-15, 14239 of
+    16814 multi-source cells carry a spread strictly between 0 and
+    1e-9 inches, against a field max of 108 inches — physically
+    snow-free cells that unit conversion left numerically unequal. An
+    exact ``spread == 0`` test catches only 239 of them, so ~85% of the
+    state would be attributed to a driver chosen by a nanometre of SWE.
+    """
+    frame = pd.DataFrame(
+        {"a": [0.0, 50.0], "b": [1e-12, 10.0], "c": [-2.9e-23, 30.0]},
+        index=[10, 11],
+    )
+    codes = helpers.member_argextreme(frame, how="max")
+    assert codes.iloc[0] == helpers.NO_SPREAD_CODE  # noise, not a driver
+    assert codes.iloc[1] == 0  # a real 40-unit spread still resolves
+
+
+def test_member_argextreme_tolerance_scales_with_the_field(helpers):
+    """The same absolute spread is meaningful in a small field, noise in a big one."""
+    small = pd.DataFrame({"a": [0.0], "b": [1e-4]}, index=[10])
+    big = pd.DataFrame({"a": [0.0, 1e6], "b": [1e-4, 0.0]}, index=[10, 11])
+    assert helpers.member_argextreme(small, how="max").iloc[0] == 1
+    assert helpers.member_argextreme(big, how="max").iloc[0] == helpers.NO_SPREAD_CODE
+
+
+def test_member_argextreme_rtol_zero_restores_exact_comparison(helpers):
+    frame = pd.DataFrame({"a": [0.0], "b": [1e-12]}, index=[10])
+    assert helpers.member_argextreme(frame, how="max", rtol=0.0).iloc[0] == 1
