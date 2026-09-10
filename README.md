@@ -453,7 +453,9 @@ On HPC, the per-fabric [`slurm/project_gfv2/run_gfv2.slurm`](slurm/project_gfv2/
 - [`slurm/shared/inspect_consolidated.slurm`](slurm/shared/inspect_consolidated.slurm) — array over `notebooks/consolidated/inspect_consolidated_<target>.ipynb` (192 GB by default; CONUS-wide gridded comparisons)
 - [`slurm/shared/inspect_aggregated.slurm`](slurm/shared/inspect_aggregated.slurm) — array over `notebooks/aggregated/inspect_aggregated_<target>.ipynb`
 
-Set `SAVE_FIGURES=1` to also write rendered panels under `docs/figures/{consolidated,aggregated}/<project>/`. `notebooks/targets/inspect_target_runoff.ipynb` inspects the final per-HRU runoff bounds.
+Set `SAVE_FIGURES=1` to also write rendered panels under `docs/figures/{consolidated,aggregated}/<project>/`.
+
+`notebooks/targets/inspect_target_<target>.ipynb` inspects the final per-HRU bounds. For targets built with `emit_members: true` these also plot the ensemble (issue #351): member small multiples on one shared color scale, an `ensemble_std` disagreement map, driver maps naming which source sets each bound, and per-member series at the representative HRUs. `snow_covered_area` carries no members by construction (its bounds are a MOD10C1 confidence interval, not a member min/max) and its notebook says so instead of plotting them. Render every target notebook's figures with `pixi run -e dev render-figures-targets -- --project-dir <project>`, or on HPC via `sbatch --array=2 slurm/project_<fabric>/render_<fabric>.slurm`.
 
 ## Aggregation Transformation Policy
 

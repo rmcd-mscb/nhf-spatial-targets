@@ -297,6 +297,17 @@ rather than a member min/max, so emitted members would not reconstruct
 them. The output NC always stamps `members_emitted` recording the choice
 actually made for that file.
 
+The `inspect_target_*` notebooks visualize this schema (issue #351) via helpers in `notebooks/targets/_helpers.py`: `member_keys` (reads the
+`member_keys` attr and cross-checks it against the variables on disk --
+never a `data_vars` denylist), `member_colors` (fixed-order categorical
+hues, all-pairs colorblind-validated to four members), `plot_member_panels`
+(small multiples on one **pooled** scale) and `member_argextreme` (which
+source sets each bound). `member_argextreme` treats a spread within
+`atol + rtol * max|value|` as a tie rather than picking a driver: members
+are float32 through a unit conversion, so physically identical values are
+rarely bit-identical, and an exact test attributed 85% of a snow-free
+August Oregon to a driver chosen by a nanometre of SWE.
+
 **`stat_method` choice: `mean` vs `masked_mean`.** gdptools' area-weighted
 mean comes in two flavours, and the right choice depends on whether the
 source has explicit per-pixel masking:

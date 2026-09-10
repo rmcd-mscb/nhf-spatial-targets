@@ -19,6 +19,16 @@ to the source docs it cites) and render to HTML or PDF on demand.
   `swe_raw_panels.png`, `swe_normalized_comparison.png`,
   `snow_covered_area_raw_panels.png`) so colleagues can decide whether to
   wire up aggregation + target builders (PR-B/C/D) before that work begins.
+- `2026-09-ensemble-targets-or-spatial-targets.slides.md` — what the
+  ensemble target schema (issue #338) changed in the written target NCs:
+  per-source members alongside the bounds, `ensemble_mean` /
+  `ensemble_std`, and per-source period-of-record normalization for
+  recharge and soil moisture. Includes the ensemble figures added in
+  issue #351 (member maps, spread, driver maps, member series).
+  References `../figures/targets/or-spatial-targets/`. **Supersedes**
+  `2026-05-aggregated-targets-overview-or-spatial-targets.slides.md`,
+  removed in #351 — its recharge, soil-moisture and SWE plots were built
+  from pre-#338 targets and no longer matched the files on disk.
 
 ## Naming convention
 
@@ -56,10 +66,10 @@ puppeteer cache and sets `MARP_USER=root` for the sandboxless HPC chrome):
 
 ```bash
 # Render to PDF
-pixi run -e marp render-deck docs/presentations/2026-05-aggregated-targets-overview-or-spatial-targets.slides.md --pdf
+pixi run -e marp render-deck docs/presentations/2026-09-ensemble-targets-or-spatial-targets.slides.md --pdf
 
 # Render to HTML (no chromium required at runtime — fast)
-pixi run -e marp render-deck docs/presentations/2026-05-aggregated-targets-overview-or-spatial-targets.slides.md --html
+pixi run -e marp render-deck docs/presentations/2026-09-ensemble-targets-or-spatial-targets.slides.md --html
 
 # Live-reload server (open the printed URL — works through SSH port-forward)
 pixi run -e marp render-deck docs/presentations/ --server
@@ -85,11 +95,11 @@ above is the portable alternative.
 
 ```bash
 # PDF (needs Chrome/Edge/Firefox)
-npx --yes @marp-team/marp-cli docs/presentations/2026-05-aggregated-targets-overview-or-spatial-targets.slides.md \
+npx --yes @marp-team/marp-cli docs/presentations/2026-09-ensemble-targets-or-spatial-targets.slides.md \
     --pdf --allow-local-files
 
 # HTML (no browser needed)
-npx --yes @marp-team/marp-cli docs/presentations/2026-05-aggregated-targets-overview-or-spatial-targets.slides.md \
+npx --yes @marp-team/marp-cli docs/presentations/2026-09-ensemble-targets-or-spatial-targets.slides.md \
     --html --allow-local-files
 ```
 
@@ -97,7 +107,7 @@ npx --yes @marp-team/marp-cli docs/presentations/2026-05-aggregated-targets-over
 
 ```bash
 docker run --rm -v "$PWD:/home/marp/app" \
-    marpteam/marp-cli docs/presentations/2026-05-aggregated-targets-overview-or-spatial-targets.slides.md \
+    marpteam/marp-cli docs/presentations/2026-09-ensemble-targets-or-spatial-targets.slides.md \
     --pdf --allow-local-files
 ```
 

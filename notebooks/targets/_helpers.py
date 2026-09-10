@@ -21,7 +21,9 @@ Notebooks import via:
 
 from __future__ import annotations
 
+import math
 import warnings
+from collections.abc import Sequence
 from pathlib import Path
 
 import geopandas as gpd
@@ -30,6 +32,8 @@ import pandas as pd
 import xarray as xr
 import yaml
 
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import Normalize
 from matplotlib.patches import Patch
 from shapely.geometry import Point
 
@@ -45,6 +49,11 @@ DEFAULT_CALDERA_PROJECT = Path(
 
 
 _AREA_CACHE: dict[int, pd.Series] = {}
+
+#: Cache for :func:`lookup_hrus_by_points`, keyed on
+#: ``(id(fabric_gdf), sorted point items)``. Same in-place-mutation
+#: caveat as :data:`_AREA_CACHE`.
+_HRU_LOOKUP_CACHE: dict[tuple, dict[str, object]] = {}
 
 
 def _fabric_area(fabric_gdf: gpd.GeoDataFrame) -> pd.Series:
@@ -160,7 +169,9 @@ def load_representative_points(
     raw = block.get(target)
     if not raw:
         return None
-    return {label: (float(coords[0]), float(coords[1])) for label, coords in raw.items()}
+    return {
+        label: (float(coords[0]), float(coords[1])) for label, coords in raw.items()
+    }
 
 
 def discover_target_nc(
@@ -291,7 +302,22 @@ def lookup_hrus_by_points(
 
     Raises ``ValueError`` if any point falls outside the fabric — better
     to fail early than silently drop a regime from the time-series cell.
+
+    Cached on ``(id(fabric_gdf), points)``. Each uncached call costs
+    three things that do not scale down with the four points asked for:
+    a reprojection from EPSG:4326 into the fabric's CRS (which on a
+    projected fabric pulls a PROJ datum-shift grid off the shared
+    filesystem), a ``reset_index()`` copy of the entire fabric including
+    geometry, and an ``sjoin`` that builds a spatial index over every
+    polygon. The notebooks call this twice per target — once for the
+    bounds series and once for the member series (issue #351) — so the
+    cache halves that, and it costs nothing when the answer is already
+    known.
     """
+    cache_key = (id(fabric_gdf), tuple(sorted(points.items())))
+    if cache_key in _HRU_LOOKUP_CACHE:
+        return dict(_HRU_LOOKUP_CACHE[cache_key])
+
     pts = gpd.GeoDataFrame(
         {"label": list(points.keys())},
         geometry=[Point(lon, lat) for lon, lat in points.values()],
@@ -306,7 +332,9 @@ def lookup_hrus_by_points(
             f"REPRESENTATIVE_POINTS lie outside the fabric: {missing}. "
             f"Pick coordinates inside the fabric's CONUS extent."
         )
-    return dict(zip(joined["label"], joined[id_col].tolist()))
+    result = dict(zip(joined["label"], joined[id_col].tolist()))
+    _HRU_LOOKUP_CACHE[cache_key] = result
+    return dict(result)
 
 
 def select_month(da: xr.DataArray, year: int, month: int) -> xr.DataArray:
@@ -329,6 +357,28 @@ def select_month(da: xr.DataArray, year: int, month: int) -> xr.DataArray:
     return sliced.isel(time=0)
 
 
+def _axis_labels(fabric_gdf: gpd.GeoDataFrame) -> tuple[str, str]:
+    """Axis labels matching the fabric's CRS.
+
+    A geographic CRS really is longitude/latitude; a projected one is
+    easting/northing in that CRS's own linear unit (metres for the
+    EPSG:5070 Albers the Oregon fabric uses). Hardcoding "Longitude"
+    mislabels every projected fabric's figures.
+    """
+    crs = getattr(fabric_gdf, "crs", None)
+    if crs is None or crs.is_geographic:
+        return ("Longitude", "Latitude")
+    unit = "m"
+    try:
+        unit_name = crs.axis_info[0].unit_name
+        unit = {"metre": "m", "meter": "m", "US survey foot": "ft"}.get(
+            unit_name, unit_name
+        )
+    except (AttributeError, IndexError):  # pragma: no cover - exotic CRS
+        pass
+    return (f"Easting ({unit})", f"Northing ({unit})")
+
+
 def plot_hru_choropleth(
     ax,
     fabric_gdf: gpd.GeoDataFrame,
@@ -340,12 +390,30 @@ def plot_hru_choropleth(
     title: str = "",
     units: str = "",
     nan_color: str = "lightgrey",
+    nan_label: str | None = None,
+    legend: bool = True,
 ) -> None:
     """Render an HRU-level choropleth with NaN HRUs in ``nan_color``.
 
     Joins ``values`` (indexed by HRU id) onto ``fabric_gdf``. NaN HRUs
     are plotted first in ``nan_color`` so coverage gaps are visually
     obvious; finite-value HRUs are plotted on top.
+
+    ``nan_label`` adds a legend entry naming the grey class and its HRU
+    count. Pass it whenever the NaN has a *specific* meaning the reader
+    cannot infer -- ``ensemble_std`` is masked wherever ``n_sources <
+    2``, which is a deliberate modelling decision (a one-source
+    population std is exactly 0 and would read as perfect agreement),
+    not a coverage gap. Left ``None`` the map is unchanged.
+
+    ``legend=False`` suppresses this panel's colorbar -- used by
+    :func:`plot_member_panels`, where one shared colorbar serves every
+    panel and per-panel bars would imply per-panel scales.
+
+    Axis labels follow the fabric's CRS. The Oregon fabric is stored in
+    EPSG:5070 Albers, whose coordinates are metres; labelling those
+    "Longitude" (as this helper did before issue #351) misreports the
+    units on every figure rendered from a projected fabric.
     """
     plot_gdf = fabric_gdf.copy()
     plot_gdf["value"] = values.reindex(plot_gdf.index)
@@ -353,6 +421,17 @@ def plot_hru_choropleth(
     nan_mask = plot_gdf["value"].isna()
     if nan_mask.any():
         plot_gdf[nan_mask].plot(ax=ax, color=nan_color, edgecolor="none")
+        if nan_label:
+            ax.legend(
+                handles=[
+                    Patch(
+                        facecolor=nan_color,
+                        label=f"{nan_label} (n={int(nan_mask.sum())})",
+                    )
+                ],
+                loc="lower left",
+                fontsize=8,
+            )
 
     plot_gdf[~nan_mask].plot(
         ax=ax,
@@ -360,14 +439,17 @@ def plot_hru_choropleth(
         cmap=cmap,
         vmin=vmin,
         vmax=vmax,
-        legend=True,
-        legend_kwds={"label": units, "shrink": 0.6},
+        legend=legend,
+        legend_kwds={"label": units, "shrink": 0.6} if legend else None,
         edgecolor="none",
     )
     ax.set_title(title, fontsize=11)
-    ax.set_xlabel("Longitude")
-    ax.set_ylabel("Latitude")
-    ax.set_aspect("equal")  # 1° lon = 1° lat — prevents east-west stretching
+    xlabel, ylabel = _axis_labels(fabric_gdf)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    # Equal aspect keeps the fabric undistorted: 1 unit east == 1 unit
+    # north, whether those units are degrees or projected metres.
+    ax.set_aspect("equal")
 
 
 def plot_categorical_choropleth(
@@ -405,8 +487,9 @@ def plot_categorical_choropleth(
     if handles:
         ax.legend(handles=handles, loc="lower left", fontsize=8)
     ax.set_title(title, fontsize=11)
-    ax.set_xlabel("Longitude")
-    ax.set_ylabel("Latitude")
+    xlabel, ylabel = _axis_labels(fabric_gdf)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
     ax.set_aspect("equal")
 
 
@@ -423,8 +506,9 @@ def plot_nan_hrus(
     plot_gdf[~plot_gdf["is_nan"]].plot(ax=ax, color="lightgrey", edgecolor="none")
     plot_gdf[plot_gdf["is_nan"]].plot(ax=ax, color="crimson", edgecolor="none")
     ax.set_title(title, fontsize=11)
-    ax.set_xlabel("Longitude")
-    ax.set_ylabel("Latitude")
+    xlabel, ylabel = _axis_labels(fabric_gdf)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
     ax.set_aspect("equal")
 
 
@@ -443,6 +527,378 @@ def n_sources_per_time(ds: xr.Dataset) -> pd.DataFrame:
     for k in range(max_n + 1):
         cols[f"n={k}"] = (arr == k).sum(axis=1)
     return pd.DataFrame(cols, index=time).rename_axis("date")
+
+
+# --------------------------------------------------------------------------
+# Ensemble members (issue #351)
+#
+# Targets built with ``targets.<t>.emit_members: true`` (issue #338) carry
+# one variable per contributing source key alongside the bounds, plus the
+# derived ``ensemble_mean`` / ``ensemble_std``. The helpers below read that
+# schema and render it. ``snow_covered_area`` deliberately emits no members
+# -- its bounds are a MOD10C1 confidence interval, not a member min/max --
+# so ``member_keys`` returns ``[]`` there and the notebook skips cleanly.
+# --------------------------------------------------------------------------
+
+#: Categorical hues for member identity, in fixed assignment order.
+#:
+#: These are the light-mode steps of the standard eight-hue categorical
+#: theme. The order is deliberate, not arbitrary: the first four validate
+#: on the *all-pairs* colorblind test (worst pair CVD dE 9.2, normal-vision
+#: 16.3 in OKLab x100), which is the test that applies to a choropleth or a
+#: spaghetti plot where every series is on screen simultaneously -- unlike
+#: a stacked bar, where only adjacent pairs need to separate.
+#:
+#: Light-mode only, by design. These helpers render matplotlib PNGs onto a
+#: white figure ground for a Marp ``theme: default`` deck; there is no dark
+#: surface in play. The dark steps of this same theme do NOT survive the
+#: all-pairs test at four slots (violet collides with blue), so do not
+#: assume this list is safe to reuse on a dark background.
+MEMBER_PALETTE: tuple[str, ...] = (
+    "#2a78d6",  # blue
+    "#eb6834",  # orange
+    "#1baf7a",  # aqua
+    "#4a3aa7",  # violet
+    "#e87ba4",  # magenta
+    "#008300",  # green
+    "#eda100",  # yellow
+    "#e34948",  # red
+)
+
+#: Member count beyond which all-pairs colorblind separation is no longer
+#: guaranteed by :data:`MEMBER_PALETTE`.
+ALL_PAIRS_SAFE_MEMBERS: int = 4
+
+#: :func:`member_argextreme` code for "every finite member agrees".
+NO_SPREAD_CODE: int = -1
+
+#: :func:`member_argextreme` code for "exactly one member is finite here".
+SINGLE_SOURCE_CODE: int = -2
+
+
+def member_keys(ds: xr.Dataset) -> list[str]:
+    """Return the ensemble member source keys carried by ``ds``.
+
+    Reads the ``member_keys`` global attr stamped by
+    ``targets/_writers.write_bounds_target`` and cross-checks each name
+    against the variables actually present, so a truncated or
+    hand-edited file cannot promise a member it does not hold.
+
+    Returns ``[]`` when the dataset declares ``members_emitted`` other
+    than ``"true"`` (the ``snow_covered_area`` case, and every
+    ``_nn_filled`` companion) or carries neither attr (a pre-#338
+    target). Callers should treat ``[]`` as "skip the member figures",
+    not as an error.
+
+    Deliberately attr-driven rather than inferred by subtracting a
+    denylist of known non-member variables from ``ds.data_vars``: the
+    attr is the machine-readable contract issue #338 introduced, and a
+    denylist silently misclassifies the next derived variable added to
+    the target schema as a member.
+    """
+    if ds.attrs.get("members_emitted") != "true":
+        return []
+    raw = ds.attrs.get("member_keys", "")
+    if not raw:
+        return []
+    declared = [key.strip() for key in raw.split(",") if key.strip()]
+    present = [key for key in declared if key in ds.data_vars]
+    missing = [key for key in declared if key not in ds.data_vars]
+    if missing:
+        warnings.warn(
+            f"member_keys declares {missing} but those variables are not in "
+            "the dataset; dropping them. The file may be truncated or the "
+            "attr hand-edited.",
+            stacklevel=2,
+        )
+    return present
+
+
+def member_colors(keys: Sequence[str]) -> dict[str, str]:
+    """Map member source keys to categorical hues, in order.
+
+    Assignment is positional against :data:`MEMBER_PALETTE` and never
+    cycles, so within one target every figure paints a given source the
+    same color -- the member map, the driver map and the spaghetti all
+    agree, which is what lets them be read as one set.
+
+    The mapping is per-target, not global: ``era5_land`` is a runoff
+    member and an SWE member and may take a different slot in each,
+    because the twelve source keys in the catalog cannot all be given
+    an all-pairs-separable hue. Every figure therefore carries its own
+    legend, and no figure invites a cross-target color inference.
+
+    Warns past :data:`ALL_PAIRS_SAFE_MEMBERS` (all-pairs separation is
+    no longer guaranteed -- facet instead) and raises past the eight
+    hues the theme defines rather than generating or recycling one.
+    """
+    keys = list(keys)
+    if len(keys) > len(MEMBER_PALETTE):
+        raise ValueError(
+            f"member_colors: {len(keys)} member keys exceeds the "
+            f"{len(MEMBER_PALETTE)} validated categorical hues. Facet the "
+            "figure or fold the tail into an 'other' group rather than "
+            "generating a new hue."
+        )
+    if len(keys) > ALL_PAIRS_SAFE_MEMBERS:
+        warnings.warn(
+            f"member_colors: {len(keys)} members exceeds "
+            f"{ALL_PAIRS_SAFE_MEMBERS}, past which the palette is not "
+            "all-pairs colorblind-separable. Every series is on screen at "
+            "once in these figures, so prefer faceting.",
+            stacklevel=2,
+        )
+    return {key: MEMBER_PALETTE[i] for i, key in enumerate(keys)}
+
+
+def member_frame_at_time(
+    ds: xr.Dataset,
+    keys: Sequence[str],
+    time_sel,
+    id_dim: str,
+) -> pd.DataFrame:
+    """Members at one timestep as an ``(hru x member)`` DataFrame.
+
+    ``time_sel`` is anything ``.sel(time=...)`` accepts. A selection
+    that still carries a time dimension -- a partial string like
+    ``"2005"``, or a label that matches more than one step -- collapses
+    to its first step, the same tolerance :func:`select_month` provides.
+    That lets the annual, monthly and daily notebooks share one idiom
+    instead of each spelling out its own cadence.
+    """
+
+    def _one(key: str) -> pd.Series:
+        da = ds[key].sel(time=time_sel)
+        if "time" in da.dims:
+            da = da.isel(time=0)
+        return da.to_pandas().reindex(ds[id_dim].values)
+
+    return pd.DataFrame(
+        {key: _one(key) for key in keys},
+        index=pd.Index(ds[id_dim].values, name=id_dim),
+    )
+
+
+def member_frame_at_hru(
+    ds: xr.Dataset,
+    keys: Sequence[str],
+    hru_id,
+    id_dim: str,
+) -> pd.DataFrame:
+    """Members at one HRU as a ``(time x member)`` DataFrame."""
+    columns = {key: ds[key].sel({id_dim: hru_id}).to_pandas() for key in keys}
+    frame = pd.DataFrame(columns)
+    frame.index = pd.DatetimeIndex(ds["time"].values)
+    frame.index.name = "time"
+    return frame
+
+
+def member_argextreme(
+    frame: pd.DataFrame,
+    *,
+    how: str = "max",
+    rtol: float = 1e-6,
+    atol: float = 0.0,
+) -> pd.Series:
+    """Which member sets the bound at each row of ``frame``.
+
+    Returns a ``pd.Series`` of float codes aligned to ``frame.index``:
+
+    * ``0 .. n-1``   -- positional index into ``frame.columns``
+    * :data:`NO_SPREAD_CODE`      -- two or more finite members, all equal
+    * :data:`SINGLE_SOURCE_CODE`  -- exactly one finite member
+    * ``NaN``        -- no finite member
+
+    The two sentinels exist because a bare ``argmax`` is actively
+    misleading on this data. On a summer SWE day every source reads
+    0.0 mm; ``np.nanargmax`` breaks that tie by returning column 0, so
+    a naive driver map paints the entire state as ``snodas``-driven
+    when in truth nothing drives anything and all four sources agree.
+    Separating "they agree" from "one of them won" is the whole point
+    of the map. The single-source code is split out for the same
+    honesty reason: with one finite member there is no comparison to
+    win, and that cell's story is coverage (see the ``n_sources`` map),
+    not disagreement.
+
+    **"Equal" has to mean "equal to within noise", not bit-identical.**
+    Members reach this function as float32 that has been through a unit
+    conversion, so physically identical values are often numerically
+    unequal in the last bits. Measured on the Oregon SWE target for
+    2010-08-15: 14239 of 16814 multi-source cells have a spread
+    strictly between 0 and 1e-9 inches against a field max of 108
+    inches, while only 239 are bit-identical zeros. An exact test would
+    hand ~85% of a snow-free state to a driver chosen by a nanometre of
+    SWE -- the very failure the sentinel exists to prevent.
+
+    A spread is therefore negligible when it is within
+    ``atol + rtol * max(|value|)`` over the whole frame. Scaling by the
+    field rather than by the cell is deliberate: near-zero cells have
+    no magnitude of their own to be relative to, which is exactly where
+    the noise lives. The default ``rtol`` is float32's resolution, so
+    the threshold is "closer together than this dtype can represent at
+    this field's scale". Pass ``rtol=0.0`` for a strict comparison, or
+    a physical ``atol`` (in the target's units) when you know what
+    counts as a meaningful difference.
+    """
+    if how not in ("max", "min"):
+        raise ValueError(f"member_argextreme: how must be 'max' or 'min', got {how!r}")
+
+    values = frame.to_numpy(dtype="float64")
+    n_finite = np.isfinite(values).sum(axis=1)
+    codes = np.full(values.shape[0], np.nan, dtype="float64")
+
+    finite_any = np.isfinite(values).any()
+    scale = float(np.nanmax(np.abs(values[np.isfinite(values)]))) if finite_any else 0.0
+    tolerance = atol + rtol * scale
+
+    multi = n_finite >= 2
+    if multi.any():
+        sub = values[multi]
+        spread = np.nanmax(sub, axis=1) - np.nanmin(sub, axis=1)
+        picker = np.nanargmax if how == "max" else np.nanargmin
+        codes[multi] = np.where(
+            spread <= tolerance, NO_SPREAD_CODE, picker(sub, axis=1)
+        )
+
+    codes[n_finite == 1] = SINGLE_SOURCE_CODE
+    return pd.Series(codes, index=frame.index, name=f"arg{how}_member")
+
+
+def member_categories(
+    keys: Sequence[str], colors: dict[str, str] | None = None
+) -> dict[int, tuple[str, str]]:
+    """Category map for :func:`plot_categorical_choropleth` driver maps.
+
+    Pairs each member's positional code with its hue, then appends the
+    two neutral sentinel classes. The sentinels are greys on purpose:
+    "the sources agree" and "only one source is here" are not members,
+    and giving them a categorical hue would read as a fifth source.
+    """
+    colors = colors or member_colors(keys)
+    categories = {i: (key, colors[key]) for i, key in enumerate(keys)}
+    categories[NO_SPREAD_CODE] = ("no spread (sources agree)", "#b8b8b3")
+    categories[SINGLE_SOURCE_CODE] = ("single source", "#6e6e69")
+    return categories
+
+
+def _panel_grid_ncols(n_panels: int, max_cols: int = 3) -> int:
+    """Column count leaving the fewest empty cells, preferring wider grids.
+
+    Four panels (three members plus ``ensemble_mean``) is the case that
+    matters: 3 columns strands one panel on its own row, 2 columns gives
+    a clean 2x2. Ties go to the wider grid, so five panels still lay out
+    3 + 2 rather than as a tall column.
+    """
+    if n_panels <= 1:
+        return 1
+    best = 1
+    fewest = n_panels
+    for cols in range(2, min(max_cols, n_panels) + 1):
+        empty = (-n_panels) % cols
+        if empty <= fewest:  # <= so a wider grid wins ties
+            fewest = empty
+            best = cols
+    return best
+
+
+def plot_member_panels(
+    fabric_gdf: gpd.GeoDataFrame,
+    panels: dict[str, pd.Series],
+    *,
+    units: str = "",
+    cmap: str = "YlGnBu",
+    ncols: int | None = None,
+    vmin: float | None = None,
+    vmax: float | None = None,
+    colors: dict[str, str] | None = None,
+    suptitle: str = "",
+    nan_color: str = "lightgrey",
+) -> tuple[object, tuple[float, float]]:
+    """Small-multiples choropleth, one panel per member, one color scale.
+
+    ``panels`` maps a label (a member source key, or a derived name like
+    ``"ensemble_mean"``) to a per-HRU Series. Returns
+    ``(fig, (vmin, vmax))`` so the caller can report -- and a test can
+    assert on -- the scale that was actually used.
+
+    **The shared scale is the point.** Per-panel autoscaling is the
+    default in most small-multiples code and it is wrong here: it
+    renormalises each source to its own range, so four sources that
+    disagree by a factor of three render as four near-identical maps.
+    Unless ``vmin`` / ``vmax`` are given they are pooled across every
+    panel (2nd/98th percentile of all finite values together), so panel
+    brightness is comparable across members and a systematically wet or
+    dry source is visible at a glance.
+
+    ``ncols`` defaults to a grid that fills (see
+    :func:`_panel_grid_ncols`). The common case is three members plus
+    ``ensemble_mean``: four panels, which want 2x2 rather than a row of
+    three with a lone straggler and 40% dead space on the slide.
+
+    ``colors`` (from :func:`member_colors`) tints each panel's frame,
+    tying a panel to the same member's line in the spaghetti plot and
+    its class in the driver map. The tint is on the spines -- a mark --
+    never on the title text, which stays in default ink so identity is
+    carried by the label itself and not by color alone.
+    """
+    import matplotlib.pyplot as plt
+
+    if not panels:
+        raise ValueError("plot_member_panels: no panels to draw")
+
+    if vmin is None or vmax is None:
+        pooled = np.concatenate(
+            [s.to_numpy(dtype="float64").ravel() for s in panels.values()]
+        )
+        pooled = pooled[np.isfinite(pooled)]
+        if pooled.size:
+            vmin = float(np.percentile(pooled, 2)) if vmin is None else vmin
+            vmax = float(np.percentile(pooled, 98)) if vmax is None else vmax
+        else:
+            vmin, vmax = (0.0, 1.0)
+    if vmin == vmax:  # a constant field would otherwise render blank
+        vmax = vmin + 1.0
+
+    ncols = _panel_grid_ncols(len(panels)) if ncols is None else ncols
+    ncols = max(1, min(ncols, len(panels)))
+    nrows = math.ceil(len(panels) / ncols)
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(6.5 * ncols, 5.5 * nrows),
+        squeeze=False,
+        layout="constrained",
+    )
+    drawn = list(axes.flat)
+
+    for ax, (label, series) in zip(drawn, panels.items()):
+        plot_hru_choropleth(
+            ax,
+            fabric_gdf,
+            series,
+            vmin=vmin,
+            vmax=vmax,
+            cmap=cmap,
+            title=label,
+            units=units,
+            nan_color=nan_color,
+            legend=False,  # one shared bar below, not one per panel
+        )
+        if colors and label in colors:
+            for spine in ax.spines.values():
+                spine.set_edgecolor(colors[label])
+                spine.set_linewidth(2.0)
+
+    for ax in drawn[len(panels) :]:
+        ax.remove()  # remove, not hide: a hidden axes still reserves grid space
+
+    live = [ax for ax in fig.axes]
+    mappable = ScalarMappable(norm=Normalize(vmin=vmin, vmax=vmax), cmap=cmap)
+    fig.colorbar(mappable, ax=live, shrink=0.7, label=units)
+
+    if suptitle:
+        fig.suptitle(suptitle, fontsize=13)
+    return fig, (float(vmin), float(vmax))
 
 
 def save_figure(fig, name: str) -> None:

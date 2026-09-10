@@ -61,3 +61,7 @@ docs/figures/.cache/
 # MkDocs build output (issue #233). `pixi run docs-build` writes here;
 # `pixi run docs-serve` does not need this dir (it serves from memory).
 _site/
+
+# Marp deck build output. `pixi run -e marp render-deck <deck>.slides.md --html`
+# writes the HTML next to its source; the committed artifact is the PDF.
+docs/presentations/*.slides.html
