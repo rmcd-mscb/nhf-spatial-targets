@@ -91,7 +91,10 @@ def target_config_fingerprint(project: Project, target_name: str) -> str:
     The fabric identity is included because a fabric swap changes the HRU
     set and CRS the target was built against — the same target config
     against a different fabric produces semantically different output that
-    must not be silently reused.
+    must not be silently reused. ``fabric.id_col`` is part of that
+    identity: re-keying the *same* fabric file onto a different HRU column
+    leaves path and sha256 untouched while making every existing
+    intermediate unreadable to the next build (issue #353).
 
     Returns
     -------
@@ -105,6 +108,13 @@ def target_config_fingerprint(project: Project, target_name: str) -> str:
         "target": target_cfg,
         "fabric_path": fabric_cfg.get("path", ""),
         "fabric_sha256": fabric_sha,
+        # id_col is fabric identity too: the SAME fabric file re-keyed onto a
+        # different HRU column produces intermediates whose id dimension the
+        # next build cannot read. Omitting it let Oregon's nhm_id -> hru_id
+        # switch (#353) keep a matching fingerprint -- path and sha were
+        # unchanged -- so the SCA/SWE builders reused nhm_id-keyed per-year
+        # files and died with "No variable named 'hru_id'".
+        "fabric_id_col": fabric_cfg.get("id_col", ""),
     }
     canonical = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]

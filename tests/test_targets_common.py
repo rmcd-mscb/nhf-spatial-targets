@@ -1658,7 +1658,12 @@ def test_read_aggregated_source_masks_netcdf_default_fill_cells(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def _project_with_target(tmp_path: Path, target_block: dict, fabric_sha: str = ""):
+def _project_with_target(
+    tmp_path: Path,
+    target_block: dict,
+    fabric_sha: str = "",
+    id_col: str = "nhm_id",
+):
     """Build a minimal project skeleton that carries a target config block.
 
     ``parents=True`` so callers can pass a sub-path of ``tmp_path`` for
@@ -1670,11 +1675,11 @@ def _project_with_target(tmp_path: Path, target_block: dict, fabric_sha: str = "
     fabric_path = tmp_path / "f.gpkg"
     cfg = {
         "datastore": str(tmp_path / "store"),
-        "fabric": {"path": str(fabric_path), "id_col": "nhm_id"},
+        "fabric": {"path": str(fabric_path), "id_col": id_col},
         "targets": {"snow_covered_area": target_block},
     }
     (workdir / "config.yml").write_text(yaml.safe_dump(cfg))
-    fabric_json = {"id_col": "nhm_id"}
+    fabric_json = {"id_col": id_col}
     if fabric_sha:
         fabric_json["sha256"] = fabric_sha
     (workdir / "fabric.json").write_text(json.dumps(fabric_json))
@@ -1723,6 +1728,49 @@ def test_target_config_fingerprint_changes_on_fabric_swap(tmp_path: Path):
         _project_with_target(tmp_path / "b", block, fabric_sha="cafef00d"),
         "snow_covered_area",
     )
+    assert fp_a != fp_b
+
+
+def test_target_config_fingerprint_changes_on_id_col_switch(tmp_path: Path):
+    """Changing fabric.id_col must invalidate the year-chunked intermediates.
+
+    Regression for issue #353. Switching Oregon from ``nhm_id`` to
+    ``hru_id`` kept the *same* fabric file, so ``fabric_path`` and
+    ``fabric_sha256`` were unchanged and the fingerprint matched -- the
+    SCA and SWE builders then reused per-year intermediates still keyed
+    on ``nhm_id`` and died with
+    ``No variable named 'hru_id'``.
+
+    ``id_col`` is fabric identity in exactly the sense the docstring
+    already claims for path and sha: the same target config against a
+    different HRU key produces incompatible output that must not be
+    silently reused.
+    """
+    from nhf_spatial_targets.targets._intermediates import target_config_fingerprint
+
+    block = {"period": "2005/2010", "ci_threshold": 0.70}
+    # The fabric path and sha are held IDENTICAL on purpose: this is the
+    # real-world case (same file, different key column). Deriving the
+    # path from tmp_path, as _project_with_target does, would vary the
+    # path too and the test would pass with or without the fix.
+    shared_fabric = tmp_path / "shared.gpkg"
+
+    def _proj(name: str, id_col: str):
+        workdir = tmp_path / name
+        workdir.mkdir(parents=True)
+        cfg = {
+            "datastore": str(tmp_path / "store"),
+            "fabric": {"path": str(shared_fabric), "id_col": id_col},
+            "targets": {"snow_covered_area": block},
+        }
+        (workdir / "config.yml").write_text(yaml.safe_dump(cfg))
+        (workdir / "fabric.json").write_text(
+            json.dumps({"id_col": id_col, "sha256": "same-sha-both-sides"})
+        )
+        return load(workdir)
+
+    fp_a = target_config_fingerprint(_proj("a", "nhm_id"), "snow_covered_area")
+    fp_b = target_config_fingerprint(_proj("b", "hru_id"), "snow_covered_area")
     assert fp_a != fp_b
 
 
