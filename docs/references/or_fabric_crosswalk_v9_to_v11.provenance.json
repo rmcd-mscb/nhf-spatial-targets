@@ -1,0 +1,40 @@
+{
+  "description": "Oregon fabric HRU id crosswalk. v9 keys HRUs by a sparse NATIONAL nhm_id (1-41195); v11 renumbered nhm_id to a dense LOCAL 1-16814 equal to hru_id. Geometry is identical between the two, so this is a pure relabeling map.",
+  "generated_utc": "2026-09-10T21:44:41+00:00",
+  "generated_by": "issue #351 follow-up; nhf-spatial-targets",
+  "n_hru": 16814,
+  "v9": {
+    "path": "/caldera/hovenweep/projects/usgs/water/impd/nhgf/or-spatial-targets/fabric/model_layers_9_nhru.parquet",
+    "sha256": "896685aa11210400feec038784b984dd39e11a234d0ad690d0e220ae8ce0e673",
+    "nhm_id_range": [
+      1,
+      41195
+    ]
+  },
+  "v11": {
+    "path": "/caldera/hovenweep/projects/usgs/water/impd/nhgf/or-spatial-targets/fabric/model_layers 11.gpkg",
+    "sha256": "c7676346a52c224e2b26b261011b8eeb1eb858dd6238ec0f7c1370ef783315ed",
+    "nhm_id_range": [
+      1,
+      16814
+    ]
+  },
+  "rows_where_id_unchanged": 280,
+  "nhm_id_values_present_in_both_numberings": 1158,
+  "collision_warning": "1158 nhm_id values exist in BOTH numberings but only 280 of those refer to the same polygon. Joining v9-keyed data to the v11 fabric by nhm_id therefore mislabels ~878 HRUs silently and drops the rest. Always map through this crosswalk.",
+  "verifications": {
+    "same row count": true,
+    "same CRS": true,
+    "geometry identical row-for-row (16814/16814)": true,
+    "areasqkm identical": true,
+    "v9 hru_id == v11 hru_id": true,
+    "v11 nhm_id == v11 hru_id": true,
+    "v11 nhm_id is exactly 1..16814": true,
+    "v9 nhm_id unique": true,
+    "v11 nhm_id unique": true,
+    "crosswalk is a bijection": true,
+    "nhm_id_v11 == hru_id": true,
+    "nhm_id_v11 dense 1..N": true,
+    "round-trip v9->v11->v9": true
+  }
+}
