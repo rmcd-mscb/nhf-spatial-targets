@@ -340,3 +340,104 @@ def check_manifest_cmd(
         "This command never edits your manifest."
     )
     sys.exit(1)
+
+
+@maintenance_app.command(name="relabel-id-col")
+def relabel_id_col_cmd(
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
+    to_col: Annotated[
+        str,
+        Parameter(
+            name=["--to"],
+            help="Fabric column to key artifacts on (e.g. 'hru_id').",
+        ),
+    ],
+    from_col: Annotated[
+        str | None,
+        Parameter(
+            name=["--from"],
+            help="Column being replaced (default: the project's current id_col).",
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        Parameter(name=["--dry-run"], help="Report what would change without writing."),
+    ] = False,
+):
+    """Re-key aggregated NCs and weight caches onto a different fabric id column.
+
+    For switching ``fabric.id_col`` when the fabric *geometry* is
+    unchanged (issue #353) -- every value is identical and only labels
+    move, so this avoids re-running aggregation to reproduce numbers the
+    project already has.
+
+    Target NCs are deliberately not touched: rebuild them with
+    ``nhf-targets run`` so the published deliverables are produced
+    natively under the new id rather than relabelled.
+
+    The ``{old: new}`` map is derived from the fabric itself, where both
+    columns sit on the same row -- never from a hand-supplied crosswalk
+    that could go stale against the geometry.
+    """
+    from nhf_spatial_targets.relabel_id import build_id_map, relabel_project
+    from nhf_spatial_targets.workspace import load as load_project
+
+    if not workdir.exists():
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
+        sys.exit(2)
+
+    try:
+        project = load_project(workdir)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    source_col = from_col or project.id_col
+    if source_col == to_col:
+        print(
+            f"Error: --to {to_col!r} is already the project's id_col; nothing to do.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    fabric_path = Path(project.config["fabric"]["path"])
+    import geopandas as gpd
+
+    gdf = (
+        gpd.read_parquet(fabric_path)
+        if fabric_path.suffix == ".parquet"
+        else gpd.read_file(fabric_path)
+    )
+
+    try:
+        id_map = build_id_map(gdf, source_col, to_col)
+    except (KeyError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Relabelling {source_col!r} -> {to_col!r} using {len(id_map)} fabric rows.")
+    results = relabel_project(workdir, source_col, to_col, id_map, dry_run=dry_run)
+
+    done = [r for r in results if r["status"] == "relabelled"]
+    skipped = [r for r in results if r["status"].startswith("skipped")]
+    planned = [r for r in results if r["status"] == "would-relabel"]
+    failed = [r for r in results if r["status"] == "failed"]
+
+    if dry_run:
+        print(f"[dry-run] {len(planned)} file(s) would be relabelled.")
+    else:
+        print(f"Relabelled {len(done)} file(s), skipped {len(skipped)}.")
+
+    if failed:
+        print(f"Error: {len(failed)} file(s) failed:", file=sys.stderr)
+        for r in failed[:10]:
+            print(f"  {r['path'].name}: {r.get('error')}", file=sys.stderr)
+        sys.exit(1)
+
+    if not dry_run and done:
+        print(
+            f"\nNext: set fabric.id_col to {to_col!r} in config.yml, then\n"
+            f"  nhf-targets validate            --project-dir {workdir}\n"
+            f"  nhf-targets run                 --project-dir {workdir}\n"
+            f"  nhf-targets maintenance rebuild-manifest --project-dir {workdir}"
+        )
