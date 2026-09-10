@@ -1,0 +1,34 @@
+{
+  "description": "Oregon fabric HRU id crosswalk for the model_layers_9 fabric: the national nhm_id (sparse, 1-41195) that every pre-#353 Oregon artifact was keyed on, paired with hru_id (dense, 1-16814) which the project now uses. Both columns come from the same row of the same fabric file, so the mapping cannot disagree with the geometry.",
+  "generated_utc": "2026-09-10T21:44:41+00:00",
+  "generated_by": "issue #351 follow-up; nhf-spatial-targets",
+  "n_hru": 16814,
+  "verifications": {
+    "same row count": true,
+    "same CRS": true,
+    "geometry identical row-for-row (16814/16814)": true,
+    "areasqkm identical": true,
+    "v9 hru_id == v11 hru_id": true,
+    "v11 nhm_id == v11 hru_id": true,
+    "v11 nhm_id is exactly 1..16814": true,
+    "v9 nhm_id unique": true,
+    "v11 nhm_id unique": true,
+    "crosswalk is a bijection": true,
+    "nhm_id_v11 == hru_id": true,
+    "nhm_id_v11 dense 1..N": true,
+    "round-trip v9->v11->v9": true
+  },
+  "fabric": {
+    "path": "/caldera/hovenweep/projects/usgs/water/impd/nhgf/or-spatial-targets/fabric/model_layers_9_nhru.parquet",
+    "sha256": "896685aa11210400feec038784b984dd39e11a234d0ad690d0e220ae8ce0e673",
+    "nhm_id_range": [
+      1,
+      41195
+    ]
+  },
+  "hru_id_range": [
+    1,
+    16814
+  ],
+  "note": "Applies to model_layers_9, the fabric used by this project and by the gfv2-params workflows. Use it to map data joined to the old nhm_id onto the hru_id-keyed targets."
+}

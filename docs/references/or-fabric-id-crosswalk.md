@@ -1,91 +1,77 @@
-# Oregon fabric HRU id crosswalk (v9 → v11)
+# Oregon fabric HRU id crosswalk (`nhm_id` → `hru_id`)
 
-Companion to [`or_fabric_crosswalk_v9_to_v11.csv`](or_fabric_crosswalk_v9_to_v11.csv)
-and its [provenance sidecar](or_fabric_crosswalk_v9_to_v11.provenance.json).
+Companion to
+[`or_fabric_crosswalk_nhm_id_to_hru_id.csv`](or_fabric_crosswalk_nhm_id_to_hru_id.csv)
+and its [provenance sidecar](or_fabric_crosswalk_nhm_id_to_hru_id.provenance.json).
 Generated for issue #353.
 
-## Why this file exists at all
+Applies to **`model_layers_9`** — the Oregon fabric this project uses, and the
+one the `gfv2-params` workflows use.
 
-The Oregon fabric shipped in two releases whose `nhru` layers are
-**field-for-field identical in schema and geometry** but disagree on what
-`nhm_id` means:
+## What changed
 
-| | `model_layers_9` | `model_layers 11` |
+Every Oregon artifact built before #353 was keyed on `nhm_id`, the **national**
+NHM identifier. The project now keys on `hru_id`, the Oregon model's own index:
+
+| | `nhm_id` (before) | `hru_id` (now) |
 |---|---|---|
-| `nhm_id` | 1 – 41,195 (sparse **national**) | 1 – 16,814 (dense **local**) |
-| `hru_id` | 1 – 16,814 | 1 – 16,814 (identical to v9) |
-| `model_hru_idx` | identical to `hru_id` | identical to `hru_id` |
-| geometry | — | **16,814/16,814 identical to v9** |
+| range | 1 – 41,195 (sparse) | **1 – 16,814 (dense)** |
+| unique values | 16,814 | 16,814 |
+| owned by | the national fabric | **the Oregon model** |
+| matches `gfv2-params` | no | **yes** |
 
-Verified directly:
+Both columns live on the same row of the same fabric file, so the mapping
+cannot disagree with the geometry.
 
-```
-v9 hru_id        == v11 hru_id        : True
-v9 model_hru_idx == v11 model_hru_idx : True
-v9 nhm_id        == v11 nhm_id        : False   <-- the only column that moved
-```
+## Who needs this file
 
-`nhm_id` is controlled by the national fabric producer and was renumbered
-without a schema change, a column rename, or any other visible signal.
-`hru_id` is intrinsic to the Oregon model and did not move.
+Anyone holding data joined to the **old** `nhm_id` — earlier target NCs,
+downstream analyses, colleagues' spreadsheets. Map through this crosswalk to
+land on the `hru_id`-keyed targets.
 
-## The hazard this file protects against
-
-Only **1,158** of 16,814 `nhm_id` values exist in both numberings, and only
-**280** of those refer to the *same polygon*. Joining v9-keyed data to the
-v11 fabric by `nhm_id`:
-
-- drops ~15,656 rows that have no match, and
-- **silently attaches ~878 HRUs to the wrong polygon.**
-
-There is no error, no shape change and no dtype change — the column name is
-the same and the geometry is the same. Nothing warns you.
+The two numberings are **not** interchangeable: they disagree on 16,534 of
+16,814 rows. Only the first 280 happen to coincide, which is exactly enough to
+make a bad join look plausible on a spot check.
 
 ## What the file contains
 
-16,814 rows, sorted by `nhm_id_v11`:
+16,814 rows, sorted by `hru_id`:
 
 | column | meaning |
 |---|---|
-| `nhm_id_v9` | the sparse national id every pre-#353 Oregon artifact was keyed on |
-| `nhm_id_v11` | v11's dense local id — **equal to `hru_id`** |
-| `hru_id` | the Oregon model's own index, stable across both releases |
+| `nhm_id` | the national id every pre-#353 Oregon artifact was keyed on |
+| `hru_id` | the Oregon model's index — the current key |
 | `model_hru_idx` | identical to `hru_id` |
 | `vpu`, `areasqkm` | context for spot-checks |
 
 Every row was verified before the file was written: bijection in both
-directions, round-trips `v9 → v11 → v9`, covers every id present in all 12
-Oregon target NCs, and leaves every file strictly ascending after mapping.
-The provenance sidecar records both fabrics' sha256 and each check.
+directions, round-trips, covers every id present in all 12 Oregon target NCs,
+and leaves every file strictly ascending after mapping. The provenance sidecar
+records the fabric sha256 and each check.
 
-## It cannot be regenerated
+## Why it is committed here
 
-This mapping exists **only** because v9's parquet carries `nhm_id` and
-`hru_id` side by side on the same row. v11 overwrote `nhm_id` with the local
-numbering, destroying that correspondence. Once the v9 fabric is gone the
-crosswalk cannot be reconstructed from anything else — which is why it is
-committed here rather than left in the project directory.
+The mapping exists only because the fabric carries `nhm_id` and `hru_id` side
+by side. It is cheap to keep and awkward to reconstruct after the fact, and it
+is the only record connecting published pre-#353 Oregon data to the current
+targets.
 
-## What #353 actually did with it
+## What #353 did with it
 
-The migration did **not** consume this CSV. `maintenance relabel-id-col`
-derives its `{old: new}` map from the fabric itself, where both columns sit
-on the same row, so it cannot go stale against the geometry the way a
-separate file can.
-
-This crosswalk is the **external** record: the artifact anyone who joined to
-the old national ids needs in order to follow the change.
+The migration did **not** consume this CSV.
+`nhf-targets maintenance relabel-id-col` derives its `{old: new}` map from the
+fabric directly, so it cannot go stale against the geometry the way a separate
+file can. This crosswalk is the **external** record for downstream consumers.
 
 ## The lesson
 
 Key a project on an identifier the project controls. `nhm_id` belongs to the
-national fabric producer; `hru_id` belongs to the Oregon model. Had the
-project used `hru_id` from the start, v9 and v11 would have been equivalent
-and none of this would have been necessary.
+national fabric producer and can be renumbered upstream without a schema change
+or a column rename; `hru_id` belongs to the Oregon model.
 
 Note the follow-on caveat: `hru_id` is a **dense positional index**, stable
-here only because the HRU *set* did not change. Adding or removing a single
-HRU would shift every id after it, just as silently. A `{fabric}_id`
-convention should therefore specify ids that are **persistent and
-immutable** — assigned once, never renumbered, never reused — not merely
-locally scoped. See [`lessons-learned.md`](lessons-learned.md).
+while the HRU *set* is stable. Adding or removing a single HRU would shift every
+id after it, just as quietly. A `{fabric}_id` convention should therefore
+specify ids that are **persistent and immutable** — assigned once, never
+renumbered, never reused — not merely locally scoped. See
+[`lessons-learned.md`](lessons-learned.md).
