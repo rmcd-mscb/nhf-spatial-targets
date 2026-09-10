@@ -207,3 +207,266 @@ def test_load_representative_points_returns_none_without_block(helpers, tmp_path
 
 def test_load_representative_points_returns_none_when_config_missing(helpers, tmp_path):
     assert helpers.load_representative_points(tmp_path, "aet") is None
+
+
+# --------------------------------------------------------------------------
+# Ensemble member helpers (issue #351)
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def member_target_nc(tmp_path: Path) -> Path:
+    """A monthly target NC carrying three ensemble members.
+
+    Mirrors the runoff target schema written by
+    ``targets/_writers.write_bounds_target`` with ``emit_members=True``:
+    bounds + ``n_sources`` + one variable per source key + the derived
+    ``ensemble_mean`` / ``ensemble_std``, stamped with ``members_emitted``
+    and ``member_keys``.
+    """
+    time = pd.date_range("2005-01-01", periods=4, freq="MS")
+    hru = np.arange(3, dtype="int64")
+    shape = (time.size, hru.size)
+
+    def _const(value: float) -> np.ndarray:
+        return np.full(shape, value, dtype="float32")
+
+    ds = xr.Dataset(
+        {
+            "lower_bound": (("time", "nhm_id"), _const(1.0)),
+            "upper_bound": (("time", "nhm_id"), _const(3.0)),
+            "n_sources": (("time", "nhm_id"), np.full(shape, 3, dtype="int8")),
+            "ensemble_mean": (("time", "nhm_id"), _const(2.0)),
+            "ensemble_std": (("time", "nhm_id"), _const(0.8)),
+            "era5_land": (("time", "nhm_id"), _const(1.0)),
+            "gldas_noah_v21_monthly": (("time", "nhm_id"), _const(2.0)),
+            "mwbm_climgrid": (("time", "nhm_id"), _const(3.0)),
+        },
+        coords={"time": time, "nhm_id": hru},
+        attrs={
+            "members_emitted": "true",
+            "member_keys": "era5_land,gldas_noah_v21_monthly,mwbm_climgrid",
+        },
+    )
+    path = tmp_path / "runoff_targets.nc"
+    ds.to_netcdf(path)
+    ds.close()
+    return path
+
+
+def test_member_keys_reads_the_member_keys_attr(helpers, member_target_nc):
+    with xr.open_dataset(member_target_nc) as ds:
+        assert helpers.member_keys(ds) == [
+            "era5_land",
+            "gldas_noah_v21_monthly",
+            "mwbm_climgrid",
+        ]
+
+
+def test_member_keys_empty_when_members_not_emitted(helpers, member_target_nc):
+    """The SCA case: bounds are a CI, not a member min/max."""
+    with xr.open_dataset(member_target_nc) as ds:
+        ds.attrs["members_emitted"] = "false"
+        assert helpers.member_keys(ds) == []
+
+
+def test_member_keys_empty_when_attrs_absent(helpers, member_target_nc):
+    """A pre-#338 target NC carries neither attr."""
+    with xr.open_dataset(member_target_nc) as ds:
+        ds.attrs.pop("members_emitted")
+        ds.attrs.pop("member_keys")
+        assert helpers.member_keys(ds) == []
+
+
+def test_member_keys_drops_keys_with_no_matching_variable(helpers, member_target_nc):
+    """Guard a truncated file: the attr promises a var that is not there."""
+    with xr.open_dataset(member_target_nc) as ds:
+        ds.attrs["member_keys"] = "era5_land,not_on_disk"
+        with pytest.warns(UserWarning, match="not_on_disk"):
+            assert helpers.member_keys(ds) == ["era5_land"]
+
+
+def test_member_colors_assigns_one_validated_hue_per_key(helpers):
+    keys = ["snodas", "era5_land", "margulis_wus_sr", "ua_swe"]
+    colors = helpers.member_colors(keys)
+    assert list(colors) == keys
+    assert len(set(colors.values())) == 4
+    assert all(c.startswith("#") for c in colors.values())
+
+
+def test_member_colors_is_deterministic(helpers):
+    keys = ["a", "b", "c"]
+    assert helpers.member_colors(keys) == helpers.member_colors(keys)
+
+
+def test_member_colors_warns_past_the_all_pairs_safe_count(helpers):
+    """Slots 5+ are not all-pairs colorblind-separable; warn, do not cycle."""
+    with pytest.warns(UserWarning, match="all-pairs"):
+        colors = helpers.member_colors([f"s{i}" for i in range(5)])
+    assert len(set(colors.values())) == 5
+
+
+def test_member_colors_rejects_more_keys_than_validated_hues(helpers):
+    with pytest.raises(ValueError, match="9"):
+        helpers.member_colors([f"s{i}" for i in range(9)])
+
+
+def test_member_frame_at_time_is_hru_by_member(helpers, member_target_nc):
+    with xr.open_dataset(member_target_nc) as ds:
+        keys = helpers.member_keys(ds)
+        frame = helpers.member_frame_at_time(ds, keys, "2005-01-01", "nhm_id")
+    assert list(frame.columns) == keys
+    assert len(frame) == 3
+    assert frame["mwbm_climgrid"].iloc[0] == pytest.approx(3.0)
+
+
+def test_member_frame_at_hru_is_time_by_member(helpers, member_target_nc):
+    with xr.open_dataset(member_target_nc) as ds:
+        keys = helpers.member_keys(ds)
+        frame = helpers.member_frame_at_hru(ds, keys, 1, "nhm_id")
+    assert list(frame.columns) == keys
+    assert len(frame) == 4
+    assert isinstance(frame.index, pd.DatetimeIndex)
+
+
+def test_member_argextreme_picks_the_driving_member(helpers):
+    frame = pd.DataFrame(
+        {"a": [1.0, 5.0], "b": [2.0, 1.0], "c": [3.0, 2.0]}, index=[10, 11]
+    )
+    codes = helpers.member_argextreme(frame, how="max")
+    assert codes.tolist() == [2, 0]
+
+
+def test_member_argextreme_min_picks_the_lower_driver(helpers):
+    frame = pd.DataFrame(
+        {"a": [1.0, 5.0], "b": [2.0, 1.0], "c": [3.0, 2.0]}, index=[10, 11]
+    )
+    codes = helpers.member_argextreme(frame, how="min")
+    assert codes.tolist() == [0, 1]
+
+
+def test_member_argextreme_flags_ties_instead_of_inventing_a_driver(helpers):
+    """The summer-SWE case: every source reads 0.0, so nothing drives.
+
+    ``np.argmax`` would silently return member 0 and paint the whole
+    map as that source's, which is the bug this code exists to avoid.
+    """
+    frame = pd.DataFrame({"a": [0.0], "b": [0.0], "c": [0.0]}, index=[10])
+    codes = helpers.member_argextreme(frame, how="max")
+    assert codes.tolist() == [helpers.NO_SPREAD_CODE]
+
+
+def test_member_argextreme_flags_single_source_cells(helpers):
+    """One finite member is a coverage story, not a driver story."""
+    frame = pd.DataFrame({"a": [np.nan], "b": [4.0], "c": [np.nan]}, index=[10])
+    codes = helpers.member_argextreme(frame, how="max")
+    assert codes.tolist() == [helpers.SINGLE_SOURCE_CODE]
+
+
+def test_member_argextreme_is_nan_where_no_member_is_finite(helpers):
+    frame = pd.DataFrame({"a": [np.nan], "b": [np.nan], "c": [np.nan]}, index=[10])
+    codes = helpers.member_argextreme(frame, how="max")
+    assert bool(np.isnan(codes.iloc[0]))
+
+
+def test_member_argextreme_ignores_nan_members_when_ranking(helpers):
+    frame = pd.DataFrame({"a": [1.0], "b": [np.nan], "c": [3.0]}, index=[10])
+    codes = helpers.member_argextreme(frame, how="max")
+    assert codes.tolist() == [2]
+
+
+def test_member_argextreme_rejects_an_unknown_how(helpers):
+    frame = pd.DataFrame({"a": [1.0]}, index=[10])
+    with pytest.raises(ValueError, match="how"):
+        helpers.member_argextreme(frame, how="median")
+
+
+@pytest.fixture
+def tiny_fabric():
+    """A 3-cell fabric; enough geometry for the plotting helpers."""
+    import geopandas as gpd
+    from shapely.geometry import box
+
+    return gpd.GeoDataFrame(
+        {"geometry": [box(i, 0, i + 1, 1) for i in range(3)]},
+        index=pd.Index([0, 1, 2], name="nhm_id"),
+        crs="EPSG:4326",
+    )
+
+
+def test_plot_hru_choropleth_labels_the_nan_class_when_asked(helpers, tiny_fabric):
+    """ensemble_std's grey needs a reason, not a mystery."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots()
+    helpers.plot_hru_choropleth(
+        ax,
+        tiny_fabric,
+        pd.Series([1.0, np.nan, 3.0], index=tiny_fabric.index),
+        nan_label="n_sources < 2",
+    )
+    legend_texts = [t.get_text() for t in ax.get_legend().get_texts()]
+    plt.close(fig)
+    assert any("n_sources < 2" in t for t in legend_texts)
+    assert any("1" in t for t in legend_texts)  # the count of masked HRUs
+
+
+def test_plot_hru_choropleth_has_no_nan_legend_by_default(helpers, tiny_fabric):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots()
+    helpers.plot_hru_choropleth(
+        ax,
+        tiny_fabric,
+        pd.Series([1.0, np.nan, 3.0], index=tiny_fabric.index),
+    )
+    legend = ax.get_legend()
+    plt.close(fig)
+    assert legend is None
+
+
+def test_plot_member_panels_shares_one_color_scale_across_panels(helpers, tiny_fabric):
+    """A per-panel scale would make the members look falsely alike."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    panels = {
+        "era5_land": pd.Series([1.0, 2.0, 3.0], index=tiny_fabric.index),
+        "snodas": pd.Series([10.0, 20.0, 30.0], index=tiny_fabric.index),
+    }
+    fig, (vmin, vmax) = helpers.plot_member_panels(tiny_fabric, panels, units="mm")
+    plt.close(fig)
+    # Pooled across both panels: had each panel autoscaled, era5_land's
+    # scale would top out near 3.0 and the two members would render as
+    # near-identical maps despite differing by an order of magnitude.
+    assert vmax > 3.0
+    assert vmin < 10.0
+
+
+def test_plot_member_panels_makes_one_panel_per_member(helpers, tiny_fabric):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    panels = {
+        k: pd.Series([1.0, 2.0, 3.0], index=tiny_fabric.index)
+        for k in ("a", "b", "c", "d", "e")
+    }
+    fig, _ = helpers.plot_member_panels(tiny_fabric, panels, units="mm", ncols=3)
+    titled = [ax.get_title() for ax in fig.axes if ax.get_title()]
+    plt.close(fig)
+    assert set(panels) <= set(titled)
+
+
+def test_plot_member_panels_rejects_an_empty_panel_map(helpers, tiny_fabric):
+    with pytest.raises(ValueError, match="no panels"):
+        helpers.plot_member_panels(tiny_fabric, {}, units="mm")
