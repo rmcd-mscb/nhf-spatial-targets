@@ -470,3 +470,76 @@ def test_plot_member_panels_makes_one_panel_per_member(helpers, tiny_fabric):
 def test_plot_member_panels_rejects_an_empty_panel_map(helpers, tiny_fabric):
     with pytest.raises(ValueError, match="no panels"):
         helpers.plot_member_panels(tiny_fabric, {}, units="mm")
+
+
+def test_member_frame_at_time_collapses_a_multi_match_selection(
+    helpers, member_target_nc
+):
+    """A partial time string may match >1 step; take the first, like select_month.
+
+    Lets every notebook use one idiom regardless of whether its target
+    is annual, monthly or daily.
+    """
+    with xr.open_dataset(member_target_nc) as ds:
+        keys = helpers.member_keys(ds)
+        frame = helpers.member_frame_at_time(ds, keys, "2005", "nhm_id")
+    assert list(frame.columns) == keys
+    assert len(frame) == 3
+    assert frame.index.name == "nhm_id"
+
+
+def test_plot_member_panels_draws_exactly_one_shared_colorbar(helpers, tiny_fabric):
+    """One scale must show one colorbar; three would imply three scales."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    panels = {
+        k: pd.Series([1.0, 2.0, 3.0], index=tiny_fabric.index) for k in ("a", "b", "c")
+    }
+    fig, _ = helpers.plot_member_panels(tiny_fabric, panels, units="mm", ncols=3)
+    n_axes = len(fig.axes)
+    plt.close(fig)
+    assert n_axes == len(panels) + 1
+
+
+def test_plot_hru_choropleth_labels_projected_axes_in_metres(helpers):
+    """The Oregon fabric is EPSG:5070 Albers — 'Longitude' would be a lie."""
+    import geopandas as gpd
+    import matplotlib
+    from shapely.geometry import box
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    gdf = gpd.GeoDataFrame(
+        {"geometry": [box(i, 0, i + 1, 1) for i in range(3)]},
+        index=pd.Index([0, 1, 2], name="nhm_id"),
+        crs="EPSG:5070",
+    )
+    fig, ax = plt.subplots()
+    helpers.plot_hru_choropleth(ax, gdf, pd.Series([1.0, 2.0, 3.0], index=gdf.index))
+    xlabel, ylabel = ax.get_xlabel(), ax.get_ylabel()
+    plt.close(fig)
+    assert "Longitude" not in xlabel
+    assert "Easting" in xlabel and "m" in xlabel
+    assert "Northing" in ylabel
+
+
+def test_plot_hru_choropleth_still_says_longitude_for_geographic_crs(
+    helpers, tiny_fabric
+):
+    """gfv2's fabric is EPSG:4326 — degrees really are lon/lat."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots()
+    helpers.plot_hru_choropleth(
+        ax, tiny_fabric, pd.Series([1.0, 2.0, 3.0], index=tiny_fabric.index)
+    )
+    xlabel = ax.get_xlabel()
+    plt.close(fig)
+    assert xlabel == "Longitude"

@@ -32,6 +32,8 @@ import pandas as pd
 import xarray as xr
 import yaml
 
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import Normalize
 from matplotlib.patches import Patch
 from shapely.geometry import Point
 
@@ -333,6 +335,28 @@ def select_month(da: xr.DataArray, year: int, month: int) -> xr.DataArray:
     return sliced.isel(time=0)
 
 
+def _axis_labels(fabric_gdf: gpd.GeoDataFrame) -> tuple[str, str]:
+    """Axis labels matching the fabric's CRS.
+
+    A geographic CRS really is longitude/latitude; a projected one is
+    easting/northing in that CRS's own linear unit (metres for the
+    EPSG:5070 Albers the Oregon fabric uses). Hardcoding "Longitude"
+    mislabels every projected fabric's figures.
+    """
+    crs = getattr(fabric_gdf, "crs", None)
+    if crs is None or crs.is_geographic:
+        return ("Longitude", "Latitude")
+    unit = "m"
+    try:
+        unit_name = crs.axis_info[0].unit_name
+        unit = {"metre": "m", "meter": "m", "US survey foot": "ft"}.get(
+            unit_name, unit_name
+        )
+    except (AttributeError, IndexError):  # pragma: no cover - exotic CRS
+        pass
+    return (f"Easting ({unit})", f"Northing ({unit})")
+
+
 def plot_hru_choropleth(
     ax,
     fabric_gdf: gpd.GeoDataFrame,
@@ -345,6 +369,7 @@ def plot_hru_choropleth(
     units: str = "",
     nan_color: str = "lightgrey",
     nan_label: str | None = None,
+    legend: bool = True,
 ) -> None:
     """Render an HRU-level choropleth with NaN HRUs in ``nan_color``.
 
@@ -358,6 +383,15 @@ def plot_hru_choropleth(
     2``, which is a deliberate modelling decision (a one-source
     population std is exactly 0 and would read as perfect agreement),
     not a coverage gap. Left ``None`` the map is unchanged.
+
+    ``legend=False`` suppresses this panel's colorbar -- used by
+    :func:`plot_member_panels`, where one shared colorbar serves every
+    panel and per-panel bars would imply per-panel scales.
+
+    Axis labels follow the fabric's CRS. The Oregon fabric is stored in
+    EPSG:5070 Albers, whose coordinates are metres; labelling those
+    "Longitude" (as this helper did before issue #351) misreports the
+    units on every figure rendered from a projected fabric.
     """
     plot_gdf = fabric_gdf.copy()
     plot_gdf["value"] = values.reindex(plot_gdf.index)
@@ -383,14 +417,17 @@ def plot_hru_choropleth(
         cmap=cmap,
         vmin=vmin,
         vmax=vmax,
-        legend=True,
-        legend_kwds={"label": units, "shrink": 0.6},
+        legend=legend,
+        legend_kwds={"label": units, "shrink": 0.6} if legend else None,
         edgecolor="none",
     )
     ax.set_title(title, fontsize=11)
-    ax.set_xlabel("Longitude")
-    ax.set_ylabel("Latitude")
-    ax.set_aspect("equal")  # 1° lon = 1° lat — prevents east-west stretching
+    xlabel, ylabel = _axis_labels(fabric_gdf)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    # Equal aspect keeps the fabric undistorted: 1 unit east == 1 unit
+    # north, whether those units are degrees or projected metres.
+    ax.set_aspect("equal")
 
 
 def plot_categorical_choropleth(
@@ -428,8 +465,9 @@ def plot_categorical_choropleth(
     if handles:
         ax.legend(handles=handles, loc="lower left", fontsize=8)
     ax.set_title(title, fontsize=11)
-    ax.set_xlabel("Longitude")
-    ax.set_ylabel("Latitude")
+    xlabel, ylabel = _axis_labels(fabric_gdf)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
     ax.set_aspect("equal")
 
 
@@ -446,8 +484,9 @@ def plot_nan_hrus(
     plot_gdf[~plot_gdf["is_nan"]].plot(ax=ax, color="lightgrey", edgecolor="none")
     plot_gdf[plot_gdf["is_nan"]].plot(ax=ax, color="crimson", edgecolor="none")
     ax.set_title(title, fontsize=11)
-    ax.set_xlabel("Longitude")
-    ax.set_ylabel("Latitude")
+    xlabel, ylabel = _axis_labels(fabric_gdf)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
     ax.set_aspect("equal")
 
 
@@ -596,12 +635,26 @@ def member_frame_at_time(
     time_sel,
     id_dim: str,
 ) -> pd.DataFrame:
-    """Members at one timestep as an ``(hru x member)`` DataFrame."""
-    columns = {
-        key: ds[key].sel(time=time_sel).to_pandas().reindex(ds[id_dim].values)
-        for key in keys
-    }
-    return pd.DataFrame(columns, index=pd.Index(ds[id_dim].values, name=id_dim))
+    """Members at one timestep as an ``(hru x member)`` DataFrame.
+
+    ``time_sel`` is anything ``.sel(time=...)`` accepts. A selection
+    that still carries a time dimension -- a partial string like
+    ``"2005"``, or a label that matches more than one step -- collapses
+    to its first step, the same tolerance :func:`select_month` provides.
+    That lets the annual, monthly and daily notebooks share one idiom
+    instead of each spelling out its own cadence.
+    """
+
+    def _one(key: str) -> pd.Series:
+        da = ds[key].sel(time=time_sel)
+        if "time" in da.dims:
+            da = da.isel(time=0)
+        return da.to_pandas().reindex(ds[id_dim].values)
+
+    return pd.DataFrame(
+        {key: _one(key) for key in keys},
+        index=pd.Index(ds[id_dim].values, name=id_dim),
+    )
 
 
 def member_frame_at_hru(
@@ -730,11 +783,15 @@ def plot_member_panels(
     ncols = max(1, min(ncols, len(panels)))
     nrows = math.ceil(len(panels) / ncols)
     fig, axes = plt.subplots(
-        nrows, ncols, figsize=(7.0 * ncols, 5.5 * nrows), squeeze=False
+        nrows,
+        ncols,
+        figsize=(6.5 * ncols, 5.5 * nrows),
+        squeeze=False,
+        layout="constrained",
     )
-    flat = axes.flat
+    drawn = list(axes.flat)
 
-    for ax, (label, series) in zip(flat, panels.items()):
+    for ax, (label, series) in zip(drawn, panels.items()):
         plot_hru_choropleth(
             ax,
             fabric_gdf,
@@ -745,18 +802,22 @@ def plot_member_panels(
             title=label,
             units=units,
             nan_color=nan_color,
+            legend=False,  # one shared bar below, not one per panel
         )
         if colors and label in colors:
             for spine in ax.spines.values():
                 spine.set_edgecolor(colors[label])
                 spine.set_linewidth(2.0)
 
-    for ax in list(flat)[len(panels) :]:
-        ax.set_visible(False)
+    for ax in drawn[len(panels) :]:
+        ax.remove()  # remove, not hide: a hidden axes still reserves grid space
+
+    live = [ax for ax in fig.axes]
+    mappable = ScalarMappable(norm=Normalize(vmin=vmin, vmax=vmax), cmap=cmap)
+    fig.colorbar(mappable, ax=live, shrink=0.7, label=units)
 
     if suptitle:
-        fig.suptitle(suptitle, fontsize=13, y=1.01)
-    fig.tight_layout()
+        fig.suptitle(suptitle, fontsize=13)
     return fig, (float(vmin), float(vmax))
 
 
