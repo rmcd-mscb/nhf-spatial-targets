@@ -759,13 +759,33 @@ def member_categories(
     return categories
 
 
+def _panel_grid_ncols(n_panels: int, max_cols: int = 3) -> int:
+    """Column count leaving the fewest empty cells, preferring wider grids.
+
+    Four panels (three members plus ``ensemble_mean``) is the case that
+    matters: 3 columns strands one panel on its own row, 2 columns gives
+    a clean 2x2. Ties go to the wider grid, so five panels still lay out
+    3 + 2 rather than as a tall column.
+    """
+    if n_panels <= 1:
+        return 1
+    best = 1
+    fewest = n_panels
+    for cols in range(2, min(max_cols, n_panels) + 1):
+        empty = (-n_panels) % cols
+        if empty <= fewest:  # <= so a wider grid wins ties
+            fewest = empty
+            best = cols
+    return best
+
+
 def plot_member_panels(
     fabric_gdf: gpd.GeoDataFrame,
     panels: dict[str, pd.Series],
     *,
     units: str = "",
     cmap: str = "YlGnBu",
-    ncols: int = 3,
+    ncols: int | None = None,
     vmin: float | None = None,
     vmax: float | None = None,
     colors: dict[str, str] | None = None,
@@ -787,6 +807,11 @@ def plot_member_panels(
     panel (2nd/98th percentile of all finite values together), so panel
     brightness is comparable across members and a systematically wet or
     dry source is visible at a glance.
+
+    ``ncols`` defaults to a grid that fills (see
+    :func:`_panel_grid_ncols`). The common case is three members plus
+    ``ensemble_mean``: four panels, which want 2x2 rather than a row of
+    three with a lone straggler and 40% dead space on the slide.
 
     ``colors`` (from :func:`member_colors`) tints each panel's frame,
     tying a panel to the same member's line in the spaghetti plot and
@@ -812,6 +837,7 @@ def plot_member_panels(
     if vmin == vmax:  # a constant field would otherwise render blank
         vmax = vmin + 1.0
 
+    ncols = _panel_grid_ncols(len(panels)) if ncols is None else ncols
     ncols = max(1, min(ncols, len(panels)))
     nrows = math.ceil(len(panels) / ncols)
     fig, axes = plt.subplots(

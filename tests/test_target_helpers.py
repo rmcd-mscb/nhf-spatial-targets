@@ -575,3 +575,28 @@ def test_member_argextreme_tolerance_scales_with_the_field(helpers):
 def test_member_argextreme_rtol_zero_restores_exact_comparison(helpers):
     frame = pd.DataFrame({"a": [0.0], "b": [1e-12]}, index=[10])
     assert helpers.member_argextreme(frame, how="max", rtol=0.0).iloc[0] == 1
+
+
+def test_plot_member_panels_picks_a_grid_that_fills(helpers, tiny_fabric):
+    """3 members + ensemble_mean is 4 panels — 2x2, not 3+1 with dead space."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    def shape_for(n):
+        panels = {
+            f"m{i}": pd.Series([1.0, 2.0, 3.0], index=tiny_fabric.index)
+            for i in range(n)
+        }
+        fig, _ = helpers.plot_member_panels(tiny_fabric, panels, units="mm")
+        # every panel axes carries a title; the colorbar axes does not
+        ncols = len(
+            {round(ax.get_position().x0, 3) for ax in fig.axes if ax.get_title()}
+        )
+        plt.close(fig)
+        return ncols
+
+    assert shape_for(4) == 2  # 2x2, no empty slot
+    assert shape_for(3) == 3  # 3x1, no empty slot
+    assert shape_for(6) == 3  # 3x2, no empty slot
