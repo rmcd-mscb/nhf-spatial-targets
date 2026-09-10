@@ -110,7 +110,20 @@ def _startup_payload(
     )
 
 
-def _execute(nb_path: Path, startup: Path, timeout: int) -> None:
+def _execute(
+    nb_path: Path, startup: Path, timeout: int, startup_timeout: int
+) -> None:
+    """Execute one notebook in place via nbconvert.
+
+    Two distinct timeouts are in play and conflating them is the trap that
+    motivated issue #348. ``ExecutePreprocessor.timeout`` bounds a single
+    *cell*; ``ExecutePreprocessor.startup_timeout`` bounds how long nbclient
+    waits for the *kernel* to come up, and defaults to only 60 seconds.
+    Starting a kernel from this repo's pixi env on caldera's shared filesystem
+    exceeds that on a cold compute node, so a render would die on its first
+    notebook before running any code — while the generous ``--timeout`` made
+    it look as though an hour was allowed.
+    """
     cmd = [
         "jupyter",
         "nbconvert",
@@ -120,6 +133,7 @@ def _execute(nb_path: Path, startup: Path, timeout: int) -> None:
         "--inplace",
         "--ExecutePreprocessor.kernel_name=python3",
         f"--ExecutePreprocessor.timeout={timeout}",
+        f"--ExecutePreprocessor.startup_timeout={startup_timeout}",
         str(nb_path),
     ]
     env = os.environ.copy()
@@ -179,7 +193,11 @@ def _make_project_dir_temp_notebook(nb_path: Path, project_dir: str) -> Path:
 
 
 def render_group(
-    group: str, timeout: int, project: str | None, project_dir: str | None = None
+    group: str,
+    timeout: int,
+    project: str | None,
+    project_dir: str | None = None,
+    startup_timeout: int = 300,
 ) -> None:
     cfg = GROUPS[group]
     notebooks = sorted(cfg["dir"].glob("inspect_*.ipynb"))
@@ -231,7 +249,7 @@ def render_group(
                 display = nb
             print(f"=== executing {display} ===", flush=True)
             if project_dir is None:
-                _execute(nb, startup_path, timeout)
+                _execute(nb, startup_path, timeout, startup_timeout)
                 continue
             # Repoint PROJECT_DIR via a temp notebook so the committed,
             # gfv2-pinned inspect_*.ipynb is untouched. The temp's executed
@@ -239,7 +257,7 @@ def render_group(
             # under docs/figures/<group>/<PROJECT>/ matter.
             temp_nb = _make_project_dir_temp_notebook(nb, project_dir)
             try:
-                _execute(temp_nb, startup_path, timeout)
+                _execute(temp_nb, startup_path, timeout, startup_timeout)
             finally:
                 temp_nb.unlink(missing_ok=True)
     finally:
@@ -283,6 +301,17 @@ def main() -> int:
         default=3600,
         help="Per-cell execution timeout, seconds (default: 3600)",
     )
+    p.add_argument(
+        "--startup-timeout",
+        type=int,
+        default=300,
+        help=(
+            "Kernel startup timeout, seconds (default: 300). Distinct from "
+            "--timeout, which bounds a single cell. nbclient's own default is "
+            "60s, which is not enough to start a kernel from this repo's pixi "
+            "env on a cold shared-filesystem compute node (#348)."
+        ),
+    )
     args = p.parse_args()
     # Default --project to the project dir's basename so figures land in the
     # right subdir without having to pass both flags.
@@ -294,7 +323,13 @@ def main() -> int:
         else [args.group]
     )
     for g in groups:
-        render_group(g, args.timeout, args.project, project_dir=args.project_dir)
+        render_group(
+            g,
+            args.timeout,
+            args.project,
+            project_dir=args.project_dir,
+            startup_timeout=args.startup_timeout,
+        )
     return 0
 
 
