@@ -526,9 +526,40 @@ Turning `emit_members: false` on a target changes no bound value — only file s
 
 <!-- _class: compact -->
 
+## Oregon now keys on `hru_id`
+
+Every Oregon artifact was keyed on `nhm_id` — the **national** NHM identifier,
+16,814 values spread across 1–41,195. It now keys on `hru_id`, the Oregon
+model's own dense 1–16,814 index, matching the `gfv2-params` workflows.
+
+| | `nhm_id` (before) | `hru_id` (now) |
+|---|---|---|
+| range | 1 – 41,195, sparse | **1 – 16,814, dense** |
+| owned by | the national fabric | **the Oregon model** |
+| matches `gfv2-params` | no | **yes** |
+
+Same fabric (`model_layers_9`), same geometry, same values — only the key
+changed.
+
+<div class="callout">
+
+Key on an identifier **the project controls**. A national id can be renumbered
+upstream without a schema change or a column rename; the model's own index
+cannot.
+
+</div>
+
+<span class="footnote">
+Because the geometry never changed, values are provably identical: the aggregated NCs and weight caches were <strong>relabelled</strong> (<code>nhf-targets maintenance relabel-id-col</code>) rather than re-aggregated, and the six targets were <strong>rebuilt natively</strong> so the published files carry <code>hru_id</code> from the writer. Verification: all five <code>ensemble_std</code> medians reproduce this deck's own figures to five significant digits, and 54 of 65 re-rendered figures — every choropleth — came back byte-identical. Anyone holding data joined to the old <code>nhm_id</code> should map through the committed crosswalk in <code>docs/references/</code>. Issue #353.
+</span>
+
+---
+
+<!-- _class: compact -->
+
 ## Caveats and what is not done
 
-- **Figures here are current** — re-rendered 2026-09-10 against the rebuilt targets, adding the four ensemble figures. Every *map* also changed cosmetically: the axes were labelled "Longitude"/"Latitude" while the Oregon fabric is EPSG:5070 Albers, so every OR figure had been reporting metres as degrees. They now read `Easting (m)` / `Northing (m)`. The May OR deck carried superseded plots and is removed on this branch.
+- **Figures here are current** — re-rendered 2026-09-10 against targets rebuilt under `hru_id` (#353). Only the 11 representative-HRU series changed (their titles carry an HRU id); every map is byte-identical, which is the evidence the re-keying moved labels and not values. Every *map* also changed cosmetically: the axes were labelled "Longitude"/"Latitude" while the Oregon fabric is EPSG:5070 Albers, so every OR figure had been reporting metres as degrees. They now read `Easting (m)` / `Northing (m)`. The May OR deck carried superseded plots and is removed on this branch.
 - **The member and spread figures now exist** (issue #351): member small multiples, an `ensemble_std` map, driver maps, and per-member series, in all five member-carrying notebooks. Building them surfaced a real bug — the first tie test compared spread against exactly `0`, which left 85% of a snow-free August attributed to a noise-chosen driver; see the tie-test slide above. `snow_covered_area` gets a note instead of figures: its bounds are a MOD10C1 confidence interval, not a member min/max.
 - **`sca_targets.nc` was rebuilt despite `enabled: false`** and is in the manifest as a published target (accepted for now).
 - **Aggregated-figure notebooks glob disk, not config.** They will still render a Daymet panel for SWE even though Daymet is no longer a member of the target. Read the source of truth from the target NC.

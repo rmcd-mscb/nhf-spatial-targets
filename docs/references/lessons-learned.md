@@ -385,3 +385,73 @@ The `mwbm_climgrid.md` template is the model: title / description,
 manual-download steps, fingerprinting / placement, expected file
 layout in the datastore, and any gotchas. Track this work in a future
 issue rather than blocking on it for the current PR.
+
+---
+
+## Key on an identifier the project controls
+
+**Status:** resolved — Oregon moved from `nhm_id` to `hru_id` in issue #353.
+Crosswalk and details in
+[`or-fabric-id-crosswalk.md`](or-fabric-id-crosswalk.md).
+
+### What we found
+
+`or-spatial-targets` keyed every artifact on `nhm_id`, the **national** NHM
+identifier, even though the fabric also carried `hru_id` / `model_hru_idx` —
+the Oregon model's own index, and the key the `gfv2-params` workflows use.
+
+A national id is owned by the national fabric producer. It can be renumbered
+upstream with no schema change, no column rename and no other visible signal;
+we saw exactly that on a later Oregon fabric release (not adopted). The
+model's own index cannot move that way.
+
+Because the two numberings disagree on 16,534 of 16,814 rows while the first
+280 coincide, a bad join looks plausible on a spot check and fails silently
+everywhere else — same column name, same geometry, no error.
+
+### The rule
+
+Key on an identifier the project controls. A `{fabric}_id` convention (e.g.
+`or_id`) makes this explicit and prevents cross-fabric joins by construction.
+
+But name-scoping alone is not enough. It fixes cross-fabric confusion and does
+nothing for **version drift within a fabric**, which is the failure mode that
+actually costs you: an `or_id` can be renumbered just as quietly. Specify that
+`{fabric}_id` values are **persistent and immutable** — assigned once, never
+renumbered, retired rather than reused — and that a renumbering requires a
+declared fabric version bump. `validate` stamps a fabric sha256 today, which
+detects *that* something changed but not *what*.
+
+Note the trade-off in what replaced it: `hru_id` is a **dense positional
+index**, stable only while the HRU set is stable. Adding or removing one HRU
+shifts every id after it. It is immune to external renumbering and fragile to
+membership change — a different failure mode, not the absence of one.
+
+### Two implementation findings from the migration
+
+**Renaming a NetCDF dimension destroys its coordinate.**
+`netCDF4.Dataset.renameDimension` on a dimension that carries a coordinate
+variable silently wipes that variable — values return as the dtype fill value,
+with no exception raised and the data variables still reporting correct dims.
+A relabel therefore cannot be an in-place patch; every file is rewritten.
+Verified in `tests/test_relabel_id.py`.
+
+**A relabel must carry the source file's own encoding forward.** Re-deriving
+encoding from `io_nc.build_encoding` would re-chunk the daymet and ssebop
+aggregated outputs that `rechunk._SKIP_SOURCES` deliberately leaves unchunked,
+and flip `shuffle` on every float variable. A relabel changes labels and
+nothing else.
+
+**`fabric.id_col` belongs in the intermediate cache fingerprint.** Re-keying
+the *same* fabric file leaves `fabric_path` and `fabric_sha256` untouched, so
+`target_config_fingerprint` matched and the SCA/SWE builders reused per-year
+intermediates keyed on the old column, dying with `No variable named
+'hru_id'`. Fixed by including `id_col` in the payload.
+
+### Where to look in the code
+
+- `src/nhf_spatial_targets/relabel_id.py` — the migration, and why the map is
+  value-based rather than positional
+- `nhf-targets maintenance relabel-id-col` — the operator entry point
+- `src/nhf_spatial_targets/targets/_intermediates.py` — the fingerprint
+- `tests/test_relabel_id.py`
