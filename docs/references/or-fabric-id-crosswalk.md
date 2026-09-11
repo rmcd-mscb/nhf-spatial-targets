@@ -75,3 +75,6 @@ id after it, just as quietly. A `{fabric}_id` convention should therefore
 specify ids that are **persistent and immutable** — assigned once, never
 renumbered, never reused — not merely locally scoped. See
 [`lessons-learned.md`](lessons-learned.md).
+
+The contract we ask fabric developers to adopt so this cannot recur is
+[`fabric-publishing-guideline.md`](fabric-publishing-guideline.md).
