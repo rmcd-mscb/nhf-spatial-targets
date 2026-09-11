@@ -142,6 +142,8 @@ nav:
       - Known gaps resolved: references/known-gaps-resolved.md
       - Target period coverage: references/target-period-coverage.md
       - Lessons learned: references/lessons-learned.md
+      - Oregon fabric id crosswalk: references/or-fabric-id-crosswalk.md
+      - Fabric publishing guideline: references/fabric-publishing-guideline.md
   - Data release:
       - Overview: data_release/README.md
       - Command walkthrough: data_release/walkthrough.md

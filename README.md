@@ -111,6 +111,17 @@ pixi run catalog-sources
 pixi run catalog-variables
 ```
 
+### Fabric provenance
+
+The fabric is the one pipeline input that is **not** fetched — it is a
+hand-placed file, so a project records the path it was given rather than a
+version. [`docs/references/fabric-publishing-guideline.md`](docs/references/fabric-publishing-guideline.md)
+is the contract we ask fabric developers to follow (tagged release, one
+GeoPackage, a sidecar JSON declaring each layer's primary key and the
+artifact's SHA-256), with [`scripts/make_fabric_sidecar.py`](scripts/make_fabric_sidecar.py)
+to generate the sidecar. Until fabrics are published that way, record which
+fabric a project used from `fabric.json`.
+
 ## Projects & Datastore
 
 The pipeline has two independent concepts:
@@ -164,7 +175,11 @@ To build targets for a new fabric (e.g. upgrading from GFv1.1 to GFv2.0, or a cu
    ```
 2. Edit `/data/gfv20-targets/config.yml`:
    - Set `fabric.path` to the new fabric file (GeoPackage, GeoParquet, or Shapefile)
-   - Set `fabric.id_col` to the HRU identifier column in that file
+   - Set `fabric.id_col` to the HRU identifier column in that file — prefer the
+     **model's own** index (e.g. `hru_id`) over an externally-owned identifier
+     like `nhm_id`, which the national fabric producer can renumber between
+     releases without a schema change (issue #353,
+     [`docs/references/or-fabric-id-crosswalk.md`](docs/references/or-fabric-id-crosswalk.md))
    - Set `datastore` to the **same** datastore path used by other projects (so fetched data is reused)
 3. Copy or symlink `.credentials.yml` from an existing project, or fill it in fresh
 4. Run `materialize-creds` and `validate` for the new project
