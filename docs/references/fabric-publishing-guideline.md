@@ -156,8 +156,7 @@ version number or an id.**
 
 ## The script
 
-[`scripts/make_fabric_sidecar.py`](../../scripts/make_fabric_sidecar.py) —
-standalone, needs only `pyogrio` (ships with geopandas). Copy it into your
+`scripts/make_fabric_sidecar.py` in this repository — standalone, needs only `pyogrio` (ships with geopandas). Copy it into your
 fabric repo and run it as the last step of the build, so the sidecar can never
 drift from the artifact it describes.
 
