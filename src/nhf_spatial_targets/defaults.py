@@ -66,7 +66,7 @@ DEFAULTS: dict = {
             ],
             "time_step": "monthly",
             "period": None,  # required when enabled
-            "prms_variable": "basin_cfs",
+            "prms_variable": "hru_outflow",  # per-HRU total; see target-model-mapping.md
             "range_method": "multi_source_minmax",
             "output_file": "runoff_targets.nc",
             "nn_fill": True,

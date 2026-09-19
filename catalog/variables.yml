@@ -13,7 +13,11 @@
 variables:
 
   runoff:
-    prms_variable: basin_cfs
+    # Per-HRU total flow (sroff + ssres_flow + gwres_flow, cfs). TM 6-B10
+    # labels RUN as basin_cfs, but that is a single basin-wide value; the
+    # sources are total runoff, so the per-HRU match is hru_outflow -- NOT
+    # sroff. See docs/references/target-model-mapping.md.
+    prms_variable: hru_outflow
     description: >
       Monthly basin mean runoff. Range is min/max across two reanalysis
       sources per HRU and time step.
