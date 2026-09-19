@@ -70,7 +70,7 @@ targets:
       - mwbm_climgrid
     time_step: monthly
     period: "2000-01-01/2010-12-31"
-    prms_variable: basin_cfs
+    prms_variable: hru_outflow   # sroff + ssres_flow + gwres_flow (per-HRU total, cfs)
     range_method: multi_source_minmax
     output_file: runoff_targets.nc
     nn_fill: true

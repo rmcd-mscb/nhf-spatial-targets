@@ -8,7 +8,7 @@ This pipeline builds the baseline calibration targets documented in [Hay and oth
 
 | Target | PRMS variable | Sources | Method | Cadence |
 |---|---|---|---|---|
-| Runoff | `basin_cfs` | ERA5-Land · GLDAS-NOAH · MWBM ClimGrid | NaN-aware multi-source min/max | Monthly |
+| Runoff | `hru_outflow` | ERA5-Land · GLDAS-NOAH · MWBM ClimGrid | NaN-aware multi-source min/max | Monthly |
 | AET | `hru_actet` | MOD16A2 v061 · SSEBop · MWBM ClimGrid | Multi-source min/max | Monthly |
 | Recharge | `recharge` | Reitz 2017 · WaterGAP 2.2d · ERA5-Land | Normalized min/max | Annual |
 | Soil moisture | `soil_rechr` | MERRA-2 · NCEP/NCAR · NLDAS-MOSAIC · NLDAS-NOAH | Normalized min/max per calendar month | Monthly + annual |

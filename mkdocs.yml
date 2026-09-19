@@ -136,6 +136,7 @@ nav:
   - References:
       - TM 6-B10 crib sheet: references/tm6b10-summary.md
       - PRMSobjfun summary: references/prmsobjfun-summary.md
+      - Target ↔ model-output mapping: references/target-model-mapping.md
       - Calibration target recipes: references/calibration-target-recipes.md
       - Pipeline architecture reference: references/pipeline-architecture-reference.md
       - Processing steps reference: references/processing-steps-reference.md

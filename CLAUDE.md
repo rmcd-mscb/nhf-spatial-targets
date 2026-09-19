@@ -406,6 +406,13 @@ The pipeline separates **projects** (fabric-specific) from the **datastore** (sh
 
 ## Relationship to TM 6-B10 (Hay et al. 2023)
 
+**Before answering a calibration question** (which model output a target is
+compared with, a prior-data conflict, whether to widen a bound), read
+[`docs/references/target-model-mapping.md`](docs/references/target-model-mapping.md):
+it maps each target to its PRMS/pywatershed variable (runoff → `hru_outflow`,
+total runoff, **not** `sroff`), states what the sources measure, and lists the
+known comparison pitfalls.
+
 `docs/references/tm6b10.pdf` (and `tm6b10.md`, a pymupdf4llm conversion) is the
 methodological reference for the five calibration targets. A short crib sheet
 keyed to this repo lives at `docs/references/tm6b10-summary.md`. This pipeline

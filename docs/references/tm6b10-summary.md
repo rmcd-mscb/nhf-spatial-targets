@@ -41,7 +41,7 @@ for RUN/AET, individual source values too. The Fortran optimizer
 
 | Field | Value |
 |---|---|
-| PRMS variable | `basin_cfs` (streamflow leaving the basin) |
+| PRMS variable | report: `basin_cfs` (streamflow leaving the basin); **this repo compares per-HRU `hru_outflow`** (total runoff, not `sroff`) — see [target-model-mapping.md](target-model-mapping.md) |
 | Time step | monthly |
 | Report window | 1982–2010 |
 | Units (report) | cubic feet per second |
