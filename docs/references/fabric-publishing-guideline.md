@@ -19,22 +19,33 @@ For each fabric release, in the repo that generates it:
    Name it `<fabric>_v<version>.gpkg` — e.g. `or_v9.gpkg`.
    No spaces, no dates, no "final", no "copy".
 
-2. **Generate the sidecar JSON** (script below, ~2 seconds):
+   The version is an integer (`9`, not `2.0`).
+
+2. **Generate the sidecar JSON** (script below, ~2 seconds). Run it from the
+   fabric repo's working tree, or point `--repo-dir` at it — the sidecar
+   records that repo's commit, and warns if it can't read one or the tree has
+   uncommitted changes:
 
    ```bash
    python make_fabric_sidecar.py or_v9.gpkg \
        --fabric or --version 9 \
        --title "Oregon NHM model layers" \
-       --repo https://code.usgs.gov/ORG/REPO --tag or-v9
+       --repo https://code.usgs.gov/ORG/REPO --tag or-v9 \
+       --repo-dir path/to/fabric-repo
    ```
 
    This writes `or_v9.json` and embeds the GeoPackage's SHA-256.
 
-3. **Fill in anything the script couldn't infer.** It prints, e.g.:
+3. **Declare anything the script couldn't infer.** It prints, e.g.:
 
    ```
-   NOTE: set primary_key by hand for: domain, main
+   NOTE: no primary_key for: domain, main, npoi -- declare with --key LAYER=COLUMN
    ```
+
+   Add the answers as flags and re-run — e.g. `--key domain=domain_id`, and
+   `--xref hy_id` for any other column that belongs to someone else's
+   numbering. Don't hand-edit the JSON: the next build overwrites it, and flags
+   live in your build script where they can't be forgotten.
 
 4. **Tag and release**:
 
@@ -44,8 +55,9 @@ For each fabric release, in the repo that generates it:
 
    Create a release on that tag and attach `or_v9.gpkg` + `or_v9.json`.
 
-That's it. Consumers then pin `fabric: {source: or, version: 9}` and fetch it
-by a URL derived from the tag.
+That's it. This is what will let consumers pin a fabric by
+`{source: or, version: 9}` and fetch it by a URL derived from the tag (the
+consumer side is planned, not built yet).
 
 ---
 
@@ -66,8 +78,9 @@ only when you must, and when you do, say so in the release notes — it is a
 breaking change, not a refresh.
 
 **4. Declare each layer's primary key** in the sidecar, and mark ids that
-belong to someone else's numbering as cross-references. The script does most of
-this automatically.
+belong to someone else's numbering as cross-references. The script knows the
+keys of `nhru`, `nsegment` and `npoigages`, and flags `nhm_*` / `to_nhm_*`
+columns automatically; declare anything else with `--key` and `--xref`.
 
 ---
 
@@ -87,12 +100,13 @@ this automatically.
   "produced_by": {
     "repo": "https://code.usgs.gov/ORG/REPO",
     "tag": "or-v9",
-    "commit": "0db4bd3efddeb27ea5cf7cd83beab9ecca8d78bb",
+    "commit": "<40-character commit of the fabric repo>",
     "generated_utc": "2026-09-11T18:17:11+00:00"
   },
   "layers": {
     "nhru": {
       "geometry": "MultiPolygon",
+      "crs": "EPSG:5070",
       "features": 16814,
       "primary_key": "hru_id",
       "fields": ["vpu_agg_id", "nhm_id", "nhm_hru_seg", "areasqkm",
@@ -141,13 +155,19 @@ version number or an id.**
 
 ---
 
-## Two questions for you
+## Three questions for you
 
 1. **`main` and `npoi` look like duplicates** — identical schema, identical
    7,701 features, both Point. Is one a leftover? Dropping it would shrink the
    artifact and remove a "which do I use?" question.
 
-2. **Is `hru_id` stable across releases, or positional?** It held steady in our
+2. **What is `npoi`'s key?** `vpu_poi_id` has 305 duplicate values across the
+   7,701 points, and `segment_id` has duplicates and 57 nulls. The only unique
+   column is `nhm_seg_id`, which belongs to the national fabric. If a POI has
+   no identity of its own in this fabric, say so; otherwise a unique id column
+   would let consumers join on it safely.
+
+3. **Is `hru_id` stable across releases, or positional?** It held steady in our
    case, but it's a dense `1..N` sequence, so it would shift if HRUs were ever
    added or removed. If it's positional, say so in the sidecar — consumers need
    to know whether they can cache things keyed on it.
@@ -156,10 +176,18 @@ version number or an id.**
 
 ## The script
 
-`scripts/make_fabric_sidecar.py` in this repository — standalone, needs only `pyogrio` (ships with geopandas). Copy it into your
+[`scripts/make_fabric_sidecar.py`](https://github.com/rmcd-mscb/nhf-spatial-targets/blob/main/scripts/make_fabric_sidecar.py)
+— standalone, needs only `pyogrio` (ships with geopandas). Copy it into your
 fabric repo and run it as the last step of the build, so the sidecar can never
 drift from the artifact it describes.
 
-It refuses to guess: layers whose primary key it does not recognise are
-emitted with `"primary_key": null` and named in a note on stderr, so an
-unknown key is a prompt rather than a silent wrong answer.
+It refuses to guess:
+
+- A declared primary key must be a column of its layer, unique and non-null.
+  If not, the script exits non-zero and writes no sidecar.
+- A layer whose key it does not know is written with `"primary_key": null` and
+  named in a NOTE on stderr, so an unknown key is a prompt rather than a silent
+  wrong answer.
+- Only `.gpkg` input is accepted, and it warns when the filename doesn't match
+  `<fabric>_v<version>.gpkg` or when layers disagree on CRS (each layer's CRS
+  is recorded in its entry; the top-level `crs` becomes a list in that case).
