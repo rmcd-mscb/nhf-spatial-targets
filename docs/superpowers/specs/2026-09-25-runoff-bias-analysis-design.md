@@ -73,7 +73,7 @@ correction.
 | Gage daily flow | `nhf-spatial-targets/gage_data/sf_efc.nc` | 944 POIs × daily 1979-01-01..2022-12-31, `discharge` in cfs. 846 of 851 fabric POIs present. Not committed (380 MB; `gage_data/` gitignored). |
 | Flow management | `nhf-spatial-targets/gage_data/TableA2_FlowManagementIndex.csv` | 631 gages, `storage_index`, `use_index`, `flow_management_index` 0–3, `area_mi2`, `comid`. Source report to be recorded (open question §9). |
 | Terrain covariates | `gfv2-params` outputs (`hru_elev`, `hru_slope`, `hru_aspect`, impervious, soils) | keyed on `nhm_id`, which the Oregon `nhru` layer carries. |
-| Climate covariates | `or-spatial-targets/data/aggregated/daymet/` | precipitation, tmin/tmax per HRU; snow fraction derived. |
+| Climate covariates | `or-spatial-targets/data/aggregated/daymet/` | precipitation, tmin/tmax per HRU, 1980–2025; snow fraction derived. Climatology window 1980–2022. |
 | Geology | to download: Oregon Geologic Data Compilation, or USGS SGMC, or GLHYMPS permeability | one zonal overlay per HRU. |
 
 Defects in the gage NC that the loader must handle (measured 2026-09-25):
@@ -168,12 +168,14 @@ nhf-runoff-bias fit        # covariates + bias   -> fit.json, factor_hru.parquet
 
 Gage selection tiers are data, not code:
 
-| Tier | Flow mgmt index | Overlap years | Area check | Boundary |
-|---|---|---|---|---|
-| A | 0 | ≥ 10 | within 10 % | inside fabric |
-| B | ≤ 1 | ≥ 10 | within 10 % | inside fabric |
+| Tier | Flow mgmt index | Overlap years | Area check | Boundary | Role |
+|---|---|---|---|---|---|
+| A | ≤ 1 | ≥ 10 | within 10 % | inside fabric | **primary** — the same screen the pywatershed calibration uses (~180 gages) |
+| B | 0 | ≥ 10 | within 10 % | inside fabric | strict sensitivity check (~50 gages) |
 
-Every fit reports both tiers. A gage failing a check stays in every artifact
+Every fit reports both tiers; the factor table and the headline figures come
+from tier A, and tier B is shown alongside to confirm the relationship is not
+driven by lightly managed basins. A gage failing a check stays in every artifact
 with `tier = none` and `exclusion_reason`.
 
 ## 7. Quality gates and error handling
@@ -188,6 +190,15 @@ with `tier = none` and `exclusion_reason`.
 - `fit.json` records n gages actually used per tier and member.
 - Area check uses the CSV or NWIS area; a gage with no published area is
   `tier = none` with reason `no_published_area`.
+- **Fabric portability.** The gate above binds an analysis run to one
+  fabric, deliberately. When this scales to GFv2 or CONUS the fabric, its
+  feature id column, and the POI layer schema will all differ, so the id
+  column names (`hru_id`, `nhm_id`, `segment_id`, `to_segment`,
+  `hru_segment`, `poi_gage_id`) and the layer names are **config values with
+  Oregon defaults**, never literals in `network.py` / `accumulate.py`. Every
+  artifact records the fabric path, its sha256, and the id column it is
+  keyed on, so an Oregon `factor_hru.parquet` cannot be joined to a GFv2
+  fabric by accident.
 
 ## 8. Testing
 
@@ -201,10 +212,15 @@ with `tier = none` and `exclusion_reason`.
 ## 9. Open questions carried into implementation
 
 - Provenance of `TableA2_FlowManagementIndex.csv` (which report) for
-  citation; meaning of `oregon = N` rows (17 gages).
-- Which geology product: Oregon compilation (best resolution, Oregon only),
-  SGMC (CONUS-consistent, coarser), or GLHYMPS (permeability directly, ~1 km).
-  Recommendation: SGMC lithology majority class + GLHYMPS log-permeability,
-  because both scale to CONUS.
-- Whether the Daymet aggregation on disk already covers the full 1979–2022
-  window needed for the climate covariates.
+  citation; meaning of `oregon = N` rows (17 gages). Query is out with the
+  table's author (2026-09-25); record the citation in `gage_meta` metadata
+  once known.
+
+Resolved 2026-09-25:
+
+- **Geology: SGMC lithology majority class + GLHYMPS log-permeability**, both
+  CONUS-consistent so they scale without a product swap.
+- **Daymet covers 1980–2025** on disk, so the climate covariates and the
+  bias overlap window are **1980–2022** (gage records end 2022; the 1979
+  target/gage year is dropped from the climatology, not from the bias
+  itself, which still uses all overlap years present in both records).
