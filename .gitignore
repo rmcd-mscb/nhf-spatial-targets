@@ -65,3 +65,6 @@ _site/
 # Marp deck build output. `pixi run -e marp render-deck <deck>.slides.md --html`
 # writes the HTML next to its source; the committed artifact is the PDF.
 docs/presentations/*.slides.html
+
+# gage observation bundle (large, shared out-of-band)
+gage_data/
