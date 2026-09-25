@@ -73,7 +73,7 @@ correction.
 | Gage daily flow | `nhf-spatial-targets/gage_data/sf_efc.nc` | 944 POIs × daily 1979-01-01..2022-12-31, `discharge` in cfs. 846 of 851 fabric POIs present. Not committed (380 MB; `gage_data/` gitignored). |
 | Flow management | `nhf-spatial-targets/gage_data/TableA2_FlowManagementIndex.csv` | 631 gages, `storage_index`, `use_index`, `flow_management_index` 0–3, `area_mi2`, `comid`. Source report to be recorded (open question §9). |
 | Terrain covariates | `gfv2-params` outputs (`hru_elev`, `hru_slope`, `hru_aspect`, impervious, soils) | keyed on `nhm_id`, which the Oregon `nhru` layer carries. |
-| Climate covariates | `or-spatial-targets/data/aggregated/daymet/` | precipitation, tmin/tmax per HRU, 1980–2025; snow fraction derived. Climatology window 1980–2022. |
+| Climate covariates | `nhf-datastore/mwbm_climgrid/ClimGrid_WBM.nc` + cached weights `or-spatial-targets/weights/mwbm_climgrid_batch*.csv` | monthly `prcp`, `pet`, `snow`, `tmean` on the ~5 km nClimGrid, 1895–2020. The Oregon Daymet aggregation holds only `swe`, so ClimGrid is the climate source; climatology window **1980–2020**. |
 | Geology | to download: Oregon Geologic Data Compilation, or USGS SGMC, or GLHYMPS permeability | one zonal overlay per HRU. |
 
 Defects in the gage NC that the loader must handle (measured 2026-09-25):
@@ -129,8 +129,8 @@ Defects in the gage NC that the loader must handle (measured 2026-09-25):
   count of NaN HRUs per gage-month.
 - **`covariates.py`** — one builder per group, each emitting a per-HRU
   Parquet on `hru_id`: `terrain` (join gfv2-params on `nhm_id`), `climate`
-  (Daymet: annual P, snow fraction from daily tmean ≤ 0 °C precipitation,
-  PET via Hamon or Daymet-derived, aridity P/PET), `geology` (majority
+  (ClimGrid via the cached gdptools weights: annual P and PET, aridity
+  PET/P, snow fraction Σsnow/Σprcp from ClimGrid's own partition, mean T), `geology` (majority
   class and area-weighted log-permeability), `derived` (runoff ratio uses
   gage Q/P, so it is basin-scale only). Basin-mean versions are
   area-weighted through `gage_hrus.parquet`. Emits `covariates_hru.parquet`,
@@ -220,7 +220,8 @@ Resolved 2026-09-25:
 
 - **Geology: SGMC lithology majority class + GLHYMPS log-permeability**, both
   CONUS-consistent so they scale without a product swap.
-- **Daymet covers 1980–2025** on disk, so the climate covariates and the
-  bias overlap window are **1980–2022** (gage records end 2022; the 1979
-  target/gage year is dropped from the climatology, not from the bias
-  itself, which still uses all overlap years present in both records).
+- **Climate source is ClimGrid, not Daymet.** Daymet on disk is 1980–2025
+  but the Oregon aggregation carries only `swe`; the MWBM ClimGrid source
+  file already holds `prcp`/`pet`/`snow`/`tmean` and the project has cached
+  weights for that grid. Climatology window **1980–2020**; the bias itself
+  still uses every overlap year present in both records (1979–2022).
