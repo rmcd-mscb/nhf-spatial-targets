@@ -944,3 +944,73 @@ def test_ua_swe_threshold_mismatch_blocks_real_publish(tmp_path):
             project, make_sb_client(session), registry_path=reg, now=NOW
         )
     assert session.created == []  # nothing published -- gate fired fail-fast
+
+
+# ---------------------------------------------------------------------------
+# Default-fill sentinel gate (issue #361): unconditionally fatal, no override
+# ---------------------------------------------------------------------------
+
+
+def _write_real_agg_nc(project, key: str, year: int, *, sentinel_cells: int) -> None:
+    """Overwrite an aggregated NC with a real NetCDF; ``sentinel_cells`` > 0
+    plants gdptools' NC_FILL_DOUBLE as data (the pre-#205 on-disk state)."""
+    import numpy as np
+    import pandas as pd
+    import xarray as xr
+    from netCDF4 import default_fillvals
+
+    ro = np.random.default_rng(0).random((12, 20))
+    if sentinel_cells:
+        ro[:, :sentinel_cells] = default_fillvals["f8"]
+    ds = xr.Dataset(
+        {"ro": (("time", "nhm_id"), ro)},
+        coords={
+            "time": pd.date_range(f"{year}-01-01", periods=12, freq="MS"),
+            "nhm_id": np.arange(1, 21),
+        },
+    )
+    path = project.aggregated_dir() / key / f"{key}_{year}_agg.nc"
+    ds.to_netcdf(path, encoding={"ro": {"_FillValue": np.nan}})
+
+
+def test_fill_sentinel_gate_passes_on_clean_and_placeholder_ncs(tmp_path):
+    """Plain-bytes placeholders (the fixture's default) are skipped like the
+    provenance gate skips them; a real, clean NC clears the gate."""
+    project = build_release_project(tmp_path)
+    _write_real_agg_nc(project, "era5_land", 1980, sentinel_cells=0)
+    publish._preflight_no_fill_sentinels(project)  # does not raise
+
+
+def test_fill_sentinel_gate_is_fatal_and_names_the_file(tmp_path):
+    project = build_release_project(tmp_path)
+    _write_real_agg_nc(project, "era5_land", 1980, sentinel_cells=4)
+    with pytest.raises(publish.PreflightError) as exc:
+        publish._preflight_no_fill_sentinels(project)
+    msg = str(exc.value)
+    assert "era5_land_1980_agg.nc" in msg
+    assert "ro=48 cell(s)" in msg
+    assert "mask-fills" in msg
+
+
+def test_fill_sentinel_gate_runs_in_preflight_common_without_override(tmp_path):
+    """The gate is wired into _preflight_common and allow_incomplete_sources
+    does NOT bypass it: a sentinel-laden NC never ships."""
+    project = build_release_project(tmp_path)
+    _write_real_agg_nc(project, "era5_land", 1980, sentinel_cells=1)
+    rebuild_manifest(project)  # keep the provenance gate satisfied
+    with pytest.raises(publish.PreflightError, match="default-fill sentinel"):
+        publish._preflight_common(project, allow_incomplete_sources=True)
+
+
+def test_fill_sentinel_gate_fires_before_any_publish(tmp_path):
+    project = build_release_project(tmp_path)
+    _write_real_agg_nc(project, "era5_land", 1980, sentinel_cells=1)
+    rebuild_manifest(project)
+    reg = _registry(tmp_path)
+    _seed_umbrella(reg)
+    session = FakeSbSession()
+    with pytest.raises(publish.PreflightError, match="mask-fills"):
+        publish.publish_fabric_child(
+            project, make_sb_client(session), registry_path=reg, now=NOW
+        )
+    assert session.created == []

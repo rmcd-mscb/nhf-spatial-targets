@@ -834,6 +834,64 @@ def _preflight_ua_swe_threshold_current(project: Project) -> None:
         )
 
 
+def _preflight_no_fill_sentinels(project: Project) -> None:
+    """Refuse to publish an NC that stores the netCDF default fill as data.
+
+    Aggregated NCs written before #205 carry gdptools' ``NC_FILL_DOUBLE``
+    (``9.969209968386869e+36``) at HRUs the source grid does not cover, with
+    ``_FillValue=NaN`` declared -- so the sentinel survives ``decode_cf`` as
+    ~1e36 of real data. The target builder masks it on read, but the release
+    payload ships the aggregated NCs themselves (``release/payload.py``), so a
+    consumer would receive the sentinel verbatim (issue #361).
+
+    Verify-don't-mutate and **unconditionally fatal** (no
+    ``allow_incomplete_sources`` override): a sentinel-laden file is a
+    correctness error, not an incompleteness. The fix is
+    ``nhf-targets maintenance mask-fills -d <dir>`` (then ``rebuild-manifest``
+    if ``--compute-sha256`` provenance is in use, since the bytes change).
+
+    Walks every NC under ``data/aggregated/`` and ``targets/`` and streams a
+    full-array equality scan per float data var, so this is the **slowest**
+    pre-flight -- IO-bound, roughly a sequential read of the whole project --
+    and runs last. A plain-bytes placeholder (no NetCDF/HDF5 magic) is skipped
+    with the same policy as the provenance gate; a file that *has* NetCDF magic
+    but cannot be read is fatal here, consistent with
+    ``_preflight_provenance_complete``'s corrupt-NC rule.
+    """
+    from nhf_spatial_targets.fill_sentinels import scan_file
+    from nhf_spatial_targets.rebuild_manifest import _looks_like_netcdf
+    from nhf_spatial_targets.rechunk import _iter_layer_files
+
+    problems: list[str] = []
+    for path, _layer in _iter_layer_files(
+        project, None, None, skip_sources=frozenset()
+    ):
+        if not _looks_like_netcdf(path):
+            continue
+        try:
+            counts = scan_file(path)
+        except Exception as exc:
+            raise PreflightError(
+                f"publish pre-flight: {path} carries NetCDF magic but cannot be "
+                f"scanned for default-fill sentinels: {exc}"
+            ) from exc
+        if counts:
+            rel = path.relative_to(project.workdir)
+            detail = ", ".join(f"{v}={n} cell(s)" for v, n in counts.items())
+            problems.append(f"{rel}: {detail}")
+
+    if problems:
+        joined = "\n  - ".join(problems)
+        raise PreflightError(
+            f"publish pre-flight: {len(problems)} NC(s) store the netCDF "
+            "default-fill sentinel (9.969209968386869e+36) as data -- they were "
+            "aggregated before #205 and would ship ~1e36 as real values. Run "
+            f"'nhf-targets maintenance mask-fills -d {project.workdir}' to "
+            "back-fill them (NaN at those cells), then re-run "
+            f"rebuild-manifest:\n  - {joined}"
+        )
+
+
 def _preflight_common(
     project: Project, *, allow_incomplete_sources: bool = False
 ) -> None:
@@ -902,6 +960,12 @@ def _preflight_common(
     # ua_swe. Runs after the config-staleness gate so config.effective.yml is
     # known current.
     _preflight_ua_swe_threshold_current(project)
+
+    # The default-fill sentinel gate (verify-don't-mutate, unconditionally
+    # fatal -- no override): an aggregated NC written before #205 stores
+    # gdptools' 9.97e36 no-coverage sentinel as data, and the payload ships
+    # those files verbatim. Streams a full read of every NC, so it runs last.
+    _preflight_no_fill_sentinels(project)
 
 
 def _require_umbrella_sb_id(registry_path: Path | None) -> str:

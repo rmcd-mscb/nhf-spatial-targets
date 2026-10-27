@@ -24,7 +24,7 @@ regenerates the **derived** kind; it never touches your **intent**.
 
 ## The maintenance commands
 
-Five commands, plus `validate`. The verbs split into **report-only** (safe to run any
+Seven commands, plus `validate`. The verbs split into **report-only** (safe to run any
 time; they only print) and **regenerating** (they rewrite a *derived* artifact, never
 your intent):
 
@@ -32,19 +32,24 @@ your intent):
 |---|---|---|---|---|
 | `maintenance check-config` | report-only | `config.yml`, defaults, catalog | nothing (prints stubs) | after a pull that may add optional config keys / targets / sources |
 | `maintenance check-manifest` | report-only | `manifest.json` | nothing (prints status) | to check whether the manifest schema is behind |
+| `maintenance check-fills` | report-only | `data/aggregated/`, `targets/` | nothing (prints counts) | to find NCs that still store the netCDF default-fill sentinel (9.97e36) as data (#361) |
 | `validate` | regenerates | `config.yml`, fabric, catalog | `fabric.json`, `config.effective.yml`, `manifest.json` | after **any** `config.yml` edit, and before any release |
 | `maintenance rebuild-manifest` | regenerates | datastore × catalog, `data/aggregated/`, `targets/`, `fabric.json` | `manifest.json` | after fetching/aggregating new data, or to normalize a behind manifest |
 | `maintenance rechunk` | regenerates | `data/aggregated/`, `targets/` | rewrites those NCs in place | one-time backfill of NetCDFs built before the chunked-encoding policy (#165) |
+| `maintenance mask-fills` | regenerates | `data/aggregated/`, `targets/` | rewrites affected NCs in place | one-time backfill of NetCDFs aggregated before the default-fill mask (#205); the publish gate refuses to ship without it |
 
-All five accept `--project-dir`/`-d`. The report-only `check-*` pair **exit non-zero
+All seven accept `--project-dir`/`-d`. The report-only `check-*` trio **exit non-zero
 on drift** (0 = in sync), so you can wire them into a scripted heartbeat.
-`rebuild-manifest` and `rechunk` accept `--dry-run` to preview without writing.
+`rebuild-manifest`, `rechunk` and `mask-fills` accept `--dry-run` to preview without
+writing.
 
 ```bash
 pixi run check-config     -- --project-dir /data/my-targets
 pixi run check-manifest   -- --project-dir /data/my-targets
+pixi run check-fills      -- --project-dir /data/my-targets
 pixi run rebuild-manifest -- --project-dir /data/my-targets
 pixi run rechunk          -- --project-dir /data/my-targets --dry-run
+pixi run mask-fills       -- --project-dir /data/my-targets --dry-run
 ```
 
 > **Verb grammar.** The `check-*` commands only *report* — they never write. The
@@ -141,6 +146,32 @@ aggregated outputs untouched (intentionally unchunked, per #165). Restrict scope
 `--layer aggregated|target` or `--source <key>`. See
 [Architecture · NetCDF encoding policy](architecture/nc-encoding-policy.md) for the
 per-layer rationale.
+
+## One-time: back-fill default-fill sentinels (#361)
+
+gdptools writes the netCDF default fill `9.969209968386869e+36` as *data* at HRUs a
+source grid does not cover (the Oregon coast for Margulis WUS-SR, fabric edges for
+ERA5-Land / NLDAS / GLDAS / MWBM), with `_FillValue=NaN` declared — so xarray does
+not mask it. Since #205 the aggregator substitutes NaN at write time and the target
+builder at read time, so **target NCs are clean**, but aggregated NCs written before
+2026-05-23 still carry the sentinel on disk, and anything reading them directly
+(inspect notebooks, collaborator scripts, the release payload) sees ~1e36 as a real
+value. Both `or-spatial-targets` and `gfv2-spatial-targets` were in this state.
+
+```bash
+pixi run check-fills -- --project-dir /data/my-targets             # report: file, variable, cell count; exit 1 if any
+pixi run mask-fills  -- --project-dir /data/my-targets --dry-run   # preview
+pixi run mask-fills  -- --project-dir /data/my-targets             # rewrite affected NCs in place (sentinel -> NaN)
+pixi run rebuild-manifest -- --project-dir /data/my-targets        # only if the manifest carries --compute-sha256 checksums
+```
+
+`mask-fills` is atomic, idempotent (clean files are never touched) and
+value-preserving apart from sentinel → NaN; a rewritten file lands in the canonical
+chunked+compressed layout, so it also rechunks. It never touches the shared datastore's
+consolidated NCs. Restrict scope with `--layer aggregated|target` or `--source <key>`.
+The publish pre-flight (`release.publish._preflight_no_fill_sentinels`) streams a full
+scan of every NC and is **always fatal** — there is no override, because a sentinel-laden
+file is a wrong value, not a missing one.
 
 ## New project against an existing datastore
 

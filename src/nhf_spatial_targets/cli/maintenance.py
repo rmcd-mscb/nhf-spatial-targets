@@ -3,10 +3,10 @@
 Groups the maintenance verbs so report-vs-mutate is legible from the
 grammar (issue #319):
 
-- ``check-config`` / ``check-manifest`` are **report-only** — they never
+- ``check-config`` / ``check-manifest`` / ``check-fills`` are **report-only** — they never
   mutate the operator's intent artifacts; they print what's missing or
   behind and exit non-zero on drift so scripted heartbeats can detect it.
-- ``rebuild-manifest`` / ``rechunk`` **mutate derived artifacts** —
+- ``rebuild-manifest`` / ``rechunk`` / ``mask-fills`` **mutate derived artifacts** —
   ``manifest.json`` is regenerated as a deterministic projection; NCs are
   rewritten in place to the canonical encoding. Both accept ``--dry-run``.
 
@@ -340,6 +340,181 @@ def check_manifest_cmd(
         "This command never edits your manifest."
     )
     sys.exit(1)
+
+
+@maintenance_app.command(name="check-fills")
+def check_fills_cmd(
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
+    layer: Annotated[
+        str | None,
+        Parameter(
+            name=["--layer"],
+            help="Restrict to 'aggregated' or 'target' (default: both).",
+        ),
+    ] = None,
+    source: Annotated[
+        str | None,
+        Parameter(
+            name=["--source"],
+            help="Restrict the aggregated layer to one source key.",
+        ),
+    ] = None,
+):
+    """Report NCs that store the netCDF default-fill sentinel (9.97e36) as data.
+
+    Aggregated NCs written before #205 carry gdptools' no-coverage sentinel
+    with _FillValue=NaN declared, so it decodes as ~1e36 of real data for any
+    direct reader (issue #361). Streams every in-scope NC under
+    data/aggregated/ and targets/ (slow on a large project; IO-bound).
+
+    Report-only: never rewrites a file. Exits 0 if clean, 1 if any sentinel
+    cell or unreadable NC is found (so scripted heartbeats detect it). To
+    back-fill, run 'nhf-targets maintenance mask-fills -d <dir>'.
+    """
+    from rich.console import Console
+
+    from nhf_spatial_targets.fill_sentinels import scan_project
+    from nhf_spatial_targets.workspace import load as load_project
+
+    console = Console()
+    project = _load_for_nc_maintenance(workdir, layer, source, load_project)
+    results = scan_project(project, layer=layer, source=source)
+
+    dirty = [r for r in results if r["counts"]]
+    unreadable = [r for r in results if r.get("error")]
+    if not dirty and not unreadable:
+        console.print(
+            f"[bold green]No netCDF default-fill sentinels in {len(results)} "
+            "scanned NC(s).[/bold green]"
+        )
+        return
+
+    if dirty:
+        # One plain line per file (not a rich Table): paths are long and a
+        # table wraps them mid-name at terminal width, which defeats grepping
+        # this output from a scripted heartbeat.
+        console.print(
+            "[bold yellow]NCs storing the netCDF default-fill sentinel "
+            "(9.969209968386869e+36) as data:[/bold yellow]"
+        )
+        for r in dirty:
+            cells = ", ".join(f"{v}={n}" for v, n in r["counts"].items())
+            print(
+                f"  {r['path'].relative_to(project.workdir)}  [{r['layer']}]  {cells}"
+            )
+        console.print(
+            f"\n{len(dirty)} of {len(results)} NC(s) affected. Run "
+            f"'nhf-targets maintenance mask-fills -d {workdir}' to rewrite "
+            "them in place (sentinel -> NaN). This command never edits a file.\n"
+        )
+    if unreadable:
+        print(f"Error: {len(unreadable)} NC(s) could not be read:", file=sys.stderr)
+        for r in unreadable:
+            print(f"  {r['path'].name}: {r['error']}", file=sys.stderr)
+    sys.exit(1)
+
+
+@maintenance_app.command(name="mask-fills")
+def mask_fills_cmd(
+    workdir: Annotated[Path, _PROJECT_DIR_PARAM],
+    layer: Annotated[
+        str | None,
+        Parameter(
+            name=["--layer"],
+            help="Restrict to 'aggregated' or 'target' (default: both).",
+        ),
+    ] = None,
+    source: Annotated[
+        str | None,
+        Parameter(
+            name=["--source"],
+            help="Restrict the aggregated layer to one source key.",
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        Parameter(
+            name=["--dry-run"],
+            help="Report what would be rewritten without writing.",
+        ),
+    ] = False,
+):
+    """Back-fill NCs that store the netCDF default-fill sentinel as data.
+
+    Rewrites each affected NC in place with the sentinel cells set to NaN
+    (issue #361): atomic, idempotent (clean files are never touched), and
+    value-preserving apart from sentinel -> NaN. A rewritten file lands in
+    the canonical io_nc chunked+compressed layout. Does not touch the shared
+    datastore's consolidated NCs. Re-run 'rebuild-manifest' afterwards if the
+    manifest carries --compute-sha256 checksums, since the bytes change.
+    """
+    from nhf_spatial_targets.fill_sentinels import mask_project
+    from nhf_spatial_targets.workspace import load as load_project
+
+    project = _load_for_nc_maintenance(workdir, layer, source, load_project)
+    results = mask_project(project, layer=layer, source=source, dry_run=dry_run)
+
+    masked = [r for r in results if r["status"] == "masked"]
+    clean = [r for r in results if r["status"].startswith(("clean", "skipped"))]
+    planned = [r for r in results if r["status"] == "would-mask"]
+    failed = [r for r in results if r["status"] == "failed"]
+
+    if dry_run:
+        print(
+            f"[dry-run] {len(planned)} file(s) would be rewritten, "
+            f"{len(clean)} already clean."
+        )
+        for r in planned:
+            cells = ", ".join(f"{v}={n}" for v, n in r["counts"].items())
+            print(f"  {r['path'].relative_to(project.workdir)}: {cells}")
+    else:
+        print(f"Masked {len(masked)} file(s), {len(clean)} already clean.")
+
+    if failed:
+        print(f"Error: {len(failed)} file(s) failed to mask:", file=sys.stderr)
+        for r in failed:
+            print(f"  {r['path'].name}: {r.get('error')}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _load_for_nc_maintenance(
+    workdir: Path, layer: str | None, source: str | None, load_project
+):
+    """Shared argument validation for the NC-rewriting maintenance verbs.
+
+    Mirrors ``rechunk``'s checks: project dir and fabric.json must exist,
+    ``--layer`` must be a fabric layer, and a mistyped ``--source`` fails
+    loudly instead of becoming a silent no-op.
+    """
+    if not workdir.exists():
+        print(f"Error: Project not found: {workdir}", file=sys.stderr)
+        sys.exit(2)
+    if not (workdir / "fabric.json").exists():
+        print(
+            f"Error: fabric.json not found in {workdir}. "
+            "Run 'nhf-targets validate' first.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if layer is not None and layer not in ("aggregated", "target"):
+        print(
+            f"Error: invalid --layer {layer!r}; expected 'aggregated' or 'target'.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    try:
+        project = load_project(workdir)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    if source is not None and not (project.aggregated_dir() / source).is_dir():
+        print(
+            f"Error: no aggregated source directory '{source}' under "
+            f"{project.aggregated_dir()}.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    return project
 
 
 @maintenance_app.command(name="relabel-id-col")

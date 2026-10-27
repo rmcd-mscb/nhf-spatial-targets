@@ -6,8 +6,8 @@ The CLI is split across per-stage submodules:
 - ``cli.agg``         — ``agg`` sub-app (HRU aggregation; ``aggregate`` alias)
 - ``cli.catalog``     — ``catalog`` sub-app (registry inspection)
 - ``cli.release``     — ``release`` sub-app (ScienceBase data release)
-- ``cli.maintenance`` — ``maintenance`` sub-app (check-config /
-  check-manifest / rebuild-manifest / rechunk)
+- ``cli.maintenance`` — ``maintenance`` sub-app (check-config / check-fills /
+  check-manifest / rebuild-manifest / rechunk / mask-fills)
 - ``cli.run``         — root-level commands (init / validate / run /
   materialize-credentials)
 - ``cli._params``     — shared ``Parameter`` aliases (used inside ``Annotated``)
@@ -84,8 +84,10 @@ from nhf_spatial_targets.cli.catalog import catalog_app  # noqa: E402
 from nhf_spatial_targets.cli.fetch import fetch_app  # noqa: E402
 from nhf_spatial_targets.cli.maintenance import (  # noqa: E402
     check_config_cmd,
+    check_fills_cmd,
     check_manifest_cmd,
     maintenance_app,
+    mask_fills_cmd,
     rebuild_manifest_cmd,
     rechunk,
 )
@@ -125,6 +127,8 @@ __all__ = [
     "rebuild_manifest_cmd",
     "check_config_cmd",
     "check_manifest_cmd",
+    "check_fills_cmd",
+    "mask_fills_cmd",
     "materialize_credentials_cmd",
     # aggregate callables (test-patch targets)
     "aggregate_daymet",
