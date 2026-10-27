@@ -178,6 +178,8 @@ check-config     = { cmd = "nhf-targets maintenance check-config",     descripti
 check-manifest   = { cmd = "nhf-targets maintenance check-manifest",   description = "Report whether manifest.json predates the current schema (report-only)" }
 rebuild-manifest = { cmd = "nhf-targets maintenance rebuild-manifest", description = "Regenerate manifest.json as a deterministic projection of on-disk artifacts" }
 rechunk          = { cmd = "nhf-targets maintenance rechunk",          description = "Backfill aggregated/target NCs to the chunked+compressed layout (#165)" }
+check-fills      = { cmd = "nhf-targets maintenance check-fills",      description = "Report NCs storing the netCDF default-fill sentinel (9.97e36) as data (report-only, #361)" }
+mask-fills       = { cmd = "nhf-targets maintenance mask-fills",       description = "Rewrite NCs in place with default-fill sentinel cells set to NaN (#361)" }
 
 # Fetch source data
 fetch-era5-land = { cmd = "nhf-targets fetch era5-land", description = "Download ERA5-Land data into a project datastore" }

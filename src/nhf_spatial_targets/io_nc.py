@@ -72,7 +72,11 @@ def mask_netcdf_default_fills(ds: xr.Dataset) -> xr.Dataset:
     before write, so future NCs have ``data=NaN`` matching the declared
     ``_FillValue=NaN``) and the **read boundary** (targets/_io.py:
     read_aggregated_source — substitutes after load, so existing on-disk NCs
-    with the encoding mismatch decode correctly without rewrite) call.
+    with the encoding mismatch decode correctly without rewrite) call. The
+    **on-disk backfill** for NCs written before the write-boundary fix is
+    ``nhf-targets maintenance mask-fills`` (:mod:`fill_sentinels`, #361),
+    which rewrites them through this same helper; the publish pre-flight
+    refuses to ship a file that still carries the sentinel.
 
     Today only floats are substituted — the aggregated layer doesn't emit
     integer data vars from gdptools. The :data:`default_fillvals` lookup is

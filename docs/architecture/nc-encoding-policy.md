@@ -112,6 +112,15 @@ touches the datastore's consolidated NCs, and skips daymet/ssebop. Prefer it
 over re-aggregating (which is multi-day SLURM time to produce identical data in
 a different layout).
 
+### Sibling backfill: `nhf-targets maintenance mask-fills` (#361)
+
+`rechunk` is bit-identical by contract, so it carries a pre-#205 default-fill
+sentinel (gdptools' `NC_FILL_DOUBLE`, stored as data with `_FillValue=NaN`
+declared) straight through. `mask-fills` is the value-changing sibling: it
+rewrites only the affected files with those cells set to NaN, through the same
+`build_encoding` layout, and `check-fills` reports them. See
+[maintenance.md](../maintenance.md#one-time-back-fill-default-fill-sentinels-361).
+
 ## What the win actually is
 
 Measured on real gfv2 aggregated NCs (rewritten with this policy,

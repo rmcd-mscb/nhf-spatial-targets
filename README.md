@@ -204,8 +204,9 @@ The fabric file must contain a polygon geometry column and a unique integer HRU 
 
 **Maintaining an existing project.** When a `git pull` brings a new config key, a new
 source, a new manifest field, or a storage-layout change, you bring an existing project
-up to date with the report-only `check-config` / `check-manifest` commands and the
-regenerating `rebuild-manifest` / `rechunk` / `validate` commands — never by re-`init`ing.
+up to date with the report-only `check-config` / `check-manifest` / `check-fills` commands
+and the regenerating `rebuild-manifest` / `rechunk` / `mask-fills` / `validate` commands —
+never by re-`init`ing.
 The catch-up sequences and the one ordering rule that bites (re-run `validate` after any
 `config.yml` edit, or the publish gate fails) are documented in
 [docs/maintenance.md](docs/maintenance.md).

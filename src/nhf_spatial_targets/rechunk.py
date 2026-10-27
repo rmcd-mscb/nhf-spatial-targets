@@ -98,9 +98,18 @@ def _arrays_equal(a: np.ndarray, b: np.ndarray) -> bool:
 
 
 def _iter_layer_files(
-    project: Project, layer: str | None, source: str | None
+    project: Project,
+    layer: str | None,
+    source: str | None,
+    *,
+    skip_sources: frozenset[str] = _SKIP_SOURCES,
 ) -> list[tuple[Path, str]]:
-    """Per-file work list of ``(path, layer)`` for the requested scope."""
+    """Per-file work list of ``(path, layer)`` for the requested scope.
+
+    ``skip_sources`` defaults to the ST3 unchunked set; ``fill_sentinels``
+    passes an empty set because a default-fill sentinel is wrong wherever it
+    is.
+    """
     files: list[tuple[Path, str]] = []
     if layer in (None, "aggregated"):
         agg = project.aggregated_dir()
@@ -109,7 +118,7 @@ def _iter_layer_files(
                 key = src_dir.name
                 if source is not None and key != source:
                     continue
-                if key in _SKIP_SOURCES:
+                if key in skip_sources:
                     continue
                 files.extend(
                     (f, "aggregated") for f in sorted(src_dir.glob(f"{key}_*_agg.nc"))
