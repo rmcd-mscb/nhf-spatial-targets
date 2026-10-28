@@ -49,7 +49,7 @@ Perennial pixels are therefore removed **before** they are averaged to HRUs.
   `<datastore>/margulis_wus_sr/derived/perennial_snow_mask.nc`, with `perennial`
   (0/1), `n_years_held` and `n_years_valid` on the consolidated lat/lon grid.
   Its global attrs record the rule, the input years, the pixel count and area,
-  and `perennial_snow_mask_fingerprint`.
+  `perennial_snow_mask_build_key` and `perennial_snow_mask_fingerprint`.
 - **How it is applied.** `agg margulis-wus-sr` builds the mask if needed, then
   drops perennial cells from the gdptools weight table in memory
   (`SourceAdapter.weight_filter`; the cached weight CSVs are never rewritten
@@ -73,24 +73,25 @@ Perennial pixels are therefore removed **before** they are averaged to HRUs.
 
 ### Rebuilds and self-healing
 
-- The fingerprint covers **the rule plus the set of input years only, not file
-  contents.** The mask is rebuilt automatically when the catalog rule changes
-  or a Margulis year is added or removed.
-- **Cost of a year-set change.** Adding or removing any Margulis year changes
-  the fingerprint. Fetching WY2021, or moving a corrupt year aside, therefore
-  re-aggregates **every** Margulis year in **every** project on the shared
-  datastore and rebuilds the full SWE intermediates, even if no mask cell
-  changes.
-- **Manual recovery after re-consolidating a year with corrected data.**
-  Because the fingerprint cannot see file contents, a rebuilt mask carries the
-  *same* fingerprint. Per-year aggregates still match their stamp and are
-  skipped, the re-consolidated year is skipped too (the aggregate skip is by
-  file existence), and the SWE cache key is unchanged. Nothing re-runs
-  automatically. Delete, then re-run:
+- **Two keys.** The *build key* (`perennial_snow_mask_build_key`, a hash of the
+  rule plus the input years) decides when the mask file itself is rebuilt. The
+  *fingerprint* (`perennial_snow_mask_fingerprint`, a hash of the rule, the grid
+  and the perennial flags) is what is stamped on aggregated NCs and the SWE
+  target, so downstream work re-runs exactly when the removed-pixel set or the
+  rule changes.
+- **Cost of a year-set change.** Adding or removing a Margulis year rebuilds
+  the mask (it reads every Sep 30 slice) and changes the Margulis consolidate
+  step in every project's manifest (run `maintenance rebuild-manifest`).
+  Existing years re-aggregate, and the SWE target rebuilds, **only if a mask
+  cell (or the rule) changed**; otherwise the fingerprint is unchanged and
+  nothing downstream re-runs.
+- **After re-consolidating a year Y with corrected data.** The aggregate skip is
+  by file existence, so the operator deletes:
   1. `<datastore>/margulis_wus_sr/derived/perennial_snow_mask.nc`
-  2. `<project>/data/aggregated/margulis_wus_sr/` in **every** project that
-     uses this datastore (the rebuilt mask may differ).
-  3. `<project>/targets/.swe_intermediates/` in each such project.
+  2. `<project>/data/aggregated/margulis_wus_sr/margulis_wus_sr_<Y>_agg.nc` in
+     **every** project on the datastore
+  3. `<project>/targets/.swe_intermediates/` in each such project (the SWE
+     cache key changes only when the mask content changes)
 
   Then, per project:
 
@@ -100,6 +101,8 @@ Perennial pixels are therefore removed **before** they are averaged to HRUs.
   nhf-targets maintenance rebuild-manifest --project-dir <project>
   nhf-targets validate --project-dir <project>
   ```
+
+  If the rebuilt mask's cells changed, every year re-aggregates automatically.
 - **Manifest drift elsewhere.** A mask build or rebuild in the shared datastore
   changes the Margulis consolidate step in **every** project's manifest,
   including projects that do not use Margulis (e.g. gfv2). Their publish gate

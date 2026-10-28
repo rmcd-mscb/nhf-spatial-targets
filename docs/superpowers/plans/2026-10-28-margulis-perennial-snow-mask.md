@@ -30,7 +30,9 @@ and every other HRU keeps its exact current value.
     `held` means SWE ≥ 0.1 on the check date; the comparison is strict.
   - A pixel with `n_years_valid == 0` is not perennial.
 - **Mask path:** `<datastore>/margulis_wus_sr/derived/perennial_snow_mask.nc`.
-- **Fingerprint:** the first 12 hex characters of the sha256 of the
+- **Fingerprint:** SUPERSEDED by the spec's "Amendment (Rich, 2026-10-28, after
+  final review)": that hash is now the mask *build key*; the stamped
+  `perennial_snow_mask_fingerprint` hashes the mask content. Original text: the first 12 hex characters of the sha256 of the
   canonical JSON (`sort_keys=True`) of
   `{"swe_threshold_m", "check_month_day", "min_year_fraction", "years": sorted list[int]}`.
 - **Attr names**, global attrs, used everywhere:

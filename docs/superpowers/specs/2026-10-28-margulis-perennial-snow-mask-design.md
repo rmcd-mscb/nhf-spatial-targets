@@ -356,3 +356,23 @@ Every `sbatch` needs Rich's OK first, and always uses `--account=impd`.
 - How notebook check 3 finds the HRUs touching the mask from the weight
   cache.
 - The region boundaries for the per-region counts in notebook check 1.
+
+## Amendment (Rich, 2026-10-28, after final review)
+
+This supersedes the fingerprint bullet in "Mask artifact — datastore".
+
+- **Two keys.**
+  - `mask_build_key(rule, years)` (rule plus sorted years; global attr
+    `perennial_snow_mask_build_key`) decides when the mask NC is rebuilt.
+  - `mask_content_fingerprint(rule, lat, lon, perennial)` (sha256 of the rule,
+    grid sizes, `<f8` lat/lon and `|i1` flags in C order) is stored as
+    `perennial_snow_mask_fingerprint` and is what aggregated NCs, the SWE
+    target and the manifest carry. The years list stays on the mask NC for
+    provenance but is not stamped downstream.
+- **Why.** A rule-plus-years stamp re-aggregated every year in every project
+  whenever any year was added or removed, even when no mask cell changed. It
+  also left a rebuilt mask with changed cells under the same stamp. Stamping
+  content re-aggregates exactly when the removed-pixel set or the rule changes.
+- **Consequence.** Re-consolidating a year still needs a manual delete of the
+  mask, that year's aggregated NC and `.swe_intermediates/`; after that, a
+  changed mask re-aggregates all years automatically.

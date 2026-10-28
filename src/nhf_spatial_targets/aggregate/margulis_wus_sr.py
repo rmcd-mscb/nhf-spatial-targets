@@ -19,12 +19,14 @@ builds a per-pixel flag in the datastore
 when its SWE is at or above a threshold on the water-year-end check date in
 more than a given fraction of the years on disk (rule in the catalog,
 ``margulis_wus_sr.perennial_snow_mask``). The mask is rebuilt when the rule
-or the set of years changes, and its fingerprint is stamped on every
-per-year aggregated NC so pre-mask or stale years are re-aggregated. The
-fingerprint covers the rule and the year set, not file contents: after
-re-consolidating a year with corrected data the operator must delete the mask,
-the aggregated dir and the SWE intermediates by hand (see
-``docs/sources/margulis_wus_sr.md``).
+or the set of years changes (the *build key*: rule plus years). The
+fingerprint stamped on every per-year aggregated NC is a hash of the mask
+*content* (rule, grid, perennial flags), so pre-mask or stale years are
+re-aggregated exactly when a mask cell or the rule changes; adding a year that
+flips no cell rebuilds the mask but re-aggregates nothing. The aggregate skip
+is by file existence, so after re-consolidating a year with corrected data the
+operator deletes the mask, that year's aggregated NC in every project and the
+SWE intermediates by hand (see ``docs/sources/margulis_wus_sr.md``).
 
 The mask is applied as ``SourceAdapter.weight_filter``: perennial cells are
 dropped from the gdptools weight table, so the area-weighted ``mean`` is
@@ -109,8 +111,12 @@ class MaskRule:
         return cls(swe_threshold_m=thr, check_month_day=md, min_year_fraction=frac)
 
 
-def mask_fingerprint(rule: MaskRule, years: list[int]) -> str:
-    """12-hex-char sha256 of the rule parameters plus the sorted input years."""
+def mask_build_key(rule: MaskRule, years: list[int]) -> str:
+    """12-hex-char sha256 of the rule parameters plus the sorted input years.
+
+    Decides only whether the mask NC must be rebuilt; it is not stamped
+    downstream (see ``mask_content_fingerprint``).
+    """
     payload = {
         "swe_threshold_m": rule.swe_threshold_m,
         "check_month_day": rule.check_month_day,
@@ -119,6 +125,34 @@ def mask_fingerprint(rule: MaskRule, years: list[int]) -> str:
     }
     blob = json.dumps(payload, sort_keys=True).encode()
     return hashlib.sha256(blob).hexdigest()[:12]
+
+
+def mask_content_fingerprint(
+    rule: MaskRule, lat: np.ndarray, lon: np.ndarray, perennial: np.ndarray
+) -> str:
+    """12-hex-char sha256 of the rule, grid coordinates and perennial flags.
+
+    This is what is stamped on aggregated NCs and the SWE target. It changes
+    exactly when the removed-pixel set (or the rule, or the grid) changes, not
+    when a year is added that flips no cell. Inputs are coerced to fixed
+    dtypes (``<f8`` coords, ``|i1`` flags, C order) so float32 and float64
+    coordinates, and bool or int8 flags, hash alike.
+    """
+    lat = np.asarray(lat)
+    lon = np.asarray(lon)
+    header = {
+        "swe_threshold_m": rule.swe_threshold_m,
+        "check_month_day": rule.check_month_day,
+        "min_year_fraction": rule.min_year_fraction,
+        "lat_size": int(lat.size),
+        "lon_size": int(lon.size),
+    }
+    h = hashlib.sha256()
+    h.update(json.dumps(header, sort_keys=True).encode("utf-8"))
+    h.update(np.ascontiguousarray(lat, dtype="<f8").tobytes())
+    h.update(np.ascontiguousarray(lon, dtype="<f8").tobytes())
+    h.update(np.ascontiguousarray(perennial, dtype="|i1").tobytes())
+    return h.hexdigest()[:12]
 
 
 def classify_perennial(
@@ -159,10 +193,10 @@ def _load_check_slice(path: Path, year: int, month_day: str) -> xr.DataArray:
         return da.isel(time=0, drop=True).load()
 
 
-def _read_fingerprint(path: Path) -> str | None:
+def _read_build_key(path: Path) -> str | None:
     try:
         with xr.open_dataset(path) as ds:
-            return ds.attrs.get("perennial_snow_mask_fingerprint")
+            return ds.attrs.get("perennial_snow_mask_build_key")
     except (OSError, ValueError) as exc:
         logger.warning("Unreadable perennial-snow mask %s (%s); rebuilding", path, exc)
         return None
@@ -187,8 +221,11 @@ def ensure_perennial_snow_mask(datastore: Path, rule: MaskRule | None = None) ->
 
     The mask lives at
     ``<datastore>/margulis_wus_sr/derived/perennial_snow_mask.nc`` and is
-    rebuilt only when its stored fingerprint differs from the fingerprint of
-    the current rule plus the years on disk that have a check-date timestep.
+    rebuilt only when its stored build key differs from the build key of the
+    current rule plus the years on disk that have a check-date timestep. The
+    fingerprint stamped on the file is a hash of its content (see
+    ``mask_content_fingerprint``), so a rebuild that changes no cell leaves
+    it unchanged.
     """
     rule = rule or MaskRule.from_catalog()
     datastore = Path(datastore)
@@ -214,8 +251,8 @@ def ensure_perennial_snow_mask(datastore: Path, rule: MaskRule | None = None) ->
         )
 
     years = sorted(files)
-    fingerprint = mask_fingerprint(rule, years)
-    if path.exists() and _read_fingerprint(path) == fingerprint:
+    build_key = mask_build_key(rule, years)
+    if path.exists() and _read_build_key(path) == build_key:
         return path
 
     # Rebuild: stream one year's slice at a time into the accumulators.
@@ -242,6 +279,7 @@ def ensure_perennial_snow_mask(datastore: Path, rule: MaskRule | None = None) ->
         held += finite & (np.where(finite, arr, 0.0) >= rule.swe_threshold_m)
         del da, arr, finite
     perennial = classify_perennial(held, valid, rule.min_year_fraction)
+    fingerprint = mask_content_fingerprint(rule, lat, lon, perennial)
 
     newest = max(files.values(), key=lambda p: p.stat().st_mtime)
     from pyproj import CRS
@@ -310,6 +348,7 @@ def ensure_perennial_snow_mask(datastore: Path, rule: MaskRule | None = None) ->
                 f"{iso_from_mtime(newest)} derived from Margulis WUS-SR daily "
                 f"files (#363)"
             ),
+            "perennial_snow_mask_build_key": build_key,
             "perennial_snow_mask_fingerprint": fingerprint,
             "perennial_snow_mask_swe_threshold_m": float(rule.swe_threshold_m),
             "perennial_snow_mask_check_month_day": rule.check_month_day,
@@ -336,10 +375,11 @@ def ensure_perennial_snow_mask(datastore: Path, rule: MaskRule | None = None) ->
     }
     atomic_to_netcdf(ds, path, encoding=encoding)
     logger.info(
-        "Built perennial-snow mask %s (%d cells, fingerprint %s)",
+        "Built perennial-snow mask %s (%d cells, fingerprint %s, build key %s)",
         path,
         int(perennial.sum()),
         fingerprint,
+        build_key,
     )
     return path
 
