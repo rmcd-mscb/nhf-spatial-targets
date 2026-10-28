@@ -8,11 +8,35 @@ area-weighted HRU means via the shared aggregation driver.
 The consolidated NCs store ``SWE`` as float32 in **metres water
 equivalent** on a regular WGS84 lat/lon grid (the consolidator
 reprojects from the native ~90 m EASE-Grid). Per-pixel NaN over
-unmodelled cells decodes naturally via ``mask_and_scale=True``; the
-default ``stat_method="mean"`` is the right choice since the source
-does not apply any per-pixel quality gate in a ``pre_aggregate_hook``
-— HRUs that straddle the WUS domain edge become honest NaN, which the
-SWE target builder handles at multi-source combination time.
+unmodelled cells decodes naturally via ``mask_and_scale=True``.
+
+Perennial snow / glacier mask (#363)
+------------------------------------
+PRMS cannot carry snow across water years, so glacier and perennial-snow
+pixels are removed before HRU aggregation. ``ensure_perennial_snow_mask``
+builds a per-pixel flag in the datastore
+(``margulis_wus_sr/derived/perennial_snow_mask.nc``): a pixel is perennial
+when its SWE is at or above a threshold on the water-year-end check date in
+more than a given fraction of the years on disk (rule in the catalog,
+``margulis_wus_sr.perennial_snow_mask``). The mask is rebuilt when the rule
+or the set of years changes, and its fingerprint is stamped on every
+per-year aggregated NC so pre-mask or stale years are re-aggregated.
+
+The mask is applied as ``SourceAdapter.weight_filter``: perennial cells are
+dropped from the gdptools weight table, so the area-weighted ``mean`` is
+taken over the surviving (seasonal) cells only. An HRU with no perennial
+cell is bit-identical to the unmasked run. An HRU whose cells are all
+perennial has no weights left and is NaN, never 0.0.
+
+``stat_method`` stays ``"mean"`` (NaN propagates) and ``masked_mean`` is
+deliberately avoided: gdptools returns 0.0, not NaN, for an HRU whose
+pixels are all NaN under ``masked_mean`` (#364), which would turn a fully
+perennial HRU into a false zero-SWE value. Dropping weight rows gives the
+survivors-only mean without that failure mode.
+
+Without the mask, HRUs that straddle the WUS domain edge or contain an
+unmodelled (NaN) pixel become honest NaN under ``mean``; the SWE target
+builder handles that at multi-source combination time.
 
 The source covers only the Western US. The aggregation driver's
 geometry-driven coverage guard (#309) skips fabric batches outside the
@@ -23,6 +47,7 @@ combine uses it wherever it is finite.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import logging
@@ -40,6 +65,7 @@ from nhf_spatial_targets.aggregate._adapter import SourceAdapter
 from nhf_spatial_targets.aggregate._driver import aggregate_source
 from nhf_spatial_targets.io_nc import atomic_to_netcdf
 from nhf_spatial_targets.release.lineage import iso_from_mtime
+from nhf_spatial_targets.workspace import load as load_project
 
 logger = logging.getLogger(__name__)
 
@@ -383,9 +409,20 @@ def aggregate_margulis_wus_sr(
     worker_index: int = 0,
     n_workers: int = 1,
 ) -> None:
-    """Aggregate Margulis WUS-SR daily SWE to HRU polygons; emit per-year NCs."""
-    aggregate_source(
+    """Aggregate Margulis WUS-SR daily SWE to HRU polygons; emit per-year NCs.
+
+    Builds (or reuses) the perennial-snow mask in the datastore, then
+    aggregates with perennial cells dropped from the weights (#363).
+    """
+    datastore = load_project(Path(workdir)).datastore
+    mask_path = ensure_perennial_snow_mask(datastore)
+    adapter = dataclasses.replace(
         ADAPTER,
+        weight_filter=make_perennial_weight_filter(mask_path),
+        stamp_attrs=mask_stamp_attrs(mask_path),
+    )
+    aggregate_source(
+        adapter,
         fabric_path,
         id_col,
         workdir,

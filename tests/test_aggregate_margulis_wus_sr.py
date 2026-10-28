@@ -335,3 +335,188 @@ def test_ensure_mask_reuse_reads_no_swe(tmp_path, monkeypatch):
 
     monkeypatch.setattr(m, "_load_check_slice", _boom)
     ensure_perennial_snow_mask(store, _RULE)
+
+
+# ---------------------------------------------------------------------------
+# End-to-end with real gdptools (#363)
+# ---------------------------------------------------------------------------
+# 12x12 grid so the gdptools agg subset has non-zero offsets. Cell (lat, lon)
+# centres: lat 11.5..0.5 descending, lon -3.5..7.5.
+_E_LAT = np.arange(11.5, -0.5, -1.0)
+_E_LON = np.arange(-3.5, 8.5, 1.0)
+_E_YEARS = (1985, 1986, 1987, 1988)
+_E_A, _E_B, _E_C = 1, 2, 3
+# A: lat 3.5, lon 2.5-4.5 (all perennial). B: lat 1.5-2.5, lon 5.5-6.5 (lat 1.5
+# row perennial). C: lat 4.5-5.5, lon 1.5-2.5 (none perennial; (5.5, 1.5) NaN).
+_E_PERENNIAL = {(3.5, 2.5), (3.5, 3.5), (3.5, 4.5), (1.5, 5.5), (1.5, 6.5)}
+_E_SEASONAL_B = [(2.5, 5.5), (2.5, 6.5)]
+
+
+def _e_val(lat, lon):
+    """Seasonal SWE (m) on 09-29; < 0.1 everywhere so it never trips the mask."""
+    r = int(np.where(_E_LAT == lat)[0][0])
+    c = int(np.where(_E_LON == lon)[0][0])
+    return 0.0005 * (r * 12 + c + 1)
+
+
+def _e_write_store(datastore):
+    daily = datastore / "margulis_wus_sr" / "daily"
+    daily.mkdir(parents=True, exist_ok=True)
+    for year in _E_YEARS:
+        data = np.empty((2, _E_LAT.size, _E_LON.size))
+        for r, lat in enumerate(_E_LAT):
+            for c, lon in enumerate(_E_LON):
+                if (float(lat), float(lon)) in _E_PERENNIAL:
+                    data[:, r, c] = 0.5
+                else:
+                    data[0, r, c] = _e_val(lat, lon)
+                    data[1, r, c] = _e_val(lat, lon) + 0.001
+        data[:, 6, 5] = np.nan  # lat 5.5, lon 1.5, inside HRU C
+        ds = xr.Dataset(
+            {"SWE": (("time", "lat", "lon"), data.astype("float32"))},
+            coords={
+                "time": (
+                    "time",
+                    pd.to_datetime([f"{year}-09-29", f"{year}-09-30"]),
+                    {"standard_name": "time"},
+                ),
+                "lat": (
+                    "lat",
+                    _E_LAT,
+                    {"standard_name": "latitude", "units": "degrees_north"},
+                ),
+                "lon": (
+                    "lon",
+                    _E_LON,
+                    {"standard_name": "longitude", "units": "degrees_east"},
+                ),
+            },
+        )
+        ds.to_netcdf(daily / f"margulis_wus_sr_daily_{year}.nc")
+
+
+def _e_project(root, datastore):
+    import json
+
+    import geopandas as gpd
+    import yaml
+    from shapely.geometry import box
+
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "config.yml").write_text(
+        yaml.dump(
+            {
+                "fabric": {"path": str(root / "fabric.gpkg"), "id_col": "hru_id"},
+                "datastore": str(datastore),
+            }
+        )
+    )
+    (root / "fabric.json").write_text(json.dumps({"sha256": "abc123"}))
+    (root / "manifest.json").write_text(json.dumps({"sources": {}, "steps": []}))
+    gdf = gpd.GeoDataFrame(
+        {"hru_id": [_E_A, _E_B, _E_C]},
+        geometry=[
+            box(2.05, 3.05, 4.95, 3.95),
+            box(5.05, 1.05, 6.95, 2.95),
+            box(1.05, 4.05, 2.95, 5.95),
+        ],
+        crs="EPSG:4326",
+    )
+    gdf.to_file(root / "fabric.gpkg", driver="GPKG")
+    return root
+
+
+def _e_year_nc(root, year=1985):
+    return (
+        root
+        / "data"
+        / "aggregated"
+        / "margulis_wus_sr"
+        / f"margulis_wus_sr_{year}_agg.nc"
+    )
+
+
+def _e_run_masked(root):
+    aggregate_margulis_wus_sr(root / "fabric.gpkg", "hru_id", root)
+
+
+def _e_run_plain(root):
+    from nhf_spatial_targets.aggregate._driver import aggregate_source
+
+    aggregate_source(ADAPTER, root / "fabric.gpkg", "hru_id", root, 500)
+
+
+@pytest.fixture(scope="module")
+def e2e(tmp_path_factory):
+    base = tmp_path_factory.mktemp("margulis_e2e")
+    datastore = base / "datastore"
+    _e_write_store(datastore)
+    masked = _e_project(base / "masked", datastore)
+    plain = _e_project(base / "plain", datastore)
+    _e_run_masked(masked)
+    _e_run_plain(plain)
+    return datastore, masked, plain
+
+
+def test_end_to_end_fully_perennial_hru_nan(e2e):
+    _, masked, _ = e2e
+    with xr.open_dataset(_e_year_nc(masked)) as ds:
+        a = ds["SWE"].sel(hru_id=_E_A)
+        assert np.isnan(a).all()  # never 0.0
+        assert not (a == 0.0).any()
+
+
+def test_end_to_end_partial_hru_mean_of_seasonal(e2e):
+    _, masked, _ = e2e
+    with xr.open_dataset(_e_year_nc(masked)) as ds:
+        got = ds["SWE"].sel(hru_id=_E_B).values
+    expected = np.array(
+        [
+            np.mean([_e_val(lat, lon) for lat, lon in _E_SEASONAL_B]),
+            np.mean([_e_val(lat, lon) + 0.001 for lat, lon in _E_SEASONAL_B]),
+        ]
+    )
+    np.testing.assert_allclose(got, expected, rtol=1e-3)
+
+
+def test_end_to_end_unmasked_hru_bit_identical(e2e):
+    _, masked, plain = e2e
+    for year in _E_YEARS:
+        with (
+            xr.open_dataset(_e_year_nc(masked, year)) as m,
+            xr.open_dataset(_e_year_nc(plain, year)) as p,
+        ):
+            mc = m["SWE"].sel(hru_id=_E_C).values
+            pc = p["SWE"].sel(hru_id=_E_C).values
+        np.testing.assert_array_equal(mc, pc)
+        assert np.isnan(mc).all()  # the in-grid NaN pixel poisons plain "mean"
+
+
+def test_end_to_end_stamps_fingerprint(e2e):
+    _, masked, plain = e2e
+    expected = mask_fingerprint(MaskRule.from_catalog(), list(_E_YEARS))
+    for year in _E_YEARS:
+        with xr.open_dataset(_e_year_nc(masked, year)) as ds:
+            assert ds.attrs["perennial_snow_mask_fingerprint"] == expected
+    with xr.open_dataset(_e_year_nc(plain)) as ds:
+        assert "perennial_snow_mask_fingerprint" not in ds.attrs
+
+
+def test_end_to_end_premask_year_reaggregated(tmp_path, caplog):
+    datastore = tmp_path / "datastore"
+    _e_write_store(datastore)
+    root = _e_project(tmp_path / "proj", datastore)
+    _e_run_plain(root)
+    with xr.open_dataset(_e_year_nc(root)) as ds:
+        assert "perennial_snow_mask_fingerprint" not in ds.attrs
+    with caplog.at_level(logging.WARNING):
+        _e_run_masked(root)
+    assert "stale" in caplog.text
+    with xr.open_dataset(_e_year_nc(root)) as ds:
+        assert "perennial_snow_mask_fingerprint" in ds.attrs
+        assert np.isnan(ds["SWE"].sel(hru_id=_E_A)).all()
+
+
+def test_module_adapter_stays_plain():
+    assert ADAPTER.weight_filter is None
+    assert not ADAPTER.stamp_attrs
