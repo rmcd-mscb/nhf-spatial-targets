@@ -897,6 +897,34 @@ def test_margulis_params_corrupt_netcdf_magic_raises(tmp_path):
         _aggregate_nc_params(_MARGULIS, [nc])
 
 
+def test_aggregate_nc_params_corrupt_later_year_raises(tmp_path):
+    """#366: every agg NC is now read, so a corrupt NC after a stamped one
+    raises (the first-stamp loop used to stop before reaching it)."""
+    from nhf_spatial_targets.rebuild_manifest import _aggregate_nc_params
+
+    first = tmp_path / "ua_swe_1982_agg.nc"
+    second = tmp_path / "ua_swe_1983_agg.nc"
+    _write_ua_swe_agg_nc(first, threshold=1.0)
+    second.write_bytes(b"\x89HDF\r\n\x1a\n" + b"\x00garbage")
+    with pytest.raises(ValueError, match="truncated or corrupt"):
+        _aggregate_nc_params("ua_swe", [first, second])
+
+
+def test_looks_like_netcdf_reads_header_only(tmp_path, monkeypatch):
+    """#366 review: the magic check must not read the whole file (target NCs
+    reach tens of GB)."""
+    from nhf_spatial_targets.rebuild_manifest import _looks_like_netcdf
+
+    nc = tmp_path / "big.nc"
+    nc.write_bytes(b"\x89HDF\r\n\x1a\n" + b"\x00" * 1024)
+
+    def _no_full_read(self):
+        raise AssertionError("read_bytes() loads the whole file")
+
+    monkeypatch.setattr(Path, "read_bytes", _no_full_read)
+    assert _looks_like_netcdf(nc) is True
+
+
 def test_margulis_params_non_netcdf_placeholder_is_empty(tmp_path):
     from nhf_spatial_targets.rebuild_manifest import _aggregate_nc_params
 

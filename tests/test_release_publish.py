@@ -1057,9 +1057,7 @@ def test_margulis_mask_rule_differs_from_catalog_is_fatal(tmp_path):
     project = build_release_project(tmp_path)
     _consistent_margulis(project)
     _write_margulis_agg(project, 1991, perennial_snow_mask_swe_threshold_m=0.25)
-    with pytest.raises(
-        publish.PreflightError, match="perennial_snow_mask_swe_threshold_m=0.25"
-    ):
+    with pytest.raises(publish.PreflightError, match=r"swe_threshold_m in \[.0\.25.\]"):
         publish._preflight_margulis_mask_current(project)
 
 
@@ -1127,6 +1125,107 @@ def test_margulis_mask_placeholder_target_is_skipped(tmp_path):
     _consistent_margulis(project)
     (project.targets_dir() / "swe_targets.nc").write_bytes(b"placeholder")
     publish._preflight_margulis_mask_current(project)  # does not raise
+
+
+def test_margulis_mask_target_period_outside_margulis_passes(tmp_path):
+    """A SWE period with no Margulis aggregate year gets no fingerprint from
+    the builder (Margulis is an all-NaN member there), so it is not required."""
+    project = build_release_project(tmp_path)
+    _consistent_margulis(project)  # agg years 1990, 1991
+    _write_swe_target(
+        project, {"member_keys": f"snodas,{_MG}", "period": "2022-01-01/2024-12-31"}
+    )
+    _set_swe_sources(project, ["snodas", _MG])
+    publish._preflight_margulis_mask_current(project)  # does not raise
+
+
+def test_margulis_mask_target_period_overlapping_requires_stamp(tmp_path):
+    project = build_release_project(tmp_path)
+    _consistent_margulis(project)
+    _write_swe_target(
+        project, {"member_keys": f"snodas,{_MG}", "period": "1980-01-01/2024-12-31"}
+    )
+    with pytest.raises(publish.PreflightError, match="carries no"):
+        publish._preflight_margulis_mask_current(project)
+
+
+def test_margulis_mask_renamed_product_still_checked(tmp_path):
+    """A stale product left under a non-configured filename still ships, so it
+    is still checked."""
+    project = build_release_project(tmp_path)
+    _consistent_margulis(project)
+    _write_swe_target(
+        project, {"member_keys": _MG, _SWE_FP_ATTR: "0123456789ab"}, name="swe_v1.nc"
+    )
+    with pytest.raises(publish.PreflightError, match="swe_v1.nc"):
+        publish._preflight_margulis_mask_current(project)
+
+
+def test_margulis_mask_nn_filled_with_fingerprint_passes(tmp_path):
+    project = build_release_project(tmp_path)
+    _consistent_margulis(project)
+    _write_swe_target(project, {_SWE_FP_ATTR: _FP}, name="swe_targets_nn_filled.nc")
+    _set_swe_sources(project, [_MG])
+    publish._preflight_margulis_mask_current(project)  # does not raise
+
+
+def test_margulis_mask_rule_mismatch_grouped_by_key(tmp_path):
+    """A changed check_month_day across years is one problem line, not one
+    per file."""
+    project = build_release_project(tmp_path)
+    _write_margulis_mask(project)
+    _write_margulis_agg(project, 1990, perennial_snow_mask_check_month_day="08-31")
+    _write_margulis_agg(project, 1991, perennial_snow_mask_check_month_day="08-31")
+    with pytest.raises(publish.PreflightError) as exc:
+        publish._preflight_margulis_mask_current(project)
+    msg = str(exc.value)
+    assert "2 agg NC(s) were built with perennial_snow_mask_check_month_day" in msg
+    assert msg.count("perennial_snow_mask_check_month_day") == 1
+
+
+def test_margulis_mask_min_year_fraction_mismatch_is_fatal(tmp_path):
+    project = build_release_project(tmp_path)
+    _consistent_margulis(project)
+    _write_margulis_agg(project, 1991, perennial_snow_mask_min_year_fraction=0.75)
+    with pytest.raises(publish.PreflightError, match="min_year_fraction in"):
+        publish._preflight_margulis_mask_current(project)
+
+
+def test_margulis_mask_unreadable_mask_nc_is_fatal(tmp_path):
+    project = build_release_project(tmp_path)
+    _consistent_margulis(project)
+    _write_margulis_mask(project).write_bytes(b"not a netcdf")
+    with pytest.raises(publish.PreflightError, match="is unreadable"):
+        publish._preflight_margulis_mask_current(project)
+
+
+def test_margulis_mask_bad_catalog_rule_reported_with_other_problems(
+    tmp_path, monkeypatch
+):
+    """A broken catalog rule is collected, not raised first, so the operator
+    also sees the other problems in one run."""
+    from nhf_spatial_targets.aggregate import margulis_wus_sr
+
+    project = build_release_project(tmp_path)
+    _consistent_margulis(project)
+    _write_margulis_agg(project, 1992, stamped=False)
+
+    def _boom():
+        raise KeyError("perennial_snow_mask")
+
+    monkeypatch.setattr(margulis_wus_sr.MaskRule, "from_catalog", _boom)
+    with pytest.raises(publish.PreflightError) as exc:
+        publish._preflight_margulis_mask_current(project)
+    assert "catalog margulis_wus_sr.perennial_snow_mask rule" in str(exc.value)
+    assert "margulis_wus_sr_1992_agg" in str(exc.value)
+
+
+def test_margulis_mask_consistent_clears_preflight_common(tmp_path):
+    """End-to-end: a consistent Margulis project clears every shared gate."""
+    project = build_release_project(tmp_path)
+    _consistent_margulis(project)
+    rebuild_manifest(project)
+    publish._preflight_common(project)  # does not raise
 
 
 def test_margulis_mask_stale_target_blocks_real_publish(tmp_path):

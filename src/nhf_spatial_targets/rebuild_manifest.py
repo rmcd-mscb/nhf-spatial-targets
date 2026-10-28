@@ -202,8 +202,10 @@ _NETCDF_MAGIC: tuple[bytes, ...] = (
 
 def _looks_like_netcdf(nc: Path) -> bool:
     """Return True if *nc*'s leading bytes carry NetCDF/HDF5 magic."""
+    # Read only the header: target NCs reach tens of GB (#366 review).
     try:
-        head = nc.read_bytes()[:8]
+        with nc.open("rb") as f:
+            head = f.read(8)
     except OSError:
         return False
     return any(head.startswith(m) for m in _NETCDF_MAGIC)

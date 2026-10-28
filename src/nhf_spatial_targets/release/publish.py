@@ -864,10 +864,14 @@ def _preflight_margulis_mask_current(project: Project) -> None:
     :func:`read_margulis_mask_stamp` and is caught earlier, at the
     ``_preflight_provenance_complete`` projection boundary.
 
-    A SWE product "uses Margulis" when ``margulis_wus_sr`` is in its
-    ``member_keys`` attr or in the effective config's
-    ``targets.snow_water_equivalent.sources``; either way it must carry the
-    target fingerprint. A product carrying the attr is always checked.
+    Check 4 scans every ``targets/*.nc``. A product that carries the target
+    fingerprint attr is always checked against the aggregates. A product
+    without it is required to carry it when it "uses Margulis"
+    (``margulis_wus_sr`` in its ``member_keys``, or, for the configured SWE
+    output, in the effective config's SWE ``sources``) **and** its ``period``
+    overlaps a Margulis aggregate year. Outside Margulis coverage the builder
+    stamps nothing, so requiring the attr would be a block that re-running
+    cannot clear.
     """
     import math
 
@@ -885,6 +889,7 @@ def _preflight_margulis_mask_current(project: Project) -> None:
         _looks_like_netcdf,
         read_margulis_mask_stamp,
     )
+    from nhf_spatial_targets.targets._io import parse_period as _parse_target_period
 
     agg_dir = project.aggregated_dir() / _MARGULIS_KEY
     if not agg_dir.is_dir():
@@ -915,28 +920,34 @@ def _preflight_margulis_mask_current(project: Project) -> None:
     try:
         rule = MaskRule.from_catalog()
     except (KeyError, ValueError) as exc:
-        raise PreflightError(
-            f"publish pre-flight: the catalog margulis_wus_sr.perennial_snow_mask "
-            f"rule is missing or invalid: {exc}"
-        ) from exc
-    expected_rule = {
-        "perennial_snow_mask_swe_threshold_m": rule.swe_threshold_m,
-        "perennial_snow_mask_check_month_day": rule.check_month_day,
-        "perennial_snow_mask_min_year_fraction": rule.min_year_fraction,
-    }
-    for nc, s in stamped.items():
+        rule = None
+        problems.append(
+            f"the catalog margulis_wus_sr.perennial_snow_mask rule is missing "
+            f"or invalid ({exc}), so the stamped rule cannot be verified"
+        )
+    if rule is not None:
+        expected_rule = {
+            "perennial_snow_mask_swe_threshold_m": rule.swe_threshold_m,
+            "perennial_snow_mask_check_month_day": rule.check_month_day,
+            "perennial_snow_mask_min_year_fraction": rule.min_year_fraction,
+        }
         for key, want in expected_rule.items():
-            got = s.get(key)
-            if isinstance(want, float):
-                same = got is not None and math.isclose(
-                    got, want, rel_tol=1e-9, abs_tol=1e-12
-                )
-            else:
-                same = got == want
-            if not same:
+            wrong: dict[str, object] = {}
+            for nc, s in stamped.items():
+                got = s.get(key)
+                if isinstance(want, float):
+                    same = got is not None and math.isclose(
+                        got, want, rel_tol=1e-9, abs_tol=1e-12
+                    )
+                else:
+                    same = got == want
+                if not same:
+                    wrong[nc.name] = got
+            if wrong:
+                built = sorted({str(v) for v in wrong.values()})
                 problems.append(
-                    f"{nc.name} was built with {key}={got} but the "
-                    f"catalog rule says {want}"
+                    f"{len(wrong)} agg NC(s) were built with {key} in {built} "
+                    f"but the catalog rule says {want}: {sorted(wrong)}"
                 )
 
     # 3. The stamped fingerprint matches the datastore mask NC.
@@ -949,7 +960,7 @@ def _preflight_margulis_mask_current(project: Project) -> None:
     else:
         try:
             mask_fp = mask_stamp_attrs(mask_path)[_MASK_FINGERPRINT_ATTR]
-        except (OSError, KeyError, ValueError) as exc:
+        except (OSError, KeyError, TypeError, ValueError) as exc:
             problems.append(f"the datastore mask NC {mask_path} is unreadable: {exc}")
         else:
             stale = [fp for fp in fingerprints if fp != mask_fp]
@@ -980,31 +991,62 @@ def _preflight_margulis_mask_current(project: Project) -> None:
     )
     target_attr = f"{_MARGULIS_KEY}_{_MASK_FINGERPRINT_ATTR}"
     config_uses_margulis = _MARGULIS_KEY in (swe_cfg.get("sources") or [])
-    if output_file:
-        stem = Path(output_file).stem
-        for nc in sorted(project.targets_dir().glob(f"{stem}*.nc")):
-            # A plain-bytes placeholder is skipped; a corrupt NC with NetCDF
-            # magic was already made fatal by _preflight_provenance_complete.
-            if not nc.is_file() or not _looks_like_netcdf(nc):
-                continue
+    stem = Path(output_file).stem if output_file else None
+    agg_years = set()
+    for nc in ncs:
+        try:
+            agg_years.add(int(nc.stem.split("_")[-2]))
+        except (IndexError, ValueError):
+            continue
+
+    def _overlaps_margulis(period: object) -> bool:
+        # margulis_input_provenance stamps only from aggregates inside the
+        # period, so a product whose period misses every Margulis year has
+        # no stamp to carry. An unparseable period is treated as overlapping.
+        try:
+            start, end = _parse_target_period(str(period))
+            lo, hi = int(start[:4]), int(end[:4])
+        except (TypeError, ValueError):
+            return True
+        return any(lo <= y <= hi for y in agg_years)
+
+    # Every published target NC is scanned (the payload ships all of them),
+    # not only the configured SWE filename, so a renamed output_file cannot
+    # leave a stale product unchecked.
+    for nc in sorted(project.targets_dir().glob("*.nc")):
+        # A plain-bytes placeholder is skipped; a corrupt NC with NetCDF magic
+        # was already made fatal by _preflight_provenance_complete.
+        if not nc.is_file() or not _looks_like_netcdf(nc):
+            continue
+        try:
             with xr.open_dataset(nc, decode_times=False) as ds:
                 attrs = dict(ds.attrs)
-            members = str(attrs.get("member_keys", "")).split(",")
-            target_fp = attrs.get(target_attr)
-            uses_margulis = config_uses_margulis or _MARGULIS_KEY in members
-            if target_fp is None:
-                if uses_margulis:
-                    problems.append(
-                        f"{nc.name} was built with {_MARGULIS_KEY} but carries no "
-                        f"{target_attr} (built before the perennial-snow mask)"
-                    )
-                continue
-            if str(target_fp) not in fingerprints:
+        except Exception as exc:
+            problems.append(f"{nc.name} could not be opened to read its attrs: {exc}")
+            continue
+        is_swe_product = stem is not None and nc.name.startswith(stem)
+        members = str(attrs.get("member_keys", "")).split(",")
+        target_fp = attrs.get(target_attr)
+        if target_fp is None:
+            uses_margulis = _MARGULIS_KEY in members or (
+                is_swe_product and config_uses_margulis
+            )
+            period = attrs.get("period") or (
+                swe_cfg.get("period") if is_swe_product else None
+            )
+            if uses_margulis and _overlaps_margulis(period):
                 problems.append(
-                    f"{nc.name} has {target_attr}={target_fp} but the agg NCs "
-                    f"carry {fingerprints} (Margulis was re-aggregated after "
-                    f"the SWE target was built)"
+                    f"{nc.name} was built with {_MARGULIS_KEY} over a period with "
+                    f"Margulis data but carries no {target_attr} (built before "
+                    f"the perennial-snow mask, or before Margulis was aggregated)"
                 )
+            continue
+        if str(target_fp) not in fingerprints:
+            problems.append(
+                f"{nc.name} has {target_attr}={target_fp} but the agg NCs "
+                f"carry {fingerprints} (Margulis was re-aggregated after "
+                f"the SWE target was built)"
+            )
 
     if problems:
         joined = "\n  - ".join(problems)

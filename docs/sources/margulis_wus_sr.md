@@ -124,9 +124,12 @@ Perennial pixels are therefore removed **before** they are averaged to HRUs.
   1. every per-year aggregate is stamped, with one fingerprint;
   2. the stamped rule equals the current catalog `perennial_snow_mask` rule;
   3. that fingerprint equals the datastore mask NC's (a missing mask NC fails);
-  4. every SWE target product built with Margulis (`margulis_wus_sr` in its
-     `member_keys` or in the configured SWE `sources`) carries
-     `margulis_wus_sr_perennial_snow_mask_fingerprint` with that same value.
+  4. every target NC under `targets/` that carries
+     `margulis_wus_sr_perennial_snow_mask_fingerprint` carries that same
+     value. A product built with Margulis (`margulis_wus_sr` in its
+     `member_keys`, or in the configured SWE `sources`) must carry the attr
+     when its `period` overlaps a Margulis aggregate year. Outside Margulis
+     coverage the builder stamps nothing, so nothing is required.
 
   The usual cause of check 4 failing is re-aggregating Margulis without
   re-running `run-swe`. The fix is always the sequence above: `agg`, `run`,
