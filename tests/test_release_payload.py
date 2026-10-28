@@ -344,3 +344,13 @@ def test_distribution_kind_literal_matches_catalog_tokens():
     from typing import get_args
 
     assert set(get_args(DistributionKind)) == catalog.DISTRIBUTION_KIND_TOKENS
+
+
+def test_margulis_source_child_includes_perennial_mask(tmp_path):
+    """#363: the datastore perennial-snow mask ships as Margulis provenance."""
+    project = _build_project(tmp_path)
+    _touch(project.datastore / "margulis_wus_sr" / "margulis_wus_sr_1990.nc")
+    _touch(project.datastore / "margulis_wus_sr" / "derived" / "perennial_snow_mask.nc")
+    plan = payload.plan_source_child(project, "margulis_wus_sr")
+    assert plan.distribution_kind == "data"
+    assert any(p.name == "perennial_snow_mask.nc" for p in plan.data_files)

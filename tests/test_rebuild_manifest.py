@@ -764,3 +764,114 @@ def test_synthesize_steps_lifts_ua_swe_threshold_param(tmp_path):
     assert len(agg_steps) == 1
     assert agg_steps[0]["source_key"] == "ua_swe"
     assert agg_steps[0]["params"] == {"depth_threshold_mm": 3.0}
+
+
+# ---------------------------------------------------------------------------
+# #363: Margulis perennial-snow mask params lifted into aggregate params
+# ---------------------------------------------------------------------------
+
+_MARGULIS = "margulis_wus_sr"
+
+
+def _write_margulis_agg_nc(path: Path, *, stamped: bool = True):
+    """Write a synthetic Margulis aggregated NC with the mask global attrs."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ds = xr.Dataset({"swe": (("hru_id",), np.zeros(2, dtype="float32"))})
+    if stamped:
+        ds.attrs.update(
+            {
+                "perennial_snow_mask_fingerprint": "abc123def456",
+                "perennial_snow_mask_swe_threshold_m": 0.1,
+                "perennial_snow_mask_check_month_day": "09-30",
+                "perennial_snow_mask_min_year_fraction": 0.5,
+            }
+        )
+    ds.to_netcdf(path)
+
+
+def _margulis_project(tmp_path, *, stamped: bool = True):
+    datastore = tmp_path / "datastore"
+    (datastore / _MARGULIS / "derived").mkdir(parents=True)
+    (datastore / _MARGULIS / "derived" / "perennial_snow_mask.nc").write_bytes(b"x")
+    (datastore / _MARGULIS / "margulis_wus_sr_1990.nc").write_bytes(b"x")
+    proj = tmp_path / "proj"
+    agg = proj / "data" / "aggregated" / _MARGULIS
+    _write_margulis_agg_nc(agg / "margulis_wus_sr_1990_agg.nc", stamped=stamped)
+    _write_margulis_agg_nc(agg / "margulis_wus_sr_1991_agg.nc", stamped=stamped)
+    (proj / "fabric.json").write_text("{}")
+    return datastore, proj
+
+
+def _margulis_step(datastore, proj, kind):
+    from nhf_spatial_targets.rebuild_manifest import synthesize_steps
+
+    steps = synthesize_steps(
+        datastore=datastore, project_dir=proj, compute_sha256=False
+    )
+    (step,) = [s for s in steps if s["kind"] == kind and s["source_key"] == _MARGULIS]
+    return step
+
+
+def test_margulis_aggregate_step_params_carry_mask(tmp_path):
+    datastore, proj = _margulis_project(tmp_path)
+    step = _margulis_step(datastore, proj, "aggregate")
+    assert step["params"] == {
+        "perennial_snow_mask_fingerprint": "abc123def456",
+        "perennial_snow_mask_swe_threshold_m": 0.1,
+        "perennial_snow_mask_check_month_day": "09-30",
+        "perennial_snow_mask_min_year_fraction": 0.5,
+    }
+
+
+def test_margulis_consolidate_outputs_include_mask(tmp_path):
+    datastore, proj = _margulis_project(tmp_path)
+    step = _margulis_step(datastore, proj, "consolidate")
+    assert any(
+        o["path"].endswith("derived/perennial_snow_mask.nc") for o in step["outputs"]
+    )
+
+
+def test_margulis_params_absent_when_unstamped(tmp_path):
+    datastore, proj = _margulis_project(tmp_path, stamped=False)
+    step = _margulis_step(datastore, proj, "aggregate")
+    assert "perennial_snow_mask_fingerprint" not in step.get("params", {})
+
+
+def test_margulis_params_corrupt_netcdf_magic_raises(tmp_path):
+    from nhf_spatial_targets.rebuild_manifest import _aggregate_nc_params
+
+    nc = tmp_path / "margulis_wus_sr_1990_agg.nc"
+    nc.write_bytes(b"\x89HDF\r\n\x1a\n" + b"truncated")
+    with pytest.raises(ValueError, match="corrupt|truncated"):
+        _aggregate_nc_params(_MARGULIS, [nc])
+
+
+def test_margulis_params_non_netcdf_placeholder_is_empty(tmp_path):
+    from nhf_spatial_targets.rebuild_manifest import _aggregate_nc_params
+
+    nc = tmp_path / "margulis_wus_sr_1990_agg.nc"
+    nc.write_bytes(b"x")
+    assert _aggregate_nc_params(_MARGULIS, [nc]) == {}
+
+
+def test_rebuild_deterministic_with_mask(tmp_path):
+    from nhf_spatial_targets.rebuild_manifest import rebuild_manifest
+
+    datastore, proj = _margulis_project(tmp_path)
+    (proj / "config.yml").write_text(
+        yaml.dump(
+            {
+                "fabric": {"path": "/fake/fabric.gpkg", "id_col": "hru_id"},
+                "datastore": str(datastore),
+            }
+        )
+    )
+    (proj / "fabric.json").write_text(
+        json.dumps(
+            {"sha256": "abc", "hru_count": 3, "id_col": "hru_id", "id_col_sorted": True}
+        )
+    )
+    project = load_project(proj)
+    m1 = rebuild_manifest(project, dry_run=True)
+    m2 = rebuild_manifest(project, dry_run=True)
+    assert json.dumps(m1, indent=2) == json.dumps(m2, indent=2)
