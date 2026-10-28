@@ -112,12 +112,18 @@ def _year_files(datastore: Path) -> list[tuple[int, Path]]:
     return out
 
 
-def _check_slice(path: Path, year: int, month_day: str) -> xr.DataArray | None:
-    """Return the check-date SWE slice (lazy-loaded), or None if absent."""
+def _has_check_date(path: Path, year: int, month_day: str) -> bool:
+    """True if the file's ``time`` index contains the check date (no SWE read)."""
+    with xr.open_dataset(path) as ds:
+        times = ds.indexes["time"]
+        day = pd.Timestamp(f"{year}-{month_day}")
+        return bool(((times >= day) & (times < day + pd.Timedelta(days=1))).any())
+
+
+def _load_check_slice(path: Path, year: int, month_day: str) -> xr.DataArray:
+    """Load the check-date SWE slice (time dim dropped)."""
     with xr.open_dataset(path) as ds:
         da = ds["SWE"].sel(time=slice(f"{year}-{month_day}", f"{year}-{month_day}"))
-        if da.sizes["time"] == 0:
-            return None
         return da.isel(time=0, drop=True).load()
 
 
@@ -156,10 +162,9 @@ def ensure_perennial_snow_mask(datastore: Path, rule: MaskRule | None = None) ->
     datastore = Path(datastore)
     path = datastore / _MASK_RELPATH
 
-    slices: dict[int, tuple[Path, xr.DataArray]] = {}
+    files: dict[int, Path] = {}
     for year, f in _year_files(datastore):
-        da = _check_slice(f, year, rule.check_month_day)
-        if da is None:
+        if not _has_check_date(f, year, rule.check_month_day):
             logger.info(
                 "Margulis %s has no %s-%s timestep; left out of the "
                 "perennial-snow mask",
@@ -168,41 +173,45 @@ def ensure_perennial_snow_mask(datastore: Path, rule: MaskRule | None = None) ->
                 rule.check_month_day,
             )
             continue
-        slices[year] = (f, da)
-    if not slices:
+        files[year] = f
+    if not files:
         raise FileNotFoundError(
             f"No Margulis daily files with a {rule.check_month_day} timestep "
             f"under {datastore / _SOURCE_KEY / 'daily'}; run "
             f"`nhf-targets fetch {_SOURCE_KEY}` first."
         )
 
-    years = sorted(slices)
+    years = sorted(files)
     fingerprint = mask_fingerprint(rule, years)
     if path.exists() and _read_fingerprint(path) == fingerprint:
         return path
 
-    first = slices[years[0]][1]
-    lat, lon = first["lat"].values, first["lon"].values
-    for year in years[1:]:
-        da = slices[year][1]
-        for name, ref in (("lat", lat), ("lon", lon)):
-            if da[name].shape != ref.shape or not np.array_equal(da[name].values, ref):
-                raise ValueError(
-                    f"Margulis {year} {name} coordinates differ from {years[0]}; "
-                    "the perennial-snow mask needs one common grid."
-                )
-
-    held = np.zeros((lat.size, lon.size), dtype="int16")
-    valid = np.zeros_like(held)
+    # Rebuild: stream one year's slice at a time into the accumulators.
+    lat = lon = held = valid = None
     for year in years:
-        arr = slices[year][1].transpose("lat", "lon").values
+        da = _load_check_slice(files[year], year, rule.check_month_day)
+        if lat is None:
+            lat, lon = da["lat"].values, da["lon"].values
+            held = np.zeros((lat.size, lon.size), dtype="int16")
+            valid = np.zeros_like(held)
+        else:
+            for name, ref in (("lat", lat), ("lon", lon)):
+                if da[name].shape != ref.shape or not np.array_equal(
+                    da[name].values, ref
+                ):
+                    raise ValueError(
+                        f"Margulis {year} {name} coordinates differ from "
+                        f"{years[0]}; the perennial-snow mask needs one common grid."
+                    )
+        arr = da.transpose("lat", "lon").values
         finite = np.isfinite(arr)
         valid += finite
         # NaN >= thr is False (and warns); mask first.
         held += finite & (np.where(finite, arr, 0.0) >= rule.swe_threshold_m)
+        del da, arr, finite
     perennial = classify_perennial(held, valid, rule.min_year_fraction)
 
-    newest = max((slices[y][0] for y in years), key=lambda p: p.stat().st_mtime)
+    newest = max(files.values(), key=lambda p: p.stat().st_mtime)
     from pyproj import CRS
 
     crs_attrs = dict(CRS.from_epsg(4326).to_cf())

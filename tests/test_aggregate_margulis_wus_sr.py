@@ -322,3 +322,16 @@ def test_perennial_weight_filter_unmatched_coords_raise(tmp_path):
     w = pd.DataFrame({"hru_id": [1], "wght": [1.0]})
     with pytest.raises(ValueError, match="absent from the perennial mask grid"):
         filt(w, np.array([50.0]), np.array([_LON[0]]))
+
+
+def test_ensure_mask_reuse_reads_no_swe(tmp_path, monkeypatch):
+    from nhf_spatial_targets.aggregate import margulis_wus_sr as m
+
+    store = _synthetic_store(tmp_path)
+    ensure_perennial_snow_mask(store, _RULE)
+
+    def _boom(*a, **k):
+        raise AssertionError("SWE loaded on the reuse path")
+
+    monkeypatch.setattr(m, "_load_check_slice", _boom)
+    ensure_perennial_snow_mask(store, _RULE)
