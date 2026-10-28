@@ -9,6 +9,7 @@ import math
 import os
 import re
 import tempfile
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -791,6 +792,7 @@ def aggregate_year(
                     weights=weights,
                     period=period,
                     stat_method=adapter.stat_method,
+                    weight_filter=adapter.weight_filter,
                 )
             except Exception as exc:
                 # Preserve the original exception type (FileNotFoundError,
@@ -1000,6 +1002,74 @@ def compute_or_load_weights(
     return weights
 
 
+def _weight_cell_coords(
+    user_data: UserCatData,
+    var: str,
+    weights: pd.DataFrame,
+    x_coord: str,
+    y_coord: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(cell_y, cell_x)`` coordinate values for each weight row.
+
+    gdptools' ``AggGen`` indexes ``mdata[:, i, j]`` where ``mdata`` is
+    ``user_data.get_source_subset(var).values`` -- the *subset* of the
+    source (cropped to the batch bbox), not the full grid, with the axis
+    order of the subset DataArray. This resolves ``i`` / ``j`` through that
+    very subset's coordinate arrays, so the result is correct for any
+    subset offset and any y direction (ascending or descending), and is
+    independent of which of ``i`` / ``j`` is y: the dim name at array axis
+    1 (``i``) and axis 2 (``j``) decides.
+    """
+    subset = user_data.get_source_subset(var)
+    dim_i, dim_j = subset.dims[1], subset.dims[2]
+    coord_i = subset[dim_i].to_numpy()[weights["i"].to_numpy().astype(int)]
+    coord_j = subset[dim_j].to_numpy()[weights["j"].to_numpy().astype(int)]
+    by_dim = {dim_i: coord_i, dim_j: coord_j}
+    if set(by_dim) != {x_coord, y_coord}:
+        raise ValueError(
+            f"Source subset spatial dims {(dim_i, dim_j)} do not match the "
+            f"detected coords y={y_coord!r}, x={x_coord!r}; cannot map "
+            f"weight rows to cell coordinates."
+        )
+    return by_dim[y_coord], by_dim[x_coord]
+
+
+def _all_nan_batch(
+    user_datas: list[UserCatData],
+    variables: list[str],
+    batch_gdf: gpd.GeoDataFrame,
+    id_col: str,
+) -> xr.Dataset:
+    """All-NaN batch result shaped exactly like a normal ``AggGen`` batch.
+
+    Used when ``weight_filter`` removes every weight row, so ``AggGen``
+    has nothing to aggregate. Reuses gdptools' own ``build_cf_dataset`` (the
+    function ``AggGen`` returns through) so dims, dtypes, coords (``time``,
+    ``id_col``, centroid ``lat`` / ``lon``) and the ``crs`` variable match
+    a real batch and ``xr.concat`` / reindex behave identically.
+    """
+    from gdptools.agg._cf_dataset import build_cf_dataset
+
+    agg_data = {
+        var: ud.prep_agg_data(key=var) for var, ud in zip(variables, user_datas)
+    }
+    gdf = (
+        batch_gdf.reset_index(drop=True)
+        .sort_values(id_col)
+        .dissolve(by=id_col, as_index=False)
+    )
+    first = next(iter(agg_data.values()))
+    n_time = first.da.sizes[first.cat_cr.T_name]
+    vals = [np.full((n_time, len(gdf)), np.nan) for _ in variables]
+    return build_cf_dataset(
+        agg_data=agg_data,
+        dissolved_gdf=gdf,
+        vals=vals,
+        precision=None,
+        history_timestamp=datetime.now().strftime("%Y_%m_%d_%H_%M_%S"),
+    )
+
+
 def aggregate_variables_for_batch(
     batch_gdf: gpd.GeoDataFrame,
     source_ds: xr.Dataset,
@@ -1013,6 +1083,8 @@ def aggregate_variables_for_batch(
     *,
     period: tuple[str, str],
     stat_method: str = "mean",
+    weight_filter: Callable[[pd.DataFrame, np.ndarray, np.ndarray], pd.DataFrame]
+    | None = None,
 ) -> xr.Dataset:
     """Run gdptools AggGen once per variable, merge results on HRU ID.
 
@@ -1048,15 +1120,21 @@ def aggregate_variables_for_batch(
         survived the pre-aggregate gate. See
         ``docs/architecture/transformation-pipeline.md`` for the full
         rule.
+    weight_filter : callable or None
+        ``SourceAdapter.weight_filter``. Called once, on the first
+        variable's subset, as ``weight_filter(weights, cell_y, cell_x)``;
+        the returned rows are used for every variable. In memory only --
+        the cache CSV is never rewritten. If it returns an empty table,
+        ``AggGen`` is not called and every variable is all-NaN.
 
     Returns
     -------
     xr.Dataset
         Merged Dataset with all ``variables`` aggregated to HRU dimensions.
     """
-    per_var: list[xr.Dataset] = []
-    for var in variables:
-        user_data = UserCatData(
+
+    def _user_data(var: str) -> UserCatData:
+        return UserCatData(
             source_ds=source_ds,
             source_crs=source_crs,
             source_x_coord=x_coord,
@@ -1068,6 +1146,19 @@ def aggregate_variables_for_batch(
             target_id=id_col,
             source_time_period=[period[0], period[1]],
         )
+
+    per_var: list[xr.Dataset] = []
+    for var in variables:
+        user_data = _user_data(var)
+        if var == variables[0] and weight_filter is not None:
+            cell_y, cell_x = _weight_cell_coords(
+                user_data, var, weights, x_coord=x_coord, y_coord=y_coord
+            )
+            weights = weight_filter(weights, cell_y, cell_x)
+            if weights.empty:
+                return _all_nan_batch(
+                    [_user_data(v) for v in variables], variables, batch_gdf, id_col
+                )
         agg = AggGen(
             user_data=user_data,
             stat_method=stat_method,

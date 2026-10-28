@@ -2768,3 +2768,265 @@ def test_aggregate_year_warns_when_existing_nc_misses_fabric_hrus(tmp_path, capl
             batch_size=2,
         )
     assert "carries 2 HRUs but the fabric has 4" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# weight_filter (#363): drop masked source cells from the in-memory weights,
+# resolved through the coordinates of the subset gdptools actually indexes.
+# ---------------------------------------------------------------------------
+
+# 12 rows (descending lat) x 12 cols. The HRUs sit well inside the grid, so the
+# gdptools agg subset (cropped to the batch bbox) has non-zero i and j offsets.
+_WF_LAT = np.arange(11.5, -0.5, -1.0)
+_WF_LON = np.arange(-3.5, 8.5, 1.0)
+_WF_TIMES = pd.date_range("2005-01-01", periods=12, freq="MS")
+_WF_A, _WF_B, _WF_C = 1, 2, 3
+# Asymmetric on purpose: A is 1 row x 3 cols, B is 2 rows x 2 cols, so a
+# swapped i/j or a flipped lat axis lands on cells outside the polygon.
+_WF_EXPECTED_CELLS = {
+    _WF_A: {(3.5, 2.5), (3.5, 3.5), (3.5, 4.5)},
+    _WF_B: {(1.5, 5.5), (1.5, 6.5), (2.5, 5.5), (2.5, 6.5)},
+    _WF_C: {(4.5, 1.5), (4.5, 2.5), (5.5, 1.5), (5.5, 2.5)},
+}
+
+
+def _wf_cell_value(t, lat, lon):
+    return 100.0 * t + 10.0 * (11.5 - lat) + (lon + 3.5)
+
+
+def _wf_source_ds():
+    data = np.empty((len(_WF_TIMES), len(_WF_LAT), len(_WF_LON)))
+    for t in range(len(_WF_TIMES)):
+        for r, lat in enumerate(_WF_LAT):
+            for c, lon in enumerate(_WF_LON):
+                data[t, r, c] = _wf_cell_value(t, lat, lon)
+    data[:, list(_WF_LAT).index(5.5), list(_WF_LON).index(1.5)] = np.nan  # in HRU C
+    return xr.Dataset(
+        {"SWE": (["time", "lat", "lon"], data)},
+        coords={
+            "time": ("time", _WF_TIMES, {"standard_name": "time"}),
+            "lat": (
+                "lat",
+                _WF_LAT,
+                {"standard_name": "latitude", "units": "degrees_north"},
+            ),
+            "lon": (
+                "lon",
+                _WF_LON,
+                {"standard_name": "longitude", "units": "degrees_east"},
+            ),
+        },
+    )
+
+
+def _wf_fabric():
+    # Polygons inset 0.05 deg so only the intended whole cells intersect.
+    polys = [
+        box(2.05, 3.05, 4.95, 3.95),  # A: lat 3.5, lon 2.5-4.5
+        box(5.05, 1.05, 6.95, 2.95),  # B: lat 1.5-2.5, lon 5.5-6.5
+        box(1.05, 4.05, 2.95, 5.95),  # C: lat 4.5-5.5, lon 1.5-2.5
+    ]
+    return gpd.GeoDataFrame(
+        {"hru_id": [_WF_A, _WF_B, _WF_C], "batch_id": [0, 0, 0]},
+        geometry=polys,
+        crs="EPSG:4326",
+    )
+
+
+_WF_PERIOD = ("2005-01-01", "2005-12-31")
+
+
+def _wf_user_data(ds, gdf):
+    from gdptools import UserCatData
+
+    from nhf_spatial_targets.aggregate._driver import WEIGHT_GEN_CRS
+
+    return UserCatData(
+        source_ds=ds,
+        source_crs="EPSG:4326",
+        source_x_coord="lon",
+        source_y_coord="lat",
+        source_t_coord="time",
+        source_var=["SWE"],
+        target_gdf=gdf.drop(columns=["batch_id"]),
+        target_crs=WEIGHT_GEN_CRS,
+        target_id="hru_id",
+        source_time_period=list(_WF_PERIOD),
+    )
+
+
+def _wf_weights(project, ds, gdf):
+    from nhf_spatial_targets.aggregate._driver import compute_or_load_weights
+
+    return compute_or_load_weights(
+        batch_gdf=gdf.drop(columns=["batch_id"]),
+        source_ds=ds,
+        source_var="SWE",
+        source_crs="EPSG:4326",
+        x_coord="lon",
+        y_coord="lat",
+        time_coord="time",
+        id_col="hru_id",
+        source_key="wf_src",
+        batch_id=0,
+        workdir=project.workdir,
+        period=_WF_PERIOD,
+    )
+
+
+def _wf_batch(ds, gdf, weights, **kw):
+    from nhf_spatial_targets.aggregate._driver import aggregate_variables_for_batch
+
+    return aggregate_variables_for_batch(
+        batch_gdf=gdf.drop(columns=["batch_id"]),
+        source_ds=ds,
+        variables=["SWE"],
+        source_crs="EPSG:4326",
+        x_coord="lon",
+        y_coord="lat",
+        time_coord="time",
+        id_col="hru_id",
+        weights=weights,
+        period=_WF_PERIOD,
+        **kw,
+    )
+
+
+def test_weight_cell_coords_match_cell_centres(project):
+    from nhf_spatial_targets.aggregate._driver import _weight_cell_coords
+
+    ds, gdf = _wf_source_ds(), _wf_fabric()
+    weights = _wf_weights(project, ds, gdf)
+    cy, cx = _weight_cell_coords(
+        _wf_user_data(ds, gdf), "SWE", weights, x_coord="lon", y_coord="lat"
+    )
+    assert len(cy) == len(cx) == len(weights)
+    for hru, expected in _WF_EXPECTED_CELLS.items():
+        rows = (weights["hru_id"].astype(int) == hru).to_numpy()
+        assert set(zip(cy[rows].tolist(), cx[rows].tolist())) == expected
+
+
+def test_weight_filter_drops_rows_and_means_survivors(project):
+    ds, gdf = _wf_source_ds(), _wf_fabric()
+    weights = _wf_weights(project, ds, gdf)
+    seen = {}
+
+    def drop_b_east(w, cell_y, cell_x):
+        seen["n"] = len(w)
+        return w[~((w["hru_id"].astype(int) == _WF_B) & (cell_x == 6.5))]
+
+    out = _wf_batch(ds, gdf, weights, weight_filter=drop_b_east)
+    assert seen["n"] == len(weights)
+
+    # Survivors are the two lon 5.5 cells (lat 1.5, 2.5); weights are
+    # near-equal, so the weighted mean equals the plain mean at loose rtol.
+    survivors = ds["SWE"].sel(lon=[5.5], lat=[1.5, 2.5])
+    expected = survivors.mean(("lat", "lon")).values
+    np.testing.assert_allclose(out["SWE"].sel(hru_id=_WF_B).values, expected, rtol=1e-3)
+    base = _wf_batch(ds, gdf, weights)
+    # Untouched HRUs are identical to the unfiltered run.
+    for hru in (_WF_A, _WF_C):
+        np.testing.assert_array_equal(
+            out["SWE"].sel(hru_id=hru).values, base["SWE"].sel(hru_id=hru).values
+        )
+    assert not np.allclose(
+        out["SWE"].sel(hru_id=_WF_B).values, base["SWE"].sel(hru_id=_WF_B).values
+    )
+
+
+def test_weight_filter_fully_filtered_hru_is_fill_then_nan(project):
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import aggregate_year
+
+    ds, gdf = _wf_source_ds(), _wf_fabric()
+    src_dir = project.raw_dir("merra2")
+    src_dir.mkdir(parents=True, exist_ok=True)
+    src_file = src_dir / "src_2005_consolidated.nc"
+    ds.to_netcdf(src_file)
+
+    def drop_a(w, cell_y, cell_x):
+        return w[w["hru_id"].astype(int) != _WF_A]
+
+    adapter = SourceAdapter(
+        source_key="merra2",
+        output_name="merra2_agg.nc",
+        variables=["SWE"],
+        weight_filter=drop_a,
+    )
+    with patch(
+        "nhf_spatial_targets.aggregate._driver.catalog_source",
+        return_value={"access": {"doi": "10.0/TEST"}},
+    ):
+        out = aggregate_year(adapter, project, 2005, src_file, gdf, "hru_id")
+    with xr.open_dataset(out) as year_ds:
+        assert np.isnan(year_ds["SWE"].sel(hru_id=_WF_A)).all()
+        assert not (year_ds["SWE"].sel(hru_id=_WF_A) == 0.0).any()
+        assert np.isfinite(year_ds["SWE"].sel(hru_id=_WF_B)).all()
+
+
+def test_weight_filter_none_is_unchanged(project):
+    from gdptools import AggGen
+
+    ds, gdf = _wf_source_ds(), _wf_fabric()
+    weights = _wf_weights(project, ds, gdf)
+    _gdf, baseline = AggGen(
+        user_data=_wf_user_data(ds, gdf),
+        stat_method="mean",
+        agg_engine="serial",
+        agg_writer="none",
+        weights=weights,
+    ).calculate_agg()
+    with_none = _wf_batch(ds, gdf, weights, weight_filter=None)
+    xr.testing.assert_identical(with_none, baseline)
+
+
+def test_weight_filter_empty_batch_all_nan(project):
+    ds, gdf = _wf_source_ds(), _wf_fabric()
+    weights = _wf_weights(project, ds, gdf)
+    normal = _wf_batch(ds, gdf, weights)
+    with patch("nhf_spatial_targets.aggregate._driver.AggGen") as mock_agg:
+        out = _wf_batch(ds, gdf, weights, weight_filter=lambda w, y, x: w.iloc[0:0])
+    mock_agg.assert_not_called()
+    assert np.isnan(out["SWE"]).all()
+    assert set(out["hru_id"].values) == {_WF_A, _WF_B, _WF_C}
+    # Same structure as a normal batch so concat / reindex behave identically.
+    assert out["SWE"].dims == normal["SWE"].dims
+    assert out["SWE"].dtype == normal["SWE"].dtype
+    assert out["hru_id"].dtype == normal["hru_id"].dtype
+    np.testing.assert_array_equal(out["time"].values, normal["time"].values)
+    xr.concat([out, normal], dim="hru_id", data_vars="all")
+
+
+def test_weight_filter_does_not_touch_cache(project):
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import (
+        aggregate_year,
+        weight_cache_path,
+    )
+
+    ds, gdf = _wf_source_ds(), _wf_fabric()
+    src_dir = project.raw_dir("merra2")
+    src_dir.mkdir(parents=True, exist_ok=True)
+    src_file = src_dir / "src_2005_consolidated.nc"
+    ds.to_netcdf(src_file)
+    adapter = SourceAdapter(
+        source_key="merra2",
+        output_name="merra2_agg.nc",
+        variables=["SWE"],
+        weight_filter=lambda w, y, x: w[w["hru_id"].astype(int) != _WF_A],
+    )
+    cache = weight_cache_path(project.workdir, "merra2", 0)
+    with patch(
+        "nhf_spatial_targets.aggregate._driver.catalog_source",
+        return_value={"access": {"doi": "10.0/TEST"}},
+    ):
+        # Seed the cache by running once with the filter (the cache is written
+        # unfiltered on the miss), then re-run and compare bytes.
+        aggregate_year(adapter, project, 2005, src_file, gdf, "hru_id")
+        before = cache.read_bytes()
+        (
+            project.workdir / "data" / "aggregated" / "merra2" / "merra2_2005_agg.nc"
+        ).unlink()
+        aggregate_year(adapter, project, 2005, src_file, gdf, "hru_id")
+    assert cache.read_bytes() == before
+    assert len(pd.read_csv(cache)["hru_id"].unique()) == 3  # A still in the cache
