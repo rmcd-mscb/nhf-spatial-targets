@@ -1191,3 +1191,40 @@ def test_swe_target_nc_carries_mask_fingerprint(tmp_path: Path):
     build(project)
     with xr.open_dataset(project.targets_dir() / "swe_targets.nc") as ds:
         assert ds.attrs[_PROV_KEY] == _MASK_FP
+
+
+def test_mask_change_invalidates_year_intermediates(tmp_path: Path):
+    """A different Margulis mask fingerprint must rebuild cached intermediates.
+
+    Guards the driver wiring: ``provenance`` has to reach
+    ``target_config_fingerprint`` or year files built under mask A would be
+    reused while the stitched target is stamped with mask B.
+    """
+    from nhf_spatial_targets.targets.swe import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_swe_project(
+        tmp_path, nn_fill=False, margulis_mask_fp={2003: "aaaaaaaaaaaa"}
+    )
+    project = load(workdir)
+    build(project)
+    inter = project.targets_dir() / ".swe_intermediates" / "swe_targets_2003.nc"
+    with xr.open_dataset(inter) as ds:
+        fp_a = ds.attrs["config_fingerprint"]
+        assert ds.attrs[_PROV_KEY] == "aaaaaaaaaaaa"
+
+    on_disk_key, var = _SOURCE_DIRS_AND_VARS["margulis_wus_sr"]
+    _write_daily_nc(
+        workdir / "data" / "aggregated" / on_disk_key / f"{on_disk_key}_2003_agg.nc",
+        2003,
+        var,
+        0.2,
+        attrs={_MASK_ATTR: "bbbbbbbbbbbb"},
+    )
+    build(load(workdir))
+
+    with xr.open_dataset(inter) as ds:
+        assert ds.attrs["config_fingerprint"] != fp_a
+        assert ds.attrs[_PROV_KEY] == "bbbbbbbbbbbb"
+    with xr.open_dataset(project.targets_dir() / "swe_targets.nc") as ds:
+        assert ds.attrs[_PROV_KEY] == "bbbbbbbbbbbb"
