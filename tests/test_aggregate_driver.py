@@ -2977,6 +2977,10 @@ def test_weight_filter_none_is_unchanged(project):
         weights=weights,
     ).calculate_agg()
     with_none = _wf_batch(ds, gdf, weights, weight_filter=None)
+    # gdptools stamps attrs["history"] with a wall-clock second; drop it so
+    # the comparison cannot flake on a tick. Everything else stays exact.
+    with_none.attrs.pop("history", None)
+    baseline.attrs.pop("history", None)
     xr.testing.assert_identical(with_none, baseline)
 
 
