@@ -97,6 +97,17 @@ is a release-blocking error: the publish preflight
 whose stamped threshold no longer matches config (the agg-layer analogue of
 the `config.effective.yml` staleness gate).
 
+The second instance is the **Margulis perennial-snow mask** (#363): its
+fingerprint and rule are stamped as global attrs on every Margulis per-year
+aggregated NC and lifted into that aggregate step's `params`. The projection
+records a stamp param only when every per-year NC agrees on it. A mixed set
+records nothing for that param and logs a WARNING (#366); this applies to
+`ua_swe`'s threshold too. The publish preflight
+`_preflight_margulis_mask_current` refuses to publish unless the catalog rule,
+the datastore mask NC, the aggregate stamps and every SWE target product built
+with Margulis all carry the same mask (see
+[margulis_wus_sr.md](../sources/margulis_wus_sr.md#perennial-snow-mask-363)).
+
 ## File and data requirements
 
 - **Open formats**: NetCDF, CSV, ASCII. Our pipeline writes CF-1.6 NetCDF and

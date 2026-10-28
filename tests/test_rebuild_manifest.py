@@ -710,32 +710,47 @@ def test_aggregate_nc_params_only_for_ua_swe(tmp_path):
     assert _aggregate_nc_params("ua_swe", [nc]) == {"depth_threshold_mm": 2.5}
 
 
-def test_aggregate_nc_params_reads_first_stamped_deterministically(tmp_path):
+def test_aggregate_nc_params_records_agreed_threshold(tmp_path):
     from nhf_spatial_targets.rebuild_manifest import _aggregate_nc_params
 
-    # ncs are pre-sorted by the caller; the first carrying a stamp wins.
-    # Distinct values so this genuinely proves "first", not "any".
+    first = tmp_path / "ua_swe_1982_agg.nc"
+    second = tmp_path / "ua_swe_1983_agg.nc"
+    _write_ua_swe_agg_nc(first, threshold=2.0)
+    _write_ua_swe_agg_nc(second, threshold=2.0)
+    assert _aggregate_nc_params("ua_swe", [first, second]) == {
+        "depth_threshold_mm": 2.0
+    }
+
+
+def test_aggregate_nc_params_omits_disagreeing_threshold(tmp_path, caplog):
+    """#366: years built with different thresholds must not be recorded as
+    the first file's value; the param is omitted and a WARNING names both."""
+    from nhf_spatial_targets.rebuild_manifest import _aggregate_nc_params
+
     first = tmp_path / "ua_swe_1982_agg.nc"
     second = tmp_path / "ua_swe_1983_agg.nc"
     _write_ua_swe_agg_nc(first, threshold=1.0)
     _write_ua_swe_agg_nc(second, threshold=2.0)
-    assert _aggregate_nc_params("ua_swe", [first, second]) == {
-        "depth_threshold_mm": 1.0
-    }
+    with caplog.at_level("WARNING"):
+        assert _aggregate_nc_params("ua_swe", [first, second]) == {}
+    assert "disagree on depth_threshold_mm" in caplog.text
+    assert "ua_swe_1982_agg.nc=1.0" in caplog.text
+    assert "ua_swe_1983_agg.nc=2.0" in caplog.text
 
 
-def test_aggregate_nc_params_skips_unstamped_first(tmp_path):
-    """When the first NC has no stamp, the loop continues to the next NC that
-    does (read_scf_threshold_stamp returns None on the unstamped one)."""
+def test_aggregate_nc_params_omits_when_partly_unstamped(tmp_path, caplog):
+    """#366: an unstamped year alongside stamped ones (a partial
+    re-aggregation) records no threshold and warns, naming the unstamped NC."""
     from nhf_spatial_targets.rebuild_manifest import _aggregate_nc_params
 
     first = tmp_path / "ua_swe_1982_agg.nc"
     second = tmp_path / "ua_swe_1983_agg.nc"
     _write_ua_swe_agg_nc(first, threshold=None)  # scf var, no stamp
     _write_ua_swe_agg_nc(second, threshold=2.0)
-    assert _aggregate_nc_params("ua_swe", [first, second]) == {
-        "depth_threshold_mm": 2.0
-    }
+    with caplog.at_level("WARNING"):
+        assert _aggregate_nc_params("ua_swe", [first, second]) == {}
+    assert "ua_swe_1982_agg.nc" in caplog.text
+    assert "carry no provenance stamp" in caplog.text
 
 
 def test_aggregate_nc_params_empty_when_no_stamp(tmp_path):
@@ -773,14 +788,16 @@ def test_synthesize_steps_lifts_ua_swe_threshold_param(tmp_path):
 _MARGULIS = "margulis_wus_sr"
 
 
-def _write_margulis_agg_nc(path: Path, *, stamped: bool = True):
+def _write_margulis_agg_nc(
+    path: Path, *, stamped: bool = True, fingerprint: str = "abc123def456"
+):
     """Write a synthetic Margulis aggregated NC with the mask global attrs."""
     path.parent.mkdir(parents=True, exist_ok=True)
     ds = xr.Dataset({"swe": (("hru_id",), np.zeros(2, dtype="float32"))})
     if stamped:
         ds.attrs.update(
             {
-                "perennial_snow_mask_fingerprint": "abc123def456",
+                "perennial_snow_mask_fingerprint": fingerprint,
                 "perennial_snow_mask_swe_threshold_m": 0.1,
                 "perennial_snow_mask_check_month_day": "09-30",
                 "perennial_snow_mask_min_year_fraction": 0.5,
@@ -837,6 +854,40 @@ def test_margulis_params_absent_when_unstamped(tmp_path):
     assert "perennial_snow_mask_fingerprint" not in step.get("params", {})
 
 
+def test_margulis_params_mixed_fingerprint_keeps_agreed_rule(tmp_path, caplog):
+    """#366: years stamped by different masks omit only the fingerprint; the
+    rule params all years agree on are still recorded, in stamp order."""
+    datastore, proj = _margulis_project(tmp_path)
+    _write_margulis_agg_nc(
+        proj / "data" / "aggregated" / _MARGULIS / "margulis_wus_sr_1991_agg.nc",
+        fingerprint="0123456789ab",
+    )
+    with caplog.at_level("WARNING"):
+        step = _margulis_step(datastore, proj, "aggregate")
+    # Order follows read_margulis_mask_stamp: str attrs, then floats.
+    assert list(step["params"]) == [
+        "perennial_snow_mask_check_month_day",
+        "perennial_snow_mask_swe_threshold_m",
+        "perennial_snow_mask_min_year_fraction",
+    ]
+    assert "disagree on perennial_snow_mask_fingerprint" in caplog.text
+    assert "margulis_wus_sr_1990_agg.nc=abc123def456" in caplog.text
+    assert "margulis_wus_sr_1991_agg.nc=0123456789ab" in caplog.text
+
+
+def test_margulis_params_partly_unstamped_records_nothing(tmp_path, caplog):
+    """#366: a pre-mask year next to a stamped one records no mask params."""
+    datastore, proj = _margulis_project(tmp_path)
+    _write_margulis_agg_nc(
+        proj / "data" / "aggregated" / _MARGULIS / "margulis_wus_sr_1991_agg.nc",
+        stamped=False,
+    )
+    with caplog.at_level("WARNING"):
+        step = _margulis_step(datastore, proj, "aggregate")
+    assert not step.get("params")
+    assert "margulis_wus_sr_1991_agg.nc" in caplog.text
+
+
 def test_margulis_params_corrupt_netcdf_magic_raises(tmp_path):
     from nhf_spatial_targets.rebuild_manifest import _aggregate_nc_params
 
@@ -844,6 +895,34 @@ def test_margulis_params_corrupt_netcdf_magic_raises(tmp_path):
     nc.write_bytes(b"\x89HDF\r\n\x1a\n" + b"truncated")
     with pytest.raises(ValueError, match="corrupt|truncated"):
         _aggregate_nc_params(_MARGULIS, [nc])
+
+
+def test_aggregate_nc_params_corrupt_later_year_raises(tmp_path):
+    """#366: every agg NC is now read, so a corrupt NC after a stamped one
+    raises (the first-stamp loop used to stop before reaching it)."""
+    from nhf_spatial_targets.rebuild_manifest import _aggregate_nc_params
+
+    first = tmp_path / "ua_swe_1982_agg.nc"
+    second = tmp_path / "ua_swe_1983_agg.nc"
+    _write_ua_swe_agg_nc(first, threshold=1.0)
+    second.write_bytes(b"\x89HDF\r\n\x1a\n" + b"\x00garbage")
+    with pytest.raises(ValueError, match="truncated or corrupt"):
+        _aggregate_nc_params("ua_swe", [first, second])
+
+
+def test_looks_like_netcdf_reads_header_only(tmp_path, monkeypatch):
+    """#366 review: the magic check must not read the whole file (target NCs
+    reach tens of GB)."""
+    from nhf_spatial_targets.rebuild_manifest import _looks_like_netcdf
+
+    nc = tmp_path / "big.nc"
+    nc.write_bytes(b"\x89HDF\r\n\x1a\n" + b"\x00" * 1024)
+
+    def _no_full_read(self):
+        raise AssertionError("read_bytes() loads the whole file")
+
+    monkeypatch.setattr(Path, "read_bytes", _no_full_read)
+    assert _looks_like_netcdf(nc) is True
 
 
 def test_margulis_params_non_netcdf_placeholder_is_empty(tmp_path):

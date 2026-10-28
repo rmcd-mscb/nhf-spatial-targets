@@ -202,8 +202,10 @@ _NETCDF_MAGIC: tuple[bytes, ...] = (
 
 def _looks_like_netcdf(nc: Path) -> bool:
     """Return True if *nc*'s leading bytes carry NetCDF/HDF5 magic."""
+    # Read only the header: target NCs reach tens of GB (#366 review).
     try:
-        head = nc.read_bytes()[:8]
+        with nc.open("rb") as f:
+            head = f.read(8)
     except OSError:
         return False
     return any(head.startswith(m) for m in _NETCDF_MAGIC)
@@ -419,12 +421,59 @@ def read_margulis_mask_stamp(nc: Path) -> dict | None:
     return params
 
 
+def _agreed_stamp_params(
+    source_key: str, stamps: list[tuple[Path, dict | None]]
+) -> dict:
+    """Keep only the stamp params that every per-year agg NC agrees on (#366).
+
+    A step's ``params`` describe all of its outputs, so a param is recorded
+    only when every NC carries it with one value. A set where some NCs are
+    unstamped records nothing; a param whose values differ is omitted. Both
+    log a WARNING naming each file's value (an interrupted or partial
+    re-aggregation). The projection stays non-fatal: the publish gate is the
+    fatal stop. Key order follows the first NC's stamp, so the JSON stays
+    byte-stable.
+    """
+    if not stamps:
+        return {}
+    unstamped = [nc.name for nc, stamp in stamps if stamp is None]
+    if unstamped:
+        if len(unstamped) < len(stamps):
+            logger.warning(
+                "rebuild-manifest: %s aggregated NCs %s carry no provenance "
+                "stamp while the others do; omitting the stamp params from the "
+                "aggregate step. Re-aggregate %s so every year is stamped.",
+                source_key,
+                unstamped,
+                source_key,
+            )
+        return {}
+    params: dict = {}
+    for key in stamps[0][1]:
+        values = {nc.name: stamp.get(key) for nc, stamp in stamps}
+        distinct = set(values.values())
+        if len(distinct) == 1 and None not in distinct:
+            params[key] = distinct.pop()
+            continue
+        detail = ", ".join(f"{name}={value}" for name, value in values.items())
+        logger.warning(
+            "rebuild-manifest: %s aggregated NCs disagree on %s (%s); omitting "
+            "it from the aggregate step params. Re-aggregate %s so every year "
+            "carries one value.",
+            source_key,
+            key,
+            detail,
+            source_key,
+        )
+    return params
+
+
 def _aggregate_nc_params(source_key: str, ncs: list[Path]) -> dict:
     """Lift aggregate-baked provenance stamps into the aggregate step params.
 
     ua_swe: the ``depth_threshold_mm`` stamp; margulis_wus_sr: the four
-    ``perennial_snow_mask_*`` global attrs. Each is read from the
-    deterministically-first agg NC that carries it (``ncs`` is pre-sorted).
+    ``perennial_snow_mask_*`` global attrs. Every agg NC is read, and only the
+    params they all agree on are recorded (see :func:`_agreed_stamp_params`).
     Read from the NC attrs, **not** config -- the rebuild is a pure function of
     disk and must stay deterministic; config could have drifted from what
     actually defined the on-disk values (the publish staleness gate is the place
@@ -432,15 +481,17 @@ def _aggregate_nc_params(source_key: str, ncs: list[Path]) -> dict:
     provenance-enriching, not gating, so the projection never fails on absence.
     """
     if source_key == _UA_SWE_KEY:
+        stamps = []
         for nc in ncs:
-            stamp = read_scf_threshold_stamp(nc)
-            if stamp is not None:
-                return {_DEPTH_THRESHOLD_ATTR: stamp}
-    elif source_key == _MARGULIS_KEY:
-        for nc in ncs:
-            params = read_margulis_mask_stamp(nc)
-            if params is not None:
-                return params
+            value = read_scf_threshold_stamp(nc)
+            stamps.append(
+                (nc, None if value is None else {_DEPTH_THRESHOLD_ATTR: value})
+            )
+        return _agreed_stamp_params(source_key, stamps)
+    if source_key == _MARGULIS_KEY:
+        return _agreed_stamp_params(
+            source_key, [(nc, read_margulis_mask_stamp(nc)) for nc in ncs]
+        )
     return {}
 
 

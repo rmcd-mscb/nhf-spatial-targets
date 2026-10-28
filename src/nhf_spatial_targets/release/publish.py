@@ -834,6 +834,232 @@ def _preflight_ua_swe_threshold_current(project: Project) -> None:
         )
 
 
+def _preflight_margulis_mask_current(project: Project) -> None:
+    """Verify the Margulis perennial-snow mask is consistent end to end (#366).
+
+    The Margulis analogue of :func:`_preflight_ua_swe_threshold_current`. The
+    perennial-snow mask (#363) is a pre-aggregation per-pixel gate, so the
+    removed-pixel set is baked into every per-year agg NC and, through them,
+    into the SWE target's bound at glacier HRUs. ``run-swe`` already refuses a
+    mixed or unstamped agg set, but four stale states would otherwise ship
+    provenance that does not describe the data:
+
+    - an agg NC carries no ``perennial_snow_mask_fingerprint`` (a pre-mask
+      aggregate), or the agg NCs disagree on it (a partial re-aggregation);
+    - the stamped rule (threshold, check day, year fraction) differs from the
+      current catalog ``margulis_wus_sr.perennial_snow_mask`` (the catalog was
+      edited without re-aggregating);
+    - the stamped fingerprint differs from the datastore mask NC's, or that
+      file is missing (the shared mask was rebuilt, perhaps by another project,
+      and this project's aggregates were not refreshed). The release ships the
+      mask NC in the Margulis source child, so it must match;
+    - a SWE target product built with Margulis carries no
+      ``margulis_wus_sr_perennial_snow_mask_fingerprint``, or a different one
+      (Margulis was re-aggregated but ``run-swe`` was not re-run).
+
+    Verify-don't-mutate and **unconditionally fatal** (no
+    ``allow_incomplete_sources`` override). No-op when the project never
+    aggregated Margulis (e.g. gfv2): an absent ``data/aggregated/margulis_wus_sr/``
+    dir or no NCs there -> return. A *corrupt* agg NC raises from
+    :func:`read_margulis_mask_stamp` and is caught earlier, at the
+    ``_preflight_provenance_complete`` projection boundary.
+
+    Check 4 scans every ``targets/*.nc``. A product that carries the target
+    fingerprint attr is always checked against the aggregates. A product
+    without it is required to carry it when it "uses Margulis"
+    (``margulis_wus_sr`` in its ``member_keys``, or, for the configured SWE
+    output, in the effective config's SWE ``sources``) **and** its ``period``
+    overlaps a Margulis aggregate year. Outside Margulis coverage the builder
+    stamps nothing, so requiring the attr would be a block that re-running
+    cannot clear.
+    """
+    import math
+
+    import xarray as xr
+
+    from nhf_spatial_targets.aggregate.margulis_wus_sr import (
+        _MASK_RELPATH,
+        MaskRule,
+        mask_stamp_attrs,
+    )
+    from nhf_spatial_targets.defaults import DEFAULTS
+    from nhf_spatial_targets.rebuild_manifest import (
+        _MARGULIS_KEY,
+        _MASK_FINGERPRINT_ATTR,
+        _looks_like_netcdf,
+        read_margulis_mask_stamp,
+    )
+    from nhf_spatial_targets.targets._io import parse_period as _parse_target_period
+
+    agg_dir = project.aggregated_dir() / _MARGULIS_KEY
+    if not agg_dir.is_dir():
+        return
+    ncs = sorted(p for p in agg_dir.rglob("*.nc") if p.is_file())
+    if not ncs:
+        return
+
+    problems: list[str] = []
+
+    # 1. Every agg NC is stamped, and all share one fingerprint.
+    stamps = {nc: read_margulis_mask_stamp(nc) for nc in ncs}
+    unstamped = [nc.name for nc, s in stamps.items() if s is None]
+    if unstamped:
+        problems.append(
+            f"{len(unstamped)} agg NC(s) carry no {_MASK_FINGERPRINT_ATTR} "
+            f"(aggregated before the perennial-snow mask): {unstamped}"
+        )
+    stamped = {nc: s for nc, s in stamps.items() if s is not None}
+    fingerprints = sorted({s[_MASK_FINGERPRINT_ATTR] for s in stamped.values()})
+    if len(fingerprints) > 1:
+        detail = ", ".join(
+            f"{nc.name}={s[_MASK_FINGERPRINT_ATTR]}" for nc, s in stamped.items()
+        )
+        problems.append(f"agg NCs disagree on {_MASK_FINGERPRINT_ATTR}: {detail}")
+
+    # 2. The stamped rule matches the current catalog rule.
+    try:
+        rule = MaskRule.from_catalog()
+    except (KeyError, ValueError) as exc:
+        rule = None
+        problems.append(
+            f"the catalog margulis_wus_sr.perennial_snow_mask rule is missing "
+            f"or invalid ({exc}), so the stamped rule cannot be verified"
+        )
+    if rule is not None:
+        expected_rule = {
+            "perennial_snow_mask_swe_threshold_m": rule.swe_threshold_m,
+            "perennial_snow_mask_check_month_day": rule.check_month_day,
+            "perennial_snow_mask_min_year_fraction": rule.min_year_fraction,
+        }
+        for key, want in expected_rule.items():
+            wrong: dict[str, object] = {}
+            for nc, s in stamped.items():
+                got = s.get(key)
+                if isinstance(want, float):
+                    same = got is not None and math.isclose(
+                        got, want, rel_tol=1e-9, abs_tol=1e-12
+                    )
+                else:
+                    same = got == want
+                if not same:
+                    wrong[nc.name] = got
+            if wrong:
+                built = sorted({str(v) for v in wrong.values()})
+                problems.append(
+                    f"{len(wrong)} agg NC(s) were built with {key} in {built} "
+                    f"but the catalog rule says {want}: {sorted(wrong)}"
+                )
+
+    # 3. The stamped fingerprint matches the datastore mask NC.
+    mask_path = project.datastore / _MASK_RELPATH
+    if not mask_path.is_file():
+        problems.append(
+            f"the datastore mask NC {mask_path} is missing, so the agg NCs' "
+            f"{_MASK_FINGERPRINT_ATTR} cannot be verified against it"
+        )
+    else:
+        try:
+            mask_fp = mask_stamp_attrs(mask_path)[_MASK_FINGERPRINT_ATTR]
+        except (OSError, KeyError, TypeError, ValueError) as exc:
+            problems.append(f"the datastore mask NC {mask_path} is unreadable: {exc}")
+        else:
+            stale = [fp for fp in fingerprints if fp != mask_fp]
+            if stale:
+                problems.append(
+                    f"agg NC {_MASK_FINGERPRINT_ATTR} {stale} != the datastore "
+                    f"mask NC's {mask_fp} (the shared mask was rebuilt after "
+                    f"this project aggregated Margulis)"
+                )
+
+    # 4. A SWE product built with Margulis carries the aggregates' fingerprint.
+    eff_path = project.workdir / "config.effective.yml"
+    try:
+        effective = yaml.safe_load(eff_path.read_text()) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        # _preflight_effective_config_current runs first and already turns an
+        # absent/unparseable effective config into a clean PreflightError; guard
+        # here too so a call-order change can't crash this gate.
+        raise PreflightError(
+            f"config.effective.yml at {eff_path} is unreadable for the Margulis "
+            f"perennial-mask check: {exc}"
+        ) from exc
+    swe_cfg = (effective.get("targets") or {}).get("snow_water_equivalent") or {}
+    output_file = swe_cfg.get("output_file") or (
+        (DEFAULTS.get("targets") or {})
+        .get("snow_water_equivalent", {})
+        .get("output_file")
+    )
+    target_attr = f"{_MARGULIS_KEY}_{_MASK_FINGERPRINT_ATTR}"
+    config_uses_margulis = _MARGULIS_KEY in (swe_cfg.get("sources") or [])
+    stem = Path(output_file).stem if output_file else None
+    agg_years = set()
+    for nc in ncs:
+        try:
+            agg_years.add(int(nc.stem.split("_")[-2]))
+        except (IndexError, ValueError):
+            continue
+
+    def _overlaps_margulis(period: object) -> bool:
+        # margulis_input_provenance stamps only from aggregates inside the
+        # period, so a product whose period misses every Margulis year has
+        # no stamp to carry. An unparseable period is treated as overlapping.
+        try:
+            start, end = _parse_target_period(str(period))
+            lo, hi = int(start[:4]), int(end[:4])
+        except (TypeError, ValueError):
+            return True
+        return any(lo <= y <= hi for y in agg_years)
+
+    # Every published target NC is scanned (the payload ships all of them),
+    # not only the configured SWE filename, so a renamed output_file cannot
+    # leave a stale product unchecked.
+    for nc in sorted(project.targets_dir().glob("*.nc")):
+        # A plain-bytes placeholder is skipped; a corrupt NC with NetCDF magic
+        # was already made fatal by _preflight_provenance_complete.
+        if not nc.is_file() or not _looks_like_netcdf(nc):
+            continue
+        try:
+            with xr.open_dataset(nc, decode_times=False) as ds:
+                attrs = dict(ds.attrs)
+        except Exception as exc:
+            problems.append(f"{nc.name} could not be opened to read its attrs: {exc}")
+            continue
+        is_swe_product = stem is not None and nc.name.startswith(stem)
+        members = str(attrs.get("member_keys", "")).split(",")
+        target_fp = attrs.get(target_attr)
+        if target_fp is None:
+            uses_margulis = _MARGULIS_KEY in members or (
+                is_swe_product and config_uses_margulis
+            )
+            period = attrs.get("period") or (
+                swe_cfg.get("period") if is_swe_product else None
+            )
+            if uses_margulis and _overlaps_margulis(period):
+                problems.append(
+                    f"{nc.name} was built with {_MARGULIS_KEY} over a period with "
+                    f"Margulis data but carries no {target_attr} (built before "
+                    f"the perennial-snow mask, or before Margulis was aggregated)"
+                )
+            continue
+        if str(target_fp) not in fingerprints:
+            problems.append(
+                f"{nc.name} has {target_attr}={target_fp} but the agg NCs "
+                f"carry {fingerprints} (Margulis was re-aggregated after "
+                f"the SWE target was built)"
+            )
+
+    if problems:
+        joined = "\n  - ".join(problems)
+        raise PreflightError(
+            "publish pre-flight: the Margulis perennial-snow mask is not "
+            "consistent across the catalog rule, the datastore mask, the "
+            "aggregated NCs and the SWE target. Re-run 'nhf-targets agg "
+            f"margulis-wus-sr -d {project.workdir}', then 'nhf-targets run "
+            "--target snow_water_equivalent', rebuild-manifest and validate "
+            f"(see docs/sources/margulis_wus_sr.md):\n  - {joined}"
+        )
+
+
 def _preflight_no_fill_sentinels(project: Project) -> None:
     """Refuse to publish an NC that stores the netCDF default fill as data.
 
@@ -960,6 +1186,13 @@ def _preflight_common(
     # ua_swe. Runs after the config-staleness gate so config.effective.yml is
     # known current.
     _preflight_ua_swe_threshold_current(project)
+
+    # The Margulis perennial-snow mask gate (#366; verify-don't-mutate,
+    # unconditionally fatal -- no override): the mask is baked into every
+    # Margulis agg NC and through them into the SWE bound, so the catalog rule,
+    # the datastore mask, the agg stamps and the SWE target must all agree.
+    # No-op for projects that never aggregated Margulis.
+    _preflight_margulis_mask_current(project)
 
     # The default-fill sentinel gate (verify-don't-mutate, unconditionally
     # fatal -- no override): an aggregated NC written before #205 stores
