@@ -345,9 +345,11 @@ def test_ensure_mask_reuse_reads_no_swe(tmp_path, monkeypatch):
 _E_LAT = np.arange(11.5, -0.5, -1.0)
 _E_LON = np.arange(-3.5, 8.5, 1.0)
 _E_YEARS = (1985, 1986, 1987, 1988)
-_E_A, _E_B, _E_C = 1, 2, 3
+_E_A, _E_B, _E_C, _E_D = 1, 2, 3, 4
 # A: lat 3.5, lon 2.5-4.5 (all perennial). B: lat 1.5-2.5, lon 5.5-6.5 (lat 1.5
 # row perennial). C: lat 4.5-5.5, lon 1.5-2.5 (none perennial; (5.5, 1.5) NaN).
+# D: lat 2.5, lon 2.5-3.5 (no perennial cell, no NaN; directly below A's row, so
+# it borders perennial cells and must keep all its weight rows).
 _E_PERENNIAL = {(3.5, 2.5), (3.5, 3.5), (3.5, 4.5), (1.5, 5.5), (1.5, 6.5)}
 _E_SEASONAL_B = [(2.5, 5.5), (2.5, 6.5)]
 
@@ -414,11 +416,12 @@ def _e_project(root, datastore):
     (root / "fabric.json").write_text(json.dumps({"sha256": "abc123"}))
     (root / "manifest.json").write_text(json.dumps({"sources": {}, "steps": []}))
     gdf = gpd.GeoDataFrame(
-        {"hru_id": [_E_A, _E_B, _E_C]},
+        {"hru_id": [_E_A, _E_B, _E_C, _E_D]},
         geometry=[
             box(2.05, 3.05, 4.95, 3.95),
             box(5.05, 1.05, 6.95, 2.95),
             box(1.05, 4.05, 2.95, 5.95),
+            box(2.05, 2.05, 3.95, 2.95),
         ],
         crs="EPSG:4326",
     )
@@ -476,7 +479,7 @@ def test_end_to_end_partial_hru_mean_of_seasonal(e2e):
             np.mean([_e_val(lat, lon) + 0.001 for lat, lon in _E_SEASONAL_B]),
         ]
     )
-    np.testing.assert_allclose(got, expected, rtol=1e-3)
+    np.testing.assert_allclose(got, expected, rtol=1e-6)
 
 
 def test_end_to_end_unmasked_hru_bit_identical(e2e):
@@ -490,6 +493,20 @@ def test_end_to_end_unmasked_hru_bit_identical(e2e):
             pc = p["SWE"].sel(hru_id=_E_C).values
         np.testing.assert_array_equal(mc, pc)
         assert np.isnan(mc).all()  # the in-grid NaN pixel poisons plain "mean"
+
+
+def test_end_to_end_finite_unmasked_hru_bit_identical(e2e):
+    """HRU D borders perennial cells but has none itself and no NaN pixel."""
+    _, masked, plain = e2e
+    for year in _E_YEARS:
+        with (
+            xr.open_dataset(_e_year_nc(masked, year)) as m,
+            xr.open_dataset(_e_year_nc(plain, year)) as p,
+        ):
+            md = m["SWE"].sel(hru_id=_E_D).values
+            pd_ = p["SWE"].sel(hru_id=_E_D).values
+        assert np.isfinite(md).all()
+        np.testing.assert_array_equal(md, pd_)
 
 
 def test_end_to_end_stamps_fingerprint(e2e):
