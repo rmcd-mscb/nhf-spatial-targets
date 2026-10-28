@@ -115,6 +115,23 @@ Perennial pixels are therefore removed **before** they are averaged to HRUs.
   set, makes the SWE build raise,
   naming the years that lack the fingerprint (or listing each year's
   fingerprint if they disagree). Until then `run-swe` cannot proceed; re-run `agg margulis-wus-sr` to fix it.
+- **Manifest with a mixed set.** `rebuild-manifest` records a mask param on the
+  Margulis aggregate step only when every per-year aggregate agrees on it. If
+  some years are unstamped, or the fingerprints differ, the param is left out
+  and a WARNING names each file's value (#366).
+- **Publish gate (#366).** `release.publish._preflight_margulis_mask_current`
+  refuses to publish (always fatal, no override) unless all four agree:
+  1. every per-year aggregate is stamped, with one fingerprint;
+  2. the stamped rule equals the current catalog `perennial_snow_mask` rule;
+  3. that fingerprint equals the datastore mask NC's (a missing mask NC fails);
+  4. every SWE target product built with Margulis (`margulis_wus_sr` in its
+     `member_keys` or in the configured SWE `sources`) carries
+     `margulis_wus_sr_perennial_snow_mask_fingerprint` with that same value.
+
+  The usual cause of check 4 failing is re-aggregating Margulis without
+  re-running `run-swe`. The fix is always the sequence above: `agg`, `run`,
+  `rebuild-manifest`, `validate`. The gate is a no-op for projects with no
+  Margulis aggregates (e.g. gfv2).
 - Verification: the Perennial-snow mask section of
   `notebooks/aggregated/inspect_aggregated_swe.ipynb` (checks 1-5) and the
   `n_sources` section of `notebooks/targets/inspect_target_swe.ipynb`

@@ -333,6 +333,10 @@ source has explicit per-pixel masking:
   in-memory weight table via `SourceAdapter.weight_filter` and keeps
   `stat_method="mean"`; `masked_mean` returns 0.0 (not NaN) for an HRU whose
   pixels are all NaN (#364). See `docs/architecture/transformation-pipeline.md`.
+  A pre-aggregation stamp like this needs a publish gate that checks stamp ×
+  catalog/config × downstream product (`_preflight_margulis_mask_current`, #366;
+  `_preflight_ua_swe_threshold_current` for ua_swe). `rebuild-manifest` records
+  a stamp param only when every per-year NC agrees on it.
 
 **The aggregated NC at `<project>/data/aggregated/<source_key>/...`
 therefore carries the source's NATIVE variable names and NATIVE units**,

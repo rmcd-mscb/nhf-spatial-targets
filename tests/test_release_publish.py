@@ -947,6 +947,206 @@ def test_ua_swe_threshold_mismatch_blocks_real_publish(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Margulis perennial-snow mask gate (issue #366): unconditionally fatal
+# ---------------------------------------------------------------------------
+
+_MG = "margulis_wus_sr"
+_FP = "abc123def456"
+_SWE_FP_ATTR = "margulis_wus_sr_perennial_snow_mask_fingerprint"
+
+
+def _mask_attrs(fp=_FP, **overrides):
+    """The four perennial_snow_mask_* attrs for the current catalog rule."""
+    from nhf_spatial_targets.aggregate.margulis_wus_sr import MaskRule
+
+    rule = MaskRule.from_catalog()
+    attrs = {
+        "perennial_snow_mask_fingerprint": fp,
+        "perennial_snow_mask_swe_threshold_m": rule.swe_threshold_m,
+        "perennial_snow_mask_check_month_day": rule.check_month_day,
+        "perennial_snow_mask_min_year_fraction": rule.min_year_fraction,
+    }
+    attrs.update(overrides)
+    return attrs
+
+
+def _write_margulis_agg(project, year, *, stamped=True, **attr_overrides):
+    nc = project.aggregated_dir() / _MG / f"{_MG}_{year}_agg.nc"
+    nc.parent.mkdir(parents=True, exist_ok=True)
+    ds = xr.Dataset({"SWE": (("nhm_id",), np.array([0.1, 0.2]))})
+    if stamped:
+        ds.attrs.update(_mask_attrs(**attr_overrides))
+    ds.to_netcdf(nc)
+    return nc
+
+
+def _write_margulis_mask(project, fp=_FP):
+    from nhf_spatial_targets.aggregate.margulis_wus_sr import _MASK_RELPATH
+
+    path = project.datastore / _MASK_RELPATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ds = xr.Dataset({"perennial": (("lat", "lon"), np.zeros((2, 2), "i1"))})
+    ds.attrs.update(_mask_attrs(fp=fp))
+    ds.to_netcdf(path)
+    return path
+
+
+def _write_swe_target(project, attrs, name="swe_targets.nc"):
+    nc = project.targets_dir() / name
+    nc.parent.mkdir(parents=True, exist_ok=True)
+    ds = xr.Dataset({"lower_bound": (("nhm_id",), np.array([0.0, 1.0]))})
+    ds.attrs.update(attrs)
+    ds.to_netcdf(nc)
+    return nc
+
+
+def _set_swe_sources(project, sources):
+    eff = project.workdir / "config.effective.yml"
+    eff.chmod(0o644)
+    body = _yaml.safe_load(eff.read_text()) or {}
+    body.setdefault("targets", {}).setdefault("snow_water_equivalent", {})[
+        "sources"
+    ] = sources
+    eff.write_text(_yaml.safe_dump(body))
+
+
+def _consistent_margulis(project):
+    """A project whose mask, agg stamps and SWE target all agree."""
+    _write_margulis_mask(project)
+    _write_margulis_agg(project, 1990)
+    _write_margulis_agg(project, 1991)
+    _write_swe_target(project, {"member_keys": f"snodas,{_MG}", _SWE_FP_ATTR: _FP})
+
+
+def test_margulis_mask_noop_when_not_aggregated(tmp_path):
+    project = build_release_project(tmp_path)
+    publish._preflight_margulis_mask_current(project)  # does not raise
+
+
+def test_margulis_mask_noop_when_dir_empty(tmp_path):
+    project = build_release_project(tmp_path)
+    (project.aggregated_dir() / _MG).mkdir(parents=True)
+    publish._preflight_margulis_mask_current(project)  # does not raise
+
+
+def test_margulis_mask_consistent_passes(tmp_path):
+    project = build_release_project(tmp_path)
+    _consistent_margulis(project)
+    _set_swe_sources(project, ["snodas", _MG])
+    publish._preflight_margulis_mask_current(project)  # does not raise
+
+
+def test_margulis_mask_unstamped_year_is_fatal(tmp_path):
+    project = build_release_project(tmp_path)
+    _consistent_margulis(project)
+    _write_margulis_agg(project, 1992, stamped=False)
+    with pytest.raises(publish.PreflightError, match=r"margulis_wus_sr_1992_agg"):
+        publish._preflight_margulis_mask_current(project)
+
+
+def test_margulis_mask_mixed_fingerprints_is_fatal(tmp_path):
+    project = build_release_project(tmp_path)
+    _consistent_margulis(project)
+    _write_margulis_agg(project, 1991, fp="0123456789ab")
+    with pytest.raises(publish.PreflightError, match="disagree on"):
+        publish._preflight_margulis_mask_current(project)
+
+
+def test_margulis_mask_rule_differs_from_catalog_is_fatal(tmp_path):
+    """Catalog rule edited without re-aggregating -> fatal."""
+    project = build_release_project(tmp_path)
+    _consistent_margulis(project)
+    _write_margulis_agg(project, 1991, perennial_snow_mask_swe_threshold_m=0.25)
+    with pytest.raises(
+        publish.PreflightError, match="perennial_snow_mask_swe_threshold_m=0.25"
+    ):
+        publish._preflight_margulis_mask_current(project)
+
+
+def test_margulis_mask_missing_mask_nc_is_fatal(tmp_path):
+    project = build_release_project(tmp_path)
+    _consistent_margulis(project)
+    _write_margulis_mask(project).unlink()
+    with pytest.raises(publish.PreflightError, match="mask NC .* is missing"):
+        publish._preflight_margulis_mask_current(project)
+
+
+def test_margulis_mask_rebuilt_mask_is_fatal(tmp_path):
+    """The shared mask was rebuilt with different cells after this project
+    aggregated -> the agg stamps no longer describe the datastore mask."""
+    project = build_release_project(tmp_path)
+    _consistent_margulis(project)
+    _write_margulis_mask(project, fp="fedcba987654")
+    with pytest.raises(publish.PreflightError, match="fedcba987654"):
+        publish._preflight_margulis_mask_current(project)
+
+
+def test_margulis_mask_target_fingerprint_stale_is_fatal(tmp_path):
+    """Margulis re-aggregated after the SWE target was built -> fatal."""
+    project = build_release_project(tmp_path)
+    _consistent_margulis(project)
+    _write_swe_target(project, {"member_keys": _MG, _SWE_FP_ATTR: "0123456789ab"})
+    with pytest.raises(publish.PreflightError, match="re-aggregated after"):
+        publish._preflight_margulis_mask_current(project)
+
+
+def test_margulis_mask_premask_target_via_member_keys_is_fatal(tmp_path):
+    """A SWE target whose member_keys include Margulis but which predates the
+    mask (no fingerprint attr) -> fatal."""
+    project = build_release_project(tmp_path)
+    _consistent_margulis(project)
+    _write_swe_target(project, {"member_keys": f"snodas,{_MG}"})
+    with pytest.raises(publish.PreflightError, match="carries no"):
+        publish._preflight_margulis_mask_current(project)
+
+
+def test_margulis_mask_premask_target_via_config_is_fatal(tmp_path):
+    """No member_keys (members not emitted), but config lists Margulis -> the
+    target must still carry the fingerprint; the nn_filled companion is
+    checked too."""
+    project = build_release_project(tmp_path)
+    _consistent_margulis(project)
+    _write_swe_target(project, {_SWE_FP_ATTR: _FP})
+    _write_swe_target(project, {}, name="swe_targets_nn_filled.nc")
+    _set_swe_sources(project, [_MG])
+    with pytest.raises(publish.PreflightError, match="swe_targets_nn_filled.nc"):
+        publish._preflight_margulis_mask_current(project)
+
+
+def test_margulis_mask_target_without_margulis_passes(tmp_path):
+    """A SWE target built without Margulis needs no fingerprint."""
+    project = build_release_project(tmp_path)
+    _consistent_margulis(project)
+    _write_swe_target(project, {"member_keys": "snodas,era5_land"})
+    _set_swe_sources(project, ["snodas", "era5_land"])
+    publish._preflight_margulis_mask_current(project)  # does not raise
+
+
+def test_margulis_mask_placeholder_target_is_skipped(tmp_path):
+    project = build_release_project(tmp_path)
+    _consistent_margulis(project)
+    (project.targets_dir() / "swe_targets.nc").write_bytes(b"placeholder")
+    publish._preflight_margulis_mask_current(project)  # does not raise
+
+
+def test_margulis_mask_stale_target_blocks_real_publish(tmp_path):
+    """End-to-end: a SWE target built before Margulis was re-aggregated aborts
+    a real publish_*() through _preflight_common before any ScienceBase call."""
+    project = build_release_project(tmp_path)
+    reg = _registry(tmp_path)
+    _seed_umbrella(reg)
+    session = FakeSbSession()
+    _consistent_margulis(project)
+    _write_swe_target(project, {"member_keys": _MG, _SWE_FP_ATTR: "0123456789ab"})
+    rebuild_manifest(project)
+    with pytest.raises(publish.PreflightError, match="perennial-snow mask"):
+        publish.publish_fabric_child(
+            project, make_sb_client(session), registry_path=reg, now=NOW
+        )
+    assert session.created == []
+
+
+# ---------------------------------------------------------------------------
 # Default-fill sentinel gate (issue #361): unconditionally fatal, no override
 # ---------------------------------------------------------------------------
 
