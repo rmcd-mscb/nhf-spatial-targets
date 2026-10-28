@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
+import numpy as np
+import pandas as pd
 import xarray as xr
 
 
@@ -33,11 +35,26 @@ class SourceAdapter:
     pixels in ``pre_aggregate_hook`` — fill-value masks, quality gates,
     etc. Without this override, the per-pixel mask poisons every HRU that
     touches even one masked pixel; with it, the HRU mean honestly reports
-    the area-weighted mean of pixels that survived the pre-aggregate gate
-    and the HRU is NaN only when *every* contributing pixel was masked.
+    the area-weighted mean of pixels that survived the pre-aggregate gate.
+    Caveat: for an HRU whose pixels were *all* masked, ``masked_mean``
+    currently returns 0.0, not NaN (see #364).
     Currently used by ``aggregate/mod16a2.py`` (PR #88 fill mask) and
     ``aggregate/mod10c1.py`` (CI > 70 quality gate). See
     ``docs/architecture/transformation-pipeline.md`` for the full rule.
+
+    A **static** pixel mask under ``stat_method="mean"`` belongs in
+    ``weight_filter``, not ``pre_aggregate_hook`` + ``masked_mean``, because
+    ``masked_mean`` returns 0.0 (not NaN) for an HRU whose pixels are all NaN
+    (#364).
+
+    ``weight_filter``, when set, is called once per spatial batch as
+    ``weight_filter(weights, cell_y, cell_x)`` after the weight table is
+    loaded (cache or fresh) and before ``AggGen`` runs. ``cell_y[k]`` /
+    ``cell_x[k]`` are the y / x coordinate values of the source cell weight
+    row ``k`` refers to, resolved through the same subset gdptools indexes.
+    It returns the rows to keep (same columns); the filter applies in memory
+    only and never rewrites the weight cache. An HRU with no surviving rows
+    ends up NaN after the write-boundary fill mask.
 
     ``catalog_key`` and ``raw_dir_key`` decouple the synthetic
     ``source_key`` used for output storage / weight cache / manifest
@@ -49,6 +66,14 @@ class SourceAdapter:
     (separate from the monthly runoff outputs under ``era5_land/``)
     while still reading from ``<datastore>/era5_land/daily/`` and
     inheriting CF metadata from the real ``era5_land`` catalog entry.
+
+    ``stamp_attrs``, when set, are global attrs written onto every per-year
+    aggregated NC this adapter emits (after ``post_aggregate_hook``). They
+    also gate the idempotent skip: an existing per-year NC missing any key,
+    or carrying a different value, is stale -- ``aggregate_year`` logs a
+    WARNING and re-aggregates, overwriting atomically. Use it to fingerprint
+    inputs that change pixel values but not the file name (e.g. a mask).
+    ``None`` leaves skip behaviour unchanged.
     """
 
     source_key: str
@@ -63,6 +88,10 @@ class SourceAdapter:
     files_glob: str = "*_consolidated.nc"
     pre_aggregate_hook: Callable[[xr.Dataset], xr.Dataset] | None = field(default=None)
     post_aggregate_hook: Callable[[xr.Dataset], xr.Dataset] | None = field(default=None)
+    stamp_attrs: Mapping[str, str | float] | None = None
+    weight_filter: (
+        Callable[[pd.DataFrame, np.ndarray, np.ndarray], pd.DataFrame] | None
+    ) = None
     stat_method: str = "mean"
     catalog_key: str | None = None
     raw_dir_key: str | None = None

@@ -30,6 +30,7 @@ import hashlib
 import json
 import logging
 import re
+from collections.abc import Mapping
 from pathlib import Path
 
 import xarray as xr
@@ -78,7 +79,11 @@ INTERMEDIATE_CONFIG_FINGERPRINT_ATTR = "config_fingerprint"
 INTERMEDIATE_CODE_VERSION_ATTR = "code_version"
 
 
-def target_config_fingerprint(project: Project, target_name: str) -> str:
+def target_config_fingerprint(
+    project: Project,
+    target_name: str,
+    input_provenance: Mapping[str, str] | None = None,
+) -> str:
     """Stable hash of a target's config block + fabric identity.
 
     Combines the target's config block from ``project.config["targets"]``,
@@ -95,6 +100,11 @@ def target_config_fingerprint(project: Project, target_name: str) -> str:
     identity: re-keying the *same* fabric file onto a different HRU column
     leaves path and sha256 untouched while making every existing
     intermediate unreadable to the next build (issue #353).
+
+    ``input_provenance`` (e.g. the Margulis perennial-snow mask fingerprint,
+    #363) is hashed under ``"input_provenance"`` when non-empty so a change
+    to an upstream input invalidates cached intermediates. When ``None`` or
+    empty the payload, and therefore the hash, is unchanged.
 
     Returns
     -------
@@ -116,6 +126,8 @@ def target_config_fingerprint(project: Project, target_name: str) -> str:
         # files and died with "No variable named 'hru_id'".
         "fabric_id_col": fabric_cfg.get("id_col", ""),
     }
+    if input_provenance:
+        payload["input_provenance"] = dict(input_provenance)
     canonical = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
 

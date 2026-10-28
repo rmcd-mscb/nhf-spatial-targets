@@ -527,3 +527,106 @@ def test_verify_year_coverage_raises_on_empty(tmp_path):
     d.mkdir()
     with pytest.raises(ValueError, match="no per-year"):
         _verify_year_coverage(d, "foo")
+
+
+def _run_stamped_year(project, fabric, stamp_attrs):
+    """Run aggregate_year on a toy merra2 source with the given stamp_attrs."""
+    from nhf_spatial_targets.aggregate._adapter import SourceAdapter
+    from nhf_spatial_targets.aggregate._driver import aggregate_year
+
+    src_dir = project.raw_dir("merra2")
+    src_dir.mkdir(parents=True, exist_ok=True)
+    src_file = src_dir / "src_2005_consolidated.nc"
+    if not src_file.exists():
+        _write_nc(src_file, pd.date_range("2005-01-01", periods=12, freq="MS"))
+    adapter = SourceAdapter(
+        source_key="merra2",
+        output_name="merra2_agg.nc",
+        variables=["v"],
+        stamp_attrs=stamp_attrs,
+    )
+    fake_weights = pd.DataFrame({"i": [0], "j": [0], "wght": [1.0], "hru_id": [0]})
+    fake_year_ds = xr.Dataset(
+        {"v": (["time", "hru_id"], np.ones((1, 2)))},
+        coords={
+            "time": (
+                "time",
+                pd.date_range("2005-01-01", periods=1, freq="MS"),
+                {"standard_name": "time"},
+            ),
+            "hru_id": [0, 1],
+        },
+    )
+    with (
+        patch(
+            "nhf_spatial_targets.aggregate._driver.catalog_source",
+            return_value={"access": {"doi": "10.0/TEST"}},
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.compute_or_load_weights",
+            return_value=fake_weights,
+        ),
+        patch(
+            "nhf_spatial_targets.aggregate._driver.aggregate_variables_for_batch",
+            return_value=fake_year_ds,
+        ),
+    ):
+        return aggregate_year(
+            adapter, project, 2005, src_file, fabric, "hru_id", catalog_meta=None
+        )
+
+
+def test_stamp_attrs_written_to_per_year_nc(project, tiny_batched_fabric):
+    out = _run_stamped_year(
+        project,
+        tiny_batched_fabric,
+        {
+            "perennial_snow_mask_fingerprint": "abc123def456",
+            "perennial_snow_mask_swe_threshold_m": 0.1,
+        },
+    )
+    with xr.open_dataset(out) as ds:
+        assert ds.attrs["perennial_snow_mask_fingerprint"] == "abc123def456"
+        assert float(ds.attrs["perennial_snow_mask_swe_threshold_m"]) == 0.1
+
+
+def test_existing_nc_without_stamp_is_reaggregated(
+    project, tiny_batched_fabric, caplog
+):
+    _run_stamped_year(project, tiny_batched_fabric, None)
+    with caplog.at_level("WARNING"):
+        out = _run_stamped_year(
+            project,
+            tiny_batched_fabric,
+            {"perennial_snow_mask_fingerprint": "abc123def456"},
+        )
+    with xr.open_dataset(out) as reopened:
+        assert reopened.attrs["perennial_snow_mask_fingerprint"] == "abc123def456"
+    assert "stale" in caplog.text
+    assert "perennial_snow_mask_fingerprint" in caplog.text
+
+
+def test_existing_nc_with_matching_stamp_is_skipped(project, tiny_batched_fabric):
+    stamp = {
+        "perennial_snow_mask_fingerprint": "abc123def456",
+        "perennial_snow_mask_swe_threshold_m": 0.1,
+    }
+    out = _run_stamped_year(project, tiny_batched_fabric, stamp)
+    first_mtime = out.stat().st_mtime_ns
+    _run_stamped_year(project, tiny_batched_fabric, stamp)
+    assert out.stat().st_mtime_ns == first_mtime
+
+
+def test_existing_nc_with_different_stamp_is_reaggregated(project, tiny_batched_fabric):
+    _run_stamped_year(
+        project,
+        tiny_batched_fabric,
+        {"perennial_snow_mask_fingerprint": "aaaaaaaaaaaa"},
+    )
+    out = _run_stamped_year(
+        project,
+        tiny_batched_fabric,
+        {"perennial_snow_mask_fingerprint": "bbbbbbbbbbbb"},
+    )
+    with xr.open_dataset(out) as ds:
+        assert ds.attrs["perennial_snow_mask_fingerprint"] == "bbbbbbbbbbbb"

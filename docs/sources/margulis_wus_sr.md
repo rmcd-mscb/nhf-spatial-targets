@@ -30,6 +30,97 @@ in `<datastore>/margulis_wus_sr/raw/<year>/`. Concatenating the
 per-water-year per-tile NetCDFs into a per-year CF NetCDF is handled
 by the consolidator that runs after each year's downloads complete.
 
+## Perennial-snow mask (#363)
+
+Margulis holds glacier and perennial-snow pixels at multi-metre SWE through
+every summer (Mt Hood about 2.1-2.3 m on Sep 30 each year; Rainier and Baker
+about 100 m). PRMS cannot carry snow from one water year into the next, so at
+those HRUs the raw product pulls the SWE target's upper bound to values the
+model can never reach. This is a trait of the product, not a registration
+error: the Margulis-to-HRU mapping was checked and is correct.
+
+Perennial pixels are therefore removed **before** they are averaged to HRUs.
+
+- **The rule** (catalog `sources.yml[margulis_wus_sr].perennial_snow_mask`):
+  a pixel is perennial if its SWE is at least `swe_threshold_m` (0.1 m) on
+  `check_month_day` (Sep 30) in **more than** `min_year_fraction` (0.5) of the
+  years with a finite value there. One static mask covers the whole record.
+- **The mask file** is
+  `<datastore>/margulis_wus_sr/derived/perennial_snow_mask.nc`, with `perennial`
+  (0/1), `n_years_held` and `n_years_valid` on the consolidated lat/lon grid.
+  Its global attrs record the rule, the input years, the pixel count and area,
+  `perennial_snow_mask_build_key` and `perennial_snow_mask_fingerprint`.
+- **How it is applied.** `agg margulis-wus-sr` builds the mask if needed, then
+  drops perennial cells from the gdptools weight table in memory
+  (`SourceAdapter.weight_filter`; the cached weight CSVs are never rewritten
+  and stay valid). It does not use `masked_mean`; see "Static pixel masks under
+  `mean`" in `docs/architecture/transformation-pipeline.md`.
+- **Effect on HRUs.**
+  - An HRU with no perennial pixel in its footprint is **unchanged,
+    bit for bit**.
+  - A partly perennial HRU becomes the area-weighted mean of its remaining
+    pixels.
+  - A fully perennial (fully glaciated) HRU becomes NaN on every day, never
+    0.0. Margulis therefore drops out of the multi-source bound there and
+    `n_sources` falls by one.
+  - Lake and coast HRUs are unaffected: the mask only flags grid pixels that
+    hold snow, and an HRU Margulis does not cover stays NaN as before (#309).
+- **Provenance.** Each per-year aggregated NC carries four
+  `perennial_snow_mask_*` attrs (fingerprint, threshold, check day, year
+  fraction), the SWE target NC carries
+  `margulis_wus_sr_perennial_snow_mask_fingerprint`, and the manifest records
+  the mask parameters.
+
+### Rebuilds and self-healing
+
+- **Two keys.** The *build key* (`perennial_snow_mask_build_key`, a hash of the
+  rule plus the input years) decides when the mask file itself is rebuilt. The
+  *fingerprint* (`perennial_snow_mask_fingerprint`, a hash of the rule, the grid
+  and the perennial flags) is what is stamped on aggregated NCs and the SWE
+  target, so downstream work re-runs exactly when the removed-pixel set or the
+  rule changes.
+- **Cost of a year-set change.** Adding or removing a Margulis year rebuilds
+  the mask (it reads every Sep 30 slice) and changes the Margulis consolidate
+  step in every project's manifest (run `maintenance rebuild-manifest`).
+  Existing years re-aggregate, and the SWE target rebuilds, **only if a mask
+  cell (or the rule) changed**; otherwise the fingerprint is unchanged and
+  nothing downstream re-runs.
+- **After re-consolidating a year Y with corrected data.** The aggregate skip is
+  by file existence, so the operator deletes:
+  1. `<datastore>/margulis_wus_sr/derived/perennial_snow_mask.nc`
+  2. `<project>/data/aggregated/margulis_wus_sr/margulis_wus_sr_<Y>_agg.nc` in
+     **every** project on the datastore
+  3. `<project>/targets/.swe_intermediates/` in each such project (the SWE
+     cache key changes only when the mask content changes)
+
+  Then, per project:
+
+  ```bash
+  nhf-targets agg margulis-wus-sr --project-dir <project>
+  nhf-targets run --target snow_water_equivalent --project-dir <project>   # pixi run run-swe
+  nhf-targets maintenance rebuild-manifest --project-dir <project>
+  nhf-targets validate --project-dir <project>
+  ```
+
+  If the rebuilt mask's cells changed, every year re-aggregates automatically.
+- **Manifest drift elsewhere.** A mask build or rebuild in the shared datastore
+  changes the Margulis consolidate step in **every** project's manifest,
+  including projects that do not use Margulis (e.g. gfv2). Their publish gate
+  reports drift until `nhf-targets maintenance rebuild-manifest` is run there.
+- Pre-mask per-year aggregates (no fingerprint attr) and per-year aggregates
+  stamped with an older fingerprint are re-aggregated on the next
+  `agg margulis-wus-sr`. Stale SWE year intermediates rebuild on the next
+  `run-swe` because the fingerprint is part of their cache key.
+- A mixed pre-/post-mask set of per-year aggregates, or an entirely pre-mask
+  set, makes the SWE build raise,
+  naming the years that lack the fingerprint (or listing each year's
+  fingerprint if they disagree). Until then `run-swe` cannot proceed; re-run `agg margulis-wus-sr` to fix it.
+- Verification: the Perennial-snow mask section of
+  `notebooks/aggregated/inspect_aggregated_swe.ipynb` (checks 1-5) and the
+  `n_sources` section of `notebooks/targets/inspect_target_swe.ipynb`
+  (check 6). Both compare against the pre-mask archive under
+  `<project>/archive/margulis_premask_2026-10-28/` when it exists.
+
 ## Prerequisites
 
 - NASA Earthdata account with credentials materialized into `~/.netrc`

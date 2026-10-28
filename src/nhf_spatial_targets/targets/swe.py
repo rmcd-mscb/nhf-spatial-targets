@@ -81,6 +81,7 @@ from nhf_spatial_targets.targets._combine import multi_source_nanminmax
 from nhf_spatial_targets.targets._io import (
     OutsideCoverageError,
     check_hru_coords,
+    parse_period,
     read_aggregated_source,
     reindex_to_day_start,
 )
@@ -364,6 +365,62 @@ def _load_year(
 # ---------------------------------------------------------------------------
 
 
+_MARGULIS_KEY = "margulis_wus_sr"
+_MASK_FP_ATTR = "perennial_snow_mask_fingerprint"
+
+
+def margulis_input_provenance(project: Project) -> dict[str, str]:
+    """Margulis perennial-snow mask fingerprint for the configured period.
+
+    Returns ``{}`` when ``margulis_wus_sr`` is not among the resolved SWE
+    sources. Otherwise reads only the global attrs of every Margulis
+    per-year aggregated NC in the period and returns
+    ``{"margulis_wus_sr_perennial_snow_mask_fingerprint": fp}``.
+
+    Raises
+    ------
+    ValueError
+        If any file lacks the fingerprint (a pre-mask aggregate) or the files
+        disagree (a partially re-aggregated source).
+    """
+    sources, _ = _resolve_sources(project)
+    if _MARGULIS_KEY not in sources:
+        return {}
+    shim = shims_by_config_label(SHIMS)[_MARGULIS_KEY]
+    start, end = parse_period(project.target("snow_water_equivalent")["period"])
+    year_lo, year_hi = pd.Timestamp(start).year, pd.Timestamp(end).year
+    agg_dir = project.aggregated_dir() / shim.source_key
+    by_year: dict[int, str | None] = {}
+    for path in sorted(agg_dir.glob(f"{shim.source_key}_*_agg.nc")):
+        try:
+            year = int(path.stem.split("_")[-2])
+        except ValueError:
+            continue
+        if not year_lo <= year <= year_hi:
+            continue
+        with xr.open_dataset(path, engine="netcdf4", decode_times=False) as ds:
+            fp = ds.attrs.get(_MASK_FP_ATTR)
+        by_year[year] = None if fp is None else str(fp)
+    unstamped = sorted(y for y, fp in by_year.items() if fp is None)
+    if unstamped:
+        raise ValueError(
+            f"Margulis aggregated NCs for years {unstamped} lack "
+            f"'{_MASK_FP_ATTR}': pre-mask Margulis aggregate; re-run "
+            f"`nhf-targets agg margulis-wus-sr --project-dir {project.workdir}`."
+        )
+    fps = set(by_year.values())
+    if len(fps) > 1:
+        detail = ", ".join(f"{y}={fp}" for y, fp in sorted(by_year.items()))
+        raise ValueError(
+            f"Margulis aggregated NCs disagree on '{_MASK_FP_ATTR}' ({detail}); "
+            f"re-run `nhf-targets agg margulis-wus-sr --project-dir "
+            f"{project.workdir}` so every year uses the same mask."
+        )
+    if not fps:
+        return {}
+    return {f"{_MARGULIS_KEY}_{_MASK_FP_ATTR}": fps.pop()}
+
+
 ADAPTER = TargetAdapter(
     target_key="swe",
     config_key="snow_water_equivalent",
@@ -378,6 +435,7 @@ ADAPTER = TargetAdapter(
     intermediates_subdir=".swe_intermediates",
     intermediate_base="swe_targets",
     source_loader=_load_year,
+    input_provenance=margulis_input_provenance,
     per_year_title_template="NHM SWE calibration target year {year} (intermediate)",
     per_year_nn_title_template=(
         "NHM SWE calibration target year {year} (NN-filled intermediate)"

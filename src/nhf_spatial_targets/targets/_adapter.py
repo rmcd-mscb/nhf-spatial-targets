@@ -128,9 +128,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import xarray as xr
+
+if TYPE_CHECKING:
+    from nhf_spatial_targets.workspace import Project
 
 # Allowed cadence values. ``daily`` and the year-chunked targets cohabit:
 # SCA and SWE are daily AND year-chunked, while ``monthly`` and ``annual``
@@ -263,6 +266,12 @@ class TargetAdapter:
     on_year_skip: Callable[..., None] | None = field(default=None, repr=False)
     per_year_title_template: str | None = None
     per_year_nn_title_template: str | None = None
+    # Optional hook returning upstream-input provenance (attr name -> value).
+    # Called once per build; the result is keyed into the intermediates
+    # cache fingerprint and written as global attrs on the target NC (#363).
+    input_provenance: Callable[[Project], dict[str, str]] | None = field(
+        default=None, repr=False
+    )
 
     def __post_init__(self) -> None:
         _ALLOWED_CADENCES = {"monthly", "annual", "daily"}

@@ -354,24 +354,93 @@ def read_scf_threshold_stamp(nc: Path) -> float | None:
             ) from exc
 
 
-def _aggregate_nc_params(source_key: str, ncs: list[Path]) -> dict:
-    """Lift aggregate-baked derived-variable attrs into the aggregate step params.
+# Margulis WUS-SR perennial-snow mask (issue #363). The mask is a pre-aggregation
+# per-pixel gate (it does not commute with the area-weighted mean), so its
+# fingerprint + rule parameters are stamped as global attrs on every per-year
+# aggregated NC and lifted here into the aggregate step's ``params``.
+_MARGULIS_KEY = "margulis_wus_sr"
+_MASK_FINGERPRINT_ATTR = "perennial_snow_mask_fingerprint"
+_MASK_FLOAT_ATTRS = (
+    "perennial_snow_mask_swe_threshold_m",
+    "perennial_snow_mask_min_year_fraction",
+)
+_MASK_STR_ATTRS = ("perennial_snow_mask_check_month_day",)
 
-    Currently ua_swe-specific: reads the ``depth_threshold_mm`` stamp from the
-    deterministically-first agg NC that carries it (``ncs`` is pre-sorted) into
-    ``params``. Read from the NC attr, **not** config -- the rebuild is a pure
-    function of disk and must stay deterministic; config could have drifted from
-    what actually defined the on-disk fraction (the publish staleness gate is the
-    place that catches that drift). A missing var/attr yields ``{}``: the param
-    is provenance-enriching, not gating, so the projection never fails on its
-    absence.
+
+def read_margulis_mask_stamp(nc: Path) -> dict | None:
+    """Return the ``perennial_snow_mask_*`` global attrs of a Margulis agg NC.
+
+    Returns ``None`` for a genuinely absent stamp (no fingerprint attr, or a
+    non-NetCDF placeholder). **Raises** ``ValueError`` for a file carrying
+    NetCDF/HDF5 magic that cannot be opened, or for a present-but-malformed
+    float attr -- the same semantics as :func:`read_scf_threshold_stamp`.
     """
-    if source_key != _UA_SWE_KEY:
-        return {}
-    for nc in ncs:
-        stamp = read_scf_threshold_stamp(nc)
-        if stamp is not None:
-            return {_DEPTH_THRESHOLD_ATTR: stamp}
+    import xarray as xr
+
+    try:
+        ds = xr.open_dataset(nc)
+    except Exception as exc:
+        if _looks_like_netcdf(nc):
+            raise ValueError(
+                f"margulis agg NC {nc} carries NetCDF/HDF5 magic but could not "
+                f"be opened ({exc}); it appears truncated or corrupt. Refusing "
+                f"to silently omit its perennial-snow-mask provenance. "
+                f"Re-aggregate margulis_wus_sr, then rebuild-manifest."
+            ) from exc
+        logger.warning(
+            "rebuild-manifest: %s is unreadable and carries no NetCDF/HDF5 magic "
+            "(%s); treating it as a non-NetCDF placeholder, so the margulis "
+            "aggregate step's perennial_snow_mask_* params are omitted.",
+            nc,
+            exc,
+        )
+        return None
+    with ds:
+        attrs = dict(ds.attrs)
+    if attrs.get(_MASK_FINGERPRINT_ATTR) is None:
+        return None
+    params: dict = {_MASK_FINGERPRINT_ATTR: str(attrs[_MASK_FINGERPRINT_ATTR])}
+    for name in _MASK_STR_ATTRS:
+        if attrs.get(name) is not None:
+            params[name] = str(attrs[name])
+    for name in _MASK_FLOAT_ATTRS:
+        value = attrs.get(name)
+        if value is None:
+            continue
+        raw = value.item() if hasattr(value, "item") else value
+        try:
+            params[name] = float(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"{nc}: {name} is present but not a float scalar ({raw!r}); "
+                f"refusing to treat a malformed stamp as absent provenance. "
+                f"Re-aggregate margulis_wus_sr, then rebuild-manifest."
+            ) from exc
+    return params
+
+
+def _aggregate_nc_params(source_key: str, ncs: list[Path]) -> dict:
+    """Lift aggregate-baked provenance stamps into the aggregate step params.
+
+    ua_swe: the ``depth_threshold_mm`` stamp; margulis_wus_sr: the four
+    ``perennial_snow_mask_*`` global attrs. Each is read from the
+    deterministically-first agg NC that carries it (``ncs`` is pre-sorted).
+    Read from the NC attrs, **not** config -- the rebuild is a pure function of
+    disk and must stay deterministic; config could have drifted from what
+    actually defined the on-disk values (the publish staleness gate is the place
+    that catches that drift). A missing stamp yields ``{}``: the params are
+    provenance-enriching, not gating, so the projection never fails on absence.
+    """
+    if source_key == _UA_SWE_KEY:
+        for nc in ncs:
+            stamp = read_scf_threshold_stamp(nc)
+            if stamp is not None:
+                return {_DEPTH_THRESHOLD_ATTR: stamp}
+    elif source_key == _MARGULIS_KEY:
+        for nc in ncs:
+            params = read_margulis_mask_stamp(nc)
+            if params is not None:
+                return params
     return {}
 
 
