@@ -328,6 +328,12 @@ source has explicit per-pixel masking:
   `aggregate/mod16a2.py` (PR #88 fill mask) and `aggregate/mod10c1.py`
   (CI > 70 gate). Configurable via `SourceAdapter.stat_method`.
 
+- **Static pixel masks use `weight_filter`, not `masked_mean`.** A fixed per-pixel
+  exclusion (e.g. the Margulis perennial-snow mask, #363) drops rows from the
+  in-memory weight table via `SourceAdapter.weight_filter` and keeps
+  `stat_method="mean"`; `masked_mean` returns 0.0 (not NaN) for an HRU whose
+  pixels are all NaN (#364). See `docs/architecture/transformation-pipeline.md`.
+
 **The aggregated NC at `<project>/data/aggregated/<source_key>/...`
 therefore carries the source's NATIVE variable names and NATIVE units**,
 with flag-masked and quality-gated values. **HRU NaN values are honest**:

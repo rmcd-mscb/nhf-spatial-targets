@@ -17,7 +17,9 @@ Builds the baseline calibration targets documented in [Hay and others (2022), US
 
 ¹ Margulis Western US Snow Reanalysis covers only the **Western US**; it
 contributes NaN-aware to the HRUs it covers and drops out elsewhere (#309 —
-the former fabric_scope/fabric.token gate is gone). Outside its domain the
+the former fabric_scope/fabric.token gate is gone). Glacier and
+perennial-snow pixels are masked out of its HRU means before aggregation
+(#363; see `docs/sources/margulis_wus_sr.md`). Outside its domain the
 SWE bound falls back to the remaining four sources (Daymet, SNODAS,
 ERA5-Land, UA SWE); raw downloads remain reusable across any project
 sharing the datastore.

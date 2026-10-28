@@ -16,6 +16,7 @@ file that tells you which stage your transformation belongs in.
 | `fetch/<src>.py` | Download raw files; consolidate per-year NCs from upstream tiles/granules; reproject (e.g. MODIS sinusoidal → WGS84) when the upstream format isn't directly usable. | Apply scale factors, mask flag values, derive new variables, or filter by quality. The datastore should mirror the source's native semantics. |
 | `aggregate/<src>.py` `pre_aggregate_hook` | Apply *pixel-defined* operations: flag-value masks, sums-of-accumulations needed to produce a single variable to aggregate, and quality gates that determine which pixels participate in the area-weighted mean. | Apply linear scale factors. Rename source variables. Compute multi-source combinations. Do anything that could equally well live downstream. |
 | `aggregate/<src>.py` `stat_method` | Pick `"mean"` (default, NaN propagates) or `"masked_mean"` (NaN skipped) per source. **`masked_mean` whenever there is a `pre_aggregate_hook` that sets pixels to NaN** so the per-pixel mask doesn't poison every HRU it touches; `mean` otherwise so geometric / true-upstream NaN propagates honestly. | Use `"mean"` with a source that has per-pixel masking — that defeats the mask. |
+| `aggregate/<src>.py` `weight_filter` | Drop weight-table rows for pixels excluded by a **static** per-pixel mask (e.g. Margulis perennial snow, #363), in memory, with `stat_method="mean"`. | Write NaN into the grid and rely on `masked_mean` for a static mask (all-NaN HRUs come back 0.0, #364). |
 | `aggregate/<src>.py` `post_aggregate_hook` | Cosmetic-only: attach attrs, rename auxiliary diagnostic variables (e.g. `valid_mask` → `valid_area_fraction` after the per-pixel 0/1 mask becomes an HRU-fraction). | Modify aggregated source values. Impute / NN-fill aggregated values. |
 | `normalize/methods.py` | Per-source per-HRU operations whose definition is *at HRU scale*: 0–1 normalization, multi-source min/max bounds. | Mask flags. Reach back to pixel-level data. NN-fill aggregated NCs. |
 | `targets/<tgt>.py` | Linear unit conversions (`× 1000`, `÷ 100`, `× 8 × days_in_month`), CF-compliant target NetCDF assembly, multi-source combination via NaN-aware reduction, and (optionally) NN-fill of the resulting per-HRU per-time *bound*. | Anything that can't be expressed at HRU scale. NN-fill on the aggregated NCs (use the bound). |
@@ -156,6 +157,34 @@ the architecture relies on.
 
 `SourceAdapter.stat_method` is the per-source knob; the driver enforces
 the choice in `aggregate_variables_for_batch`.
+
+### Static pixel masks under `mean`: `weight_filter`
+
+(Issues #363 and #364.) A mask that is **fixed per pixel** for the whole record
+(for example the Margulis perennial-snow mask) does not need a
+`pre_aggregate_hook` that writes NaN into the grid. Under `masked_mean`, gdptools
+returns **0.0 rather than NaN** for an HRU whose pixels are all NaN (#364), so
+a fully masked HRU (a glacier) would read as zero SWE and pull the multi-source
+lower bound to zero. (The "HRU is NaN only when *every* contributing pixel was
+masked" statement in the `masked_mean` section above predates #364 and is
+corrected there.) Instead, a static mask is applied to the **weight table**:
+
+- `SourceAdapter.weight_filter(weights, cell_y, cell_x)` is called once per
+  spatial batch after the weights are loaded and returns the rows to keep. The
+  driver resolves each row's `(i, j)` to `(cell_y, cell_x)` coordinate values
+  through the gdptools source subset (`_weight_cell_coords`); `i` / `j` index
+  that per-batch subset, not the full grid.
+- Filtering is in memory only; the weight cache CSV is never rewritten, so the
+  cache stays valid when the mask changes.
+- The adapter stays on `stat_method="mean"`. Dropped rows leave the survivors
+  area-weighted-averaged (`np.average` renormalises), so a partly masked HRU is
+  the weighted mean of its unmasked pixels, an HRU with no masked pixel is
+  bit-identical, and an HRU with no rows left is NaN: the driver short-circuits
+  to an all-NaN batch rather than calling `AggGen`.
+
+Rule of thumb: a time-varying or value-dependent per-pixel gate belongs in
+`pre_aggregate_hook` (see above); a static per-pixel exclusion belongs in
+`weight_filter`.
 
 ### Imputation lives at the target stage, not aggregation
 
@@ -380,7 +409,9 @@ When you add a new source that needs transformations, ask in order:
    defined?** (Mask invalid pixels, derive a single sum from accumulated
    components.) → `pre_aggregate_hook`. **If this hook sets pixels to NaN,
    also set `stat_method="masked_mean"` on the adapter.**
-2. **Is it a per-pixel quality threshold whose definition is at the source
+2. **Is it a static per-pixel exclusion (a fixed mask over the whole record)?**
+   → `SourceAdapter.weight_filter`, stay on `stat_method="mean"` (#363, #364).
+   **Is it a per-pixel quality threshold whose definition is at the source
    grid?** → `pre_aggregate_hook` (with `stat_method="masked_mean"`). Note:
    even though linear rescaling commutes, threshold operations do not —
    apply at the granularity where the threshold is defined.
