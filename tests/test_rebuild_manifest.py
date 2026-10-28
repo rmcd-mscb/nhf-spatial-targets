@@ -875,3 +875,9 @@ def test_rebuild_deterministic_with_mask(tmp_path):
     m1 = rebuild_manifest(project, dry_run=True)
     m2 = rebuild_manifest(project, dry_run=True)
     assert json.dumps(m1, indent=2) == json.dumps(m2, indent=2)
+    (agg,) = [
+        st
+        for st in m1["steps"]
+        if st["kind"] == "aggregate" and st["source_key"] == _MARGULIS
+    ]
+    assert agg["params"]["perennial_snow_mask_fingerprint"] == "abc123def456"

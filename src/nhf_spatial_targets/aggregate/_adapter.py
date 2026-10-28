@@ -35,8 +35,9 @@ class SourceAdapter:
     pixels in ``pre_aggregate_hook`` — fill-value masks, quality gates,
     etc. Without this override, the per-pixel mask poisons every HRU that
     touches even one masked pixel; with it, the HRU mean honestly reports
-    the area-weighted mean of pixels that survived the pre-aggregate gate
-    and the HRU is NaN only when *every* contributing pixel was masked.
+    the area-weighted mean of pixels that survived the pre-aggregate gate.
+    Caveat: for an HRU whose pixels were *all* masked, ``masked_mean``
+    currently returns 0.0, not NaN (see #364).
     Currently used by ``aggregate/mod16a2.py`` (PR #88 fill mask) and
     ``aggregate/mod10c1.py`` (CI > 70 quality gate). See
     ``docs/architecture/transformation-pipeline.md`` for the full rule.

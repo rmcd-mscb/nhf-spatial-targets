@@ -143,9 +143,9 @@ the area-weighted mean:
   the per-pixel mask poisons every HRU that touches even one masked
   pixel — defeating the point of having a per-pixel mask. With it, the
   HRU mean honestly reports "the area-weighted mean of pixels that
-  survived the pre-aggregate gate"; the HRU is NaN only when *every*
-  contributing pixel was masked, which is the genuine "no useful source
-  data" state.
+  survived the pre-aggregate gate". Caveat: for an HRU whose pixels were
+  *all* masked, gdptools' `masked_mean` currently returns 0.0, not NaN (#364),
+  so it is not a reliable "no useful source data" signal.
 
 The rule is mechanical: **if `pre_aggregate_hook` sets pixels to NaN, set
 `stat_method="masked_mean"`**. `aggregate/mod16a2.py` and
@@ -166,8 +166,8 @@ the choice in `aggregate_variables_for_batch`.
 returns **0.0 rather than NaN** for an HRU whose pixels are all NaN (#364), so
 a fully masked HRU (a glacier) would read as zero SWE and pull the multi-source
 lower bound to zero. (The "HRU is NaN only when *every* contributing pixel was
-masked" statement in the `masked_mean` section above predates #364 and is
-corrected there.) Instead, a static mask is applied to the **weight table**:
+masked" claim formerly made in the `masked_mean` section above was wrong
+after #364 and has been corrected there.) Instead, a static mask is applied to the **weight table**:
 
 - `SourceAdapter.weight_filter(weights, cell_y, cell_x)` is called once per
   spatial batch after the weights are loaded and returns the rows to keep. The
@@ -179,8 +179,14 @@ corrected there.) Instead, a static mask is applied to the **weight table**:
 - The adapter stays on `stat_method="mean"`. Dropped rows leave the survivors
   area-weighted-averaged (`np.average` renormalises), so a partly masked HRU is
   the weighted mean of its unmasked pixels, an HRU with no masked pixel is
-  bit-identical, and an HRU with no rows left is NaN: the driver short-circuits
-  to an all-NaN batch rather than calling `AggGen`.
+  bit-identical, and an HRU with no rows left ends up NaN, by one of two routes:
+  - if the **whole batch's** filtered table is empty, the driver
+    short-circuits to an all-NaN batch rather than calling `AggGen`;
+  - a single fully masked HRU in a non-empty batch gets gdptools'
+    `NC_FILL_DOUBLE` (9.97e+36) and becomes NaN only at the
+    `_atomic_write_netcdf` write boundary (`mask_netcdf_default_fills`).
+  Anything reading aggregated NCs outside
+  `targets/_io.read_aggregated_source` must apply the fill mask itself.
 
 Rule of thumb: a time-varying or value-dependent per-pixel gate belongs in
 `pre_aggregate_hook` (see above); a static per-pixel exclusion belongs in

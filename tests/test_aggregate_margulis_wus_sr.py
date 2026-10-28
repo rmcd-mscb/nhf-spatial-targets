@@ -169,6 +169,24 @@ def test_classify_nan_years_excluded_from_denominator():
     assert classify_perennial(held=2, valid=3, min_year_fraction=0.5) == 1
 
 
+def test_classify_non_dyadic_fraction_follows_spec_ratio_form():
+    # held / valid > frac is the spec rule; 57/100 is not > 0.57.
+    assert classify_perennial(held=57, valid=100, min_year_fraction=0.57) == 0
+    assert classify_perennial(held=58, valid=100, min_year_fraction=0.57) == 1
+
+
+def test_mask_rule_from_catalog_rejects_nonfinite(monkeypatch):
+    from nhf_spatial_targets.aggregate import margulis_wus_sr as m
+
+    real = m.catalog.source("margulis_wus_sr")
+    for field in ("swe_threshold_m", "min_year_fraction"):
+        bad = {**real, "perennial_snow_mask": {**real["perennial_snow_mask"]}}
+        bad["perennial_snow_mask"][field] = float("nan")
+        monkeypatch.setattr(m.catalog, "source", lambda key, _b=bad: _b)
+        with pytest.raises(ValueError, match="finite|must be"):
+            MaskRule.from_catalog()
+
+
 def test_classify_all_nan_not_perennial():
     assert classify_perennial(held=0, valid=0, min_year_fraction=0.5) == 0
 
@@ -314,6 +332,23 @@ def test_perennial_weight_filter_drops_masked_rows(tmp_path):
     out = filt(w, cy, cx)
     assert list(out.columns) == list(w.columns)
     assert out["i"].tolist() == [1, 3]
+
+
+def test_perennial_weight_filter_float32_coords(tmp_path):
+    """Real consolidated lat/lon are float32; mask and cell coords must match."""
+    lat32, lon32 = _LAT.astype("float32"), _LON.astype("float32")
+    base = np.zeros((3, 4))
+    for yr in (1985, 1986, 1987):
+        a = base.copy()
+        a[0, 0] = 0.5  # perennial every year
+        _write_year(tmp_path, yr, a, lat=lat32, lon=lon32)
+    path = ensure_perennial_snow_mask(tmp_path, _RULE)
+    filt = make_perennial_weight_filter(path)
+    w = pd.DataFrame({"hru_id": [1, 1], "wght": [0.5, 0.5], "i": [0, 1]})
+    cy = np.array([lat32[0], lat32[0]])
+    cx = np.array([lon32[0], lon32[1]])
+    assert cy.dtype == np.float32
+    assert filt(w, cy, cx)["i"].tolist() == [1]
 
 
 def test_perennial_weight_filter_unmatched_coords_raise(tmp_path):
@@ -537,3 +572,4 @@ def test_end_to_end_premask_year_reaggregated(tmp_path, caplog):
 def test_module_adapter_stays_plain():
     assert ADAPTER.weight_filter is None
     assert not ADAPTER.stamp_attrs
+    assert ADAPTER.stat_method == "mean"

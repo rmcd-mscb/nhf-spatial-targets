@@ -901,7 +901,13 @@ sources:
         PRMS cannot carry snow across water years. The mask is built in the
         datastore at margulis_wus_sr/derived/perennial_snow_mask.nc and
         rebuilt automatically when this rule or the set of years on disk
-        changes.
+        changes. The fingerprint covers the rule plus the year set, not
+        file contents, and adding or removing any year re-aggregates every
+        Margulis year in every project on the datastore and rebuilds the
+        SWE intermediates. After re-consolidating a year with corrected
+        data, manually delete the mask, the project's
+        data/aggregated/margulis_wus_sr/ and targets/.swe_intermediates/
+        (see docs/sources/margulis_wus_sr.md).
     release:
       # Spatial coverage is Western-US-only, but the consolidated NSIDC
       # source NCs are public-domain redistributable. The

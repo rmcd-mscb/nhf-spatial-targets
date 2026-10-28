@@ -2901,6 +2901,11 @@ def test_weight_cell_coords_match_cell_centres(project):
         _wf_user_data(ds, gdf), "SWE", weights, x_coord="lon", y_coord="lat"
     )
     assert len(cy) == len(cx) == len(weights)
+    # Non-zero-offset precondition: the gdptools subset is strictly smaller
+    # than the grid in both lat and lon, so i/j index the subset, not the grid.
+    subset = _wf_user_data(ds, gdf).get_source_subset("SWE")
+    assert subset.sizes["lat"] < ds.sizes["lat"]
+    assert subset.sizes["lon"] < ds.sizes["lon"]
     for hru, expected in _WF_EXPECTED_CELLS.items():
         rows = (weights["hru_id"].astype(int) == hru).to_numpy()
         assert set(zip(cy[rows].tolist(), cx[rows].tolist())) == expected

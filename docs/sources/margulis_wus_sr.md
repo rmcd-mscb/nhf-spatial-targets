@@ -76,18 +76,42 @@ Perennial pixels are therefore removed **before** they are averaged to HRUs.
 - The fingerprint covers **the rule plus the set of input years only, not file
   contents.** The mask is rebuilt automatically when the catalog rule changes
   or a Margulis year is added or removed.
-- **After re-consolidating any Margulis year with corrected data, delete
-  `<datastore>/margulis_wus_sr/derived/perennial_snow_mask.nc` to force a
-  rebuild.** The fingerprint cannot see the change. The next
-  `agg margulis-wus-sr` rebuilds the mask, and the new fingerprint then
-  re-aggregates every year and rebuilds the SWE intermediates.
+- **Cost of a year-set change.** Adding or removing any Margulis year changes
+  the fingerprint. Fetching WY2021, or moving a corrupt year aside, therefore
+  re-aggregates **every** Margulis year in **every** project on the shared
+  datastore and rebuilds the full SWE intermediates, even if no mask cell
+  changes.
+- **Manual recovery after re-consolidating a year with corrected data.**
+  Because the fingerprint cannot see file contents, a rebuilt mask carries the
+  *same* fingerprint. Per-year aggregates still match their stamp and are
+  skipped, the re-consolidated year is skipped too (the aggregate skip is by
+  file existence), and the SWE cache key is unchanged. Nothing re-runs
+  automatically. Delete, then re-run:
+  1. `<datastore>/margulis_wus_sr/derived/perennial_snow_mask.nc`
+  2. `<project>/data/aggregated/margulis_wus_sr/` in **every** project that
+     uses this datastore (the rebuilt mask may differ).
+  3. `<project>/targets/.swe_intermediates/` in each such project.
+
+  Then, per project:
+
+  ```bash
+  nhf-targets agg margulis-wus-sr --project-dir <project>
+  nhf-targets run --target snow_water_equivalent --project-dir <project>   # pixi run run-swe
+  nhf-targets maintenance rebuild-manifest --project-dir <project>
+  nhf-targets validate --project-dir <project>
+  ```
+- **Manifest drift elsewhere.** A mask build or rebuild in the shared datastore
+  changes the Margulis consolidate step in **every** project's manifest,
+  including projects that do not use Margulis (e.g. gfv2). Their publish gate
+  reports drift until `nhf-targets maintenance rebuild-manifest` is run there.
 - Pre-mask per-year aggregates (no fingerprint attr) and per-year aggregates
   stamped with an older fingerprint are re-aggregated on the next
   `agg margulis-wus-sr`. Stale SWE year intermediates rebuild on the next
   `run-swe` because the fingerprint is part of their cache key.
-- A mixed pre-/post-mask set of per-year aggregates makes the SWE build raise,
+- A mixed pre-/post-mask set of per-year aggregates, or an entirely pre-mask
+  set, makes the SWE build raise,
   naming the years that lack the fingerprint (or listing each year's
-  fingerprint if they disagree). Re-run `agg margulis-wus-sr` to fix it.
+  fingerprint if they disagree). Until then `run-swe` cannot proceed; re-run `agg margulis-wus-sr` to fix it.
 - Verification: the Perennial-snow mask section of
   `notebooks/aggregated/inspect_aggregated_swe.ipynb` (checks 1-5) and the
   `n_sources` section of `notebooks/targets/inspect_target_swe.ipynb`

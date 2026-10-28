@@ -20,13 +20,18 @@ when its SWE is at or above a threshold on the water-year-end check date in
 more than a given fraction of the years on disk (rule in the catalog,
 ``margulis_wus_sr.perennial_snow_mask``). The mask is rebuilt when the rule
 or the set of years changes, and its fingerprint is stamped on every
-per-year aggregated NC so pre-mask or stale years are re-aggregated.
+per-year aggregated NC so pre-mask or stale years are re-aggregated. The
+fingerprint covers the rule and the year set, not file contents: after
+re-consolidating a year with corrected data the operator must delete the mask,
+the aggregated dir and the SWE intermediates by hand (see
+``docs/sources/margulis_wus_sr.md``).
 
 The mask is applied as ``SourceAdapter.weight_filter``: perennial cells are
 dropped from the gdptools weight table, so the area-weighted ``mean`` is
 taken over the surviving (seasonal) cells only. An HRU with no perennial
 cell is bit-identical to the unmasked run. An HRU whose cells are all
-perennial has no weights left and is NaN, never 0.0.
+perennial has no weights left and is NaN, never 0.0 (gdptools yields
+NC_FILL_DOUBLE, masked to NaN at the aggregation write boundary).
 
 ``stat_method`` stays ``"mean"`` (NaN propagates) and ``masked_mean`` is
 deliberately avoided: gdptools returns 0.0, not NaN, for an HRU whose
@@ -93,9 +98,9 @@ class MaskRule:
         thr = float(block["swe_threshold_m"])
         md = str(block["check_month_day"])
         frac = float(block["min_year_fraction"])
-        if thr <= 0:
-            raise ValueError(f"swe_threshold_m must be > 0, got {thr}")
-        if not 0.0 <= frac < 1.0:
+        if not (np.isfinite(thr) and thr > 0):
+            raise ValueError(f"swe_threshold_m must be finite and > 0, got {thr}")
+        if not (np.isfinite(frac) and 0.0 <= frac < 1.0):
             raise ValueError(f"min_year_fraction must be in [0, 1), got {frac}")
         try:
             pd.Timestamp(f"2001-{md}")
@@ -126,8 +131,9 @@ def classify_perennial(
     """
     h = np.asarray(held, dtype="float64")
     v = np.asarray(valid, dtype="float64")
-    # held > frac * valid avoids division; valid == 0 -> 0 > 0 is False.
-    return (h > min_year_fraction * v).astype(np.int8)
+    # Spec form: held / valid > frac, with valid == 0 -> ratio 0 (never perennial).
+    ratio = np.divide(h, v, out=np.zeros(np.broadcast(h, v).shape), where=v > 0)
+    return (ratio > min_year_fraction).astype(np.int8)
 
 
 def _year_files(datastore: Path) -> list[tuple[int, Path]]:
