@@ -95,6 +95,13 @@ def _common_global_attrs(
     return attrs
 
 
+def _input_provenance(adapter: TargetAdapter, project: Project) -> dict[str, str]:
+    """Upstream-input provenance attrs from the adapter hook (``{}`` if none)."""
+    if adapter.input_provenance is None:
+        return {}
+    return dict(adapter.input_provenance(project))
+
+
 def _apply_forced_zero(
     adapter: TargetAdapter,
     result: SourceLoaderResult,
@@ -232,6 +239,7 @@ def build_single_shot(
 
     extra_attrs = dict(_common_global_attrs(project, adapter, period_str))
     extra_attrs.update(result.extra_attrs)
+    extra_attrs.update(_input_provenance(adapter, project))
 
     output_path = project.targets_dir() / target_cfg["output_file"]
     write_bounds_target(
@@ -272,7 +280,8 @@ def _build_year_chunked(
     """Year-chunked path: per-year build + cache skip + stitch."""
     fabric_hru_ids = hru_meta.index.values
 
-    config_fp = target_config_fingerprint(project, adapter.config_key)
+    provenance = _input_provenance(adapter, project)
+    config_fp = target_config_fingerprint(project, adapter.config_key, provenance)
     code_ver = code_version_fingerprint()
 
     year_specs = iter_period_years(period[0], period[1])
@@ -295,6 +304,7 @@ def _build_year_chunked(
     nn_max_candidates = int(target_cfg["nn_max_candidates"])
 
     base_extra_attrs = dict(_common_global_attrs(project, adapter, period_str))
+    base_extra_attrs.update(provenance)
     base_extra_attrs.update(
         {
             INTERMEDIATE_CONFIG_FINGERPRINT_ATTR: config_fp,

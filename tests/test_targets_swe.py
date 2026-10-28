@@ -51,6 +51,7 @@ def _write_daily_nc(
     var: str,
     value: float,
     id_col: str = "nhm_id",
+    attrs: dict | None = None,
 ) -> None:
     """Write a per-year aggregated NC with daily cadence (365/366 timesteps)."""
     times = pd.date_range(f"{year}-01-01", f"{year}-12-31", freq="D")
@@ -60,8 +61,15 @@ def _write_daily_nc(
         {var: (("time", id_col), arr)},
         coords={"time": times, id_col: hrus},
     )
+    if attrs:
+        ds.attrs.update(attrs)
     path.parent.mkdir(parents=True, exist_ok=True)
     ds.to_netcdf(path)
+
+
+_MASK_FP = "abc123def456"
+_MASK_ATTR = "perennial_snow_mask_fingerprint"
+_PROV_KEY = "margulis_wus_sr_perennial_snow_mask_fingerprint"
 
 
 def _make_swe_project(
@@ -83,6 +91,9 @@ def _make_swe_project(
     era5_sd_value_m: float = 0.1,  # 100 mm ≈ 3.94 in
     margulis_value_m: float = 0.2,  # 200 mm ≈ 7.87 in
     ua_swe_value_mm: float = 300.0,  # 300 mm ≈ 11.81 in (kg m-2 ≡ mm)
+    # Per-year Margulis mask fingerprints: None -> every year stamped with
+    # _MASK_FP; a dict {year: fp-or-None} overrides (None = unstamped).
+    margulis_mask_fp: dict[int, str | None] | None = None,
 ) -> Path:
     """Build a project skeleton with synthetic fabric + per-year aggregated NCs."""
     if sources is None:
@@ -134,11 +145,16 @@ def _make_swe_project(
             continue
         on_disk_key, var = _SOURCE_DIRS_AND_VARS[src_label]
         for year in years:
+            attrs = None
+            if src_label == "margulis_wus_sr":
+                fp = (margulis_mask_fp or {}).get(year, _MASK_FP)
+                attrs = {_MASK_ATTR: fp} if fp is not None else None
             _write_daily_nc(
                 agg_dir / on_disk_key / f"{on_disk_key}_{year}_agg.nc",
                 year,
                 var,
                 value,
+                attrs=attrs,
             )
     return workdir
 
@@ -1096,3 +1112,82 @@ def test_load_year_nan_member_matches_real_source_coords(tmp_path, monkeypatch):
     assert placeholder.shape == real.shape
     # Config order preserved for member_keys / emitted variable order.
     assert list(result.members) == ["snodas", "era5_land"]
+
+
+# ---------------------------------------------------------------------------
+# Margulis perennial-snow mask provenance (#363)
+# ---------------------------------------------------------------------------
+
+
+def test_margulis_provenance_empty_when_not_a_source(tmp_path: Path):
+    from nhf_spatial_targets.targets.swe import margulis_input_provenance
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_swe_project(tmp_path, sources=["daymet", "snodas"])
+    assert margulis_input_provenance(load(workdir)) == {}
+
+
+def test_margulis_provenance_reads_fingerprint(tmp_path: Path):
+    from nhf_spatial_targets.targets.swe import margulis_input_provenance
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_swe_project(tmp_path)
+    assert margulis_input_provenance(load(workdir)) == {_PROV_KEY: _MASK_FP}
+
+
+def test_margulis_mask_fingerprint_missing_raises(tmp_path: Path):
+    from nhf_spatial_targets.targets.swe import margulis_input_provenance
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_swe_project(tmp_path, margulis_mask_fp={2003: None})
+    with pytest.raises(ValueError, match="pre-mask Margulis aggregate"):
+        margulis_input_provenance(load(workdir))
+
+
+def test_margulis_mask_fingerprint_mixed_raises(tmp_path: Path):
+    from nhf_spatial_targets.targets.swe import margulis_input_provenance
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_swe_project(
+        tmp_path,
+        period="2003-10-01/2004-12-31",
+        margulis_mask_fp={2003: "aaaaaaaaaaaa", 2004: "bbbbbbbbbbbb"},
+    )
+    with pytest.raises(ValueError, match="2004"):
+        margulis_input_provenance(load(workdir))
+
+
+def test_target_fingerprint_unchanged_without_provenance(tmp_path: Path):
+    from nhf_spatial_targets.targets._intermediates import target_config_fingerprint
+    from nhf_spatial_targets.workspace import load
+
+    project = load(_make_swe_project(tmp_path))
+    base = target_config_fingerprint(project, "snow_water_equivalent")
+    assert base == target_config_fingerprint(project, "snow_water_equivalent", {})
+    assert base == target_config_fingerprint(project, "snow_water_equivalent", None)
+
+
+def test_target_fingerprint_changes_with_mask(tmp_path: Path):
+    from nhf_spatial_targets.targets._intermediates import target_config_fingerprint
+    from nhf_spatial_targets.workspace import load
+
+    project = load(_make_swe_project(tmp_path))
+
+    def fp(v):
+        return target_config_fingerprint(
+            project, "snow_water_equivalent", {_PROV_KEY: v}
+        )
+
+    assert fp("aaa") != fp("bbb")
+    assert fp("aaa") != target_config_fingerprint(project, "snow_water_equivalent")
+
+
+def test_swe_target_nc_carries_mask_fingerprint(tmp_path: Path):
+    from nhf_spatial_targets.targets.swe import build
+    from nhf_spatial_targets.workspace import load
+
+    workdir = _make_swe_project(tmp_path, nn_fill=False)
+    project = load(workdir)
+    build(project)
+    with xr.open_dataset(project.targets_dir() / "swe_targets.nc") as ds:
+        assert ds.attrs[_PROV_KEY] == _MASK_FP
