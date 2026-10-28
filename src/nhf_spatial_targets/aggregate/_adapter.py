@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
 import xarray as xr
@@ -49,6 +49,14 @@ class SourceAdapter:
     (separate from the monthly runoff outputs under ``era5_land/``)
     while still reading from ``<datastore>/era5_land/daily/`` and
     inheriting CF metadata from the real ``era5_land`` catalog entry.
+
+    ``stamp_attrs``, when set, are global attrs written onto every per-year
+    aggregated NC this adapter emits (after ``post_aggregate_hook``). They
+    also gate the idempotent skip: an existing per-year NC missing any key,
+    or carrying a different value, is stale -- ``aggregate_year`` logs a
+    WARNING and re-aggregates, overwriting atomically. Use it to fingerprint
+    inputs that change pixel values but not the file name (e.g. a mask).
+    ``None`` leaves skip behaviour unchanged.
     """
 
     source_key: str
@@ -63,6 +71,7 @@ class SourceAdapter:
     files_glob: str = "*_consolidated.nc"
     pre_aggregate_hook: Callable[[xr.Dataset], xr.Dataset] | None = field(default=None)
     post_aggregate_hook: Callable[[xr.Dataset], xr.Dataset] | None = field(default=None)
+    stamp_attrs: Mapping[str, str | float] | None = None
     stat_method: str = "mean"
     catalog_key: str | None = None
     raw_dir_key: str | None = None

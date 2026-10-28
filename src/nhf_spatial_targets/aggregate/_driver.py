@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import tempfile
@@ -632,6 +633,32 @@ def _verify_year_coverage(
         )
 
 
+def _stamp_mismatches(
+    existing_attrs: dict, stamp_attrs: dict
+) -> list[tuple[str, object, object]]:
+    """Return ``(key, expected, found)`` for each stamp attr missing/different.
+
+    ``found`` is ``None`` when the key is absent. Numbers compare exactly
+    (``abs_tol=0``); everything else compares as ``str``.
+    """
+    bad: list[tuple[str, object, object]] = []
+    for key, expected in stamp_attrs.items():
+        if key not in existing_attrs:
+            bad.append((key, expected, None))
+            continue
+        found = existing_attrs[key]
+        if isinstance(expected, (int, float)) and not isinstance(expected, bool):
+            try:
+                same = math.isclose(float(found), float(expected), rel_tol=0, abs_tol=0)
+            except (TypeError, ValueError):
+                same = False
+        else:
+            same = str(found) == str(expected)
+        if not same:
+            bad.append((key, expected, found))
+    return bad
+
+
 def aggregate_year(
     adapter: SourceAdapter,
     project: Project,
@@ -661,6 +688,7 @@ def aggregate_year(
     atomically.
     """
     out_path = per_year_output_path(project, adapter.source_key, year)
+    stale = False
     if out_path.exists():
         # The idempotent skip honours existing files, but a pre-#309 NC (or
         # one written under a buggy coverage classification) may not span
@@ -669,26 +697,43 @@ def aggregate_year(
         # shadowed by stale output forever.
         with xr.open_dataset(out_path) as existing:
             n_existing = int(existing.sizes.get(id_col, 0))
-        n_fabric = int(fabric_batched[id_col].nunique())
-        if n_existing != n_fabric:
-            logger.warning(
-                "%s: year %d: existing per-year NC %s carries %d HRUs but "
-                "the fabric has %d. It predates the full-fabric reindex "
-                "(#309) or was written under different coverage; delete it "
-                "and re-run agg to rebuild.",
+            existing_attrs = dict(existing.attrs)
+        if adapter.stamp_attrs:
+            for key, expected, found in _stamp_mismatches(
+                existing_attrs, dict(adapter.stamp_attrs)
+            ):
+                stale = True
+                logger.warning(
+                    "%s: year %d: existing per-year NC %s is stale: attr "
+                    "%r expected %r, found %r. Re-aggregating.",
+                    adapter.source_key,
+                    year,
+                    out_path,
+                    key,
+                    expected,
+                    found,
+                )
+        if not stale:
+            n_fabric = int(fabric_batched[id_col].nunique())
+            if n_existing != n_fabric:
+                logger.warning(
+                    "%s: year %d: existing per-year NC %s carries %d HRUs but "
+                    "the fabric has %d. It predates the full-fabric reindex "
+                    "(#309) or was written under different coverage; delete "
+                    "it and re-run agg to rebuild.",
+                    adapter.source_key,
+                    year,
+                    out_path,
+                    n_existing,
+                    n_fabric,
+                )
+            logger.info(
+                "%s: year %d: per-year NC exists, skipping (%s)",
                 adapter.source_key,
                 year,
                 out_path,
-                n_existing,
-                n_fabric,
             )
-        logger.info(
-            "%s: year %d: per-year NC exists, skipping (%s)",
-            adapter.source_key,
-            year,
-            out_path,
-        )
-        return out_path
+            return out_path
 
     logger.info(
         "%s: year %d: aggregating from %s",
@@ -770,6 +815,8 @@ def aggregate_year(
 
     if adapter.post_aggregate_hook is not None:
         year_ds = adapter.post_aggregate_hook(year_ds)
+    if adapter.stamp_attrs:
+        year_ds.attrs.update(adapter.stamp_attrs)
 
     meta = (
         catalog_meta if catalog_meta is not None else catalog_source(adapter.source_key)
