@@ -72,6 +72,18 @@ def _nc_files(directory: Path) -> tuple[Path, ...]:
     return tuple(sorted(p for p in directory.rglob("*.nc") if p.is_file()))
 
 
+def _target_files(targets_dir: Path) -> tuple[Path, ...]:
+    """Return the published target NCs: regular ``*.nc`` directly in *targets_dir*.
+
+    One level only, matching the ``target`` steps ``rebuild_manifest``
+    projects. The year-chunked driver writes per-year build intermediates
+    into ``targets/.<x>_intermediates/``; those are never targets (#339).
+    """
+    if not targets_dir.exists():
+        return ()
+    return tuple(sorted(p for p in targets_dir.glob("*.nc") if p.is_file()))
+
+
 def _publishable_agg_dir(name: str) -> bool:
     """Whether an aggregated subdir named *name* may ship in a fabric child.
 
@@ -158,7 +170,7 @@ def plan_fabric_child(project: Project) -> FabricChildPlan:
         fabric_gpkg=Path(project.fabric["path"]),
         manifest_src=project.manifest_path,
         aggregated_files=tuple(aggregated),
-        target_files=_nc_files(project.targets_dir()),
+        target_files=_target_files(project.targets_dir()),
     )
 
 
