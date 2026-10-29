@@ -136,6 +136,28 @@ def test_watergap22d_excluded_from_fabric(tmp_path):
     assert all(p.parent.name != "watergap22d" for p in plan.aggregated_files)
 
 
+def test_year_chunked_intermediates_excluded_from_fabric(tmp_path):
+    """Per-year build intermediates under targets/.<x>_intermediates/ never ship.
+
+    The year-chunked driver writes them inside targets/, but a published
+    target is a stitched targets/*.nc -- the same one-level rule the manifest
+    projection uses, so every staged target has a ``target`` step (#339).
+    """
+    project = _build_project(tmp_path)
+    targets = project.targets_dir()
+    _touch(targets / ".swe_intermediates" / "swe_1980.nc", b"swe-chunk")
+    _touch(targets / ".sca_intermediates" / "sca_1980.nc", b"sca-chunk")
+
+    plan = payload.stage_fabric_child(project)
+
+    assert sorted(p.name for p in plan.target_files) == [
+        "aet_targets.nc",
+        "runoff_targets.nc",
+    ]
+    staged = sorted(p.name for p in (plan.stage_dir / "targets").iterdir())
+    assert staged == ["aet_targets.nc", "runoff_targets.nc"]
+
+
 def test_era5_land_sd_variant_kept_in_fabric(tmp_path):
     project = _build_project(tmp_path)
     plan = payload.stage_fabric_child(project)
