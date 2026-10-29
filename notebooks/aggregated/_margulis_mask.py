@@ -11,6 +11,11 @@ rows of ``<project>/weights/margulis_wus_sr_batch<N>.csv`` hold
 Margulis grid. :func:`weight_cells` resolves them to ``(lat, lon)`` with the
 driver's own ``_weight_cell_coords`` on the same ``UserCatData`` the
 aggregation driver builds, so the result is exact for any batch.
+
+The batches must be rebuilt at the ``--batch-size`` agg actually ran with.
+SLURM agg (``slurm/shared/agg_all.body.sh``) passes ``--batch-size 10000``,
+which overrides ``config.yml`` ``fabric.batch_size`` (500 by default), so
+callers on SLURM-aggregated projects pass ``batch_size=10000`` (#368).
 """
 
 from __future__ import annotations
@@ -49,20 +54,29 @@ def archive_dir(project_dir: Path) -> Path:
 
 
 def weight_cells(
-    project_dir: Path, datastore_dir: Path, fabric_cfg: dict, year: int
+    project_dir: Path,
+    datastore_dir: Path,
+    fabric_cfg: dict,
+    year: int,
+    batch_size: int | None = None,
 ) -> pd.DataFrame:
     """Return every cached weight row with its source cell's ``(lat, lon)``.
 
     Columns: ``hru`` (id as ``str``), ``wght``, ``cell_lat``, ``cell_lon``,
     ``batch_id``. Batches with no cache CSV (not covered by Margulis) are
     skipped. Raises if a cache's batch fingerprint sidecar does not match the
-    batch rebuilt from the fabric (stale cache: ``i`` / ``j`` would point at
-    the wrong cells).
+    batch rebuilt from the fabric (``i`` / ``j`` would point at the wrong
+    cells).
+
+    ``batch_size`` is the ``--batch-size`` agg ran with (10000 for SLURM
+    agg). ``None`` falls back to ``config.yml`` ``fabric.batch_size``, which
+    is right only when agg ran without ``--batch-size``.
     """
     project_dir = Path(project_dir)
     id_col = fabric_cfg["id_col"]
-    cfg = yaml.safe_load((project_dir / "config.yml").read_text())
-    batch_size = int((cfg.get("fabric") or {}).get("batch_size", 500))
+    if batch_size is None:
+        cfg = yaml.safe_load((project_dir / "config.yml").read_text())
+        batch_size = int((cfg.get("fabric") or {}).get("batch_size", 500))
     fabric_batched = load_and_batch_fabric(Path(fabric_cfg["path"]), batch_size)
 
     src = Path(datastore_dir) / SOURCE_KEY / "daily" / f"{SOURCE_KEY}_daily_{year}.nc"
@@ -78,11 +92,20 @@ def weight_cells(
                 columns=["batch_id"]
             )
             fp_path = _weight_cache_fingerprint_path(csv)
-            expected = _batch_fingerprint(batch_gdf, id_col, source_crs=SOURCE_CRS)
-            if not fp_path.exists() or fp_path.read_text().strip() != expected:
+            if not fp_path.exists():
                 raise RuntimeError(
-                    f"weight cache {csv} is stale (fingerprint sidecar missing or "
-                    "different); re-run `agg margulis-wus-sr` before this check"
+                    f"weight cache {csv} has no fingerprint sidecar {fp_path.name}; "
+                    "its batch cannot be verified"
+                )
+            expected = _batch_fingerprint(batch_gdf, id_col, source_crs=SOURCE_CRS)
+            if fp_path.read_text().strip() != expected:
+                raise RuntimeError(
+                    f"weight cache {csv} does not match batch {bid} rebuilt at "
+                    f"batch_size={batch_size}. Most likely agg ran with a different "
+                    "--batch-size (SLURM agg uses 10000): pass that value as "
+                    "batch_size (MASK_BATCH_SIZE in the notebooks). If the batch "
+                    "size already matches, the fabric changed after agg and the "
+                    "cache really is stale."
                 )
             weights = pd.read_csv(csv)
             user_data = UserCatData(
